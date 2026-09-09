@@ -813,8 +813,8 @@ credentials of any kind.
 
 | M | Content | Demonstrates |
 |---|---------|--------------|
-| M1 | Scaffolding, core types, registry, fake provider, local state backend, locking | `infra validate` runs; state round-trips; lock contention detected |
-| M2 | Compiler stages 1, 2, 6, 7, 8 for flat configuration; graph; planner; renderer | `infra plan` runs; plan serializable; invariant 6 testable |
+| M1 | Scaffolding, core types, registry, fake provider, local state backend, locking, compiler stages 1 and 2 | `infra validate` catches malformed YAML and unregistered resource types; state round-trips; lock contention detected |
+| M2 | Compiler stages 6, 7, 8 for flat configuration; graph; planner; renderer | `infra plan` runs; plan serializable; invariant 6 testable |
 | M3 | Executor, `apply`, `destroy`, `refresh`, incremental state writes, lifecycle | Reconcile loop closes; invariants 1, 2, 4, 5 |
 | M4 | Variables, typed variable schemas, environments, `extends`, stages 3 and 4 | `PLAN.md` §7 precedence chain; provenance gains four sources |
 | M5 | Modules, stage 5 | Full configuration surface |
