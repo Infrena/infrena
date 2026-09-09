@@ -12,10 +12,13 @@ import (
 	"infra/pkg/value"
 )
 
+// Severity indicates whether a diagnostic is an error or warning.
 type Severity uint8
 
 const (
+	// SeverityError indicates a problem that must be fixed.
 	SeverityError Severity = iota
+	// SeverityWarning indicates a potential issue that should be addressed.
 	SeverityWarning
 )
 
@@ -37,12 +40,16 @@ type Diagnostic struct {
 	Related  []address.Address
 }
 
+// Diagnostics is a collection of diagnostic messages.
 type Diagnostics []Diagnostic
 
+// Add appends a single diagnostic to the collection.
 func (ds *Diagnostics) Add(d Diagnostic) { *ds = append(*ds, d) }
 
+// Extend appends all diagnostics from another collection.
 func (ds *Diagnostics) Extend(other Diagnostics) { *ds = append(*ds, other...) }
 
+// HasErrors returns true if any diagnostic has SeverityError.
 func (ds Diagnostics) HasErrors() bool {
 	for _, d := range ds {
 		if d.Severity == SeverityError {
@@ -52,6 +59,7 @@ func (ds Diagnostics) HasErrors() bool {
 	return false
 }
 
+// Render writes a human-readable representation of all diagnostics to w.
 func (ds Diagnostics) Render(w io.Writer) {
 	for i, d := range ds {
 		if i > 0 {
