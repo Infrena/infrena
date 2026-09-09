@@ -12,6 +12,7 @@
 
 ## Global Constraints
 
+- **Toolchain:** Go 1.24 is pinned by `mise.toml` in the repo root, but mise is not active in non-interactive shells. Before running any `go` command, run `export PATH="$HOME/.local/share/mise/shims:$PATH"`. Verify with `go version` — it must report `go1.24.x`, not `go1.20.x`. Building with 1.20 fails immediately on the `go.mod` version directive.
 - Go 1.24 or later. Module path is `infra` — a bare, non-URL path, chosen deliberately because the product name is not yet decided (`PLAN.md` §5, "Working Name"); renaming later is a mechanical find-and-replace and baking a hosting decision in now would be premature.
 - Dependencies in M1 are exactly two: `github.com/spf13/cobra` and `gopkg.in/yaml.v3`. Adding any third dependency requires a spec amendment.
 - `providers/` may import `pkg/`. `providers/` may **never** import `internal/`. Spec §17.
@@ -74,6 +75,8 @@ Rationale for two decisions locked in here: `Registry` lives in `internal/regist
 
 ```bash
 cd /home/james/projects/ilan
+export PATH="$HOME/.local/share/mise/shims:$PATH"
+go version   # must report go1.24.x
 go mod init infra
 go get github.com/spf13/cobra@latest
 go get gopkg.in/yaml.v3@latest
@@ -284,6 +287,10 @@ func main() {
 Create `Makefile`. Recipe lines must begin with a literal tab, not spaces:
 
 ```make
+# The project pins Go 1.24 via mise.toml. The shims directory puts that
+# toolchain on PATH even in non-interactive shells, where mise is not active.
+export PATH := $(HOME)/.local/share/mise/shims:$(PATH)
+
 GO ?= go
 
 .PHONY: build test vet fmt check
@@ -298,7 +305,7 @@ vet:
 	$(GO) vet ./...
 
 fmt:
-	@test -z "$$($(GO)fmt -l .)" || { echo "unformatted files:"; $(GO)fmt -l .; exit 1; }
+	@test -z "$$(gofmt -l .)" || { echo "unformatted files:"; gofmt -l .; exit 1; }
 
 check: fmt vet test
 ```
