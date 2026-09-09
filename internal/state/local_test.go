@@ -56,6 +56,36 @@ func TestPutIncrementsSerial(t *testing.T) {
 	}
 }
 
+func TestFailedPutDoesNotAdvanceSerial(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("running as root; directory permissions would not block the write")
+	}
+
+	root := t.TempDir()
+	b := NewLocal(root)
+	ctx := context.Background()
+	s := New("myapp", "dev")
+
+	if err := b.Put(ctx, "dev", s); err != nil {
+		t.Fatalf("first Put: %v", err)
+	}
+	before := s.Serial
+
+	// Make the state directory unwritable so the temp file cannot be created.
+	stateDir := filepath.Join(root, "state")
+	if err := os.Chmod(stateDir, 0o500); err != nil {
+		t.Fatalf("Chmod: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(stateDir, 0o700) })
+
+	if err := b.Put(ctx, "dev", s); err == nil {
+		t.Fatal("Put into an unwritable directory should fail")
+	}
+	if s.Serial != before {
+		t.Errorf("Serial = %d after a failed Put, want %d unchanged — a serial ahead of disk makes a retry skip a value and misreports staleness", s.Serial, before)
+	}
+}
+
 func TestPutIsAtomicAndPrivate(t *testing.T) {
 	root := t.TempDir()
 	b := NewLocal(root)

@@ -58,20 +58,34 @@ func (l *Local) Lock(ctx context.Context, environment string) (Lock, error) {
 	return lock, nil
 }
 
-// Unlock releases the lock held on an environment. Unlocking an environment
-// that is not locked is an error, not a silent success — otherwise a typo in
-// an environment name would look like it worked.
+// Unlock releases a lock this process holds. It refuses to release a lock held
+// by anyone else — otherwise "force" would mean nothing and a stray Unlock
+// could free an environment another apply is actively mutating.
 func (l *Local) Unlock(ctx context.Context, environment string) error {
-	err := os.Remove(l.lockPath(environment))
-	if errors.Is(err, fs.ErrNotExist) {
+	held, ok, err := l.Inspect(environment)
+	if err != nil {
+		return err
+	}
+	if !ok {
 		return fmt.Errorf("environment %q is not locked", environment)
 	}
-	return err
+	if held.PID != os.Getpid() || held.Host != hostname() {
+		return fmt.Errorf("environment %q is locked by %s on %s (pid %d), not by this process; use `infra state unlock %s` to override",
+			environment, held.User, held.Host, held.PID, environment)
+	}
+	return l.removeLock(environment)
 }
 
 // ForceUnlock removes a lock regardless of holder. `infra state unlock` uses it
 // after telling the user who holds the lock.
 func (l *Local) ForceUnlock(environment string) error {
+	return l.removeLock(environment)
+}
+
+// removeLock deletes the lock file, reporting a missing lock as an error rather
+// than a silent success — a typo in an environment name must not look like it
+// worked.
+func (l *Local) removeLock(environment string) error {
 	err := os.Remove(l.lockPath(environment))
 	if errors.Is(err, fs.ErrNotExist) {
 		return fmt.Errorf("environment %q is not locked", environment)

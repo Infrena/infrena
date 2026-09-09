@@ -3,6 +3,8 @@ package state
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -86,6 +88,32 @@ func TestInspectDescribesTheLock(t *testing.T) {
 	}
 	if lock.PID == 0 || lock.Host == "" || lock.Environment != "dev" {
 		t.Errorf("lock descriptor is incomplete: %#v", lock)
+	}
+}
+
+func TestUnlockRefusesAnotherProcessesLockButForceSucceeds(t *testing.T) {
+	root := t.TempDir()
+	b := NewLocal(root)
+	ctx := context.Background()
+
+	// Write a lock file as if another process holds it.
+	stateDir := filepath.Join(root, "state")
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	held := `{"environment":"production","pid":999999,"host":"elsewhere","user":"someone","operation":"apply","at":"2026-09-09T10:00:00Z"}`
+	if err := os.WriteFile(filepath.Join(stateDir, "production.lock"), []byte(held), 0o600); err != nil {
+		t.Fatalf("write lock: %v", err)
+	}
+
+	if err := b.Unlock(ctx, "production"); err == nil {
+		t.Error("Unlock must refuse a lock held by another process, or `force` means nothing")
+	}
+	if err := b.ForceUnlock("production"); err != nil {
+		t.Errorf("ForceUnlock should override: %v", err)
+	}
+	if _, ok, _ := b.Inspect("production"); ok {
+		t.Error("the lock should be gone after ForceUnlock")
 	}
 }
 

@@ -50,6 +50,18 @@ func (l *Local) Put(ctx context.Context, environment string, s *State) error {
 		return err
 	}
 
+	// Stamp the write, but restore on any failure path: a Serial that has
+	// advanced past what is on disk would make a retry skip a value, and any
+	// caller inspecting s.Serial after a failed Put would believe a write
+	// happened. The serial is what detects stale plans, so it must not drift.
+	prevSerial, prevEnv, prevUpdated := s.Serial, s.Environment, s.UpdatedAt
+	committed := false
+	defer func() {
+		if !committed {
+			s.Serial, s.Environment, s.UpdatedAt = prevSerial, prevEnv, prevUpdated
+		}
+	}()
+
 	s.Serial++
 	s.Environment = environment
 	s.UpdatedAt = time.Now().UTC()
@@ -81,5 +93,9 @@ func (l *Local) Put(ctx context.Context, environment string, s *State) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmpName, path)
+	if err := os.Rename(tmpName, path); err != nil {
+		return err
+	}
+	committed = true
+	return nil
 }
