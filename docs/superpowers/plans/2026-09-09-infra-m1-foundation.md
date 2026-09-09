@@ -782,7 +782,9 @@ func (v Value) MarshalJSON() ([]byte, error) {
 		Source:    v.Source,
 		Sensitive: v.Sensitive,
 	}
-	if v.Origin != (Origin{}) {
+	// Origin cannot be compared with == because Module is a slice, so the
+	// zero-check is field by field.
+	if v.Origin.File != "" || v.Origin.Line != 0 || v.Origin.Column != 0 || v.Origin.Module != nil {
 		o := v.Origin
 		w.Origin = &o
 	}
