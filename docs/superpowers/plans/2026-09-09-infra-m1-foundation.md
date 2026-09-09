@@ -4718,6 +4718,50 @@ resources:
 	}
 }
 
+func TestFormatValueRedactsNestedSensitiveLeaves(t *testing.T) {
+	// Sensitivity is per-leaf: a non-sensitive composite can hold a sensitive
+	// element. Redacting only the top level would leak it through %v.
+	secret := value.String("hunter2", value.SourceProvider).WithSensitive(true)
+
+	cases := []struct {
+		name string
+		in   value.Value
+	}{
+		{"sensitive scalar", secret},
+		{"sensitive map leaf", value.Map(map[string]value.Value{
+			"user": value.String("admin", value.SourceProvider),
+			"pass": secret,
+		}, value.SourceProvider)},
+		{"sensitive list element", value.List([]value.Value{
+			value.String("public", value.SourceProvider),
+			secret,
+		}, value.SourceProvider)},
+		{"map nested inside a list", value.List([]value.Value{
+			value.Map(map[string]value.Value{"pass": secret}, value.SourceProvider),
+		}, value.SourceProvider)},
+	}
+
+	for _, tc := range cases {
+		got := formatValue(tc.in)
+		if strings.Contains(got, "hunter2") {
+			t.Errorf("%s: rendered %q, which leaks the secret", tc.name, got)
+		}
+		if !strings.Contains(got, "<sensitive>") {
+			t.Errorf("%s: rendered %q, want a <sensitive> marker", tc.name, got)
+		}
+	}
+}
+
+func TestFormatValueSortsMapKeys(t *testing.T) {
+	got := formatValue(value.Map(map[string]value.Value{
+		"b": value.Int(2, value.SourceProvider),
+		"a": value.String("x", value.SourceProvider),
+	}, value.SourceProvider))
+	if got != "{a: x, b: 2}" {
+		t.Errorf("formatValue = %q, want %q — map keys must be sorted or output churns between runs", got, "{a: x, b: 2}")
+	}
+}
+
 func TestValidateReportsEveryProblemAtOnce(t *testing.T) {
 	dir := projectDir(t, `
 project: myapp
@@ -4986,12 +5030,7 @@ func newStateShowCommand(opts *GlobalOptions) *cobra.Command {
 			fmt.Fprintf(out, "  provider     %s\n", r.Provider)
 			fmt.Fprintf(out, "  provider_id  %s\n", r.ProviderID)
 			for _, name := range sortedAttributeKeys(r.Attributes) {
-				v := r.Attributes[name]
-				if v.Sensitive {
-					fmt.Fprintf(out, "  %-12s <sensitive>\n", name)
-					continue
-				}
-				fmt.Fprintf(out, "  %-12s %v\n", name, v.Raw)
+				fmt.Fprintf(out, "  %-12s %s\n", name, formatValue(r.Attributes[name]))
 			}
 			return nil
 		},
@@ -5016,6 +5055,45 @@ func newStateUnlockCommand(opts *GlobalOptions) *cobra.Command {
 				lock.User, lock.Host, lock.PID, lock.At.Format("2006-01-02 15:04:05 MST"))
 			return b.ForceUnlock(args[0])
 		},
+	}
+}
+
+// formatValue renders an attribute for display, redacting sensitive data.
+//
+// Sensitivity is per-leaf: a non-sensitive list or map can hold a sensitive
+// element. Checking only the top-level Value and printing %v of Raw would send
+// that leaf's plaintext straight through Go's struct formatting, so this walks
+// composites and redacts at every level. Map keys are sorted so output is
+// stable across runs.
+func formatValue(v value.Value) string {
+	if v.Sensitive {
+		return "<sensitive>"
+	}
+	if !v.Known {
+		return "(unknown)"
+	}
+	switch v.Kind {
+	case value.KindList:
+		items, _ := v.Raw.([]value.Value)
+		parts := make([]string, len(items))
+		for i, item := range items {
+			parts[i] = formatValue(item)
+		}
+		return "[" + strings.Join(parts, ", ") + "]"
+	case value.KindMap:
+		m, _ := v.Raw.(map[string]value.Value)
+		keys := make([]string, 0, len(m))
+		for k := range m {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		parts := make([]string, len(keys))
+		for i, k := range keys {
+			parts[i] = k + ": " + formatValue(m[k])
+		}
+		return "{" + strings.Join(parts, ", ") + "}"
+	default:
+		return fmt.Sprintf("%v", v.Raw)
 	}
 }
 
