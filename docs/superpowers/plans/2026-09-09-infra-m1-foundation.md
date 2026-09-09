@@ -3921,6 +3921,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"infra/pkg/value"
@@ -4056,6 +4057,57 @@ resources:
 	}
 	if _, ok := r.Attributes["depends_on"]; ok {
 		t.Error("depends_on is structure, not an attribute")
+	}
+}
+
+func TestDecodeLifecycleAcceptsCapitalisedBooleans(t *testing.T) {
+	// `True` and `TRUE` carry the !!bool tag but scalar text that is not
+	// literally "true". A raw string comparison would silently leave a
+	// destruction guard disabled.
+	for _, written := range []string{"true", "True", "TRUE"} {
+		files := writeConfig(t, `
+project: myapp
+resources:
+  database:
+    type: test.database
+    engine: postgres
+    lifecycle:
+      prevent_destroy: `+written+`
+`)
+		got, ds := Decode(files)
+		if ds.HasErrors() {
+			t.Fatalf("%s: unexpected diagnostics: %+v", written, ds)
+		}
+		if !got.Resources[0].Lifecycle.PreventDestroy {
+			t.Errorf("prevent_destroy: %s was silently ignored — a destruction guard must not depend on capitalisation", written)
+		}
+	}
+}
+
+func TestDecodeLifecycleRejectsQuotedBoolean(t *testing.T) {
+	files := writeConfig(t, `
+project: myapp
+resources:
+  database:
+    type: test.database
+    engine: postgres
+    lifecycle:
+      prevent_destroy: "true"
+`)
+	_, ds := Decode(files)
+	if !ds.HasErrors() {
+		t.Error("a quoted \"true\" is a string, not a boolean, and must be rejected rather than silently accepted")
+	}
+}
+
+func TestDecodeReportsEmptyFile(t *testing.T) {
+	files := writeConfig(t, "")
+	_, ds := Decode(files)
+	if !ds.HasErrors() {
+		t.Fatal("an empty configuration file must be an error")
+	}
+	if !strings.Contains(ds[0].Summary, "empty") {
+		t.Errorf("diagnostic should say the file is empty, got %q", ds[0].Summary)
 	}
 }
 
@@ -4354,9 +4406,13 @@ func decodeLifecycle(path string, node *yaml.Node, r *ResourceDecl, ds *diag.Dia
 		key, val := node.Content[i], node.Content[i+1]
 		switch key.Value {
 		case "prevent_destroy":
-			r.Lifecycle.PreventDestroy = val.Value == "true"
+			if b, ok := decodeLifecycleBool(path, key, val, ds); ok {
+				r.Lifecycle.PreventDestroy = b
+			}
 		case "retain":
-			r.Lifecycle.Retain = val.Value == "true"
+			if b, ok := decodeLifecycleBool(path, key, val, ds); ok {
+				r.Lifecycle.Retain = b
+			}
 		default:
 			ds.Add(diag.Diagnostic{
 				Severity: diag.SeverityError,
@@ -4366,6 +4422,29 @@ func decodeLifecycle(path string, node *yaml.Node, r *ResourceDecl, ds *diag.Dia
 			})
 		}
 	}
+}
+
+// decodeLifecycleBool decodes a lifecycle flag, letting the YAML decoder judge
+// what is boolean rather than comparing the raw scalar text.
+//
+// Raw comparison against "true" is not merely imprecise here, it is unsafe:
+// `prevent_destroy: True` and `prevent_destroy: TRUE` both carry the !!bool tag
+// but scalar text that is not literally "true", so a raw check silently
+// disables a destruction guard the user believed they had enabled. A quoted
+// "true" is a string and is rejected loudly rather than silently accepted.
+func decodeLifecycleBool(path string, key, val *yaml.Node, ds *diag.Diagnostics) (bool, bool) {
+	var b bool
+	if err := val.Decode(&b); err != nil {
+		ds.Add(diag.Diagnostic{
+			Severity: diag.SeverityError,
+			Summary:  "lifecycle option " + strconv.Quote(key.Value) + " must be true or false",
+			Detail:   "Got " + strconv.Quote(val.Value) + ". A quoted value is a string, not a boolean.",
+			Action:   "Write " + key.Value + ": true (unquoted).",
+			Origin:   originOf(path, val),
+		})
+		return false, false
+	}
+	return b, true
 }
 
 // decodeValue converts a YAML node into a typed Value, reporting whether any
@@ -4428,7 +4507,11 @@ func decodeScalar(node *yaml.Node, origin value.Origin) (value.Value, bool) {
 }
 
 func documentRoot(n *yaml.Node) *yaml.Node {
-	if n == nil {
+	// An empty file leaves the root at its zero value rather than producing a
+	// DocumentNode: yaml.Unmarshal never invokes the decoder for empty input.
+	// Without the Kind == 0 check the "configuration file is empty" diagnostic
+	// is unreachable and the user gets the generic "must be a mapping" instead.
+	if n == nil || n.Kind == 0 {
 		return nil
 	}
 	if n.Kind == yaml.DocumentNode {
