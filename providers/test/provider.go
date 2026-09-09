@@ -43,6 +43,10 @@ func New(cloudPath string) *Provider {
 	return &Provider{cloudPath: cloudPath, defs: defs, byType: byType}
 }
 
+// Provider satisfies the provider interface. Asserted at compile time so
+// interface drift surfaces here rather than at integration.
+var _ provider.Provider = (*Provider)(nil)
+
 // Name returns the provider name.
 func (p *Provider) Name() string { return "test" }
 
@@ -193,6 +197,12 @@ func (p *Provider) toState(addr, resourceType, id string, attrs map[string]any) 
 	def := p.byType[resourceType]
 	out := map[string]value.Value{}
 	for name, raw := range attrs {
+		// A JSON null means the attribute is not set. Someone hand-editing the
+		// cloud file may null a value out; turning that into the string
+		// "<nil>" would silently corrupt it.
+		if raw == nil {
+			continue
+		}
 		v := fromRaw(raw)
 		v = v.WithSource(value.SourceProvider)
 		if def != nil {
@@ -269,6 +279,12 @@ func fromRaw(raw any) value.Value {
 			items[k] = fromRaw(item)
 		}
 		return value.Map(items, value.SourceProvider)
+	case nil:
+		// Unreachable for a top-level attribute (toState skips nulls), but a
+		// null nested inside a list or map lands here. Return the zero Value,
+		// whose KindInvalid fails loudly downstream rather than masquerading
+		// as the string "<nil>".
+		return value.Value{}
 	default:
 		return value.String(fmt.Sprint(v), value.SourceProvider)
 	}
