@@ -139,9 +139,13 @@ func decodeLifecycle(path string, node *yaml.Node, r *ResourceDecl, ds *diag.Dia
 		key, val := node.Content[i], node.Content[i+1]
 		switch key.Value {
 		case "prevent_destroy":
-			r.Lifecycle.PreventDestroy = val.Value == "true"
+			if b, ok := decodeLifecycleBool(path, key, val, ds); ok {
+				r.Lifecycle.PreventDestroy = b
+			}
 		case "retain":
-			r.Lifecycle.Retain = val.Value == "true"
+			if b, ok := decodeLifecycleBool(path, key, val, ds); ok {
+				r.Lifecycle.Retain = b
+			}
 		default:
 			ds.Add(diag.Diagnostic{
 				Severity: diag.SeverityError,
@@ -151,6 +155,29 @@ func decodeLifecycle(path string, node *yaml.Node, r *ResourceDecl, ds *diag.Dia
 			})
 		}
 	}
+}
+
+// decodeLifecycleBool decodes a lifecycle flag, letting the YAML decoder judge
+// what is boolean rather than comparing the raw scalar text.
+//
+// Raw comparison against "true" is not merely imprecise here, it is unsafe:
+// `prevent_destroy: True` and `prevent_destroy: TRUE` both carry the !!bool tag
+// but scalar text that is not literally "true", so a raw check silently
+// disables a destruction guard the user believed they had enabled. A quoted
+// "true" is a string and is rejected loudly rather than silently accepted.
+func decodeLifecycleBool(path string, key, val *yaml.Node, ds *diag.Diagnostics) (bool, bool) {
+	var b bool
+	if err := val.Decode(&b); err != nil {
+		ds.Add(diag.Diagnostic{
+			Severity: diag.SeverityError,
+			Summary:  "lifecycle option " + strconv.Quote(key.Value) + " must be true or false",
+			Detail:   "Got " + strconv.Quote(val.Value) + ". A quoted value is a string, not a boolean.",
+			Action:   "Write " + key.Value + ": true (unquoted).",
+			Origin:   originOf(path, val),
+		})
+		return false, false
+	}
+	return b, true
 }
 
 // decodeValue converts a YAML node into a typed Value, reporting whether any

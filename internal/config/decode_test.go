@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"infra/pkg/value"
@@ -138,6 +139,57 @@ resources:
 	}
 	if _, ok := r.Attributes["depends_on"]; ok {
 		t.Error("depends_on is structure, not an attribute")
+	}
+}
+
+func TestDecodeLifecycleAcceptsCapitalisedBooleans(t *testing.T) {
+	// `True` and `TRUE` carry the !!bool tag but scalar text that is not
+	// literally "true". A raw string comparison would silently leave a
+	// destruction guard disabled.
+	for _, written := range []string{"true", "True", "TRUE"} {
+		files := writeConfig(t, `
+project: myapp
+resources:
+  database:
+    type: test.database
+    engine: postgres
+    lifecycle:
+      prevent_destroy: `+written+`
+`)
+		got, ds := Decode(files)
+		if ds.HasErrors() {
+			t.Fatalf("%s: unexpected diagnostics: %+v", written, ds)
+		}
+		if !got.Resources[0].Lifecycle.PreventDestroy {
+			t.Errorf("prevent_destroy: %s was silently ignored — a destruction guard must not depend on capitalisation", written)
+		}
+	}
+}
+
+func TestDecodeLifecycleRejectsQuotedBoolean(t *testing.T) {
+	files := writeConfig(t, `
+project: myapp
+resources:
+  database:
+    type: test.database
+    engine: postgres
+    lifecycle:
+      prevent_destroy: "true"
+`)
+	_, ds := Decode(files)
+	if !ds.HasErrors() {
+		t.Error("a quoted \"true\" is a string, not a boolean, and must be rejected rather than silently accepted")
+	}
+}
+
+func TestDecodeReportsEmptyFile(t *testing.T) {
+	files := writeConfig(t, "")
+	_, ds := Decode(files)
+	if !ds.HasErrors() {
+		t.Fatal("an empty configuration file must be an error")
+	}
+	if !strings.Contains(ds[0].Summary, "empty") {
+		t.Errorf("diagnostic should say the file is empty, got %q", ds[0].Summary)
 	}
 }
 
