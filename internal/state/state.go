@@ -108,6 +108,12 @@ func Decode(data []byte) (*State, error) {
 		if !ok {
 			return nil, fmt.Errorf("no migration registered from state version %d to %d", version, version+1)
 		}
+		// A migration that does not advance the version would loop forever.
+		// Refuse it: a hang while loading state is far worse than an error,
+		// because it gives the user nothing to act on.
+		if m.To <= version {
+			return nil, fmt.Errorf("migration from state version %d declares To=%d, which does not advance the version", m.From, m.To)
+		}
 		if err := m.Apply(raw); err != nil {
 			return nil, fmt.Errorf("migrating state from version %d to %d: %w", m.From, m.To, err)
 		}
@@ -141,6 +147,8 @@ func migrationFrom(version int) (Migration, bool) {
 	if len(candidates) == 0 {
 		return Migration{}, false
 	}
-	sort.Slice(candidates, func(i, j int) bool { return candidates[i].To < candidates[j].To })
+	// Stable, so two migrations registered with identical From and To resolve
+	// in registration order rather than arbitrarily.
+	sort.SliceStable(candidates, func(i, j int) bool { return candidates[i].To < candidates[j].To })
 	return candidates[0], true
 }

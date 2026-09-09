@@ -103,6 +103,38 @@ func TestDecodeRunsMigrations(t *testing.T) {
 	}
 }
 
+func TestDecodeRefusesNonAdvancingMigration(t *testing.T) {
+	original := migrations
+	t.Cleanup(func() { migrations = original })
+
+	migrations = nil
+	RegisterMigration(Migration{From: 0, To: 0, Apply: func(map[string]any) error { return nil }})
+
+	_, err := Decode([]byte(`{"version": 0, "serial": 1, "resources": {}}`))
+	if err == nil {
+		t.Fatal("a migration that does not advance the version must be refused, not looped on forever")
+	}
+}
+
+func TestDecodeRunsMultiStepChain(t *testing.T) {
+	original := migrations
+	t.Cleanup(func() { migrations = original })
+
+	migrations = nil
+	RegisterMigration(Migration{From: 0, To: 1, Apply: func(raw map[string]any) error {
+		raw["project"] = "step-one"
+		return nil
+	}})
+
+	got, err := Decode([]byte(`{"version": 0, "serial": 1, "resources": {}}`))
+	if err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+	if got.Project != "step-one" || got.Version != CurrentVersion {
+		t.Errorf("chain did not run to completion: project=%q version=%d", got.Project, got.Version)
+	}
+}
+
 func TestEncodeIsStableAcrossRuns(t *testing.T) {
 	s := New("myapp", "dev")
 	for _, n := range []string{"a", "b", "c", "d", "e"} {
