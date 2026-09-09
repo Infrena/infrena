@@ -3377,6 +3377,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -3458,6 +3459,53 @@ func TestInspectDescribesTheLock(t *testing.T) {
 	}
 	if lock.PID == 0 || lock.Host == "" || lock.Environment != "dev" {
 		t.Errorf("lock descriptor is incomplete: %#v", lock)
+	}
+}
+
+func TestConcurrentLockAttemptsElectExactlyOneWinner(t *testing.T) {
+	// The other lock tests are single-goroutine: they verify the observable
+	// contract, but a naive stat-then-create implementation would pass every
+	// one of them. This is the only test that actually exercises the race
+	// O_EXCL exists to prevent, and so the only direct proof of invariant 5.
+	b := NewLocal(t.TempDir())
+	ctx := context.Background()
+
+	const goroutines = 16
+	var (
+		wg      sync.WaitGroup
+		mu      sync.Mutex
+		granted int
+		refused int
+	)
+	start := make(chan struct{})
+
+	for i := 0; i < goroutines; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start // release together, to maximise contention
+			_, err := b.Lock(ctx, "production")
+
+			mu.Lock()
+			defer mu.Unlock()
+			switch {
+			case err == nil:
+				granted++
+			case errors.Is(err, ErrLocked):
+				refused++
+			default:
+				t.Errorf("unexpected lock error: %v", err)
+			}
+		}()
+	}
+	close(start)
+	wg.Wait()
+
+	if granted != 1 {
+		t.Fatalf("%d goroutines acquired the lock, want exactly 1 — invariant 5", granted)
+	}
+	if refused != goroutines-1 {
+		t.Errorf("%d goroutines saw ErrLocked, want %d", refused, goroutines-1)
 	}
 }
 
@@ -5131,6 +5179,7 @@ Every box below must be true before M2 begins.
 - [ ] `infra state list <env>` and `infra state show <env> <address>` work against a seeded state file, and sensitive attributes render as `<sensitive>`.
 - [ ] `infra state unlock <env>` names the lock holder before releasing, and fails clearly when nothing is locked.
 - [ ] Two `Lock` calls on the same environment conflict; two on different environments do not.
+- [ ] Sixteen goroutines racing to `Lock` one environment elect exactly one winner under `go test -race` — the only test in M1 that distinguishes `O_EXCL` from a stat-then-create implementation, and so the only direct proof of invariant 5.
 - [ ] A state file written by `Put` has mode `0600`, no temporary files are left behind, and repeated `Encode` calls are byte-identical.
 - [ ] Editing `.infra/fake-cloud.json` by hand changes what the fake provider's `Read` returns.
 
