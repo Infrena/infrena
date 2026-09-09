@@ -16,7 +16,7 @@
 - Go 1.24 or later. Module path is `infra` — a bare, non-URL path, chosen deliberately because the product name is not yet decided (`PLAN.md` §5, "Working Name"); renaming later is a mechanical find-and-replace and baking a hosting decision in now would be premature.
 - Dependencies in M1 are exactly two: `github.com/spf13/cobra` and `gopkg.in/yaml.v3`. Adding any third dependency requires a spec amendment.
 - `providers/` may import `pkg/`. `providers/` may **never** import `internal/`. Spec §17.
-- No raw `map[string]any` may flow through the engine. `internal/config/decode.go` is the only file permitted to touch `yaml.Node`. Spec §7. The one deliberate exception is `providers/test`, whose cloud file models an external system, not internal configuration.
+- No raw `map[string]any` may flow through the engine. `yaml.Node` is confined to the `internal/config` package — `load.go` produces the node tree (stage 1), `decode.go` is the only place that interprets it into typed declarations (stage 2) — and no package outside `internal/config` may reference it. Spec §7. The one deliberate exception is `providers/test`, whose cloud file models an external system, not internal configuration.
 - Every state and plan file on disk is written with mode `0600`. Spec §9.3.
 - Test-driven: every task writes a failing test first, and no task is complete until `go test ./...`, `go vet ./...`, and `gofmt -l .` are all clean.
 - Commit after every task. Commit messages use Conventional Commits (`feat:`, `test:`, `chore:`, `fix:`).
@@ -4100,6 +4100,51 @@ resources:
 	}
 }
 
+func TestDecodeAttributeBooleansAreTagAware(t *testing.T) {
+	// The same defect class as the lifecycle booleans, but for ordinary
+	// attributes: `True` carries the !!bool tag with scalar text that is not
+	// literally "true".
+	for _, written := range []string{"true", "True", "TRUE"} {
+		files := writeConfig(t, `
+project: myapp
+resources:
+  network:
+    type: test.network
+    cidr: 10.0.0.0/16
+    enabled: `+written+`
+`)
+		got, ds := Decode(files)
+		if ds.HasErrors() {
+			t.Fatalf("%s: unexpected diagnostics: %+v", written, ds)
+		}
+		attr := got.Resources[0].Attributes["enabled"]
+		if attr.Value.Kind != value.KindBool {
+			t.Fatalf("%s: Kind = %v, want KindBool", written, attr.Value.Kind)
+		}
+		if b, _ := attr.Value.AsBool(); !b {
+			t.Errorf("enabled: %s decoded as false — boolean attributes must not depend on capitalisation", written)
+		}
+	}
+}
+
+func TestDecodeRejectsScalarDependsOn(t *testing.T) {
+	files := writeConfig(t, `
+project: myapp
+resources:
+  database:
+    type: test.database
+    engine: postgres
+    depends_on: network
+`)
+	got, ds := Decode(files)
+	if !ds.HasErrors() {
+		t.Fatal("a scalar depends_on must be an error: it silently yields no dependencies, and a missing edge lets a resource run before what it depends on")
+	}
+	if len(got.Resources) > 0 && len(got.Resources[0].DependsOn) != 0 {
+		t.Errorf("DependsOn = %v, want empty after the error", got.Resources[0].DependsOn)
+	}
+}
+
 func TestDecodeReportsEmptyFile(t *testing.T) {
 	files := writeConfig(t, "")
 	_, ds := Decode(files)
@@ -4364,6 +4409,16 @@ func decodeResources(path string, node *yaml.Node, out *ProjectDecl, ds *diag.Di
 			case "type":
 				r.Type = val.Value
 			case "depends_on":
+				if val.Kind != yaml.SequenceNode {
+					ds.Add(diag.Diagnostic{
+						Severity: diag.SeverityError,
+						Summary:  "`depends_on` must be a list",
+						Detail:   "A scalar silently produces no dependencies, and a missing edge means a resource can be created before what it depends on.",
+						Action:   "Write depends_on: [" + val.Value + "]",
+						Origin:   originOf(path, val),
+					})
+					break
+				}
 				for _, item := range val.Content {
 					r.DependsOn = append(r.DependsOn, item.Value)
 				}
@@ -4438,7 +4493,7 @@ func decodeLifecycleBool(path string, key, val *yaml.Node, ds *diag.Diagnostics)
 		ds.Add(diag.Diagnostic{
 			Severity: diag.SeverityError,
 			Summary:  "lifecycle option " + strconv.Quote(key.Value) + " must be true or false",
-			Detail:   "Got " + strconv.Quote(val.Value) + ". A quoted value is a string, not a boolean.",
+			Detail:   "Got " + strconv.Quote(val.Value) + ", which is not a boolean. Note a quoted value is a string.",
 			Action:   "Write " + key.Value + ": true (unquoted).",
 			Origin:   originOf(path, val),
 		})
@@ -4501,7 +4556,14 @@ func decodeScalar(node *yaml.Node, origin value.Origin) (value.Value, bool) {
 			return value.Float(f, value.SourceExplicit).WithOrigin(origin), false
 		}
 	case "!!bool":
-		return value.Bool(raw == "true", value.SourceExplicit).WithOrigin(origin), false
+		// Let the decoder judge, exactly as decodeLifecycleBool does. `True`
+		// and `TRUE` carry the !!bool tag but scalar text that is not literally
+		// "true", so a raw comparison silently yields the wrong boolean for
+		// every attribute in every resource, with no diagnostic.
+		var b bool
+		if err := node.Decode(&b); err == nil {
+			return value.Bool(b, value.SourceExplicit).WithOrigin(origin), false
+		}
 	}
 	return value.String(raw, value.SourceExplicit).WithOrigin(origin), false
 }
