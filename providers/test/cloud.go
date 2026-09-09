@@ -32,8 +32,13 @@ type FailureRule struct {
 	Retryable bool   `json:"retryable,omitempty"`
 	Message   string `json:"message,omitempty"`
 
-	seen  int
-	fired bool
+	// Seen and Fired are bookkeeping and must be exported and persisted: the
+	// provider reloads the cloud file on every operation, so an unexported
+	// (and therefore JSON-dropped) counter would reset to zero on every load.
+	// An Nth: 1 rule would then fire on every attempt instead of once, and an
+	// Nth greater than 1 could never be reached at all.
+	Seen  int  `json:"seen,omitempty"`
+	Fired bool `json:"fired,omitempty"`
 }
 
 // Cloud represents the state of the fake infrastructure.
@@ -81,16 +86,16 @@ func (c *Cloud) Save(path string) error {
 func (c *Cloud) ShouldFail(op, addr string) (*FailureRule, bool) {
 	for i := range c.Failures {
 		rule := &c.Failures[i]
-		if rule.fired || rule.Op != op || rule.Address != addr {
+		if rule.Fired || rule.Op != op || rule.Address != addr {
 			continue
 		}
-		rule.seen++
+		rule.Seen++
 		nth := rule.Nth
 		if nth <= 0 {
 			nth = 1
 		}
-		if rule.seen == nth {
-			rule.fired = true
+		if rule.Seen == nth {
+			rule.Fired = true
 			return rule, true
 		}
 	}
