@@ -97,6 +97,16 @@ func decodeResources(path string, node *yaml.Node, out *ProjectDecl, ds *diag.Di
 			case "type":
 				r.Type = val.Value
 			case "depends_on":
+				if val.Kind != yaml.SequenceNode {
+					ds.Add(diag.Diagnostic{
+						Severity: diag.SeverityError,
+						Summary:  "`depends_on` must be a list",
+						Detail:   "A scalar silently produces no dependencies, and a missing edge means a resource can be created before what it depends on.",
+						Action:   "Write depends_on: [" + val.Value + "]",
+						Origin:   originOf(path, val),
+					})
+					break
+				}
 				for _, item := range val.Content {
 					r.DependsOn = append(r.DependsOn, item.Value)
 				}
@@ -171,7 +181,7 @@ func decodeLifecycleBool(path string, key, val *yaml.Node, ds *diag.Diagnostics)
 		ds.Add(diag.Diagnostic{
 			Severity: diag.SeverityError,
 			Summary:  "lifecycle option " + strconv.Quote(key.Value) + " must be true or false",
-			Detail:   "Got " + strconv.Quote(val.Value) + ". A quoted value is a string, not a boolean.",
+			Detail:   "Got " + strconv.Quote(val.Value) + ", which is not a boolean. Note a quoted value is a string.",
 			Action:   "Write " + key.Value + ": true (unquoted).",
 			Origin:   originOf(path, val),
 		})
@@ -234,7 +244,14 @@ func decodeScalar(node *yaml.Node, origin value.Origin) (value.Value, bool) {
 			return value.Float(f, value.SourceExplicit).WithOrigin(origin), false
 		}
 	case "!!bool":
-		return value.Bool(raw == "true", value.SourceExplicit).WithOrigin(origin), false
+		// Let the decoder judge, exactly as decodeLifecycleBool does. `True`
+		// and `TRUE` carry the !!bool tag but scalar text that is not literally
+		// "true", so a raw comparison silently yields the wrong boolean for
+		// every attribute in every resource, with no diagnostic.
+		var b bool
+		if err := node.Decode(&b); err == nil {
+			return value.Bool(b, value.SourceExplicit).WithOrigin(origin), false
+		}
 	}
 	return value.String(raw, value.SourceExplicit).WithOrigin(origin), false
 }

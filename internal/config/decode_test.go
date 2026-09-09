@@ -182,6 +182,51 @@ resources:
 	}
 }
 
+func TestDecodeAttributeBooleansAreTagAware(t *testing.T) {
+	// The same defect class as the lifecycle booleans, but for ordinary
+	// attributes: `True` carries the !!bool tag with scalar text that is not
+	// literally "true".
+	for _, written := range []string{"true", "True", "TRUE"} {
+		files := writeConfig(t, `
+project: myapp
+resources:
+  network:
+    type: test.network
+    cidr: 10.0.0.0/16
+    enabled: `+written+`
+`)
+		got, ds := Decode(files)
+		if ds.HasErrors() {
+			t.Fatalf("%s: unexpected diagnostics: %+v", written, ds)
+		}
+		attr := got.Resources[0].Attributes["enabled"]
+		if attr.Value.Kind != value.KindBool {
+			t.Fatalf("%s: Kind = %v, want KindBool", written, attr.Value.Kind)
+		}
+		if b, _ := attr.Value.AsBool(); !b {
+			t.Errorf("enabled: %s decoded as false — boolean attributes must not depend on capitalisation", written)
+		}
+	}
+}
+
+func TestDecodeRejectsScalarDependsOn(t *testing.T) {
+	files := writeConfig(t, `
+project: myapp
+resources:
+  database:
+    type: test.database
+    engine: postgres
+    depends_on: network
+`)
+	got, ds := Decode(files)
+	if !ds.HasErrors() {
+		t.Fatal("a scalar depends_on must be an error: it silently yields no dependencies, and a missing edge lets a resource run before what it depends on")
+	}
+	if len(got.Resources) > 0 && len(got.Resources[0].DependsOn) != 0 {
+		t.Errorf("DependsOn = %v, want empty after the error", got.Resources[0].DependsOn)
+	}
+}
+
 func TestDecodeReportsEmptyFile(t *testing.T) {
 	files := writeConfig(t, "")
 	_, ds := Decode(files)
