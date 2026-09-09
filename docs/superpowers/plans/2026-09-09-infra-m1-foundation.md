@@ -3323,6 +3323,36 @@ func TestPutIncrementsSerial(t *testing.T) {
 	}
 }
 
+func TestFailedPutDoesNotAdvanceSerial(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("running as root; directory permissions would not block the write")
+	}
+
+	root := t.TempDir()
+	b := NewLocal(root)
+	ctx := context.Background()
+	s := New("myapp", "dev")
+
+	if err := b.Put(ctx, "dev", s); err != nil {
+		t.Fatalf("first Put: %v", err)
+	}
+	before := s.Serial
+
+	// Make the state directory unwritable so the temp file cannot be created.
+	stateDir := filepath.Join(root, "state")
+	if err := os.Chmod(stateDir, 0o500); err != nil {
+		t.Fatalf("Chmod: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(stateDir, 0o700) })
+
+	if err := b.Put(ctx, "dev", s); err == nil {
+		t.Fatal("Put into an unwritable directory should fail")
+	}
+	if s.Serial != before {
+		t.Errorf("Serial = %d after a failed Put, want %d unchanged — a serial ahead of disk makes a retry skip a value and misreports staleness", s.Serial, before)
+	}
+}
+
 func TestPutIsAtomicAndPrivate(t *testing.T) {
 	root := t.TempDir()
 	b := NewLocal(root)
@@ -3459,6 +3489,32 @@ func TestInspectDescribesTheLock(t *testing.T) {
 	}
 	if lock.PID == 0 || lock.Host == "" || lock.Environment != "dev" {
 		t.Errorf("lock descriptor is incomplete: %#v", lock)
+	}
+}
+
+func TestUnlockRefusesAnotherProcessesLockButForceSucceeds(t *testing.T) {
+	root := t.TempDir()
+	b := NewLocal(root)
+	ctx := context.Background()
+
+	// Write a lock file as if another process holds it.
+	stateDir := filepath.Join(root, "state")
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	held := `{"environment":"production","pid":999999,"host":"elsewhere","user":"someone","operation":"apply","at":"2026-09-09T10:00:00Z"}`
+	if err := os.WriteFile(filepath.Join(stateDir, "production.lock"), []byte(held), 0o600); err != nil {
+		t.Fatalf("write lock: %v", err)
+	}
+
+	if err := b.Unlock(ctx, "production"); err == nil {
+		t.Error("Unlock must refuse a lock held by another process, or `force` means nothing")
+	}
+	if err := b.ForceUnlock("production"); err != nil {
+		t.Errorf("ForceUnlock should override: %v", err)
+	}
+	if _, ok, _ := b.Inspect("production"); ok {
+		t.Error("the lock should be gone after ForceUnlock")
 	}
 }
 
@@ -3612,6 +3668,18 @@ func (l *Local) Put(ctx context.Context, environment string, s *State) error {
 		return err
 	}
 
+	// Stamp the write, but restore on any failure path: a Serial that has
+	// advanced past what is on disk would make a retry skip a value, and any
+	// caller inspecting s.Serial after a failed Put would believe a write
+	// happened. The serial is what detects stale plans, so it must not drift.
+	prevSerial, prevEnv, prevUpdated := s.Serial, s.Environment, s.UpdatedAt
+	committed := false
+	defer func() {
+		if !committed {
+			s.Serial, s.Environment, s.UpdatedAt = prevSerial, prevEnv, prevUpdated
+		}
+	}()
+
 	s.Serial++
 	s.Environment = environment
 	s.UpdatedAt = time.Now().UTC()
@@ -3643,7 +3711,11 @@ func (l *Local) Put(ctx context.Context, environment string, s *State) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmpName, path)
+	if err := os.Rename(tmpName, path); err != nil {
+		return err
+	}
+	committed = true
+	return nil
 }
 ```
 
@@ -3712,17 +3784,34 @@ func (l *Local) Lock(ctx context.Context, environment string) (Lock, error) {
 	return lock, nil
 }
 
+// Unlock releases a lock this process holds. It refuses to release a lock held
+// by anyone else — otherwise "force" would mean nothing and a stray Unlock
+// could free an environment another apply is actively mutating.
 func (l *Local) Unlock(ctx context.Context, environment string) error {
-	err := os.Remove(l.lockPath(environment))
-	if errors.Is(err, fs.ErrNotExist) {
+	held, ok, err := l.Inspect(environment)
+	if err != nil {
+		return err
+	}
+	if !ok {
 		return fmt.Errorf("environment %q is not locked", environment)
 	}
-	return err
+	if held.PID != os.Getpid() || held.Host != hostname() {
+		return fmt.Errorf("environment %q is locked by %s on %s (pid %d), not by this process; use `infra state unlock %s` to override",
+			environment, held.User, held.Host, held.PID, environment)
+	}
+	return l.removeLock(environment)
 }
 
 // ForceUnlock removes a lock regardless of holder. `infra state unlock` uses it
 // after telling the user who holds the lock.
 func (l *Local) ForceUnlock(environment string) error {
+	return l.removeLock(environment)
+}
+
+// removeLock deletes the lock file, reporting a missing lock as an error rather
+// than a silent success — a typo in an environment name must not look like it
+// worked.
+func (l *Local) removeLock(environment string) error {
 	err := os.Remove(l.lockPath(environment))
 	if errors.Is(err, fs.ErrNotExist) {
 		return fmt.Errorf("environment %q is not locked", environment)
