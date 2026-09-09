@@ -76,6 +76,19 @@ func TestRegisterRejectsDuplicateType(t *testing.T) {
 	}
 }
 
+func TestRegisterRejectsDuplicateTypeWithinOneProvider(t *testing.T) {
+	r := New()
+	err := r.Register(stubProvider{name: "test", defs: []*schema.ResourceDefinition{
+		def("test.database"), def("test.database"),
+	}})
+	if err == nil {
+		t.Fatal("a provider declaring the same type twice must be rejected, not silently clobbered")
+	}
+	if len(r.Types()) != 0 {
+		t.Error("a failed registration must leave the registry untouched")
+	}
+}
+
 func TestRegisterValidatesDefinitions(t *testing.T) {
 	r := New()
 	broken := &schema.ResourceDefinition{

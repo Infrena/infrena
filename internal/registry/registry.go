@@ -31,7 +31,10 @@ func (r *Registry) Register(p provider.Provider) error {
 	defs := p.Definitions()
 
 	// Validate everything before mutating, so a failed registration leaves the
-	// registry untouched.
+	// registry untouched. `seen` catches a provider declaring the same type
+	// twice in one call, which the registry-state check alone cannot see
+	// because the first loop never mutates.
+	seen := make(map[string]bool, len(defs))
 	for _, d := range defs {
 		if err := d.Validate(); err != nil {
 			return fmt.Errorf("provider %s: %w", p.Name(), err)
@@ -39,6 +42,10 @@ func (r *Registry) Register(p provider.Provider) error {
 		if existing, ok := r.providers[d.Type]; ok {
 			return fmt.Errorf("provider %s: resource type %q is already registered by provider %s", p.Name(), d.Type, existing.Name())
 		}
+		if seen[d.Type] {
+			return fmt.Errorf("provider %s declares resource type %q more than once", p.Name(), d.Type)
+		}
+		seen[d.Type] = true
 	}
 
 	for _, d := range defs {
