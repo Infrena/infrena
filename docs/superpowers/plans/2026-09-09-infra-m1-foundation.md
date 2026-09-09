@@ -2451,6 +2451,66 @@ func TestSensitiveAttributeIsMarkedOnRead(t *testing.T) {
 	}
 }
 
+func TestNthReadRuleSurvivesAcrossOperations(t *testing.T) {
+	// Read is the only operation with no save on its success path, so this is
+	// the only test that actually exercises begin()'s unconditional save. A
+	// create-based version of this test passes either way, because Create
+	// persists the advanced counter itself.
+	p, path := newTestProvider(t)
+	ctx := context.Background()
+	st, err := p.Create(ctx, desired("net", "test.network", map[string]value.Value{
+		"cidr": value.String("10.0.0.0/16", value.SourceExplicit),
+	}))
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	c, err := LoadCloud(path)
+	if err != nil {
+		t.Fatalf("LoadCloud: %v", err)
+	}
+	c.Failures = []FailureRule{{Op: "read", Address: "net", Nth: 2, Message: "second read fails"}}
+	if err := c.Save(path); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	if _, err := p.Read(ctx, st); err != nil {
+		t.Fatalf("first Read should succeed: %v", err)
+	}
+	if _, err := p.Read(ctx, st); err == nil {
+		t.Fatal("second Read should fail: the rule's counter must survive the reload between operations")
+	}
+}
+
+func TestNullAttributeIsTreatedAsUnset(t *testing.T) {
+	p, path := newTestProvider(t)
+	ctx := context.Background()
+	st, err := p.Create(ctx, desired("db", "test.database", map[string]value.Value{
+		"engine": value.String("postgres", value.SourceExplicit),
+	}))
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	// Someone hand-edits the cloud file and nulls an attribute out.
+	c, err := LoadCloud(path)
+	if err != nil {
+		t.Fatalf("LoadCloud: %v", err)
+	}
+	c.Resources[st.ProviderID].Attributes["password"] = nil
+	if err := c.Save(path); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	got, err := p.Read(ctx, st)
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if v, ok := got.Attributes["password"]; ok {
+		t.Errorf("a null attribute must be absent, not present as %#v", v)
+	}
+}
+
 func TestDiscoverAndImportAreNotImplementedYet(t *testing.T) {
 	p, _ := newTestProvider(t)
 	if _, err := p.Discover(context.Background(), provider.DiscoverRequest{}); err == nil {
@@ -2579,6 +2639,10 @@ func New(cloudPath string) *Provider {
 	}
 	return &Provider{cloudPath: cloudPath, defs: defs, byType: byType}
 }
+
+// Provider satisfies the provider interface. Asserted at compile time so
+// interface drift surfaces here rather than at integration.
+var _ provider.Provider = (*Provider)(nil)
 
 func (p *Provider) Name() string { return "test" }
 
@@ -2717,6 +2781,12 @@ func (p *Provider) toState(addr, resourceType, id string, attrs map[string]any) 
 	def := p.byType[resourceType]
 	out := map[string]value.Value{}
 	for name, raw := range attrs {
+		// A JSON null means the attribute is not set. Someone hand-editing the
+		// cloud file may null a value out; turning that into the string
+		// "<nil>" would silently corrupt it.
+		if raw == nil {
+			continue
+		}
 		v := fromRaw(raw)
 		v = v.WithSource(value.SourceProvider)
 		if def != nil {
@@ -2793,6 +2863,12 @@ func fromRaw(raw any) value.Value {
 			items[k] = fromRaw(item)
 		}
 		return value.Map(items, value.SourceProvider)
+	case nil:
+		// Unreachable for a top-level attribute (toState skips nulls), but a
+		// null nested inside a list or map lands here. Return the zero Value,
+		// whose KindInvalid fails loudly downstream rather than masquerading
+		// as the string "<nil>".
+		return value.Value{}
 	default:
 		return value.String(fmt.Sprint(v), value.SourceProvider)
 	}
