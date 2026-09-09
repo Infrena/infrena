@@ -2185,8 +2185,14 @@ type FailureRule struct {
 	Retryable bool   `json:"retryable,omitempty"`
 	Message   string `json:"message,omitempty"`
 
-	seen  int
-	fired bool
+	// Seen and Fired are bookkeeping, persisted deliberately. The provider
+	// reloads this file on every operation — it must, or a human's hand edit
+	// would never be observed — so unexported counters would reset each time:
+	// an Nth:1 rule would fire on every attempt instead of once, and an Nth:2
+	// rule could never reach its count at all. A human writing a rule by hand
+	// simply omits both fields.
+	Seen  int  `json:"seen,omitempty"`
+	Fired bool `json:"fired,omitempty"`
 }
 
 type Cloud struct {
@@ -2233,16 +2239,16 @@ func (c *Cloud) Save(path string) error {
 func (c *Cloud) ShouldFail(op, addr string) (*FailureRule, bool) {
 	for i := range c.Failures {
 		rule := &c.Failures[i]
-		if rule.fired || rule.Op != op || rule.Address != addr {
+		if rule.Fired || rule.Op != op || rule.Address != addr {
 			continue
 		}
-		rule.seen++
+		rule.Seen++
 		nth := rule.Nth
 		if nth <= 0 {
 			nth = 1
 		}
-		if rule.seen == nth {
-			rule.fired = true
+		if rule.Seen == nth {
+			rule.Fired = true
 			return rule, true
 		}
 	}
@@ -2602,14 +2608,18 @@ func (p *Provider) begin(ctx context.Context, op, addr string) (*Cloud, error) {
 			return nil, ctx.Err()
 		}
 	}
-	if rule, ok := c.ShouldFail(op, addr); ok {
+	rule, failing := c.ShouldFail(op, addr)
+	// ShouldFail advances persisted bookkeeping whenever a rule matches its op
+	// and address, so the cloud is written back regardless of outcome. Saving
+	// only on failure would reset a non-firing rule's Seen counter on the next
+	// load, and an Nth greater than 1 could never be reached.
+	if err := c.Save(p.cloudPath); err != nil {
+		return nil, err
+	}
+	if failing {
 		msg := rule.Message
 		if msg == "" {
 			msg = fmt.Sprintf("injected %s failure for %s", op, addr)
-		}
-		// Persist so the rule does not fire again on the next load.
-		if err := c.Save(p.cloudPath); err != nil {
-			return nil, err
 		}
 		return nil, &ErrInjected{Message: msg, Retryable: rule.Retryable}
 	}
