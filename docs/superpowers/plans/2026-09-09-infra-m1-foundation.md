@@ -232,7 +232,7 @@ func newValidateCommand(opts *GlobalOptions) *cobra.Command {
 		Use:   "validate",
 		Short: "Check configuration for errors without contacting providers",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return errors.New("validate is implemented in Task 12")
+			return errors.New("validate is implemented in Task 14")
 		},
 	}
 }
@@ -258,7 +258,7 @@ func newStateCommand(opts *GlobalOptions) *cobra.Command {
 		Use:   "list",
 		Short: "List managed resources",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return errors.New("state list is implemented in Task 13")
+			return errors.New("state list is implemented in Task 14")
 		},
 	})
 	return cmd

@@ -13,3 +13,6 @@ coverage.*
 # Editor / OS
 .DS_Store
 *.swp
+
+# SDD scratch workspace
+.superpowers/
