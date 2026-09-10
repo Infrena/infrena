@@ -89,19 +89,31 @@ var migrations []Migration
 func RegisterMigration(m Migration) { migrations = append(migrations, m) }
 
 // Decode reads a state document, applying migrations until it is current.
+//
+// A document already at CurrentVersion is unmarshalled straight into the typed
+// struct. The generic map[string]any representation is reserved for the
+// migration path, which is the only thing that needs it: JSON numbers become
+// float64 in that intermediate, so routing every load through it silently
+// rounds any integer beyond 2^53 — in the one file whose whole job is fidelity.
 func Decode(data []byte) (*State, error) {
+	var probe struct {
+		Version int `json:"version"`
+	}
+	if err := json.Unmarshal(data, &probe); err != nil {
+		return nil, fmt.Errorf("state is not valid JSON: %w", err)
+	}
+	if probe.Version > CurrentVersion {
+		return nil, fmt.Errorf("state version %d was written by a newer version of infra; this build understands up to version %d", probe.Version, CurrentVersion)
+	}
+	if probe.Version == CurrentVersion {
+		return decodeCurrent(data)
+	}
+
 	var raw map[string]any
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return nil, fmt.Errorf("state is not valid JSON: %w", err)
 	}
-
-	version := 0
-	if v, ok := raw["version"].(float64); ok {
-		version = int(v)
-	}
-	if version > CurrentVersion {
-		return nil, fmt.Errorf("state version %d was written by a newer version of infra; this build understands up to version %d", version, CurrentVersion)
-	}
+	version := probe.Version
 
 	for version < CurrentVersion {
 		m, ok := migrationFrom(version)
@@ -125,9 +137,14 @@ func Decode(data []byte) (*State, error) {
 	if err != nil {
 		return nil, err
 	}
+	return decodeCurrent(normalised)
+}
 
+// decodeCurrent unmarshals a document already at CurrentVersion into the typed
+// struct.
+func decodeCurrent(data []byte) (*State, error) {
 	var s State
-	if err := json.Unmarshal(normalised, &s); err != nil {
+	if err := json.Unmarshal(data, &s); err != nil {
 		return nil, err
 	}
 	if s.Resources == nil {

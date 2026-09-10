@@ -158,3 +158,31 @@ func TestEncodeIsStableAcrossRuns(t *testing.T) {
 		t.Fatalf("encoded state is not valid JSON: %v", err)
 	}
 }
+
+func TestDecodePreservesLargeIntegers(t *testing.T) {
+	// 2^53 + 1 is the smallest positive integer float64 cannot represent, so a
+	// state load that round-trips through map[string]any silently rounds it
+	// down. State's entire job is fidelity: an integer attribute must come back
+	// exactly as written.
+	const large = int64(1) << 53 // 9007199254740992
+	s := New("myapp", "dev")
+	r := sampleResource("db")
+	r.Attributes["big"] = value.Int(large+1, value.SourceProvider)
+	s.Set(r)
+
+	data, err := s.Encode()
+	if err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	got, err := Decode(data)
+	if err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+	back, ok := got.Resources["db"].Attributes["big"].AsInt()
+	if !ok {
+		t.Fatalf("big attribute did not decode as an integer: %#v", got.Resources["db"].Attributes["big"])
+	}
+	if back != large+1 {
+		t.Errorf("Decode returned %d, want %d", back, large+1)
+	}
+}
