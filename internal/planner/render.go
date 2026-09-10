@@ -86,11 +86,12 @@ func renderOperationLines(op Operation, opts RenderOptions) []string {
 		}
 	case OpUpdate, OpReplace:
 		for _, k := range unionKeys(op.Before, op.After) {
-			before, after := op.Before[k], op.After[k]
-			if before.Equal(after) {
+			before, hadBefore := op.Before[k]
+			after, hasAfter := op.After[k]
+			if hadBefore && hasAfter && before.Equal(after) {
 				continue
 			}
-			lines = append(lines, "      "+k+": "+renderAnnotated(before)+" -> "+renderAnnotated(after))
+			lines = append(lines, "      "+k+": "+renderSide(before, hadBefore)+" -> "+renderSide(after, hasAfter))
 		}
 	}
 	return lines
@@ -145,6 +146,31 @@ func renderForcedBy(reasons []ChangeReason) string {
 	}
 	sort.Strings(names)
 	return strings.Join(names, ", ")
+}
+
+// renderSide renders one side of an attribute diff, distinguishing an
+// attribute that is ABSENT from that side from one that is merely not yet
+// known.
+//
+// Looking a missing key up in a map yields the zero value.Value, whose Known
+// field is false, and renderLeaf renders any unknown value as "(known after
+// apply)". So an attribute the user REMOVED from configuration rendered as
+//
+//	tags: {"env": "dev"} -> (known after apply)
+//
+// which tells the reader the value will be computed during apply. The truth
+// is the opposite: it is going away. Two different facts had collapsed into
+// one string because both arrive as a Value with Known false, and the plan is
+// the artifact a person reads before agreeing to change infrastructure — a
+// wrong tense there is the failure this whole task exists to avoid.
+//
+// present is the map lookup's comma-ok, which is the only thing that
+// separates the two cases.
+func renderSide(v value.Value, present bool) string {
+	if !present {
+		return "(absent)"
+	}
+	return renderAnnotated(v)
 }
 
 // renderAnnotated renders one value plus, when it applies, the "[default]"

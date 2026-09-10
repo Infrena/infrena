@@ -270,3 +270,47 @@ func TestRenderLeafFailsClosedOnUnexpectedShapes(t *testing.T) {
 		})
 	}
 }
+
+// TestRenderDistinguishesRemovedFromUnknown covers the one case a golden
+// cannot: an attribute present on one side of a diff and absent from the
+// other. Before renderSide existed, a missing key's zero Value rendered as
+// "(known after apply)", so a REMOVED attribute claimed it would be computed
+// during apply — the opposite of the truth, on the surface a person reads
+// before agreeing to change infrastructure.
+func TestRenderDistinguishesRemovedFromUnknown(t *testing.T) {
+	p := &Plan{
+		Version: PlanVersion, Project: "myapp", Environment: "dev",
+		Operations: []Operation{{
+			Address: addr("database"),
+			Type:    "test.database",
+			Kind:    OpUpdate,
+			Before: map[string]value.Value{
+				"size": value.Int(10, value.SourceExplicit),
+				"tags": value.String("old", value.SourceExplicit),
+			},
+			After: map[string]value.Value{
+				"size": value.Int(20, value.SourceExplicit),
+				// tags removed from configuration entirely.
+				"endpoint": value.Unknown(value.KindString, value.SourceComputed),
+			},
+		}},
+	}
+
+	out := Render(p, RenderOptions{})
+
+	// The removed attribute must not claim it will be computed.
+	if strings.Contains(out, `tags: "old" -> (known after apply)`) {
+		t.Errorf("a removed attribute must not render as pending computation:\n%s", out)
+	}
+	if !strings.Contains(out, `tags: "old" -> (absent)`) {
+		t.Errorf("a removed attribute must render as absent:\n%s", out)
+	}
+	// An attribute added on the after side reads the other way round.
+	if !strings.Contains(out, "endpoint: (absent) -> (known after apply)") {
+		t.Errorf("an added computed attribute must show absent on the before side:\n%s", out)
+	}
+	// A genuine value change is unaffected.
+	if !strings.Contains(out, "size: 10 -> 20") {
+		t.Errorf("an ordinary change must still render normally:\n%s", out)
+	}
+}

@@ -7969,11 +7969,12 @@ func renderOperationLines(op Operation, opts RenderOptions) []string {
 		}
 	case OpUpdate, OpReplace:
 		for _, k := range unionKeys(op.Before, op.After) {
-			before, after := op.Before[k], op.After[k]
-			if before.Equal(after) {
+			before, hadBefore := op.Before[k]
+			after, hasAfter := op.After[k]
+			if hadBefore && hasAfter && before.Equal(after) {
 				continue
 			}
-			lines = append(lines, "      "+k+": "+renderAnnotated(before)+" -> "+renderAnnotated(after))
+			lines = append(lines, "      "+k+": "+renderSide(before, hadBefore)+" -> "+renderSide(after, hasAfter))
 		}
 	}
 	return lines
