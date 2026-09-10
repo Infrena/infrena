@@ -252,6 +252,18 @@ attributes are known, the same evaluator finishes the expression.
 Unknownness is contagious: any function or concatenation with an unknown argument yields an
 unknown result, carrying the union of its arguments' sensitivity.
 
+**Interpolation applies to string values only.** An expression inside a list element or a
+map value — `tags: ["${environment}"]` — is rejected with a diagnostic rather than
+silently left unevaluated. Every example in `PLAN.md` §10 interpolates a scalar, and this
+states the rule those examples imply rather than adding one.
+
+The restriction is a Phase 1 simplification, not a language decision. Evaluating
+composites per leaf is a natural extension and becomes worth doing in M4, when variables
+make `tags` and similar collections a common place to want interpolation. Until then a
+loud refusal is the honest behaviour: silently emitting the literal text `${environment}`
+into a tag would be far worse than an error, and it is the shape of failure this project
+has repeatedly had to fix elsewhere.
+
 `secret: NAME` is a distinct declaration form rather than a function. It resolves from the
 process environment in Phase 1, marks the resulting value `Sensitive`, and is the
 integration point for external secret stores in Phase 5.

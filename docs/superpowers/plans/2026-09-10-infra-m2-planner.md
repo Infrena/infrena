@@ -1192,14 +1192,24 @@ func sensitiveAnywhere(v value.Value) bool {
 	}
 	switch v.Kind {
 	case value.KindList:
-		items, _ := v.Raw.([]value.Value)
+		items, ok := v.Raw.([]value.Value)
+		if !ok {
+			// A value whose Raw does not match its Kind cannot be inspected.
+			// Its sensitivity is unknown, so classify it: over-redacting a
+			// corrupt value is recoverable, leaking a secret is not. A security
+			// check that cannot verify safety must deny.
+			return true
+		}
 		for _, item := range items {
 			if sensitiveAnywhere(item) {
 				return true
 			}
 		}
 	case value.KindMap:
-		m, _ := v.Raw.(map[string]value.Value)
+		m, ok := v.Raw.(map[string]value.Value)
+		if !ok {
+			return true
+		}
 		for _, item := range m {
 			if sensitiveAnywhere(item) {
 				return true
