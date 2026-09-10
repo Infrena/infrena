@@ -11,6 +11,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"infra/pkg/provider"
 )
 
 // DefaultCloudPath is where the fake cloud lives inside a project.
@@ -24,13 +26,58 @@ type CloudResource struct {
 	Attributes map[string]any `json:"attributes"`
 }
 
+// Retryability is how a failure rule names one of the three
+// provider.Retryability classifications in the cloud file.
+//
+// A boolean cannot express the middle category, and spec §15 gives all three
+// materially different executor behaviour: Create is never retried on an
+// ambiguous failure, Delete is retried only when the provider says it is safe.
+// Spec §18 requires a test per category, and this provider is the only thing
+// that will ever produce those errors.
+type Retryability string
+
+const (
+	// RetryNotSafe means retrying could duplicate or corrupt the resource.
+	RetryNotSafe Retryability = "not_safe"
+	// RetryConditional means the outcome is ambiguous: the operation may or
+	// may not have taken effect.
+	RetryConditional Retryability = "conditional"
+	// RetrySafe means the operation provably did not take effect.
+	RetrySafe Retryability = "safe"
+)
+
+// Classify maps a rule's classification onto the provider constant. An absent
+// value is the conservative NotSafeToRetry.
+func (r Retryability) Classify() provider.Retryability {
+	switch r {
+	case RetrySafe:
+		return provider.SafeToRetry
+	case RetryConditional:
+		return provider.ConditionallyRetryable
+	default:
+		return provider.NotSafeToRetry
+	}
+}
+
+// valid reports whether r is a recognised classification. The empty string is
+// valid and means "absent".
+func (r Retryability) valid() bool {
+	switch r {
+	case "", RetryNotSafe, RetryConditional, RetrySafe:
+		return true
+	default:
+		return false
+	}
+}
+
 // FailureRule injects a failure. Nth counts from 1; the rule fires once.
 type FailureRule struct {
-	Op        string `json:"op"` // create, read, update, delete
-	Address   string `json:"address"`
-	Nth       int    `json:"nth"`
-	Retryable bool   `json:"retryable,omitempty"`
-	Message   string `json:"message,omitempty"`
+	Op      string `json:"op"` // create, read, update, delete
+	Address string `json:"address"`
+	Nth     int    `json:"nth"`
+	// Retryability is absent by default, meaning not safe to retry.
+	Retryability Retryability `json:"retryability,omitempty"`
+	Message      string       `json:"message,omitempty"`
 
 	// Seen and Fired are bookkeeping and must be exported and persisted: the
 	// provider reloads the cloud file on every operation, so an unexported
@@ -66,6 +113,14 @@ func LoadCloud(path string) (*Cloud, error) {
 	}
 	if c.Resources == nil {
 		c.Resources = map[string]*CloudResource{}
+	}
+	for i, rule := range c.Failures {
+		// Rejected rather than defaulted: a typo that silently classifies as
+		// not-safe is a rule whose retry behaviour is never what the person
+		// editing this file intended, and nothing would ever say so.
+		if !rule.Retryability.valid() {
+			return nil, fmt.Errorf("%s: failure rule %d: unknown retryability %q; use %q, %q or %q", path, i, string(rule.Retryability), RetryNotSafe, RetryConditional, RetrySafe)
+		}
 	}
 	return &c, nil
 }

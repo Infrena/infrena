@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -129,7 +130,7 @@ func TestUpdateAndDelete(t *testing.T) {
 func TestInjectedFailureIsClassified(t *testing.T) {
 	p, path := newTestProvider(t)
 	c, _ := LoadCloud(path)
-	c.Failures = []FailureRule{{Op: "create", Address: "db", Nth: 1, Retryable: true, Message: "throttled"}}
+	c.Failures = []FailureRule{{Op: "create", Address: "db", Nth: 1, Retryability: RetrySafe, Message: "throttled"}}
 	_ = c.Save(path)
 
 	_, err := p.Create(context.Background(), desired("db", "test.database", map[string]value.Value{
@@ -255,7 +256,7 @@ func TestNthFailureRuleSurvivesAcrossOperations(t *testing.T) {
 		t.Fatal("second Create must fail: the rule's Seen counter must have persisted across the first call")
 	}
 	if got := p.ClassifyError(err); got != provider.NotSafeToRetry {
-		t.Errorf("ClassifyError = %v, want NotSafeToRetry (rule did not set Retryable)", got)
+		t.Errorf("ClassifyError = %v, want NotSafeToRetry (rule set no retryability)", got)
 	}
 }
 
@@ -425,4 +426,71 @@ func TestCompositeAttributesRoundTripAsPlainJSON(t *testing.T) {
 	}
 	requirePlainTags(t, "Update")
 	requireLeaves(t, updated.Attributes["tags"], "Update")
+}
+
+// TestFailureRuleReachesAllThreeClassifications drives ClassifyError from the
+// cloud file, the way a person or an M3 test would.
+//
+// The rule carried a `Retryable bool`, which maps onto exactly two of the three
+// provider.Retryability constants. Spec §15 gives the three materially
+// different executor behaviour and spec §18 names "retry classification honored
+// for each of the three categories" as a required test, so with a boolean a
+// third of M3's retry logic was untestable — the fake provider is the only
+// thing that will ever produce these errors.
+func TestFailureRuleReachesAllThreeClassifications(t *testing.T) {
+	cases := []struct {
+		name  string
+		field string
+		want  provider.Retryability
+	}{
+		{"absent defaults to not safe", "", provider.NotSafeToRetry},
+		{"not_safe", `"retryability": "not_safe",`, provider.NotSafeToRetry},
+		{"conditional", `"retryability": "conditional",`, provider.ConditionallyRetryable},
+		{"safe", `"retryability": "safe",`, provider.SafeToRetry},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "fake-cloud.json")
+			doc := `{
+  "resources": {},
+  "failures": [
+    {"op": "create", "address": "db", "nth": 1, ` + tc.field + ` "message": "boom"}
+  ]
+}`
+			if err := os.WriteFile(path, []byte(doc), 0o600); err != nil {
+				t.Fatalf("write cloud: %v", err)
+			}
+			p := New(path)
+
+			_, err := p.Create(context.Background(), desired("db", "test.database", map[string]value.Value{
+				"engine": value.String("postgres", value.SourceExplicit),
+			}))
+			if err == nil {
+				t.Fatal("expected the injected failure")
+			}
+			if got := p.ClassifyError(err); got != tc.want {
+				t.Errorf("ClassifyError = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestUnknownRetryabilityIsRejected keeps a typo in a hand-edited file loud.
+// Silently treating "sfe" as not-safe is the same defect class that has already
+// bitten this branch twice: a value interpreted by its surface text.
+func TestUnknownRetryabilityIsRejected(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "fake-cloud.json")
+	doc := `{"resources": {}, "failures": [{"op": "create", "address": "db", "retryability": "sfe"}]}`
+	if err := os.WriteFile(path, []byte(doc), 0o600); err != nil {
+		t.Fatalf("write cloud: %v", err)
+	}
+
+	_, err := LoadCloud(path)
+	if err == nil {
+		t.Fatal("LoadCloud accepted an unrecognised retryability")
+	}
+	if !strings.Contains(err.Error(), "sfe") {
+		t.Errorf("error does not name the offending value: %v", err)
+	}
 }

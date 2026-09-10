@@ -17,8 +17,9 @@ import (
 // ErrInjected wraps a deliberately injected failure so ClassifyError can
 // recognise it.
 type ErrInjected struct {
-	Message   string
-	Retryable bool
+	Message string
+	// Retryability is the classification the failure rule declared.
+	Retryability Retryability
 }
 
 // Error returns the injected failure message.
@@ -58,10 +59,7 @@ func (p *Provider) Definitions() []*schema.ResourceDefinition { return p.defs }
 func (p *Provider) ClassifyError(err error) provider.Retryability {
 	var injected *ErrInjected
 	if errors.As(err, &injected) {
-		if injected.Retryable {
-			return provider.SafeToRetry
-		}
-		return provider.NotSafeToRetry
+		return injected.Retryability.Classify()
 	}
 	return provider.NotSafeToRetry
 }
@@ -92,7 +90,7 @@ func (p *Provider) begin(ctx context.Context, op, addr string) (*Cloud, error) {
 		if msg == "" {
 			msg = fmt.Sprintf("injected %s failure for %s", op, addr)
 		}
-		return nil, &ErrInjected{Message: msg, Retryable: rule.Retryable}
+		return nil, &ErrInjected{Message: msg, Retryability: rule.Retryability}
 	}
 	return c, nil
 }
