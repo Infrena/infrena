@@ -82,6 +82,38 @@ func (l *Local) ForceUnlock(environment string) error {
 	return l.removeLock(environment)
 }
 
+// requireOwnLock refuses unless environment is currently locked by this
+// process. Put calls it before writing anything: see the design note on Put
+// in local.go for why this re-derives ownership from the lock file's
+// contents — the same check Unlock already makes — rather than trusting a
+// token handed back by Lock.
+//
+// PID+host is what Unlock already checks, and it is deliberately not
+// strengthened here: a PID can be reused by the OS after the owning process
+// exits, so in principle a reused PID on the same host could pass this
+// check without ever having called Lock. In practice that would require the
+// original locker to exit, this process (or a look-alike) to land on the
+// exact same PID, and no ForceUnlock/removeLock to have run in between —
+// and the operator remedy for a stale lock is `infra state unlock`, not a
+// second process racing to reuse a PID. Locks here guard against ordinary
+// concurrent applies, not an adversary; if that changes, the lock file
+// should carry a random token alongside PID/host and this check should
+// compare the token instead.
+func (l *Local) requireOwnLock(environment string) error {
+	held, ok, err := l.Inspect(environment)
+	if err != nil {
+		return fmt.Errorf("checking lock for %q before writing state: %w", environment, err)
+	}
+	if !ok {
+		return fmt.Errorf("refusing to write state for %q: no lock is held; call Lock first: %w", environment, ErrNotLocked)
+	}
+	if held.PID != os.Getpid() || held.Host != hostname() {
+		return fmt.Errorf("refusing to write state for %q: locked by %s on %s (pid %d), not by this process: %w",
+			environment, held.User, held.Host, held.PID, ErrNotLocked)
+	}
+	return nil
+}
+
 // removeLock deletes the lock file, reporting a missing lock as an error rather
 // than a silent success — a typo in an environment name must not look like it
 // worked.

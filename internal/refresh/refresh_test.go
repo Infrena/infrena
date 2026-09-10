@@ -160,6 +160,9 @@ func TestRefreshNeverWritesState(t *testing.T) {
 	created := createNetwork(t, prov, "net")
 
 	backend := state.NewLocal(root)
+	if _, err := backend.Lock(context.Background(), "dev"); err != nil {
+		t.Fatalf("Lock: %v", err)
+	}
 	st := state.New("myapp", "dev")
 	st.Set(created)
 	if err := backend.Put(context.Background(), "dev", st); err != nil {

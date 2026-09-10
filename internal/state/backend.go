@@ -9,6 +9,13 @@ import (
 // ErrLocked is wrapped by every lock conflict so callers can test for it.
 var ErrLocked = errors.New("environment is locked")
 
+// ErrNotLocked is wrapped by Put when the caller has not acquired the
+// environment's lock — or no longer holds it — at the moment of the write.
+// The storage layer enforces this itself, at the write, rather than relying
+// on callers to have locked earlier: invariant 5 is a property of what the
+// backend allows, not of caller discipline (spec §9.2, §15).
+var ErrNotLocked = errors.New("state write refused: environment is not locked by this process")
+
 // Lock describes who holds an environment lock. It exists so a conflict can
 // report the holder rather than merely refusing. Spec §9.2.
 type Lock struct {

@@ -190,8 +190,15 @@ resources: {}
 
 	st := state.New("myapp", "dev")
 	st.Set(rs)
-	if err := backendFor(dir).Put(ctx, "dev", st); err != nil {
+	b := backendFor(dir)
+	if _, err := b.Lock(ctx, "dev"); err != nil {
+		t.Fatalf("Lock: %v", err)
+	}
+	if err := b.Put(ctx, "dev", st); err != nil {
 		t.Fatalf("seeding state: %v", err)
+	}
+	if err := b.Unlock(ctx, "dev"); err != nil {
+		t.Fatalf("Unlock: %v", err)
 	}
 
 	opts := &GlobalOptions{Dir: dir, Parallelism: 4}

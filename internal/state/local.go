@@ -42,9 +42,31 @@ func (l *Local) Get(ctx context.Context, environment string) (*State, error) {
 	return s, nil
 }
 
-// Put writes state atomically: a temporary file in the same directory, then a
-// rename. A crash mid-write therefore cannot corrupt state.
+// Put writes state atomically: a temporary file in the same directory, then
+// a rename. A crash mid-write therefore cannot corrupt state.
+//
+// Put refuses to write unless the caller currently holds environment's
+// lock, checked by re-reading the lock file's contents and comparing PID
+// and host against this process — the same check Unlock already makes. This
+// keeps the Backend.Put(ctx, environment, s) signature exactly as the M3
+// authoring contract already pins it, consumed by internal/refresh,
+// internal/cli and every later M3 task as written: a token-carrying
+// signature such as Put(ctx, environment, s, lock) would ripple through
+// every one of those call sites and the Backend interface itself, for a
+// guarantee the weaker check already gives at the point that actually
+// matters — the write. What that costs: the check is enforced at runtime on
+// every call rather than at compile time, and each Put now costs one extra
+// file read to re-Inspect the lock. Both are cheap next to a signature
+// change touching every caller in the tree — refresh and apply each Put
+// many times across one run under a single held lock (spec §15), so the
+// added read is one stat-and-read alongside a write already going to disk —
+// and plan never calls Put at all, so it stays lock-free with no
+// special-casing needed here.
 func (l *Local) Put(ctx context.Context, environment string, s *State) error {
+	if err := l.requireOwnLock(environment); err != nil {
+		return err
+	}
+
 	path := l.statePath(environment)
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
