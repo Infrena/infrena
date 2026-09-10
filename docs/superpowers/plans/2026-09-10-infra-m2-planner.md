@@ -9454,16 +9454,33 @@ Expected: PASS — eight new tests plus Task 10's.
 
 - [ ] **Step 5: Delete the duplicate cycle detector**
 
-`internal/compiler/validate.go` grew a private three-colour DFS (`findCycles`) because Task 8 precedes Task 10. Now that `graph.Cycle()` exists and is tested, the compiler must not carry a second implementation: two cycle detectors mean configuration one accepts and the other rejects.
+`internal/compiler/validate.go` grew a private three-colour DFS because Task 8 precedes Task 10. Now that `graph.Cycle()` exists and is tested, the compiler must not carry a second implementation: two cycle detectors mean configuration one accepts and the other rejects.
 
-In `internal/compiler/validate.go`, delete `findCycles` and the `color` constants, and build a graph over addresses instead:
+**The function is named `firstCycle`, not `findCycles`.** Task 8 shipped `findCycles`; a fix round during Task 8 narrowed it to return one cycle and renamed it (commit `a56d86f`). Delete `firstCycle`, the `color` type, and the `white`/`gray`/`black` constants.
+
+**Two shape differences have to be bridged, and getting either wrong is silent.**
+
+*Direction.* `firstCycle` walked `r.DependsOn` as an edge from the resource to its dependency, so the reported sequence reads in depends-on order — `a → b → d` means "a depends on b depends on d". The planner's graph runs the other way (a dependency must execute first). `cycleFor` exists only to feed the diagnostic, so it builds edges in depends-on direction, and a comment says why. Building it in execution direction detects the same cycle but prints it backwards, and no existing test would notice.
+
+*The closing repeat.* `firstCycle` returned the cycle with its first address repeated at the end; `graph.Cycle()` returns it without. This is not cosmetic — `cycleDiagnostic` computes `Related: cycle[1 : len(cycle)-1]`, which assumes the repeat is there. Hand it an unwrapped slice and it silently drops the last genuine member of the cycle from `Related`, and for a two-node cycle it yields an empty `Related` instead of the one other member. `cycleFor` therefore re-adds the repeat, restoring exactly the slice `cycleDiagnostic` already expects, and `cycleDiagnostic` is left untouched.
+
+In `internal/compiler/validate.go`:
 
 ```go
 // cycleFor reports a dependency cycle in the resolved configuration, or nil.
 // Detection lives in internal/graph so the compiler and the executor cannot
 // disagree about what a cycle is.
-func cycleFor(cfg *ResolvedConfig) []string {
-	type node struct{ id string }
+//
+// Edges run resource → dependency, the direction the diagnostic reads in
+// ("a → b" means a depends on b), which is the opposite of the planner's
+// graph, where an edge means "must execute first". Both orientations detect
+// the same cycles; only this one prints in the order the message claims.
+//
+// graph.Cycle returns members without repeating the first at the end. The
+// closing repeat is re-added here because cycleDiagnostic slices
+// cycle[1:len(cycle)-1] for its Related list and would otherwise drop a real
+// member of the cycle.
+func cycleFor(cfg *ResolvedConfig) []address.Address {
 	g := graph.New[addrNode]()
 	for _, addr := range cfg.Addresses() {
 		g.Add(addrNode{addr})
@@ -9471,11 +9488,28 @@ func cycleFor(cfg *ResolvedConfig) []string {
 	for _, addr := range cfg.Addresses() {
 		r := cfg.Resources[addr.String()]
 		for _, dep := range r.DependsOn {
-			// dep must run before addr.
-			g.Edge(dep.String(), addr.String())
+			if _, ok := cfg.Get(dep); !ok {
+				continue // not a node in this graph; stage 6 already reported it
+			}
+			g.Edge(addr.String(), dep.String())
 		}
 	}
-	return g.Cycle()
+
+	ids := g.Cycle()
+	if len(ids) == 0 {
+		return nil
+	}
+
+	out := make([]address.Address, 0, len(ids)+1)
+	for _, id := range ids {
+		addr, err := address.Parse(id)
+		if err != nil {
+			// Impossible: every id came from an Address we put in.
+			panic("compiler: graph returned an unparseable address " + strconv.Quote(id) + ": " + err.Error())
+		}
+		out = append(out, addr)
+	}
+	return append(out, out[0])
 }
 
 // addrNode adapts an address to the graph's Node interface.
@@ -9484,9 +9518,71 @@ type addrNode struct{ addr address.Address }
 func (n addrNode) ID() string { return n.addr.String() }
 ```
 
-Delete the unused `node` type declaration if your editor leaves it — the snippet above shows the shape, and the local `type node struct{ id string }` line is not needed; remove it.
+Note the skip for a dependency that is not a node: `firstCycle` had it, and without it `g.Edge` panics on a reference stage 6 already reported as unresolved — turning a reported user error into a crash.
 
-Rewrite `validateGraph`'s cycle branch to call `cycleFor` and build its diagnostic from the returned `[]string`. Keep the diagnostic's wording and its requirement to name every member of the cycle: the existing test asserts that, and it must keep passing unchanged.
+`validateGraph`'s cycle branch changes only its call:
+
+```go
+	if cycle := cycleFor(cfg); cycle != nil {
+		ds.Add(cycleDiagnostic(cfg, cycle))
+	}
+```
+
+`cycleDiagnostic` and `cycleKey` are not touched.
+
+- [ ] **Step 5b: Pin the diagnostic's shape BEFORE the swap**
+
+The existing cycle test asserts only that every member is *named somewhere* in the output. That cannot catch either shape difference above: a backwards sequence names the same members, and a dropped closing repeat only shortens `Related`. Write this test first, run it against the **current** `firstCycle` implementation to confirm it passes, and only then perform the swap — it is the characterisation test that makes "behaviour-preserving" a checkable claim rather than an assertion.
+
+Append to `internal/compiler/validate_test.go`:
+
+```go
+// TestCycleDiagnosticShapeIsStable pins the two properties that survive the
+// move to internal/graph but that the membership assertion above cannot see:
+// the sequence reads in depends-on order and closes back on its first member,
+// and Related therefore names every member except the one carrying Origin.
+func TestCycleDiagnosticShapeIsStable(t *testing.T) {
+	a := res("a", "test.network", map[string]value.Value{"cidr": value.String("10.0.0.0/16", value.SourceExplicit)})
+	b := res("b", "test.network", map[string]value.Value{"cidr": value.String("10.0.1.0/16", value.SourceExplicit)})
+	c := res("c", "test.network", map[string]value.Value{"cidr": value.String("10.0.2.0/16", value.SourceExplicit)})
+	a.DependsOn = []address.Address{{Name: "b"}}
+	b.DependsOn = []address.Address{{Name: "c"}}
+	c.DependsOn = []address.Address{{Name: "a"}}
+	graph := cfg(a, b, c)
+
+	ds := validateGraph(&graph, testRegistry(t))
+	var d diag.Diagnostic
+	for _, cand := range ds {
+		if strings.HasPrefix(cand.Summary, "dependency cycle: ") {
+			d = cand
+		}
+	}
+	if d.Summary == "" {
+		t.Fatalf("no cycle diagnostic: %+v", ds)
+	}
+
+	// a depends on b depends on c depends on a: the sequence reads in that
+	// order and closes on a. Reversed, it would read "a → c → b → a" and be
+	// a false statement about the configuration.
+	if want := "dependency cycle: a → b → c → a"; d.Summary != want {
+		t.Errorf("summary = %q, want %q", d.Summary, want)
+	}
+
+	// Related is every member but the first, which carries Origin. Without
+	// the closing repeat this slice silently loses c.
+	if len(d.Related) != 2 {
+		t.Fatalf("Related = %v, want 2 entries (b and c)", d.Related)
+	}
+	for i, want := range []string{"b", "c"} {
+		if got := d.Related[i].String(); got != want {
+			t.Errorf("Related[%d] = %q, want %q", i, got, want)
+		}
+	}
+}
+```
+
+Run: `go test ./internal/compiler/ -run TestCycleDiagnosticShapeIsStable -v`
+Expected: **PASS against the unmodified code.** This test is a characterisation of behaviour that must not change — it is green before the swap and must stay green after. If it fails before you touch anything, the assumption this task is built on is wrong: stop and report which property differs rather than editing the test to match.
 
 - [ ] **Step 6: Confirm the compiler's cycle tests still pass unchanged**
 
@@ -9496,8 +9592,10 @@ Expected: PASS with **no edits to `validate_test.go`**. If a test needed changin
 
 Then confirm the duplicate is gone:
 
-Run: `grep -rn 'func findCycles\|gray\|grey' internal/compiler/`
+Run: `grep -rn 'func firstCycle\|func findCycles\|white color\|gray\|black' internal/compiler/`
 Expected: no output.
+
+(The old text of this step grepped for `func findCycles`, a name that no longer exists — a check that passes whether or not the duplicate was removed. If a verification step cannot fail, it is not verifying anything.)
 
 - [ ] **Step 7: Run everything**
 
