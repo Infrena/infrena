@@ -116,15 +116,7 @@ func newApplyCommand(opts *GlobalOptions) *cobra.Command {
 					return fmt.Errorf("building execution graph: %w", err)
 				}
 
-				res, execDiags := executor.Apply(ctx, p2, g, st, executor.Options{
-					Parallelism: opts.Parallelism,
-					PerProvider: opts.Parallelism, // no dedicated flag yet; see the note below
-					Registry:    reg,
-					Backend:     backend,
-					Environment: environment,
-					Retry:       defaultRetryPolicy(),
-					Now:         time.Now,
-				})
+				res, execDiags := executor.Apply(ctx, p2, g, st, executorOptions(opts, reg, backend, environment))
 				execDiags.Render(cmd.ErrOrStderr())
 
 				// executor.Render (Task 12) is THE result renderer. An earlier
@@ -172,7 +164,7 @@ func computePlan(ctx context.Context, cmd *cobra.Command, backend *state.Local, 
 	// no-op re-assignment on that path.
 	st.Project = cfg.Project
 
-	obs, refreshDiags := refresh.Refresh(ctx, st, reg, opts.Parallelism)
+	obs, refreshDiags := refresh.Refresh(ctx, st, reg, opts.Parallelism, perProviderParallelism)
 	refreshDiags.Render(cmd.ErrOrStderr())
 	if refreshDiags.HasErrors() {
 		return nil, nil, errors.New("refreshing provider state failed")
@@ -287,3 +279,48 @@ func releaseLock(backend *state.Local, environment string, stderr io.Writer) {
 // and exposes executor.Render(Result, RenderOptions). Two renderers for one
 // Result is the duplicate-implementation defect that leaked a secret in M2,
 // so this definition was removed and the RunE above calls Task 12's instead.
+
+// perProviderParallelism is spec §15/§34's SECOND concurrency bound: how
+// many operations may be in flight against one provider at a time,
+// independent of --parallelism.
+//
+// It is a constant rather than opts.Parallelism, and that is the whole
+// point. Both commands used to pass PerProvider: opts.Parallelism, which
+// can never bind: the global semaphore already admits at most Parallelism
+// operations, so providerInFlight[p] >= PerProvider is unreachable before
+// the global check has already deferred the node. The mechanism was
+// implemented, tested in internal/executor, and inert in the shipped
+// product — "one provider's rate limits cannot be exhausted by an unrelated
+// wide graph" was a property nothing actually provided.
+//
+// 8, below --parallelism's default of 10, so it binds at default settings
+// rather than only for users who raise the global bound — a ceiling that is
+// inert unless configured is the same defect one step removed. It is not
+// tuned to any real API, because M3 has no real provider to tune against;
+// it is a deliberately conservative ceiling of the order cloud APIs
+// throttle at.
+//
+// A per-provider FLAG is deliberately not added here. Spec §37 fixes the
+// global option set for this milestone, and the right long-run answer is
+// probably for a provider to declare its own ceiling (it is the only party
+// that knows its rate limits) rather than for the user to guess one. Both
+// are Phase 3 decisions, when a provider with real limits exists. What this
+// constant fixes is that the bound is real in the meantime.
+const perProviderParallelism = 8
+
+// executorOptions builds the executor.Options apply and destroy both run
+// with. One constructor, not two identical literals: the copies had already
+// drifted in a comment and not in behaviour, and the next drift is the one
+// where destroy silently gets different concurrency or a different retry
+// policy from apply for no stated reason.
+func executorOptions(opts *GlobalOptions, reg *registry.Registry, backend *state.Local, environment string) executor.Options {
+	return executor.Options{
+		Parallelism: opts.Parallelism,
+		PerProvider: perProviderParallelism,
+		Registry:    reg,
+		Backend:     backend,
+		Environment: environment,
+		Retry:       defaultRetryPolicy(),
+		Now:         time.Now,
+	}
+}

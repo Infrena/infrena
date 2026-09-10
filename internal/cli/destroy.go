@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"time"
 
 	"github.com/spf13/cobra"
 
@@ -92,15 +91,7 @@ func newDestroyCommand(opts *GlobalOptions) *cobra.Command {
 					return fmt.Errorf("building execution graph: %w", err)
 				}
 
-				res, execDiags := executor.Apply(ctx, p2, g, st, executor.Options{
-					Parallelism: opts.Parallelism,
-					PerProvider: opts.Parallelism,
-					Registry:    reg,
-					Backend:     backend,
-					Environment: environment,
-					Retry:       defaultRetryPolicy(),
-					Now:         time.Now,
-				})
+				res, execDiags := executor.Apply(ctx, p2, g, st, executorOptions(opts, reg, backend, environment))
 				execDiags.Render(cmd.ErrOrStderr())
 
 				// executor.Render (Task 12) is THE result renderer — see

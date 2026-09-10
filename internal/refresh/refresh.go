@@ -39,7 +39,16 @@ type Observation struct {
 type Observations map[string]Observation
 
 // Refresh reads the current provider state of every resource recorded in
-// st, concurrently, bounded by parallelism (values below 1 behave as 1).
+// st, concurrently, bounded twice: globally by parallelism, and per provider
+// by perProvider (spec §10 — "bounded by the same per-provider semaphore the
+// executor uses (§15)"). Values below 1 behave as 1 for both.
+//
+// The second bound is not decoration. A refresh reads EVERY resource in
+// state, so it is the widest fan-out in the product — wider than most
+// applies — and it is exactly the operation §34's "bounded per provider or
+// account to avoid API throttling" is about: a state file holding two
+// hundred resources of one type would otherwise open two hundred reads
+// against that one provider the moment the global bound allowed it.
 //
 // Refresh never writes to st or anywhere else: it is a pure read, and its
 // result is meant to be used in memory and discarded, exactly as plan does.
@@ -47,9 +56,12 @@ type Observations map[string]Observation
 // it is never treated as deletion. Results and diagnostics are assembled in
 // address order regardless of which read finishes first, so two runs over
 // the same state produce byte-identical output.
-func Refresh(ctx context.Context, st *state.State, reg *registry.Registry, parallelism int) (Observations, diag.Diagnostics) {
+func Refresh(ctx context.Context, st *state.State, reg *registry.Registry, parallelism, perProvider int) (Observations, diag.Diagnostics) {
 	if parallelism < 1 {
 		parallelism = 1
+	}
+	if perProvider < 1 {
+		perProvider = 1
 	}
 
 	addrs := st.Addresses() // already sorted
@@ -57,14 +69,45 @@ func Refresh(ctx context.Context, st *state.State, reg *registry.Registry, paral
 	problems := make([]diag.Diagnostics, len(addrs))
 
 	sem := make(chan struct{}, parallelism)
+	// One semaphore per provider, created on demand. Built up front, on the
+	// owner goroutine, rather than lazily inside the workers: a map written
+	// from several goroutines at once is a data race, and taking a mutex
+	// around it would serialise precisely the fan-out this function exists
+	// to parallelise. A resource whose type resolves to no provider gets no
+	// per-provider bound and needs none — readOne turns it into a
+	// diagnostic without ever calling out.
+	perProviderSem := map[string]chan struct{}{}
+	providerOf := make([]string, len(addrs))
+	for i, addr := range addrs {
+		rs, ok := st.Get(addr)
+		if !ok {
+			continue
+		}
+		prov, ok := reg.Provider(rs.Type)
+		if !ok {
+			continue
+		}
+		name := prov.Name()
+		providerOf[i] = name
+		if _, ok := perProviderSem[name]; !ok {
+			perProviderSem[name] = make(chan struct{}, perProvider)
+		}
+	}
+
 	var wg sync.WaitGroup
 	for i, addr := range addrs {
 		i, addr := i, addr
 		wg.Add(1)
 		sem <- struct{}{}
+		if ps := perProviderSem[providerOf[i]]; ps != nil {
+			ps <- struct{}{}
+		}
 		go func() {
 			defer wg.Done()
 			defer func() { <-sem }()
+			if ps := perProviderSem[providerOf[i]]; ps != nil {
+				defer func() { <-ps }()
+			}
 			results[i], problems[i] = readOne(ctx, st, reg, addr)
 		}()
 	}

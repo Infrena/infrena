@@ -634,3 +634,48 @@ resources:
 		t.Errorf("db.engine = %q, want mysql — the replacement did not take effect", engine)
 	}
 }
+
+// TestExecutorOptionsDoesNotConflateTheTwoConcurrencyBounds pins spec
+// §15/§34's second bound at the seam where it was lost.
+//
+// The mechanism is tested in internal/executor
+// (TestApplyBoundsPerProviderIndependentlyOfGlobalParallelism); what was
+// broken is the WIRING. Both commands passed PerProvider: opts.Parallelism,
+// which can never bind — the global semaphore admits at most Parallelism
+// operations, so the per-provider check is unreachable before the global
+// one has already deferred the node. A bound that cannot fire is not a
+// bound.
+//
+// This asserts against executorOptions, the function production actually
+// calls, rather than reading the constant back: the constant being 8 is not
+// the property, the two bounds being independent is. An earlier bounds test
+// in internal/executor set PerProvider == Parallelism and therefore could
+// not have distinguished them either — hence the explicit inequality here.
+func TestExecutorOptionsDoesNotConflateTheTwoConcurrencyBounds(t *testing.T) {
+	// The property is independence, not any particular number: PerProvider
+	// must not TRACK Parallelism. (Asserting inequality at a single value
+	// would fail the moment the constant coincided with that value, which
+	// is a coincidence, not a conflation.)
+	var seen int
+	for i, parallelism := range []int{1, 8, 20, 100} {
+		got := executorOptions(&GlobalOptions{Parallelism: parallelism}, nil, nil, "dev")
+		if got.Parallelism != parallelism {
+			t.Errorf("Parallelism = %d, want %d — --parallelism must reach the executor unchanged", got.Parallelism, parallelism)
+		}
+		if got.PerProvider < 1 {
+			t.Errorf("PerProvider = %d, want at least 1", got.PerProvider)
+		}
+		if i == 0 {
+			seen = got.PerProvider
+			continue
+		}
+		if got.PerProvider != seen {
+			t.Fatalf("PerProvider = %d at --parallelism %d but %d at --parallelism 1: the per-provider bound tracks the global one, so it can never fire",
+				got.PerProvider, parallelism, seen)
+		}
+	}
+
+	if got := executorOptions(&GlobalOptions{Parallelism: 10}, nil, nil, "dev"); got.PerProvider >= 10 {
+		t.Errorf("PerProvider = %d at the default --parallelism of 10 — the per-provider bound is inert out of the box", got.PerProvider)
+	}
+}

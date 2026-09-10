@@ -54,7 +54,7 @@ func TestRefreshReadsCurrentProviderState(t *testing.T) {
 	st := state.New("myapp", "dev")
 	st.Set(created)
 
-	obs, ds := Refresh(context.Background(), st, reg, 4)
+	obs, ds := Refresh(context.Background(), st, reg, 4, 4)
 	if ds.HasErrors() {
 		t.Fatalf("unexpected diagnostics: %+v", ds)
 	}
@@ -88,7 +88,7 @@ func TestRefreshDetectsDeletionOutsideInfra(t *testing.T) {
 		t.Fatalf("Delete: %v", err)
 	}
 
-	obs, ds := Refresh(context.Background(), st, reg, 4)
+	obs, ds := Refresh(context.Background(), st, reg, 4, 4)
 	if ds.HasErrors() {
 		t.Fatalf("a deletion outside infra is not a planning error: %+v", ds)
 	}
@@ -126,7 +126,7 @@ func TestRefreshReadErrorIsADiagnosticAndNeverADeletion(t *testing.T) {
 		t.Fatalf("Save: %v", err)
 	}
 
-	obs, ds := Refresh(context.Background(), st, reg, 4)
+	obs, ds := Refresh(context.Background(), st, reg, 4, 4)
 	if !ds.HasErrors() {
 		t.Fatal("a read failure must fail planning for that resource")
 	}
@@ -143,7 +143,7 @@ func TestRefreshReadErrorIsADiagnosticAndNeverADeletion(t *testing.T) {
 	// exactly where it was — proving the first error was a transient read
 	// failure, not the resource going away. Mistaking the first result for
 	// absence would have proposed destroying live infrastructure.
-	obs2, ds2 := Refresh(context.Background(), st, reg, 4)
+	obs2, ds2 := Refresh(context.Background(), st, reg, 4, 4)
 	if ds2.HasErrors() {
 		t.Fatalf("the injected rule is one-shot; the second refresh must succeed: %+v", ds2)
 	}
@@ -182,7 +182,7 @@ func TestRefreshNeverWritesState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	if _, ds := Refresh(context.Background(), loaded, reg, 4); ds.HasErrors() {
+	if _, ds := Refresh(context.Background(), loaded, reg, 4, 4); ds.HasErrors() {
 		t.Fatalf("unexpected diagnostics: %+v", ds)
 	}
 
@@ -205,7 +205,7 @@ func TestRefreshUnregisteredTypeIsADiagnostic(t *testing.T) {
 		ProviderID: "ghost-1",
 	})
 
-	obs, ds := Refresh(context.Background(), st, reg, 4)
+	obs, ds := Refresh(context.Background(), st, reg, 4, 4)
 	if !ds.HasErrors() {
 		t.Fatal("a resource whose type is no longer registered must be a diagnostic, not silently skipped or treated as deleted")
 	}
@@ -222,7 +222,7 @@ func TestRefreshEmptyStateReturnsEmptyObservations(t *testing.T) {
 	reg := registry.New()
 	st := state.New("myapp", "dev")
 
-	obs, ds := Refresh(context.Background(), st, reg, 4)
+	obs, ds := Refresh(context.Background(), st, reg, 4, 4)
 	if ds.HasErrors() {
 		t.Fatalf("unexpected diagnostics: %+v", ds)
 	}
@@ -238,8 +238,11 @@ func TestRefreshTreatsParallelismBelowOneAsOne(t *testing.T) {
 	st := state.New("myapp", "dev")
 	st.Set(created)
 
+	// Both bounds, since both clamp: a zero-capacity channel would deadlock
+	// on its first send, so "below 1 means 1" is the difference between a
+	// misconfigured flag and a hang.
 	for _, p := range []int{0, -1} {
-		obs, ds := Refresh(context.Background(), st, reg, p)
+		obs, ds := Refresh(context.Background(), st, reg, p, p)
 		if ds.HasErrors() {
 			t.Fatalf("parallelism %d: unexpected diagnostics: %+v", p, ds)
 		}
@@ -344,7 +347,7 @@ func TestRefreshBoundsConcurrentReads(t *testing.T) {
 		})
 	}
 
-	obs, ds := Refresh(context.Background(), st, reg, 3)
+	obs, ds := Refresh(context.Background(), st, reg, 3, 3)
 	if ds.HasErrors() {
 		t.Fatalf("unexpected diagnostics: %+v", ds)
 	}
@@ -360,6 +363,56 @@ func TestRefreshBoundsConcurrentReads(t *testing.T) {
 	}
 	if max < 2 {
 		t.Errorf("max concurrent reads = %d, want at least 2 — reads should overlap, not run one at a time", max)
+	}
+}
+
+// TestRefreshBoundsReadsPerProviderIndependentlyOfGlobalParallelism pins
+// spec §10's second bound: refresh is "bounded by the same per-provider
+// semaphore the executor uses (§15)".
+//
+// The bounds are set far apart (global 8, per-provider 2) on purpose. With
+// them equal — the shape the executor's own bounds test originally had, and
+// the shape both commands wired for the whole milestone — the global
+// semaphore admits at most `parallelism` reads anyway, so the per-provider
+// one can never fire and removing it entirely changes nothing observable.
+// Only a per-provider bound strictly below the global one measures anything.
+//
+// Refresh is the widest fan-out in the product: it reads EVERY resource in
+// state, so it is exactly the operation §34's throttling protection is for.
+func TestRefreshBoundsReadsPerProviderIndependentlyOfGlobalParallelism(t *testing.T) {
+	const resourceType = "delayed.thing"
+	prov := &delayedProvider{resourceType: resourceType, delay: 50 * time.Millisecond}
+	reg := registry.New()
+	if err := reg.Register(prov); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	st := state.New("myapp", "dev")
+	for i := 0; i < 8; i++ {
+		name := fmt.Sprintf("r%d", i)
+		st.Set(&resource.ResourceState{
+			Address:    address.Address{Name: name},
+			Type:       resourceType,
+			ProviderID: name,
+		})
+	}
+
+	obs, ds := Refresh(context.Background(), st, reg, 8, 2)
+	if ds.HasErrors() {
+		t.Fatalf("unexpected diagnostics: %+v", ds)
+	}
+	if len(obs) != 8 {
+		t.Fatalf("Observations = %d, want 8 — the per-provider bound must throttle reads, never drop them", len(obs))
+	}
+
+	prov.mu.Lock()
+	max := prov.maxConcurrent
+	prov.mu.Unlock()
+	if max > 2 {
+		t.Errorf("max concurrent reads against one provider = %d, want at most the per-provider bound of 2 (global was 8)", max)
+	}
+	if max < 2 {
+		t.Errorf("max concurrent reads = %d, want 2 — the bound must throttle, not serialize", max)
 	}
 }
 
@@ -386,7 +439,7 @@ func TestRefreshDiagnosticsAreSortedByAddressNotCompletionOrder(t *testing.T) {
 	// zzz has no delay and fails almost immediately; aaa is deliberately
 	// slower. If diagnostics reflected completion order, zzz would come
 	// first despite sorting after aaa alphabetically.
-	_, ds := Refresh(context.Background(), st, reg, 2)
+	_, ds := Refresh(context.Background(), st, reg, 2, 2)
 	if len(ds) != 2 {
 		t.Fatalf("got %d diagnostics, want 2", len(ds))
 	}
@@ -464,7 +517,7 @@ func TestRefreshDoesNotExposeLiveStateToProviderRead(t *testing.T) {
 		},
 	})
 
-	if _, ds := Refresh(context.Background(), st, reg, 1); ds.HasErrors() {
+	if _, ds := Refresh(context.Background(), st, reg, 1, 1); ds.HasErrors() {
 		t.Fatalf("unexpected diagnostics: %+v", ds)
 	}
 
@@ -550,7 +603,7 @@ func TestRefreshSkipsProviderReadWhenContextAlreadyCancelled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	obs, ds := Refresh(ctx, st, reg, 4)
+	obs, ds := Refresh(ctx, st, reg, 4, 4)
 	if !ds.HasErrors() {
 		t.Fatal("a cancelled refresh must surface as diagnostics, not silently succeed")
 	}

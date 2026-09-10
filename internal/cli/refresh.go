@@ -61,7 +61,7 @@ func newRefreshCommand(opts *GlobalOptions) *cobra.Command {
 					return err
 				}
 
-				obs, ds := refresh.Refresh(ctx, st, reg, opts.Parallelism)
+				obs, ds := refresh.Refresh(ctx, st, reg, opts.Parallelism, perProviderParallelism)
 				ds.Render(cmd.ErrOrStderr())
 
 				wrote := applyObservations(st, obs, cmd.OutOrStdout())
