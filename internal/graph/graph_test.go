@@ -1,6 +1,7 @@
 package graph
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -160,13 +161,70 @@ func TestLayersIsDeterministicAcrossRuns(t *testing.T) {
 }
 
 func TestLayersReportsACycleByName(t *testing.T) {
-	g := build(t, []string{"a", "b"}, [][2]string{{"a", "b"}, {"b", "a"}})
+	// Node names are deliberately not single letters. Asserting that an error
+	// message contains "a" is satisfied by the words "graph" and "detected",
+	// so the original form of this test passed whether or not the members
+	// were ever named. A name that cannot appear by accident is what makes
+	// the assertion mean anything.
+	g := build(t, []string{"alpha", "bravo"}, [][2]string{{"alpha", "bravo"}, {"bravo", "alpha"}})
 	_, err := g.Layers()
 	if err == nil {
 		t.Fatal("Layers() on a cyclic graph must return an error, not a partial result")
 	}
-	if !strings.Contains(err.Error(), "a") || !strings.Contains(err.Error(), "b") {
-		t.Errorf("error should name the cycle: %v", err)
+	for _, name := range []string{"alpha", "bravo"} {
+		if !strings.Contains(err.Error(), name) {
+			t.Errorf("error must name every member of the cycle, missing %q: %v", name, err)
+		}
+	}
+}
+
+// structNode is a struct used BY VALUE, which is how Task 18 instantiates
+// this package (graph.Graph[planner.OpNode], where OpNode is a struct). The
+// rest of this file uses `type testNode string`, and a named string type
+// passing proves nothing about a struct: they are different kinds, and the
+// gap is exactly where a generic constraint mistake would hide.
+type structNode struct {
+	Name  string
+	Phase int
+}
+
+func (n structNode) ID() string { return n.Name + ":" + strconv.Itoa(n.Phase) }
+
+func TestGraphAcceptsAStructValueType(t *testing.T) {
+	g := New[structNode]()
+	first := structNode{Name: "database", Phase: 0}
+	second := structNode{Name: "database", Phase: 1}
+	other := structNode{Name: "network", Phase: 0}
+	for _, n := range []structNode{first, second, other} {
+		g.Add(n)
+	}
+	g.Edge(other.ID(), first.ID())
+	g.Edge(first.ID(), second.ID())
+
+	roots := g.Roots()
+	if len(roots) != 1 || roots[0] != other {
+		t.Fatalf("Roots() = %v, want exactly %v", roots, other)
+	}
+
+	layers, err := g.Layers()
+	if err != nil {
+		t.Fatalf("Layers: %v", err)
+	}
+	want := [][]structNode{{other}, {first}, {second}}
+	if len(layers) != len(want) {
+		t.Fatalf("Layers() = %v, want %v", layers, want)
+	}
+	for i := range want {
+		if len(layers[i]) != len(want[i]) || layers[i][0] != want[i][0] {
+			t.Errorf("layer %d = %v, want %v", i, layers[i], want[i])
+		}
+	}
+
+	// Two nodes sharing a Name but differing in Phase are distinct nodes.
+	// This is the shape Task 18 relies on for a replace, which is a destroy
+	// and a create at the same address.
+	if g.Cycle() != nil {
+		t.Errorf("acyclic graph reported a cycle: %v", g.Cycle())
 	}
 }
 
