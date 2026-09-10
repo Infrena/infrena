@@ -1,6 +1,9 @@
 package value
 
-import "strings"
+import (
+	"strconv"
+	"strings"
+)
 
 // ExprOp is the kind of an expression node.
 type ExprOp uint8
@@ -74,8 +77,15 @@ func (e *Expr) References() []Reference {
 	return out
 }
 
-// String renders the expression back to something close to its source form.
-// It is for diagnostics, not round-tripping.
+// String renders the expression back toward its configuration source form, for
+// diagnostics.
+//
+// Rendering splits in two because an expression reads differently depending on
+// where it sits. At the top level a reference is written ${db.endpoint}, but as
+// an argument inside a call it is written db.endpoint — bare. Rendering
+// arguments through String() would wrap each of them in delimiters of their own
+// and produce ${lower(${db.endpoint})}, which is not syntax a user could paste
+// back into their configuration.
 func (e *Expr) String() string {
 	if e == nil {
 		return ""
@@ -86,18 +96,43 @@ func (e *Expr) String() string {
 			return s
 		}
 		return "<literal>"
-	case OpVarRef, OpResourceRef:
-		return "${" + e.Ref.String() + "}"
-	case OpCall:
-		parts := make([]string, 0, len(e.Args))
-		for _, a := range e.Args {
-			parts = append(parts, a.String())
-		}
-		return "${" + e.Function + "(" + strings.Join(parts, ", ") + ")}"
 	case OpConcat:
 		var b strings.Builder
 		for _, a := range e.Args {
 			b.WriteString(a.String())
+		}
+		return b.String()
+	default:
+		return "${" + e.inner() + "}"
+	}
+}
+
+// inner renders an expression as it appears inside ${...}, without the
+// delimiters. A literal is re-quoted here because that is how it was written:
+// replace(engine, "sql", "SQL") takes quoted arguments, and dropping the quotes
+// would render something that no longer parses.
+func (e *Expr) inner() string {
+	if e == nil {
+		return ""
+	}
+	switch e.Op {
+	case OpLiteral:
+		if s, ok := e.Literal.AsString(); ok {
+			return strconv.Quote(s)
+		}
+		return "<literal>"
+	case OpVarRef, OpResourceRef:
+		return e.Ref.String()
+	case OpCall:
+		parts := make([]string, 0, len(e.Args))
+		for _, a := range e.Args {
+			parts = append(parts, a.inner())
+		}
+		return e.Function + "(" + strings.Join(parts, ", ") + ")"
+	case OpConcat:
+		var b strings.Builder
+		for _, a := range e.Args {
+			b.WriteString(a.inner())
 		}
 		return b.String()
 	default:
