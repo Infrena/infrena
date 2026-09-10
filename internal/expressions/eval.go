@@ -80,9 +80,11 @@ func evaluateConcat(e *value.Expr, scope Scope, ds *diag.Diagnostics) value.Valu
 	var b strings.Builder
 	sensitive := false
 	known := true
+	evaluated := make([]value.Value, len(e.Args))
 
-	for _, arg := range e.Args {
+	for i, arg := range e.Args {
 		v := evaluate(arg, scope, ds)
+		evaluated[i] = v
 		sensitive = sensitive || v.Sensitive
 		if !v.Known {
 			known = false
@@ -102,6 +104,9 @@ func evaluateConcat(e *value.Expr, scope Scope, ds *diag.Diagnostics) value.Valu
 				Origin:   arg.Origin,
 			})
 			known = false
+			// Mark it unknown so the residual keeps the source arg rather than
+			// folding in a value the diagnostic just rejected.
+			evaluated[i] = value.Unknown(v.Kind, value.SourceComputed)
 			continue
 		}
 		b.WriteString(s)
@@ -113,7 +118,7 @@ func evaluateConcat(e *value.Expr, scope Scope, ds *diag.Diagnostics) value.Valu
 		// composite argument is treated the same way — its error is already
 		// recorded above, and the caller must not receive a value fabricated
 		// from the parts that did resolve.
-		return unknownFrom(e, value.KindString, sensitive)
+		return unknownResidual(e, evaluated, value.KindString, sensitive)
 	}
 	return value.String(b.String(), value.SourceComputed).
 		WithSensitive(sensitive).
@@ -177,6 +182,56 @@ func unknownFrom(e *value.Expr, kind value.Kind, sensitive bool) value.Value {
 		WithOrigin(e.Origin)
 	v.Expr = e
 	return v
+}
+
+// residual builds the expression that is left to evaluate once everything
+// resolvable has been resolved.
+//
+// A deferred expression is re-evaluated later — by the executor, once the
+// resource it references exists. Attaching the SOURCE expression makes that
+// later evaluation redo work that already succeeded, which has two costs. It
+// forces the later evaluator to carry the earlier one's whole scope, including
+// variables that have nothing to do with the resource being waited on. And it
+// makes the deferred expression silent about the values it was built from, so
+// ConfigHash — which folds an unresolved expression by op, function, ref name
+// and arity — cannot distinguish two configurations that differ only in one of
+// them.
+//
+// Only OpConcat can be partially resolved. A call is all-or-nothing: its
+// arguments are evaluated and if any is unknown the call cannot run, so there
+// is no partial result to keep. A bare reference either resolved or did not.
+// Every other deferral therefore keeps its source expression, which is already
+// correct because nothing in it resolved.
+//
+// evaluated[i] is the result of evaluating e.Args[i]; the two slices are
+// parallel. The source expression is never modified: it belongs to the caller's
+// AST, is shared by every value that references it, and is what a diagnostic
+// renders.
+func residual(e *value.Expr, evaluated []value.Value) *value.Expr {
+	if e.Op != value.OpConcat || len(evaluated) != len(e.Args) {
+		return e
+	}
+
+	out := &value.Expr{Op: e.Op, Function: e.Function, Ref: e.Ref, Origin: e.Origin}
+	out.Args = make([]*value.Expr, len(e.Args))
+	for i, arg := range e.Args {
+		v := evaluated[i]
+		if !v.Known {
+			// Still unknown: keep the reference so the executor can resolve it.
+			out.Args[i] = arg
+			continue
+		}
+		// Resolved: fold the VALUE in, sensitivity and all. A folded literal
+		// that lost its Sensitive flag would be a way to launder a secret into
+		// a plan artifact.
+		out.Args[i] = &value.Expr{Op: value.OpLiteral, Literal: v, Origin: arg.Origin}
+	}
+	return out
+}
+
+// unknownResidual defers the residual of a partially-resolved expression.
+func unknownResidual(e *value.Expr, evaluated []value.Value, kind value.Kind, sensitive bool) value.Value {
+	return unknownFrom(residual(e, evaluated), kind, sensitive)
 }
 
 // stringify renders a known scalar value for concatenation. It reports false

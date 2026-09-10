@@ -161,3 +161,43 @@ func TestHashDistinguishesUnknownFromEmpty(t *testing.T) {
 		t.Error("an unknown value and an empty string are different desired states")
 	}
 }
+
+// TestConfigHashSeesAVariableFeedingADeferredExpression is the reason Task 3
+// exists. hashExpr folds an unresolved expression by op name, function, ref
+// NAME and argument count — never a resolved value, because before folding
+// there was none to write. Two configurations differing only in a --var that
+// feeds a deferred expression therefore hashed identically, and M6's staleness
+// refusal compares exactly this hash to decide whether a saved plan still
+// describes the configuration.
+func TestConfigHashSeesAVariableFeedingADeferredExpression(t *testing.T) {
+	body := `
+project: myapp
+resources:
+  network:
+    type: test.network
+    cidr: 10.0.0.0/16
+  database:
+    type: test.database
+    engine: postgres
+    network: ${prefix}-${network.id}
+`
+	hashWith := func(prefix string) string {
+		t.Helper()
+		cfg, ds := Compile(loadFiles(t, body), testRegistry(t), Options{
+			Vars: map[string]string{"prefix": prefix},
+		})
+		if ds.HasErrors() {
+			t.Fatalf("compile with prefix=%q: %+v", prefix, ds)
+		}
+		h, err := cfg.Hash()
+		if err != nil {
+			t.Fatalf("Hash: %v", err)
+		}
+		return h
+	}
+
+	if a, b := hashWith("acme"), hashWith("totally-different"); a == b {
+		t.Errorf("ConfigHash is identical for two different --var values feeding a deferred "+
+			"expression (%s); a saved plan would be accepted against configuration it was not computed from", a)
+	}
+}

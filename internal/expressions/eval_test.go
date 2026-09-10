@@ -244,3 +244,80 @@ func TestDefaultWithUnknownFallbackCarriesTheWholeCallExpr(t *testing.T) {
 		t.Errorf("Expr = %s, want the whole default(...) call so re-evaluation redoes the fallback logic", got.Expr)
 	}
 }
+
+func foldScope() testScope {
+	return testScope{vars: map[string]value.Value{
+		"prefix": value.String("acme", value.SourceVariable),
+		"secret": value.String("hunter2", value.SourceVariable).WithSensitive(true),
+	}}
+}
+
+// TestDeferredConcatFoldsResolvedParts pins that a deferred expression carries
+// only what is still unknown. Before this, the whole source expression was
+// deferred, so a variable resolved at compile time was left to be resolved
+// again by whoever evaluated it later — and ConfigHash could not see its value.
+func TestDeferredConcatFoldsResolvedParts(t *testing.T) {
+	got, ds := evalSrc(t, "${prefix}-${network.id}", foldScope())
+	if ds.HasErrors() {
+		t.Fatalf("unexpected diagnostics: %+v", ds)
+	}
+	if got.Known {
+		t.Fatal("a resource reference is unknown until apply, so the result must be unknown")
+	}
+	if got.Expr == nil {
+		t.Fatal("a deferred value must carry the expression that will produce it")
+	}
+	if len(got.Expr.Args) != 3 {
+		t.Fatalf("residual should keep all three positions, got %d", len(got.Expr.Args))
+	}
+	// The variable resolved, so it is now a literal carrying its VALUE.
+	if op := got.Expr.Args[0].Op; op != value.OpLiteral {
+		t.Errorf("arg[0] op = %v, want OpLiteral — the variable resolved at compile time", op)
+	}
+	if s, _ := got.Expr.Args[0].Literal.AsString(); s != "acme" {
+		t.Errorf("arg[0] literal = %q, want %q — folding must carry the value, not just the kind", s, "acme")
+	}
+	// The resource reference did not, so it survives as a reference.
+	if op := got.Expr.Args[2].Op; op != value.OpResourceRef {
+		t.Errorf("arg[2] op = %v, want OpResourceRef — it is genuinely unknown until apply", op)
+	}
+}
+
+// TestDeferredSensitivitySurvivesFolding pins that folding a resolved SENSITIVE
+// part into a literal does not lose its mark. A folded literal that dropped its
+// Sensitive flag would be a way to launder a secret into a plan artifact.
+//
+// Both assertions are UNCONDITIONAL on purpose. An earlier draft guarded the
+// second with `if args[0].Op == OpLiteral`, which is false before the fix — so
+// the check could not fail until after the change it exists to verify. That is
+// the vacuous-assertion shape this project has shipped eight times; do not
+// reintroduce it by making either line conditional.
+func TestDeferredSensitivitySurvivesFolding(t *testing.T) {
+	got, _ := evalSrc(t, "${secret}-${network.id}", foldScope())
+	if !got.Sensitive {
+		t.Error("a deferred value built from a sensitive part must itself be sensitive")
+	}
+	if got.Expr == nil || len(got.Expr.Args) == 0 {
+		t.Fatal("no residual expression")
+	}
+	if got.Expr.Args[0].Op != value.OpLiteral {
+		t.Fatalf("arg[0] op = %v, want OpLiteral", got.Expr.Args[0].Op)
+	}
+	if !got.Expr.Args[0].Literal.Sensitive {
+		t.Error("the folded literal must stay marked sensitive; otherwise the residual launders the secret")
+	}
+}
+
+// TestFullyUnresolvedConcatKeepsItsShape checks the fold does not disturb the
+// case where nothing resolved. This one PASSES before the fix as well as after,
+// and that is stated rather than dressed up: it is a guard against the fold
+// damaging an expression it should leave alone, not evidence the fold works.
+func TestFullyUnresolvedConcatKeepsItsShape(t *testing.T) {
+	got, _ := evalSrc(t, "${a.id}-${b.id}", foldScope())
+	if got.Expr == nil {
+		t.Fatal("expected a deferred expression")
+	}
+	if s := got.Expr.String(); s != "${a.id}-${b.id}" {
+		t.Errorf("residual = %q, want the source shape back", s)
+	}
+}
