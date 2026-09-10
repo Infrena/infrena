@@ -48,6 +48,17 @@ func TestRenderRedactsSensitiveAttributes(t *testing.T) {
 // order (zulu before alpha, zebra/alpha-dep/mango not alphabetical), so a
 // missing sort.Strings/address.Sort call fails this test rather than
 // passing by coincidence.
+//
+// Failed is a map[string]error, and Go randomises range order per call —
+// not once per map instance — so with only 2 keys a single render has a
+// 1-in-2 chance of coming out already sorted even with no sort.Strings
+// call in sortedFailedIDs at all. Rendering the same Result repeatedly and
+// requiring every call to match makes accidental agreement (1/2)^n rather
+// than a single coin flip: measured at n=20 against a deliberately
+// unsorted sortedFailedIDs, this fails all 20 times (see task-12-report.md
+// round 2). Skipped and Applied need no such loop — Skipped is a plain
+// slice this test orders itself, and Applied here has one element — so
+// this only re-derives the same map-order risk Failed has.
 func TestRenderSortsFailedAndSkippedRegardlessOfInputOrder(t *testing.T) {
 	st := &state.State{}
 	st.Set(summaryRS("network", map[string]value.Value{
@@ -63,7 +74,6 @@ func TestRenderSortsFailedAndSkippedRegardlessOfInputOrder(t *testing.T) {
 		State:   st,
 	}
 
-	got := Render(r, RenderOptions{})
 	want := "Apply complete: 1 applied, 2 failed, 3 skipped.\n" +
 		"\n" +
 		"Applied:\n" +
@@ -78,8 +88,12 @@ func TestRenderSortsFailedAndSkippedRegardlessOfInputOrder(t *testing.T) {
 		"  - create alpha-dep\n" +
 		"  - destroy mango\n" +
 		"  - update zebra\n"
-	if got != want {
-		t.Fatalf("Render() =\n%q\nwant\n%q", got, want)
+
+	for i := 0; i < 20; i++ {
+		got := Render(r, RenderOptions{})
+		if got != want {
+			t.Fatalf("Render() iteration %d =\n%q\nwant\n%q", i, got, want)
+		}
 	}
 }
 
@@ -135,9 +149,20 @@ func TestRenderSortsAppliedRegardlessOfInputOrder(t *testing.T) {
 // map iteration order often enough to pass by coincidence: mutation testing
 // showed that deleting the sort.Strings call over attribute names left the
 // two-attribute case in TestRenderRedactsSensitiveAttributes passing more
-// often than not (map iteration only has to land "e before p" by chance),
-// making that test a weak, flaky guard. Three names spread across the
-// alphabet make an unsorted pass far less likely to slip through.
+// often than not (map iteration only has to land "e before p" by chance).
+//
+// Three names alone are still not enough, though: Go randomises map range
+// order per CALL, not once per map instance, so with 3 keys (3! = 6
+// orderings, one of them already sorted) a single render still has a
+// 1-in-6 chance of passing with the sort deleted — measured at ~17% (2/10)
+// against a version of this package with sort.Strings(names) removed.
+// Rendering the same Result repeatedly and requiring every call to match
+// draws a fresh random order each time, so accidental agreement across n
+// renders is (1/6)^n: measured at n=20 against the same deliberately
+// unsorted build, this fails all 20 times (see task-12-report.md round 2).
+// This also pins something worth asserting in its own right — the Global
+// Constraint that Render is deterministic, same Result in, byte-identical
+// string out, on every call, not just the first.
 func TestRenderSortsAttributeNamesRegardlessOfMapOrder(t *testing.T) {
 	st := &state.State{}
 	st.Set(summaryRS("host", map[string]value.Value{
@@ -147,7 +172,6 @@ func TestRenderSortsAttributeNamesRegardlessOfMapOrder(t *testing.T) {
 	}))
 	r := Result{Applied: []address.Address{{Name: "host"}}, Failed: map[string]error{}, State: st}
 
-	got := Render(r, RenderOptions{})
 	want := "Apply complete: 1 applied, 0 failed, 0 skipped.\n" +
 		"\n" +
 		"Applied:\n" +
@@ -155,8 +179,12 @@ func TestRenderSortsAttributeNamesRegardlessOfMapOrder(t *testing.T) {
 		"      ami: \"ami-1234\"\n" +
 		"      region: \"us-east-1\"\n" +
 		"      zone: \"us-east-1a\"\n"
-	if got != want {
-		t.Fatalf("Render() =\n%q\nwant\n%q", got, want)
+
+	for i := 0; i < 20; i++ {
+		got := Render(r, RenderOptions{})
+		if got != want {
+			t.Fatalf("Render() iteration %d =\n%q\nwant\n%q", i, got, want)
+		}
 	}
 }
 
