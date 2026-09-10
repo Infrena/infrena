@@ -16,6 +16,25 @@ const (
 	statusSkipped
 )
 
+// String names a walkStatus for use in panic messages — Done and Skip
+// report the status they found instead of the status they needed, so a
+// caller sees exactly what went wrong without instrumenting the Walk
+// itself.
+func (s walkStatus) String() string {
+	switch s {
+	case statusUnstarted:
+		return "unstarted"
+	case statusDispatched:
+		return "dispatched"
+	case statusDone:
+		return "done"
+	case statusSkipped:
+		return "skipped"
+	default:
+		return "invalid"
+	}
+}
+
 // Walk tracks a graph's execution readiness incrementally: unlike Layers,
 // which is a barrier where every node in layer N finishes before layer N+1
 // starts, Walk exposes a live ready queue — a node becomes ready the instant
@@ -61,6 +80,37 @@ func (g *Graph[T]) Walk() (*Walk[T], error) {
 		w.remaining[id] = len(g.in[id])
 	}
 	return w, nil
+}
+
+// mustKnow panics if id was never added to the graph this Walk began from.
+// Every id a Walk ever sees comes from the executor itself — off Ready,
+// Done or Skip's own return values, or an address the planner already
+// validated — never from unvalidated configuration text a user typed. That
+// is exactly the trust boundary Graph.Edge enforces on the same g.nodes
+// map, for the same stated reason: the mistake belongs at the call site
+// that made it, not absorbed as a Go zero-value default that leaves the
+// Walk quietly wrong (an unknown id previously decremented Remaining for a
+// node that was never there to begin with).
+func (w *Walk[T]) mustKnow(method, id string) {
+	if _, ok := w.nodes[id]; !ok {
+		panic("graph: Walk." + method + "(" + id + "): " + id + " was never added")
+	}
+}
+
+// mustBeDispatched panics if id is not currently dispatched — the status
+// Ready, Done or Skip leaves a node in exactly once, the instant it hands
+// that node out. Done and Skip each call this before doing anything else,
+// which is what makes "each id resolved exactly once" a property the type
+// enforces rather than a discipline callers have to maintain by hand: a
+// second Done or Skip call for the same id — two independent completion
+// signals for one operation, or a completion signal for an operation that
+// was never dispatched — now panics before it can touch a
+// remaining-predecessor count a second time. See Done's doc comment for
+// why that matters concretely, and why this panics instead of no-oping.
+func (w *Walk[T]) mustBeDispatched(method, id string) {
+	if w.status[id] != statusDispatched {
+		panic(fmt.Sprintf("graph: Walk.%s(%s): status is %s, not dispatched — %s must be called exactly once per id, only on an id previously returned by Ready, Done, or Skip", method, id, w.status[id], method))
+	}
 }
 
 // sortedOut returns the IDs id points to, sorted — the same guarantee
@@ -110,13 +160,31 @@ func (w *Walk[T]) Ready() []T {
 // because §15's ready queue is defined by a node's OWN predecessors, not by
 // how much of the graph as a whole has completed.
 //
+// Done panics if id was never added to the graph, or if id is not
+// currently dispatched — meaning it was never handed out by Ready, Done or
+// Skip, or it already was and Done (or Skip) has already been called for
+// it. This is a deliberate choice over a silent no-op: a second Done call
+// for the same id is always a caller bug (the executor reporting one
+// operation's completion twice, or completion for an operation it never
+// dispatched), never a legitimate pattern, and letting it through quietly
+// used to double-decrement a shared successor's remaining-predecessor
+// count — handing that successor out as ready before all of its real
+// dependencies had finished, a false-ready signal that would let the
+// executor run a resource ahead of one of its own dependencies (invariant
+// 4, §47). Graph.Edge already panics on the equivalent mistake — an edge
+// naming an id that was never added — for the same reason: ids reaching a
+// Walk always come from the executor itself, never unvalidated input, so
+// the mistake belongs at the call site that made it rather than being
+// absorbed silently.
+//
 // The result is already in sorted order: it is built by filtering
 // sortedOut(id), and filtering a sorted sequence cannot unsort it.
 func (w *Walk[T]) Done(id string) []T {
-	if w.status[id] == statusUnstarted || w.status[id] == statusDispatched {
-		w.left--
-	}
+	w.mustKnow("Done", id)
+	w.mustBeDispatched("Done", id)
+
 	w.status[id] = statusDone
+	w.left--
 
 	var ready []T
 	for _, next := range w.sortedOut(id) {
@@ -145,12 +213,29 @@ func (w *Walk[T]) Done(id string) []T {
 // separately; what this returns is exactly the set the caller should add to
 // its own report of skipped work.
 //
+// Skip panics if id was never added to the graph, or if id itself is not
+// currently dispatched — the same two checks, for the same reason and with
+// the same panic-over-no-op choice, as Done (see Done's doc comment). A
+// second Skip call naming the same id directly is always a caller bug, not
+// a legitimate double-failure report: the legitimate case — two
+// independent failures whose branches share a downstream dependent — is
+// TestSkipOnASharedDependentIsNotDoubleCounted, and it never calls Skip
+// twice with the same id; it calls Skip once each on two different ids
+// that are each still dispatched at the time, and the transitive walk
+// below is what resolves their shared dependent exactly once no matter how
+// many failed ancestors reach it.
+//
 // Calling Skip a second time for a node already skipped by an earlier call
 // — because two independent failures share a dependent — is safe and
 // returns none of it again: the moment a node is found already
 // statusSkipped, this stops descending through it, so neither Remaining nor
-// the returned slice double-counts it.
+// the returned slice double-counts it. That is about a node reached
+// TRANSITIVELY through the walk below, not about id itself — id itself is
+// covered by the panic above, before the walk ever starts.
 func (w *Walk[T]) Skip(id string) []string {
+	w.mustKnow("Skip", id)
+	w.mustBeDispatched("Skip", id)
+
 	var skipped []string
 	seen := map[string]bool{id: true}
 	queue := []string{id}
