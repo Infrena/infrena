@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"syscall"
 	"testing"
@@ -178,5 +179,98 @@ func TestRunInterruptibleNoSignalReturnsFnsError(t *testing.T) {
 	err := runInterruptible("dev", func(ctx context.Context) error { return want })
 	if !errors.Is(err, want) {
 		t.Fatalf("err = %v, want to wrap %v", err, want)
+	}
+}
+
+// TestRunInterruptibleErrorDoesNotClaimStateWasSavedWhenFnFailed pins review
+// round 1's Minor #2 fix: runInterruptible has no way to know whether fn
+// actually persisted state before returning — only fn knows that — so its
+// own wrapping must never assert an outcome fn didn't report. Before the
+// fix, errInterrupted's text unconditionally said "state was saved, and the
+// lock was released" even when fn's own error said persistence failed,
+// which is exactly backwards from spec §44 ("state what is wrong"). This
+// simulates that failure directly: fn returns a persist-failure error after
+// its ctx is cancelled, and the combined error must not contain the false
+// claim.
+func TestRunInterruptibleErrorDoesNotClaimStateWasSavedWhenFnFailed(t *testing.T) {
+	started := make(chan struct{})
+	persistErr := errors.New("failed to persist state after 1 operation: disk full")
+	resultErr := make(chan error, 1)
+
+	go func() {
+		resultErr <- runInterruptible("dev", func(ctx context.Context) error {
+			close(started)
+			<-ctx.Done()
+			return persistErr
+		})
+	}()
+
+	<-started
+	self, err := os.FindProcess(os.Getpid())
+	if err != nil {
+		t.Fatalf("finding own process: %v", err)
+	}
+	if err := self.Signal(syscall.SIGINT); err != nil {
+		t.Fatalf("signaling self: %v", err)
+	}
+
+	select {
+	case err := <-resultErr:
+		if !errors.Is(err, errInterrupted) {
+			t.Fatalf("err = %v, want to wrap errInterrupted", err)
+		}
+		if !errors.Is(err, persistErr) {
+			t.Fatalf("err = %v, want to wrap fn's own error too", err)
+		}
+		if strings.Contains(err.Error(), "state was saved") {
+			t.Fatalf("err = %q — claims state was saved despite fn reporting a persist failure", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("runInterruptible did not return after a single SIGINT")
+	}
+}
+
+// TestRunInterruptibleUnregistersSignalHandlingOnReturn pins review round
+// 1's Minor #1: defer signal.Stop(sig) is not dead code. Without it, a
+// completed call's signal channel stays registered forever, and the
+// implementer's own report described the resulting hazard first-hand: a
+// leaked registration from one broken run caught a later test's SIGINT and
+// silently truncated that test binary. This runs a first call to
+// completion (no signal involved) and then signals a second, independent
+// call — the second call must behave exactly as
+// TestRunInterruptibleFirstSignal describes, undisturbed by the first
+// call's now-defunct registration.
+func TestRunInterruptibleUnregistersSignalHandlingOnReturn(t *testing.T) {
+	if err := runInterruptible("dev", func(ctx context.Context) error { return nil }); err != nil {
+		t.Fatalf("first call: %v", err)
+	}
+
+	started := make(chan struct{})
+	resultErr := make(chan error, 1)
+	go func() {
+		resultErr <- runInterruptible("dev", func(ctx context.Context) error {
+			close(started)
+			<-ctx.Done()
+			return nil
+		})
+	}()
+
+	<-started
+	self, err := os.FindProcess(os.Getpid())
+	if err != nil {
+		t.Fatalf("finding own process: %v", err)
+	}
+	if err := self.Signal(syscall.SIGINT); err != nil {
+		t.Fatalf("signaling self: %v", err)
+	}
+
+	select {
+	case err := <-resultErr:
+		if !errors.Is(err, errInterrupted) {
+			t.Fatalf("err = %v, want errInterrupted — the second call's own signal was not delivered as expected, "+
+				"consistent with a leaked registration from the first call interfering", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("second runInterruptible call did not return after its own SIGINT")
 	}
 }

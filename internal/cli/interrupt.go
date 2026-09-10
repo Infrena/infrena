@@ -14,7 +14,20 @@ import (
 // ExitError for anything that is not errChanges, so errInterrupted needs no
 // special case there — only errors.Is-based tests, and a human reading the
 // message, need to tell an interruption apart from an ordinary failure.
-var errInterrupted = errors.New("interrupted by SIGINT: the in-flight operation finished, state was saved, and the lock was released")
+//
+// Its text says only what runInterruptible itself knows: that a SIGINT
+// arrived and fn was allowed to finish before returning. It deliberately
+// does NOT say "state was saved" or "the lock was released" — an earlier
+// version did, and that is a claim runInterruptible has no way to verify:
+// fn is the thing that persists state and holds the lock, and fn's own
+// error (wrapped in below, when non-nil) is the one place that can say
+// whether persistence actually succeeded. A wrapper asserting an outcome it
+// cannot see is exactly how an interrupted run whose persist failed would
+// print "state was saved" — the opposite of Task 9's own diagnostic saying
+// so, and a direct violation of spec §44 ("state what is wrong"). Reusing
+// fn's own error as the single source of truth about what happened is the
+// fix, not adding a second one here.
+var errInterrupted = errors.New("interrupted by SIGINT: the in-flight operation was allowed to finish before returning")
 
 // runInterruptible runs fn under a context canceled by the first SIGINT,
 // and does not return until fn itself returns. A second SIGINT — received
@@ -31,7 +44,14 @@ func runInterruptible(environment string, fn func(ctx context.Context) error) er
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	sig := make(chan os.Signal, 1)
+	// Buffered 2, not 1: os/signal's delivery to sig is a non-blocking send,
+	// so a second SIGINT arriving before the first is dequeued would
+	// otherwise be silently dropped. A human at a terminal cannot press
+	// ctrl-C twice inside that window, but Task 16's integration test drives
+	// both signals programmatically against a real subprocess and needs the
+	// second one to land reliably rather than racing the first select's
+	// dequeue.
+	sig := make(chan os.Signal, 2)
 	signal.Notify(sig, os.Interrupt)
 	defer signal.Stop(sig)
 
@@ -52,7 +72,13 @@ func runInterruptible(environment string, fn func(ctx context.Context) error) er
 		select {
 		case err := <-done:
 			if err != nil {
-				return fmt.Errorf("%w (%v)", errInterrupted, err)
+				// Both %w, not %w/%v: fn's own error is the one place that
+				// can say whether persistence actually succeeded (see
+				// errInterrupted's doc comment), and wrapping it too lets an
+				// errors.Is check reach it — e.g. a test asserting an
+				// interrupted-with-failed-persist error still identifies as
+				// that specific persist failure, not just as "interrupted".
+				return fmt.Errorf("%w (%w)", errInterrupted, err)
 			}
 			return errInterrupted
 

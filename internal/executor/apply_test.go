@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"infra/internal/diag"
 	"infra/internal/planner"
 	"infra/internal/registry"
 	"infra/internal/state"
@@ -701,6 +702,96 @@ func TestApplyRetriesAccordingToPolicy(t *testing.T) {
 	prov.mu.Unlock()
 	if calls != 3 {
 		t.Errorf("Create called %d times, want 3 — two failures then a success, wired through opts.Retry", calls)
+	}
+}
+
+// TestApplyRespectsCancellationDuringRetryBackoff pins the half of the
+// SIGINT design that operationContext's own doc comment (context.go)
+// argues for but nothing committed actually proves: RetryPolicy.Sleep must
+// keep receiving Apply's own cancellable ctx, never operationContext(ctx).
+// execute (apply.go) calls Attempt(r.ctx, ...) rather than
+// Attempt(operationContext(r.ctx), ...) — that one word is the entire fix
+// this test exists to hold in place. Review round 1 found it unpinned by
+// mutation: swapping in operationContext(r.ctx) there left every test in
+// all 17 packages green.
+//
+// Sleep is deliberately left nil so this runs the real defaultSleep, not a
+// stub — TestAttemptStopsWhenSleepIsInterrupted (retry_test.go) already
+// proves Attempt stops when *some* Sleep returns an error, and
+// TestDefaultSleepReturnsContextErrOnCancellation proves defaultSleep
+// itself honors ctx, but neither proves the ctx defaultSleep receives here
+// is one a real cancellation can reach. Base is 5s specifically so a bug
+// that resurrects the uncancellable path is unmistakable: this test's own
+// hang guard (6s) is comfortably past the backoff, but the promptness
+// assertion (under 1s) is not — a broken implementation fails loudly
+// rather than merely running slow.
+//
+// It also pins the interaction the review asked for directly: a SIGINT
+// during backoff must not result in a second provider call. flakyProvider
+// fails exactly once, so a second Create would succeed — calls staying at
+// 1 is proof the retry never happened, not just that Apply returned fast
+// for an unrelated reason.
+func TestApplyRespectsCancellationDuringRetryBackoff(t *testing.T) {
+	backend := newLockedBackend(t, "dev")
+	prov := &flakyProvider{resourceType: "test.thing", failures: 1}
+	reg := registry.New()
+	if err := reg.Register(prov); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	plan := planWith(op(addr("a"), "test.thing", planner.OpCreate))
+	g, err := planner.BuildExecution(plan, noDeps)
+	if err != nil {
+		t.Fatalf("BuildExecution: %v", err)
+	}
+	st := state.New("proj", "dev")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		time.Sleep(150 * time.Millisecond) // well after attempt 1 fails and the 5s backoff begins
+		cancel()
+	}()
+
+	type outcome struct {
+		res Result
+		ds  diag.Diagnostics
+	}
+	start := time.Now()
+	done := make(chan outcome, 1)
+	go func() {
+		res, ds := Apply(ctx, plan, g, st, Options{
+			Parallelism: 1, PerProvider: 1, Registry: reg, Backend: backend, Environment: "dev",
+			Retry: RetryPolicy{
+				MaxAttempts: 2, Base: 5 * time.Second, Max: 5 * time.Second,
+				Jitter: func(d time.Duration) time.Duration { return d }, // deterministic: no jitter to shrink the window
+				// Sleep left nil: the real defaultSleep, not a stub — see
+				// the doc comment above for why that is the point.
+			},
+		})
+		done <- outcome{res, ds}
+	}()
+
+	select {
+	case got := <-done:
+		if elapsed := time.Since(start); elapsed > 1*time.Second {
+			t.Fatalf("Apply took %v to return after a cancelled backoff with a 5s Base — RetryPolicy.Sleep is not receiving a cancellable context; check execute's call to Attempt in apply.go still passes r.ctx, not operationContext(r.ctx)", elapsed)
+		}
+		if len(got.res.Failed) != 1 {
+			t.Fatalf("Failed = %v, want exactly one failed operation", got.res.Failed)
+		}
+		if len(got.res.Applied) != 0 {
+			t.Fatalf("Applied = %v, want none", got.res.Applied)
+		}
+
+		prov.mu.Lock()
+		calls := prov.calls
+		prov.mu.Unlock()
+		if calls != 1 {
+			t.Fatalf("Create called %d times, want exactly 1 — a cancelled backoff must not lead to a second provider call", calls)
+		}
+	case <-time.After(6 * time.Second):
+		t.Fatal("Apply did not return within 6s of a single cancelled 5s backoff")
 	}
 }
 
