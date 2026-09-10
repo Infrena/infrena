@@ -8459,7 +8459,18 @@ var errChanges = errors.New("plan has changes")
 // locked.
 func newPlanCommand(opts *GlobalOptions) *cobra.Command {
 	return &cobra.Command{
-		Use:   "plan <environment>",
+		Use: "plan <environment>",
+		// Set here as well as on the root. cobra's ExecuteC consults
+		// c.Root()'s Silence* fields when the executing command has a
+		// parent, so in production the root's settings apply and these are
+		// redundant. But the tests construct this command standalone, with
+		// no parent, and then cobra consults THIS command — whose zero
+		// values are false — and prints usage boilerplate to stdout on
+		// every non-nil RunE return, including the errChanges
+		// success-with-changes path. Measured: it polluted stdout in
+		// TestPlanRendersDiagnosticsToStderrOnInvalidConfig.
+		SilenceUsage:  true,
+		SilenceErrors: true,
 		Short: "Show what infra would change without applying it",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
