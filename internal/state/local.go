@@ -62,6 +62,20 @@ func (l *Local) Get(ctx context.Context, environment string) (*State, error) {
 // added read is one stat-and-read alongside a write already going to disk —
 // and plan never calls Put at all, so it stays lock-free with no
 // special-casing needed here.
+//
+// This is check-then-act, not a held handle: requireOwnLock reads the lock
+// file, and nothing holds it across the write that follows. Atomicity — the
+// temp-file-plus-rename below — does not close this window: atomicity
+// protects one write from being torn by a crash mid-write, which is
+// orthogonal to two complete writes racing each other. If a human
+// force-unlocks this environment mid-run and a different process acquires
+// the lock in the gap, this Put can still land after that. That is accepted
+// for M3: it requires a human to deliberately intervene on a live lock, not
+// two ordinary concurrent applies, which is what invariant 5 actually
+// guards against — Lock's O_EXCL create already makes two applies mutually
+// exclusive from the start. Closing the gap fully would mean holding an
+// open file handle (or a lease) across the write instead of re-reading a
+// path, which is more than this check-then-act design costs today.
 func (l *Local) Put(ctx context.Context, environment string, s *State) error {
 	if err := l.requireOwnLock(environment); err != nil {
 		return err

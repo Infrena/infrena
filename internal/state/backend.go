@@ -34,7 +34,15 @@ type Backend interface {
 	// Get loads the state for an environment. A missing environment is an
 	// empty state, not an error.
 	Get(ctx context.Context, environment string) (*State, error)
-	// Put atomically writes the state for an environment.
+	// Put atomically writes the state for an environment. Implementations
+	// must refuse the write unless the caller currently holds that
+	// environment's lock — writing without one breaks acceptance invariant
+	// 5 (two applies must not mutate one environment concurrently). This is
+	// a contract on every Backend, not a detail of Local: Local enforces it
+	// by re-deriving lock ownership from the lock file before writing (see
+	// Local.Put and requireOwnLock in local.go and lock.go), and any future
+	// implementation — an S3 backend in Phase 4, for instance — must enforce
+	// it too, by whatever locking mechanism it uses.
 	Put(ctx context.Context, environment string, s *State) error
 	// Lock acquires an exclusive lock on an environment, failing if already held.
 	Lock(ctx context.Context, environment string) (Lock, error)
