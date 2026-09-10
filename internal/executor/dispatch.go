@@ -1,0 +1,97 @@
+package executor
+
+import (
+	"context"
+	"fmt"
+
+	"infra/internal/planner"
+	"infra/pkg/provider"
+	"infra/pkg/resource"
+)
+
+// dispatch performs the one provider call an OpNode implies and returns the
+// resulting resource state.
+//
+// It switches on (node.Kind, node.Phase) together, never node.Kind alone:
+// OpNode.ID() is not injective over OpKind (a replace is two nodes,
+// destroy:<addr> then create:<addr>, both carrying Kind == OpReplace), and
+// neither is Kind by itself — Phase is what tells the two apart.
+//
+// current is the live resource.ResourceState the caller already holds for
+// this address (nil when there is none, e.g. a plain create); it, not
+// op.Before, is what Update and Delete receive, because Before is a bare
+// map[string]value.Value with no ProviderID, and a provider cannot find the
+// object it manages without one. desired is the fully-resolved
+// DesiredResource Task 7 built from op.After; dispatch does not evaluate
+// expressions itself.
+//
+// OpForget makes no provider call at all: dropping a resource from
+// management without touching the real infrastructure is retain's entire
+// point (spec §11, invariant 1). It returns (nil, nil) without touching
+// prov, current or desired — safe to call with prov == nil for exactly this
+// reason.
+//
+// dispatch does not retry: Attempt (retry.go) owns the retry loop, and
+// Task 8's worker pool is what calls dispatch through it. Wrapping this call
+// in a second retry loop here would double the backoff and double-count
+// attempts against Attempt's own policy.
+//
+// The switch has no default arm that reaches a provider call. Every case
+// that calls Create, Update or Delete is spelled out explicitly by
+// (Kind, Phase); the fallback below only ever returns an error naming the
+// unhandled pair, so a future OpKind landing here unhandled fails loudly
+// instead of silently reaching a provider call it was never vetted for —
+// the same failure shape this project has repeatedly shipped as a
+// permissive default arm.
+func dispatch(
+	ctx context.Context,
+	prov provider.Provider,
+	node planner.OpNode,
+	current *resource.ResourceState,
+	desired *resource.DesiredResource,
+) (*resource.ResourceState, error) {
+	switch {
+	case node.Kind == planner.OpForget:
+		return nil, nil
+
+	case node.Kind == planner.OpCreate,
+		node.Kind == planner.OpReplace && node.Phase == planner.PhaseCreate:
+		if prov == nil {
+			return nil, fmt.Errorf("%s: dispatch: no provider available for create", node.Address)
+		}
+		if desired == nil {
+			return nil, fmt.Errorf("%s: dispatch: create requires a resolved desired resource", node.Address)
+		}
+		return prov.Create(ctx, desired)
+
+	case node.Kind == planner.OpUpdate:
+		if prov == nil {
+			return nil, fmt.Errorf("%s: dispatch: no provider available for update", node.Address)
+		}
+		if current == nil {
+			return nil, fmt.Errorf("%s: dispatch: update requires the resource's current state", node.Address)
+		}
+		if desired == nil {
+			return nil, fmt.Errorf("%s: dispatch: update requires a resolved desired resource", node.Address)
+		}
+		return prov.Update(ctx, current, desired)
+
+	case node.Kind == planner.OpDestroy,
+		node.Kind == planner.OpReplace && node.Phase == planner.PhaseDestroy:
+		if prov == nil {
+			return nil, fmt.Errorf("%s: dispatch: no provider available for destroy", node.Address)
+		}
+		if current == nil {
+			return nil, fmt.Errorf("%s: dispatch: destroy requires the resource's current state", node.Address)
+		}
+		return nil, prov.Delete(ctx, current)
+
+	default:
+		// Reachable only by an OpKind this switch was never taught about —
+		// OpNoOp never reaches dispatch (BuildExecution skips it entirely),
+		// and every other kind is matched above. No arm here may fall
+		// through to prov.Create/Update/Delete: an unrecognised kind must
+		// fail, not guess which provider call it implies.
+		return nil, fmt.Errorf("%s: dispatch: unhandled operation kind %s phase %d", node.Address, node.Kind, int(node.Phase))
+	}
+}
