@@ -1891,6 +1891,47 @@ func TestHashIncludesLifecycle(t *testing.T) {
 	}
 }
 
+func TestHashDistinguishesDifferentUnresolvedReferences(t *testing.T) {
+	// Both values are unknown at compile time, so everything Hash() looked at
+	// before — kind, source, known, sensitive — is identical. What differs is
+	// which resource the attribute will resolve from, which is the whole point
+	// of a reference.
+	unknownRef := func(res, attr string) value.Value {
+		v := value.Unknown(value.KindString, value.SourceComputed)
+		v.Expr = &value.Expr{
+			Op:  value.OpResourceRef,
+			Ref: value.Reference{Resource: res, Attribute: attr},
+		}
+		return v
+	}
+
+	a := cfg(res("db", "test.database", map[string]value.Value{"network": unknownRef("network_a", "id")}))
+	b := cfg(res("db", "test.database", map[string]value.Value{"network": unknownRef("network_b", "id")}))
+
+	ha, _ := a.Hash()
+	hb, _ := b.Hash()
+	if ha == hb {
+		t.Error("two unresolved values referencing different resources must not hash alike — M6 staleness would miss a changed dependency")
+	}
+}
+
+func TestHashDistinguishesDifferentCalls(t *testing.T) {
+	call := func(fn string) value.Value {
+		v := value.Unknown(value.KindString, value.SourceComputed)
+		v.Expr = &value.Expr{
+			Op:       value.OpCall,
+			Function: fn,
+			Args:     []*value.Expr{{Op: value.OpResourceRef, Ref: value.Reference{Resource: "db", Attribute: "engine"}}},
+		}
+		return v
+	}
+	ha, _ := cfg(res("r", "test.network", map[string]value.Value{"cidr": call("lower")})).Hash()
+	hb, _ := cfg(res("r", "test.network", map[string]value.Value{"cidr": call("upper")})).Hash()
+	if ha == hb {
+		t.Error("lower() and upper() over the same reference are different desired states")
+	}
+}
+
 func TestHashChangesWithAValue(t *testing.T) {
 	a := cfg(res("db", "test.database", map[string]value.Value{"engine": value.String("postgres", value.SourceExplicit)}))
 	b := cfg(res("db", "test.database", map[string]value.Value{"engine": value.String("mysql", value.SourceExplicit)}))
@@ -2016,33 +2057,56 @@ func (c ResolvedConfig) Hash() (string, error) {
 		sort.Strings(names)
 		for _, name := range names {
 			write("attr", name)
-			if err := hashValue(h, r.Attrs[name], write); err != nil {
-				return "", err
-			}
+			hashValue(r.Attrs[name], write)
 		}
 	}
 
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-func hashValue(h interface{ Write([]byte) (int, error) }, v value.Value, write func(...string)) error {
+// exprOpNames pins each operator's hashed name, independently of its ordinal.
+// An enum reordering must not silently change every hash, which is the same
+// reason Kind's wire names are frozen in their own table.
+var exprOpNames = map[value.ExprOp]string{
+	value.OpLiteral:     "literal",
+	value.OpVarRef:      "var",
+	value.OpResourceRef: "resource",
+	value.OpConcat:      "concat",
+	value.OpCall:        "call",
+}
+
+func hashValue(v value.Value, write func(...string)) {
 	write("kind", v.Kind.String(), "source", string(v.Source))
 	write("known", strconv.FormatBool(v.Known), "sensitive", strconv.FormatBool(v.Sensitive))
+
 	if !v.Known {
-		return nil
+		// An unresolved value's identity is the expression that will produce
+		// it. Without this, two configurations differing only in WHICH
+		// resource an attribute references hash identically — exactly the case
+		// references exist to express, and exactly what M6's staleness check
+		// must not miss.
+		hashExpr(v.Expr, write)
+		return
 	}
 
 	switch v.Kind {
 	case value.KindList:
-		items, _ := v.Raw.([]value.Value)
+		items, ok := v.Raw.([]value.Value)
+		if !ok {
+			// A malformed value must not hash like an empty one.
+			write("malformed", "list")
+			return
+		}
 		write("list", strconv.Itoa(len(items)))
 		for _, item := range items {
-			if err := hashValue(h, item, write); err != nil {
-				return err
-			}
+			hashValue(item, write)
 		}
 	case value.KindMap:
-		m, _ := v.Raw.(map[string]value.Value)
+		m, ok := v.Raw.(map[string]value.Value)
+		if !ok {
+			write("malformed", "map")
+			return
+		}
 		keys := make([]string, 0, len(m))
 		for k := range m {
 			keys = append(keys, k)
@@ -2051,14 +2115,31 @@ func hashValue(h interface{ Write([]byte) (int, error) }, v value.Value, write f
 		write("map", strconv.Itoa(len(keys)))
 		for _, k := range keys {
 			write("key", k)
-			if err := hashValue(h, m[k], write); err != nil {
-				return err
-			}
+			hashValue(m[k], write)
 		}
 	default:
 		write("raw", fmt.Sprintf("%v", v.Raw))
 	}
-	return nil
+}
+
+// hashExpr folds an unresolved value's expression into the hash.
+func hashExpr(e *value.Expr, write func(...string)) {
+	if e == nil {
+		write("expr", "none")
+		return
+	}
+	name, ok := exprOpNames[e.Op]
+	if !ok {
+		name = "unknown-op"
+	}
+	write("expr", name, "fn", e.Function, "ref", e.Ref.String())
+	if e.Op == value.OpLiteral {
+		write("lit", fmt.Sprintf("%v", e.Literal.Raw))
+	}
+	write("args", strconv.Itoa(len(e.Args)))
+	for _, a := range e.Args {
+		hashExpr(a, write)
+	}
 }
 ```
 
