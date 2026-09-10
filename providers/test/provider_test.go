@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -492,5 +494,68 @@ func TestUnknownRetryabilityIsRejected(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "sfe") {
 		t.Errorf("error does not name the offending value: %v", err)
+	}
+}
+
+func TestOperationsOverlapRatherThanSerialise(t *testing.T) {
+	// The mutex exists to protect the cloud file, not to serialise simulated
+	// latency. If it covers the delay, every concurrent test in M2 and M3
+	// passes while proving nothing.
+	p, path := newTestProvider(t)
+	ctx := context.Background()
+
+	const (
+		resources = 4
+		delayMS   = 150
+	)
+
+	states := make([]*resource.ResourceState, 0, resources)
+	for i := 0; i < resources; i++ {
+		st, err := p.Create(ctx, desired(fmt.Sprintf("net%d", i), "test.network", map[string]value.Value{
+			"cidr": value.String("10.0.0.0/16", value.SourceExplicit),
+		}))
+		if err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+		states = append(states, st)
+	}
+
+	// Introduce latency only now, so setup is not slowed.
+	c, err := LoadCloud(path)
+	if err != nil {
+		t.Fatalf("LoadCloud: %v", err)
+	}
+	c.LatencyMS = delayMS
+	if err := c.Save(path); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	start := time.Now()
+	var wg sync.WaitGroup
+	errs := make([]error, resources)
+	for i, st := range states {
+		wg.Add(1)
+		go func(i int, st *resource.ResourceState) {
+			defer wg.Done()
+			_, errs[i] = p.Read(ctx, st)
+		}(i, st)
+	}
+	wg.Wait()
+	elapsed := time.Since(start)
+
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent Read %d: %v", i, err)
+		}
+	}
+
+	// Serial execution takes at least resources*delay. Overlapping execution
+	// takes roughly one delay. The midpoint is a generous threshold that is
+	// not sensitive to scheduling noise.
+	serial := time.Duration(resources) * delayMS * time.Millisecond
+	if elapsed >= serial/2 {
+		t.Errorf("%d concurrent reads with %dms latency took %v; serial would be ~%v. "+
+			"The provider is serialising — the mutex is covering the delay, so no "+
+			"concurrency test against this provider can fail.", resources, delayMS, elapsed, serial)
 	}
 }

@@ -71,19 +71,32 @@ func (p *Provider) ClassifyError(err error) provider.Retryability {
 	return provider.NotSafeToRetry
 }
 
-// begin loads the cloud, applies latency, and checks for an injected failure.
-// The caller must hold p.mu.
+// delay applies the cloud file's simulated latency. It is deliberately outside
+// the mutex: the lock protects the load-mutate-save cycle against the file, and
+// holding it across a sleep would serialise the whole provider, silently
+// disarming every concurrency test in M2 and M3.
+func (p *Provider) delay(ctx context.Context) error {
+	c, err := LoadCloud(p.cloudPath)
+	if err != nil {
+		return err
+	}
+	d := c.Delay()
+	if d <= 0 {
+		return nil
+	}
+	select {
+	case <-time.After(d):
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// begin loads the cloud and applies failure injection. Callers hold p.mu.
 func (p *Provider) begin(ctx context.Context, op, addr string) (*Cloud, error) {
 	c, err := LoadCloud(p.cloudPath)
 	if err != nil {
 		return nil, err
-	}
-	if d := c.Delay(); d > 0 {
-		select {
-		case <-time.After(d):
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		}
 	}
 	rule, failing := c.ShouldFail(op, addr)
 	// ShouldFail advances persisted bookkeeping whenever a rule matches its op
@@ -105,6 +118,10 @@ func (p *Provider) begin(ctx context.Context, op, addr string) (*Cloud, error) {
 
 // Create creates a resource in the fake cloud and assigns it a provider ID.
 func (p *Provider) Create(ctx context.Context, d *resource.DesiredResource) (*resource.ResourceState, error) {
+	if err := p.delay(ctx); err != nil {
+		return nil, err
+	}
+
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -138,6 +155,10 @@ func (p *Provider) Create(ctx context.Context, d *resource.DesiredResource) (*re
 // returns (nil, nil) when the resource no longer exists there, so drift
 // caused by a hand-edit or external deletion is observable.
 func (p *Provider) Read(ctx context.Context, current *resource.ResourceState) (*resource.ResourceState, error) {
+	if err := p.delay(ctx); err != nil {
+		return nil, err
+	}
+
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -157,6 +178,10 @@ func (p *Provider) Read(ctx context.Context, current *resource.ResourceState) (*
 // Update applies desired attributes to an existing resource in the fake
 // cloud without changing its provider ID.
 func (p *Provider) Update(ctx context.Context, current *resource.ResourceState, d *resource.DesiredResource) (*resource.ResourceState, error) {
+	if err := p.delay(ctx); err != nil {
+		return nil, err
+	}
+
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -205,6 +230,10 @@ func carryForward(next, current *resource.ResourceState) {
 
 // Delete removes a resource from the fake cloud.
 func (p *Provider) Delete(ctx context.Context, current *resource.ResourceState) error {
+	if err := p.delay(ctx); err != nil {
+		return err
+	}
+
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
