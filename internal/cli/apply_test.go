@@ -537,3 +537,100 @@ resources:
 		t.Errorf("error does not name the holder's pid: %v", err)
 	}
 }
+
+// TestApplyReplaceWhoseNewValueReferencesAResourceCreatedInTheSameRun pins
+// needsDesired (internal/executor/apply.go).
+//
+// needsDesired excludes a replace's DESTROY phase from resolving desired
+// values. Forcing it to `return true` leaves the whole suite green, and an
+// ordinary destroy or replace behaves identically under that mutation,
+// because their references resolve against state. The shape that breaks is
+// the one below: a replace whose NEW attributes point at a resource that
+// does not exist yet and is created later in the same run. The destroy phase
+// runs first, so resolving its operation's After finds ${network2.id} still
+// unknown, and the run dies with "network is still unknown after its
+// dependencies were applied" — taking the create phase and network2 with it
+// as skips. The guard is what stops a destroy from demanding values only the
+// create half needs.
+//
+// Seeded through two real applies rather than a hand-built plan: what is
+// under test is that the PLANNER produces this node shape and the executor
+// survives it, and a fixture that assembled the operation itself would prove
+// only that the author knew which fields to set.
+func TestApplyReplaceWhoseNewValueReferencesAResourceCreatedInTheSameRun(t *testing.T) {
+	dir := projectDir(t, `
+project: myapp
+resources:
+  network:
+    type: test.network
+    cidr: 10.20.0.0/16
+  db:
+    type: test.database
+    engine: postgres
+    network: ${network.id}
+`)
+	apply := func(t *testing.T) (string, error) {
+		t.Helper()
+		opts := &GlobalOptions{Dir: dir, Parallelism: 4, AutoApprove: true}
+		cmd := newApplyCommand(opts)
+		cmd.SetArgs([]string{"dev"})
+		cmd.SetIn(strings.NewReader(""))
+		var stdout, stderr bytes.Buffer
+		cmd.SetOut(&stdout)
+		cmd.SetErr(&stderr)
+		err := cmd.Execute()
+		return stdout.String() + stderr.String(), err
+	}
+
+	if out, err := apply(t); !errors.Is(err, errChanges) {
+		t.Fatalf("first apply = %v, want errChanges:\n%s", err, out)
+	}
+
+	// engine is ForceNew, so db becomes a replace; network2 does not exist
+	// yet, so the replace's new network value is unresolvable until it does.
+	if err := os.WriteFile(filepath.Join(dir, "infra.yml"), []byte(`
+project: myapp
+resources:
+  network:
+    type: test.network
+    cidr: 10.20.0.0/16
+  network2:
+    type: test.network
+    cidr: 10.50.0.0/16
+  db:
+    type: test.database
+    engine: mysql
+    network: ${network2.id}
+`), 0o644); err != nil {
+		t.Fatalf("rewriting configuration: %v", err)
+	}
+
+	out, err := apply(t)
+	if !errors.Is(err, errChanges) {
+		t.Fatalf("second apply = %v, want errChanges — the replace and the new network are both real work:\n%s", err, out)
+	}
+	if !strings.Contains(out, "Apply complete: 2 applied, 0 failed, 0 skipped.") {
+		t.Fatalf("the replace did not complete cleanly:\n%s", out)
+	}
+
+	st, err := backendFor(dir).Get(context.Background(), "dev")
+	if err != nil {
+		t.Fatalf("reading state after apply: %v", err)
+	}
+	net2, ok := st.Get(address.Address{Name: "network2"})
+	if !ok {
+		t.Fatal("network2 was not recorded in state")
+	}
+	db, ok := st.Get(address.Address{Name: "db"})
+	if !ok {
+		t.Fatal("db was not recorded in state")
+	}
+	net2ID, _ := net2.Attributes["id"].AsString()
+	dbNetwork, _ := db.Attributes["network"].AsString()
+	if net2ID == "" || dbNetwork != net2ID {
+		t.Errorf("db.network = %q, want network2's id %q — the replace's create phase did not resolve against the newly created network", dbNetwork, net2ID)
+	}
+	if engine, _ := db.Attributes["engine"].AsString(); engine != "mysql" {
+		t.Errorf("db.engine = %q, want mysql — the replacement did not take effect", engine)
+	}
+}

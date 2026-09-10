@@ -561,6 +561,21 @@ func verbFor(node planner.OpNode) (Verb, bool) {
 	}
 }
 
+// needsDesired reports whether an operation needs its desired values resolved
+// before dispatch. A destroy — standalone, or a replace's destroy phase —
+// does not: it deletes what state already records, and nothing in the new
+// configuration is an input to that call.
+//
+// This looks like a mere optimisation and is not. resolveAfter treats a
+// reference that is still unknown as a hard error, correctly: by execution
+// time, dependency ordering should have made every reference resolvable.
+// But a replace's destroy phase runs BEFORE the resources its new attributes
+// point at, so resolving it would demand a value that is not supposed to
+// exist yet. The failure only surfaces for a replace whose new attributes
+// reference a resource created in the same run — every other shape resolves
+// against state and behaves identically either way — which is why it went
+// unnoticed until pinned by TestApplyReplaceWhoseNewValueReferencesA-
+// ResourceCreatedInTheSameRun (internal/cli/apply_test.go).
 func needsDesired(node planner.OpNode) bool {
 	return node.Kind == planner.OpCreate || node.Kind == planner.OpUpdate ||
 		(node.Kind == planner.OpReplace && node.Phase == planner.PhaseCreate)
