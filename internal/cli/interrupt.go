@@ -53,6 +53,23 @@ func runInterruptible(environment string, fn func(ctx context.Context) error) er
 	// dequeue.
 	sig := make(chan os.Signal, 2)
 	signal.Notify(sig, os.Interrupt)
+	// Correct leak hygiene, deliberately kept even though no in-process test
+	// can pin it. Without this defer, every runInterruptible call leaves its
+	// sig channel registered with os/signal for the rest of the process's
+	// life — an unbounded registration leak, one per call, never freed.
+	//
+	// It cannot be red-tested here: Go delivers a signal to every registered
+	// channel independently, so a leaked registration from one cleanly-
+	// completed call cannot steal or delay delivery to a later call's own
+	// channel (confirmed by mutation — removing this defer left every test
+	// in this file green, including one written specifically to try to
+	// catch it). The only way a leak becomes observable is a leaked
+	// goroutine still actively blocked in a select on its sig channel, which
+	// requires a second, independent bug (that is what an earlier, broken
+	// runInterruptible without a working cancel() produced, and is a
+	// different failure entirely from this defer being present or absent).
+	// So: if this defer is ever removed, the symptom is a silent,
+	// ever-growing registration leak — not a failing test.
 	defer signal.Stop(sig)
 
 	done := make(chan error, 1)

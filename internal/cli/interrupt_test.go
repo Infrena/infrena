@@ -230,17 +230,19 @@ func TestRunInterruptibleErrorDoesNotClaimStateWasSavedWhenFnFailed(t *testing.T
 	}
 }
 
-// TestRunInterruptibleUnregistersSignalHandlingOnReturn pins review round
-// 1's Minor #1: defer signal.Stop(sig) is not dead code. Without it, a
-// completed call's signal channel stays registered forever, and the
-// implementer's own report described the resulting hazard first-hand: a
-// leaked registration from one broken run caught a later test's SIGINT and
-// silently truncated that test binary. This runs a first call to
-// completion (no signal involved) and then signals a second, independent
-// call — the second call must behave exactly as
-// TestRunInterruptibleFirstSignal describes, undisturbed by the first
-// call's now-defunct registration.
-func TestRunInterruptibleUnregistersSignalHandlingOnReturn(t *testing.T) {
+// TestRunInterruptibleSecondCallStillReceivesItsOwnSignalAfterAPriorNormalReturn
+// does NOT verify that defer signal.Stop(sig) runs, or that it prevents a
+// registration leak — a prior round's reviewer disproved that reading: Go's
+// os/signal delivers to every registered channel independently, so a
+// leaked registration from a cleanly-completed call cannot steal or delay a
+// later call's delivery (confirmed by mutation: removing the defer left
+// this test, and every other test in this file, green). What this test
+// does establish is narrower and still worth pinning: one runInterruptible
+// call finishing normally does not leave the process unable to correctly
+// signal-handle a second, later call. See the comment on
+// `defer signal.Stop(sig)` below for why the leak itself has no in-process
+// test and is verified by code inspection instead.
+func TestRunInterruptibleSecondCallStillReceivesItsOwnSignalAfterAPriorNormalReturn(t *testing.T) {
 	if err := runInterruptible("dev", func(ctx context.Context) error { return nil }); err != nil {
 		t.Fatalf("first call: %v", err)
 	}
