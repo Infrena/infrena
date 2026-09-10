@@ -1,10 +1,14 @@
 package cli
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/spf13/cobra"
 
 	"infra/internal/diag"
 	"infra/pkg/value"
@@ -156,4 +160,48 @@ func renderToString(ds diag.Diagnostics) string {
 	var b strings.Builder
 	ds.Render(&b)
 	return b.String()
+}
+
+// TestDiagnosticsAdviseOnlyRegisteredCommands keeps the tool from telling a
+// user to run something it does not have. The unknown-attribute diagnostic
+// suggested `infra explain <type>`, which is not registered until M7, so
+// following the advice yielded "unknown command". Spec §16 refuses command
+// stubs on the grounds that a stub promises a capability that does not exist;
+// a diagnostic makes the same promise.
+func TestDiagnosticsAdviseOnlyRegisteredCommands(t *testing.T) {
+	registered := map[string]bool{}
+	var collect func(c *cobra.Command)
+	collect = func(c *cobra.Command) {
+		for _, sub := range c.Commands() {
+			registered[sub.Name()] = true
+			collect(sub)
+		}
+	}
+	collect(NewRootCommand())
+
+	dir := projectDir(t, `
+project: myapp
+resources:
+  database:
+    type: test.database
+    engine: postgres
+    nonexistent: 1
+`)
+	ds := validateProject(dir, buildRegistry(dir))
+	if !ds.HasErrors() {
+		t.Fatal("an unknown attribute must be an error")
+	}
+
+	var buf bytes.Buffer
+	ds.Render(&buf)
+	rendered := buf.String()
+	if !strings.Contains(rendered, "nonexistent") {
+		t.Fatalf("expected an unknown-attribute diagnostic, got:\n%s", rendered)
+	}
+
+	for _, m := range regexp.MustCompile("`infra ([a-z-]+)").FindAllStringSubmatch(rendered, -1) {
+		if !registered[m[1]] {
+			t.Errorf("diagnostic advises `infra %s`, which is not a registered command:\n%s", m[1], rendered)
+		}
+	}
 }

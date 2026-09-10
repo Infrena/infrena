@@ -73,7 +73,7 @@ func validateProject(dir string, reg *registry.Registry) diag.Diagnostics {
 					Severity: diag.SeverityError,
 					Summary:  fmt.Sprintf("%s has no attribute %s", r.Type, strconv.Quote(name)),
 					Detail:   "Attributes of " + r.Type + ":\n  " + strings.Join(attributeNames(def), "\n  "),
-					Action:   "Remove the attribute, or run `infra explain " + r.Type + "`.",
+					Action:   "Remove the attribute, or correct its name — the list above is the complete set.",
 					Origin:   attr.Origin,
 				})
 				continue
