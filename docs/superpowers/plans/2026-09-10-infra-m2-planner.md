@@ -8039,14 +8039,37 @@ func renderAnnotated(v value.Value) string {
 	return s
 }
 
+// unrenderable stands in for a value this function cannot safely display.
+// It is deliberately not empty: rendering nothing would hide the existence of
+// data, and the reader needs to know something is there.
+const unrenderable = "<unrenderable>"
+
 // renderLeaf renders one value for display, redacting sensitive data.
 //
 // Sensitivity is per-leaf: a non-sensitive list or map can hold a sensitive
 // element. This checks Sensitive before descending into Raw at all, and
 // recurses into List and Map so nothing buried inside a composite reaches the
-// page in clear text — the shape follows internal/cli/state.go's
-// formatValue, M1's correct precedent for exactly this problem. Map keys are
-// sorted so output is stable across runs.
+// page in clear text. Map keys are sorted so output is stable across runs.
+//
+// The kind switch is an ALLOWLIST and must stay one. The obvious shape —
+// ending in `default: fmt.Sprintf("%v", v.Raw)` — looks safe because
+// sensitivity is checked at the top, but that check only covers the value in
+// hand, not the leaves inside it. value.KindInvalid is the ZERO VALUE of
+// value.Kind, so any Value whose Kind was never set carries its Raw straight
+// into %v, and %v on a map[string]value.Value prints every field of every
+// leaf. This was measured against internal/cli/state.go's formatValue, which
+// had exactly that default branch; it rendered
+//
+//	map[password:{string true hunter2 provider true  <generated>}]
+//
+// printing the secret in clear text with its own Sensitive flag beside it,
+// ignored. formatValue was hardened the same way in the same commit that
+// wrote this comment, and its regression test is
+// TestFormatValueFailsClosedOnUnexpectedShapes.
+//
+// The composite branches fail closed for the same reason: a failed type
+// assertion used to yield an empty {} or [], which claims a composite was
+// empty when it was really unreadable.
 func renderLeaf(v value.Value) string {
 	if v.Sensitive {
 		return "<sensitive>"
@@ -8056,14 +8079,20 @@ func renderLeaf(v value.Value) string {
 	}
 	switch v.Kind {
 	case value.KindList:
-		items, _ := v.Raw.([]value.Value)
+		items, ok := v.Raw.([]value.Value)
+		if !ok {
+			return unrenderable
+		}
 		parts := make([]string, len(items))
 		for i, item := range items {
 			parts[i] = renderLeaf(item)
 		}
 		return "[" + strings.Join(parts, ", ") + "]"
 	case value.KindMap:
-		m, _ := v.Raw.(map[string]value.Value)
+		m, ok := v.Raw.(map[string]value.Value)
+		if !ok {
+			return unrenderable
+		}
 		keys := make([]string, 0, len(m))
 		for k := range m {
 			keys = append(keys, k)
@@ -8077,8 +8106,12 @@ func renderLeaf(v value.Value) string {
 	case value.KindString:
 		s, _ := v.AsString()
 		return strconv.Quote(s)
-	default:
+	case value.KindInt, value.KindFloat, value.KindBool:
 		return fmt.Sprintf("%v", v.Raw)
+	default:
+		// KindInvalid, or a kind added later that nobody taught this
+		// function about. Both fail closed. See the comment above.
+		return unrenderable
 	}
 }
 
@@ -8090,6 +8123,41 @@ func renderSummary(p *Plan) string {
 	counts := p.Counts()
 	return fmt.Sprintf("Plan: %d to create, %d to update, %d to replace, %d to destroy, %d to forget.",
 		counts[OpCreate], counts[OpUpdate], counts[OpReplace], counts[OpDestroy], counts[OpForget])
+}
+```
+
+Also append this test to `render_test.go`. It is a literal assertion rather than a golden file, because the point is that these shapes must never reach a fixture at all:
+
+```go
+// TestRenderLeafFailsClosedOnUnexpectedShapes covers the branch a golden file
+// cannot: values whose Kind and Raw disagree, or whose Kind was never set.
+// See renderLeaf's doc comment for the measured leak this prevents.
+func TestRenderLeafFailsClosedOnUnexpectedShapes(t *testing.T) {
+	secret := value.String("hunter2", value.SourceProvider).WithSensitive(true)
+
+	cases := []struct {
+		name string
+		v    value.Value
+	}{
+		{"kind left at the zero value with a composite Raw",
+			value.Value{Known: true, Raw: map[string]value.Value{"password": secret}}},
+		{"kind says map, Raw is a different map type",
+			value.Value{Kind: value.KindMap, Known: true, Raw: map[string]any{"password": "hunter2"}}},
+		{"kind says list, Raw is a different slice type",
+			value.Value{Kind: value.KindList, Known: true, Raw: []any{"hunter2"}}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := renderLeaf(tc.v)
+			if strings.Contains(got, "hunter2") {
+				t.Errorf("secret rendered in clear text: %s", got)
+			}
+			if got != "<unrenderable>" {
+				t.Errorf("renderLeaf = %q, want %q", got, "<unrenderable>")
+			}
+		})
+	}
 }
 ```
 

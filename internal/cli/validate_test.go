@@ -226,3 +226,69 @@ resources:
 		t.Errorf("diagnostic must name the missing requirement:\n%s", renderToString(ds))
 	}
 }
+
+// TestFormatValueFailsClosedOnUnexpectedShapes covers the escape hatch that
+// M1's redaction fix left open. TestFormatValueRedactsNestedSensitiveLeaves
+// already covers a correctly-constructed composite; this covers the ones
+// that reach the default branch.
+//
+// The leak was measured before it was fixed. A Value carrying a map in Raw
+// with its Kind left at the zero value (KindInvalid) fell through to
+// fmt.Sprintf("%v", v.Raw) and rendered:
+//
+//	map[password:{string true hunter2 provider true  <generated>}]
+//
+// — the secret in clear text, with its own Sensitive flag printed next to it.
+func TestFormatValueFailsClosedOnUnexpectedShapes(t *testing.T) {
+	secret := value.String("hunter2", value.SourceProvider).WithSensitive(true)
+
+	cases := []struct {
+		name string
+		v    value.Value
+	}{
+		{
+			// The leak as measured: Kind never set, Raw holds a composite.
+			name: "kind left at the zero value with a composite Raw",
+			v:    value.Value{Known: true, Raw: map[string]value.Value{"password": secret}},
+		},
+		{
+			name: "kind says map, Raw is a different map type",
+			v:    value.Value{Kind: value.KindMap, Known: true, Raw: map[string]any{"password": "hunter2"}},
+		},
+		{
+			name: "kind says list, Raw is a different slice type",
+			v:    value.Value{Kind: value.KindList, Known: true, Raw: []any{"hunter2"}},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := formatValue(tc.v)
+			if strings.Contains(got, "hunter2") {
+				t.Errorf("secret rendered in clear text: %s", got)
+			}
+			if got != "<unrenderable>" {
+				t.Errorf("formatValue = %q, want %q — an unreadable value must say so, "+
+					"not render as empty, which would claim the composite held nothing", got, "<unrenderable>")
+			}
+		})
+	}
+}
+
+// TestFormatValueStillRendersScalars guards the other direction: failing
+// closed must not turn ordinary values into <unrenderable>.
+func TestFormatValueStillRendersScalars(t *testing.T) {
+	cases := []struct {
+		v    value.Value
+		want string
+	}{
+		{value.String("eu-west-1", value.SourceExplicit), "eu-west-1"},
+		{value.Int(20, value.SourceDefault), "20"},
+		{value.Bool(true, value.SourceExplicit), "true"},
+	}
+	for _, tc := range cases {
+		if got := formatValue(tc.v); got != tc.want {
+			t.Errorf("formatValue = %q, want %q", got, tc.want)
+		}
+	}
+}
