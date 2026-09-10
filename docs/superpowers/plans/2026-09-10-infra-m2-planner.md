@@ -162,6 +162,69 @@ func TestReferencesOnNilIsEmptyNotPanic(t *testing.T) {
 	}
 }
 
+func TestStringRendersPasteableSource(t *testing.T) {
+	// A diagnostic that shows source a user cannot paste back is a trap. The
+	// delimiters belong at the top level only: rendering a call's arguments
+	// through String() would give ${lower(${db.endpoint})}.
+	ref := func(res, attr string) *Expr {
+		return &Expr{Op: OpResourceRef, Ref: Reference{Resource: res, Attribute: attr}}
+	}
+
+	cases := []struct {
+		name string
+		in   *Expr
+		want string
+	}{
+		{
+			name: "lone reference",
+			in:   ref("database", "endpoint"),
+			want: "${database.endpoint}",
+		},
+		{
+			name: "call over a reference",
+			in:   &Expr{Op: OpCall, Function: "lower", Args: []*Expr{ref("database", "engine")}},
+			want: "${lower(database.engine)}",
+		},
+		{
+			name: "nested call",
+			in: &Expr{Op: OpCall, Function: "upper", Args: []*Expr{
+				{Op: OpCall, Function: "lower", Args: []*Expr{ref("database", "engine")}},
+			}},
+			want: "${upper(lower(database.engine))}",
+		},
+		{
+			name: "call with quoted literals",
+			in: &Expr{Op: OpCall, Function: "replace", Args: []*Expr{
+				ref("database", "engine"),
+				{Op: OpLiteral, Literal: String("sql", SourceExplicit)},
+				{Op: OpLiteral, Literal: String("SQL", SourceExplicit)},
+			}},
+			want: `${replace(database.engine, "sql", "SQL")}`,
+		},
+		{
+			name: "concat of literal and reference",
+			in: &Expr{Op: OpConcat, Args: []*Expr{
+				{Op: OpLiteral, Literal: String("prefix-", SourceExplicit)},
+				ref("network", "id"),
+			}},
+			want: "prefix-${network.id}",
+		},
+	}
+
+	for _, tc := range cases {
+		if got := tc.in.String(); got != tc.want {
+			t.Errorf("%s: String() = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}
+
+func TestStringOnNilIsEmptyNotPanic(t *testing.T) {
+	var e *Expr
+	if got := e.String(); got != "" {
+		t.Errorf("String() on nil = %q, want empty", got)
+	}
+}
+
 func TestValueCarriesExpr(t *testing.T) {
 	e := &Expr{Op: OpResourceRef, Ref: Reference{Resource: "db", Attribute: "endpoint"}}
 	v := Unknown(KindString, SourceComputed)
@@ -214,7 +277,10 @@ Create `pkg/value/expr.go`:
 ```go
 package value
 
-import "strings"
+import (
+	"strconv"
+	"strings"
+)
 
 // ExprOp is the kind of an expression node.
 type ExprOp uint8
@@ -288,8 +354,15 @@ func (e *Expr) References() []Reference {
 	return out
 }
 
-// String renders the expression back to something close to its source form.
-// It is for diagnostics, not round-tripping.
+// String renders the expression back toward its configuration source form, for
+// diagnostics.
+//
+// Rendering splits in two because an expression reads differently depending on
+// where it sits. At the top level a reference is written ${db.endpoint}, but as
+// an argument inside a call it is written db.endpoint — bare. Rendering
+// arguments through String() would wrap each of them in delimiters of their own
+// and produce ${lower(${db.endpoint})}, which is not syntax a user could paste
+// back into their configuration.
 func (e *Expr) String() string {
 	if e == nil {
 		return ""
@@ -300,18 +373,43 @@ func (e *Expr) String() string {
 			return s
 		}
 		return "<literal>"
-	case OpVarRef, OpResourceRef:
-		return "${" + e.Ref.String() + "}"
-	case OpCall:
-		parts := make([]string, 0, len(e.Args))
-		for _, a := range e.Args {
-			parts = append(parts, a.String())
-		}
-		return "${" + e.Function + "(" + strings.Join(parts, ", ") + ")}"
 	case OpConcat:
 		var b strings.Builder
 		for _, a := range e.Args {
 			b.WriteString(a.String())
+		}
+		return b.String()
+	default:
+		return "${" + e.inner() + "}"
+	}
+}
+
+// inner renders an expression as it appears inside ${...}, without the
+// delimiters. A literal is re-quoted here because that is how it was written:
+// replace(engine, "sql", "SQL") takes quoted arguments, and dropping the quotes
+// would render something that no longer parses.
+func (e *Expr) inner() string {
+	if e == nil {
+		return ""
+	}
+	switch e.Op {
+	case OpLiteral:
+		if s, ok := e.Literal.AsString(); ok {
+			return strconv.Quote(s)
+		}
+		return "<literal>"
+	case OpVarRef, OpResourceRef:
+		return e.Ref.String()
+	case OpCall:
+		parts := make([]string, 0, len(e.Args))
+		for _, a := range e.Args {
+			parts = append(parts, a.inner())
+		}
+		return e.Function + "(" + strings.Join(parts, ", ") + ")"
+	case OpConcat:
+		var b strings.Builder
+		for _, a := range e.Args {
+			b.WriteString(a.inner())
 		}
 		return b.String()
 	default:
