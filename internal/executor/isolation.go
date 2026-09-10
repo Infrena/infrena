@@ -104,6 +104,26 @@ func (t *tracker) recordSuccess(w *graph.Walk[planner.OpNode], node planner.OpNo
 // built — the only other place with this information is Walk, which knows
 // nothing about Event or Options.OnEvent and should not.
 func (t *tracker) recordFailure(w *graph.Walk[planner.OpNode], node planner.OpNode, err error, ds *diag.Diagnostics) {
+	t.recordFailureWith(w, node, err, ds, diag.Diagnostic{
+		Severity: diag.SeverityError,
+		Summary:  fmt.Sprintf("%s %s failed", node.Kind, node.Address),
+		Detail:   err.Error(),
+		Related:  []address.Address{node.Address},
+	})
+}
+
+// recordFailureWith is recordFailure with the caller supplying the
+// diagnostic that explains the failure.
+//
+// Only one caller needs it: Apply's persistence path, whose failure is not a
+// provider call going wrong but state failing to record one that went right,
+// and which has already composed a diagnostic saying so in those terms. The
+// alternative — letting it add its own diagnostic and calling recordFailure
+// — emits two error diagnostics for one event, the second of which
+// ("create x failed") contradicts the first ("the provider call reported
+// success"). The bookkeeping is identical either way; only the sentence
+// differs, so only the sentence is a parameter.
+func (t *tracker) recordFailureWith(w *graph.Walk[planner.OpNode], node planner.OpNode, err error, ds *diag.Diagnostics, d diag.Diagnostic) {
 	t.failed[node.ID()] = err
 	// A prior recordSuccess at this same address, if one exists, can only
 	// be the destroy phase of the SAME OpReplace that node's create phase
@@ -127,12 +147,7 @@ func (t *tracker) recordFailure(w *graph.Walk[planner.OpNode], node planner.OpNo
 	// one address could reach here and have this delete wipe a
 	// legitimately-applied, unrelated entry.
 	delete(t.applied, node.Address.String())
-	ds.Add(diag.Diagnostic{
-		Severity: diag.SeverityError,
-		Summary:  fmt.Sprintf("%s %s failed", node.Kind, node.Address),
-		Detail:   err.Error(),
-		Related:  []address.Address{node.Address},
-	})
+	ds.Add(d)
 
 	// Both halves of this guard are defensive depth, not what currently
 	// makes it true, and both trace back to the same two facts documented

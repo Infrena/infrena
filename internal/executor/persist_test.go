@@ -360,12 +360,27 @@ func TestApplyRecordsAHardErrorWhenAProviderReturnsSuccessWithNoResourceState(t 
 	}
 	st := state.New("proj", "dev")
 
-	_, ds := Apply(context.Background(), plan, g, st, Options{
+	result, ds := Apply(context.Background(), plan, g, st, Options{
 		Parallelism: 1, PerProvider: 1, Registry: reg, Backend: backend, Environment: "dev",
 	})
 
 	if !ds.HasErrors() {
 		t.Fatal("expected a diagnostic — a provider returning (nil, nil) on a successful create must not be a silent success")
+	}
+
+	// The operation must be REPRESENTED in Result, not merely absent from
+	// Applied. It used to fall out of all three sets — the diagnostic went
+	// to stderr while stdout's summary read "0 applied, 0 failed, 0
+	// skipped", for a run in which the provider may have created real
+	// infrastructure. Whichever stream the reader trusts, one of them is
+	// lying; an operation that vanishes makes the run look like it did
+	// nothing at all.
+	id := "create:" + a.String()
+	if _, ok := result.Failed[id]; !ok {
+		t.Errorf("Failed = %v, want an entry for %s — a hard error must appear in Result, not only in diagnostics", result.Failed, id)
+	}
+	if len(result.Applied) != 0 {
+		t.Errorf("Applied = %v, want empty — state has no entry for %s", result.Applied, a)
 	}
 	var found bool
 	for _, d := range ds {

@@ -2,6 +2,7 @@ package executor
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -157,7 +158,7 @@ func Apply(ctx context.Context, p *planner.Plan, g *graph.Graph[planner.OpNode],
 		}
 
 		if err := r.record(res); err != nil {
-			ds.Add(diag.Diagnostic{
+			d := diag.Diagnostic{
 				Severity: diag.SeverityError,
 				Summary:  "failed to persist state after " + res.node.ID() + ": " + err.Error(),
 				// Deliberately does not claim "Result.State reflects it" —
@@ -169,8 +170,34 @@ func Apply(ctx context.Context, p *planner.Plan, g *graph.Graph[planner.OpNode],
 					"kept in sync with it. The run is stopping rather than scheduling further operations " +
 					"against a state file that may no longer describe reality.",
 				Related: []address.Address{res.node.Address},
-			})
+			}
 			persistFailed = true
+
+			// The two errors record can return are not the same outcome,
+			// and Result must not flatten them into one.
+			//
+			// A Put I/O failure ran st.Set/st.Remove before the write
+			// failed, so state HAS the entry and recordSuccess below is
+			// accurate — only the flush to disk did not happen, and the
+			// diagnostic says so.
+			//
+			// A nil-state return never reached st.Set at all, so there is
+			// nothing to record as applied. Before this branch existed the
+			// operation went to recordSuccess anyway and tracker.result
+			// then filtered it back out of Applied for having no entry in
+			// state — leaving it in NEITHER Applied, Failed nor Skipped,
+			// and the summary reading "0 applied, 0 failed, 0 skipped" for
+			// a run in which a provider may have created real
+			// infrastructure. An operation that vanishes from the result
+			// is worse than one reported badly: the run looks like it did
+			// nothing. It is a failure, so it belongs in Failed, and its
+			// dependents are stranded, so they belong in Skipped.
+			var noState *noResourceStateError
+			if errors.As(err, &noState) {
+				tr.recordFailureWith(w, res.node, err, &ds, d)
+				continue
+			}
+			ds.Add(d)
 		}
 		newly := tr.recordSuccess(w, res.node)
 		queue = append(queue, newly...)
@@ -334,7 +361,7 @@ func (r *run) record(res nodeResult) error {
 		// through the identical stopping gate on purpose: continuing to
 		// schedule more work against a document already known to be
 		// silently incomplete would compound the risk, not contain it.
-		return fmt.Errorf("%s: provider %q returned success for %s with no resource state — state cannot record what happened, and if the provider call actually took effect the underlying infrastructure is now orphaned", res.node.Address, r.providerNameFor(res.node), res.node.Kind)
+		return &noResourceStateError{msg: fmt.Sprintf("%s: provider %q returned success for %s with no resource state — state cannot record what happened, and if the provider call actually took effect the underlying infrastructure is now orphaned", res.node.Address, r.providerNameFor(res.node), res.node.Kind)}
 	}
 	// context.WithoutCancel, not r.ctx directly: a state write must not be
 	// cancelled by the same signal that told Apply to stop — the entire
@@ -555,3 +582,17 @@ func firstErrorSummary(ds diag.Diagnostics) string {
 	}
 	return "unknown error"
 }
+
+// noResourceStateError is record's contract-violation arm: a provider whose
+// Create/Update returned (nil, nil).
+//
+// It exists as a distinct type purely so Apply's loop can tell it apart from
+// a Put I/O failure, which record also reports as a plain error. The two
+// reach the same stopping gate but have opposite consequences for Result:
+// after a Put failure state holds the entry (so the operation is Applied),
+// after this one it does not (so the operation is Failed). Matching on
+// message text instead would make Result's accounting depend on a sentence
+// nobody would think of as load-bearing.
+type noResourceStateError struct{ msg string }
+
+func (e *noResourceStateError) Error() string { return e.msg }
