@@ -65,7 +65,12 @@ type Options struct {
 	Retry RetryPolicy
 	// Now is injected the same way the planner's is: production wires
 	// time.Now, tests wire a fixed clock so event timestamps and any
-	// time-based assertions are deterministic.
+	// time-based assertions are deterministic. Like OnEvent below, it is
+	// called concurrently from multiple worker goroutines — once per Event
+	// emitted, and Apply may have opts.Parallelism workers each emitting
+	// events at once — so an implementation that is not itself safe for
+	// concurrent use (time.Now is; a hand-rolled fake clock with mutable
+	// internal state may not be) must serialize its own access.
 	Now func() time.Time
 	// OnEvent receives one Event per progress notification. nil is allowed
 	// — a caller that wants no progress reporting passes nothing. It may be
@@ -110,6 +115,23 @@ type RetryPolicy struct {
 	// guesses is worse than none. Called synchronously and before the wait,
 	// so an event reaches the user while the delay is still ahead rather
 	// than being reported after the fact.
+	//
+	// Called concurrently from multiple worker goroutines, exactly like
+	// OnEvent above: every retrying operation in a run calls Attempt with
+	// this same RetryPolicy value, and Apply may have several retrying at
+	// once. An implementation that is not itself safe for concurrent use
+	// must serialize its own access — the same requirement OnEvent already
+	// states, and for the same reason.
+	//
+	// One subtlety worth being explicit about: Apply gives each operation
+	// its own RetryPolicy value (a plain copy, so its own wrapping of
+	// OnRetry to also emit EventRetrying never races a sibling operation's
+	// copy), but a copy of the struct does not copy what a func value
+	// points to. If a caller's OnRetry closes over shared state — a
+	// counter, a slice it appends to, anything mutable — that state is
+	// still the ONE thing every retrying worker's copy of the policy calls
+	// into concurrently. The per-operation struct copy isolates the field
+	// itself; it does nothing for what the field, once called, touches.
 	OnRetry func(attempt int, err error, delay time.Duration)
 }
 

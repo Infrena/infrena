@@ -64,9 +64,19 @@ func Apply(ctx context.Context, p *planner.Plan, g *graph.Graph[planner.OpNode],
 		stopping := ctx.Err() != nil
 
 		var deferred []planner.OpNode
-		// launched counts how many nodes this pass actually started, as
-		// opposed to deferred — see the fix note on the diagnostic branch
-		// below for why this, not len(queue), is the right thing to check.
+		// launched counts how many nodes this pass actually started. It is
+		// provably redundant with r.inFlight == 0 below: launch() always
+		// increments r.inFlight, and nothing decrements it within this same
+		// pass (that only happens after a result is received, later in the
+		// loop), so launched > 0 this pass implies r.inFlight > 0 by the
+		// time the check below runs, and vice versa. It is kept anyway,
+		// spelled out explicitly in the condition rather than relied upon
+		// implicitly, because it names the actual intent — "this pass
+		// started nothing" — at the cost of one int, which reads better at
+		// the call site than re-deriving the same fact from inFlight's
+		// value. It is not independently load-bearing; do not read its
+		// presence as proof the len(queue) == 0 mistake below could recur
+		// through some path r.inFlight == 0 alone would miss.
 		launched := 0
 		for _, node := range queue {
 			if stopping || r.inFlight >= opts.Parallelism {
@@ -229,6 +239,26 @@ func (r *run) providerNameFor(node planner.OpNode) string {
 // stated choice, verified in review, not an oversight: do not add a
 // recover() here as a tidy-up without also deciding what "failed" should
 // mean for an operation whose provider call may have already succeeded.
+//
+// The more valuable corollary, in production terms: this reasoning is not
+// only about panics. ANY worker goroutine that exits without sending a
+// nodeResult on r.results — a panic, but just as much a bug that returns
+// early, or calls runtime.Goexit some other way — leaves the owner blocked
+// forever on the receive in Apply's loop, with the environment's lock still
+// held (state.Local.Put's requireOwnLock is the only thing that would ever
+// release it, and nothing calls Unlock from inside a stuck Apply). The
+// no-progress diagnostic a few lines up in Apply cannot catch this: it
+// exists for nothing-launched-and-nothing-running, but here something WAS
+// launched and IS, as far as r.inFlight is concerned, still running — the
+// bookkeeping is not wrong, the goroutine that was supposed to report back
+// is just gone. Measured directly with a worker forced to call t.Fatal
+// (apply_test.go's poisonProvider, via TestApplyForgetNeverCallsProvider-
+// AndRemovesFromState under a simulated regression): the process does not
+// crash and does not report a clean failure — go test's own watchdog is
+// what eventually ends it, as "panic: test timed out after 20s". Outside a
+// test binary there is no such watchdog; a production apply would hang
+// indefinitely holding the lock, and the only way out is an operator
+// force-unlocking the environment by hand.
 func (r *run) launch(node planner.OpNode, providerName string) {
 	r.inFlight++
 	snapshot := r.snapshot()

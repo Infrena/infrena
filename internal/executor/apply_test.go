@@ -705,16 +705,18 @@ func TestApplyRetriesAccordingToPolicy(t *testing.T) {
 }
 
 // lifecycleProvider succeeds at Create, Update and Delete, and records which
-// addresses each was called for. Every other Provider double in this file
-// stubs Update and Delete as provider.ErrNotImplemented (they exist only to
-// exercise Create), which is not enough for a test that needs a destroy or
-// a replace to actually complete end to end.
+// addresses each was called for, plus the combined order calls were made
+// in. Every other Provider double in this file stubs Update and Delete as
+// provider.ErrNotImplemented (they exist only to exercise Create), which is
+// not enough for a test that needs a destroy or a replace to actually
+// complete end to end.
 type lifecycleProvider struct {
 	resourceType string
 
 	mu      sync.Mutex
 	created []string
 	deleted []string
+	order   []string
 }
 
 func (p *lifecycleProvider) Name() string { return "lifecycle" }
@@ -724,6 +726,7 @@ func (p *lifecycleProvider) Definitions() []*schema.ResourceDefinition {
 func (p *lifecycleProvider) Create(ctx context.Context, d *resource.DesiredResource) (*resource.ResourceState, error) {
 	p.mu.Lock()
 	p.created = append(p.created, d.Address.String())
+	p.order = append(p.order, "create:"+d.Address.String())
 	p.mu.Unlock()
 	return &resource.ResourceState{Address: d.Address, Type: d.Type, Provider: p.Name(), ProviderID: d.Address.String(), Attributes: d.Attrs}, nil
 }
@@ -736,6 +739,7 @@ func (p *lifecycleProvider) Update(context.Context, *resource.ResourceState, *re
 func (p *lifecycleProvider) Delete(ctx context.Context, current *resource.ResourceState) error {
 	p.mu.Lock()
 	p.deleted = append(p.deleted, current.Address.String())
+	p.order = append(p.order, "delete:"+current.Address.String())
 	p.mu.Unlock()
 	return nil
 }
@@ -799,9 +803,21 @@ func TestApplyDestroyRemovesFromState(t *testing.T) {
 // TestApplyForgetNeverCallsProviderAndRemovesFromState covers OpForget,
 // which — like OpDestroy — never reached Apply in any test in the
 // repository before this one. poisonProvider (dispatch_test.go, Task 6)
-// fails the test immediately from inside Create/Update/Delete, so if a
-// regression ever routed a forget through any of those, this test would
-// catch it directly rather than by inference from an absence of calls.
+// calls t.Fatal from inside Create/Update/Delete, so if a regression ever
+// routed a forget through any of those, this test would catch it directly
+// rather than by inference from an absence of calls.
+//
+// It does NOT fail immediately, though: t.Fatal calls runtime.Goexit on
+// whatever goroutine calls it, and here that goroutine is a worker
+// (run.launch's goroutine, not the test's own), so Goexit unwinds it
+// without ever sending the nodeResult r.launch's send statement was about
+// to make. Apply's owner is left blocked forever on <-r.results, and the
+// failure actually surfaces as `go test` hitting its own timeout (measured:
+// "panic: test timed out after 20s" under the default `go test` timeout;
+// ten minutes under most CI defaults) rather than an immediate, clean
+// t.Fatal report. That is itself the production form of a real failure
+// mode — see the corollary on launch's own doc comment — not just a test
+// artefact to shrug off.
 func TestApplyForgetNeverCallsProviderAndRemovesFromState(t *testing.T) {
 	backend := newLockedBackend(t, "dev")
 	reg := registry.New()
@@ -843,10 +859,22 @@ func TestApplyForgetNeverCallsProviderAndRemovesFromState(t *testing.T) {
 // the third operation kind that never reached Apply in any test before this
 // round: its two nodes ("destroy:swap" then "create:swap") share the SAME
 // *planner.Operation through r.ops, which is keyed by address, not by node
-// ID. This proves that sharing works correctly end to end — both phases
-// fire, in the right order, and state ends up holding the NEW object under
-// the same address the old one occupied, not the destroyed original and not
-// both.
+// ID. This proves that sharing works correctly end to end on the HAPPY
+// path — both phases fire, in the right order (asserted directly below,
+// not merely claimed), and state ends up holding the NEW object under the
+// same address the old one occupied, not the destroyed original and not
+// both. Result.Applied is also checked here: a replace is two completed
+// nodes at one address, and types.go documents that Apply collapses them
+// into a single Result.Applied entry — this is the one place in the
+// package that address appears in Applied at all, so it is also the only
+// place that documented collapse can be asserted.
+//
+// This test cannot distinguish "the destroy phase's removal happened, then
+// the create phase correctly re-added it" from "the destroy phase's
+// removal never happened at all" — the create phase's st.Set overwrites
+// the address either way, so a missing intermediate st.Remove is invisible
+// here. TestApplyReplaceLeavesNoStateWhenCreatePhaseFailsAfterDestroySucceeds
+// below isolates that specific failure path instead.
 func TestApplyReplaceDestroysThenCreatesSharingOneOperation(t *testing.T) {
 	backend := newLockedBackend(t, "dev")
 	prov := &lifecycleProvider{resourceType: "test.thing"}
@@ -884,6 +912,7 @@ func TestApplyReplaceDestroysThenCreatesSharingOneOperation(t *testing.T) {
 	prov.mu.Lock()
 	deleted := append([]string(nil), prov.deleted...)
 	created := append([]string(nil), prov.created...)
+	order := append([]string(nil), prov.order...)
 	prov.mu.Unlock()
 
 	if len(deleted) != 1 || deleted[0] != "swap" {
@@ -893,12 +922,124 @@ func TestApplyReplaceDestroysThenCreatesSharingOneOperation(t *testing.T) {
 		t.Fatalf("Create calls = %v, want exactly [swap] — both phases of the replace must fire, sharing one *planner.Operation through the address-keyed index", created)
 	}
 
+	wantOrder := []string{"delete:swap", "create:swap"}
+	if !reflect.DeepEqual(order, wantOrder) {
+		t.Errorf("call order = %v, want %v — the destroy phase must complete before the create phase begins", order, wantOrder)
+	}
+
 	got, ok := st.Get(a)
 	if !ok {
 		t.Fatal("state has no entry for swap after a replace — a replace must leave the address present, holding the freshly created object")
 	}
 	if got.ProviderID != "swap" {
 		t.Errorf("ProviderID = %q, want %q — final state must reflect the NEW object from the create phase, not the destroyed original", got.ProviderID, "swap")
+	}
+
+	wantApplied := []address.Address{a}
+	if !reflect.DeepEqual(result.Applied, wantApplied) {
+		t.Errorf("Applied = %v, want exactly %v — the replace's two completed nodes at one address must collapse into a single entry, per Result.Applied's documented contract", result.Applied, wantApplied)
+	}
+}
+
+// deleteSucceedsCreateFailsProvider succeeds at Delete and always fails at
+// Create. It exists for one purpose: proving that a replace whose destroy
+// phase succeeds and whose create phase then fails leaves state with NO
+// entry for the address — never the destroyed original (which no longer
+// exists at the provider) and never a half-formed new one.
+type deleteSucceedsCreateFailsProvider struct {
+	resourceType string
+
+	mu      sync.Mutex
+	deleted []string
+}
+
+func (p *deleteSucceedsCreateFailsProvider) Name() string { return "half-replace" }
+func (p *deleteSucceedsCreateFailsProvider) Definitions() []*schema.ResourceDefinition {
+	return []*schema.ResourceDefinition{{Type: p.resourceType}}
+}
+func (p *deleteSucceedsCreateFailsProvider) Create(ctx context.Context, d *resource.DesiredResource) (*resource.ResourceState, error) {
+	return nil, fmt.Errorf("simulated create failure for %s", d.Address)
+}
+func (p *deleteSucceedsCreateFailsProvider) Read(context.Context, *resource.ResourceState) (*resource.ResourceState, error) {
+	return nil, provider.ErrNotImplemented
+}
+func (p *deleteSucceedsCreateFailsProvider) Update(context.Context, *resource.ResourceState, *resource.DesiredResource) (*resource.ResourceState, error) {
+	return nil, provider.ErrNotImplemented
+}
+func (p *deleteSucceedsCreateFailsProvider) Delete(ctx context.Context, current *resource.ResourceState) error {
+	p.mu.Lock()
+	p.deleted = append(p.deleted, current.Address.String())
+	p.mu.Unlock()
+	return nil
+}
+func (p *deleteSucceedsCreateFailsProvider) Discover(context.Context, provider.DiscoverRequest) ([]provider.DiscoveredResource, error) {
+	return nil, provider.ErrNotImplemented
+}
+func (p *deleteSucceedsCreateFailsProvider) Import(context.Context, string, string) (*resource.ResourceState, error) {
+	return nil, provider.ErrNotImplemented
+}
+func (p *deleteSucceedsCreateFailsProvider) ClassifyError(error) provider.Retryability {
+	return provider.NotSafeToRetry
+}
+
+var _ provider.Provider = (*deleteSucceedsCreateFailsProvider)(nil)
+
+// TestApplyReplaceLeavesNoStateWhenCreatePhaseFailsAfterDestroySucceeds
+// covers invariant 1's other half on the path that actually exercises it.
+// TestApplyReplaceDestroysThenCreatesSharingOneOperation's happy path
+// cannot distinguish "removed then correctly re-added" from "never removed
+// at all," because the create phase's st.Set unconditionally overwrites
+// the address regardless of whether the destroy phase's st.Remove ran.
+// This test isolates the FAILURE path instead: the destroy phase succeeds
+// — the old object is actually gone at the provider — and the create phase
+// then fails. State must not still describe infrastructure that no longer
+// exists: that is the worst moment for state to lie, since a later apply,
+// or a person reading `infra state show`, would believe the OLD, now
+// genuinely deleted object is still live.
+func TestApplyReplaceLeavesNoStateWhenCreatePhaseFailsAfterDestroySucceeds(t *testing.T) {
+	backend := newLockedBackend(t, "dev")
+	prov := &deleteSucceedsCreateFailsProvider{resourceType: "test.thing"}
+	reg := registry.New()
+	if err := reg.Register(prov); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	a := addr("swap")
+	replaceOp := planner.Operation{
+		Address: a,
+		Type:    "test.thing",
+		Kind:    planner.OpReplace,
+		Before:  map[string]value.Value{"x": value.String("old", value.SourceExplicit)},
+		After:   map[string]value.Value{"x": value.String("new", value.SourceExplicit)},
+	}
+	plan := planWith(replaceOp)
+	g, err := planner.BuildExecution(plan, noDeps)
+	if err != nil {
+		t.Fatalf("BuildExecution: %v", err)
+	}
+	st := state.New("proj", "dev")
+	st.Set(&resource.ResourceState{Address: a, Type: "test.thing", Provider: "half-replace", ProviderID: "swap-old"})
+
+	result, _ := Apply(context.Background(), plan, g, st, Options{
+		Parallelism: 1, PerProvider: 1, Registry: reg, Backend: backend, Environment: "dev",
+	})
+
+	if len(result.Failed) != 1 {
+		t.Fatalf("Failed = %v, want exactly one entry — the create phase must fail", result.Failed)
+	}
+	if _, ok := result.Failed["create:swap"]; !ok {
+		t.Errorf("Failed = %v, want the key \"create:swap\"", result.Failed)
+	}
+
+	prov.mu.Lock()
+	deleted := append([]string(nil), prov.deleted...)
+	prov.mu.Unlock()
+	if len(deleted) != 1 || deleted[0] != "swap" {
+		t.Fatalf("Delete calls = %v, want exactly [swap] — the destroy phase must actually have run before the create phase could fail", deleted)
+	}
+
+	if _, ok := st.Get(a); ok {
+		t.Error("state still holds an entry for swap after its destroy phase succeeded and its create phase failed — this describes deleted infrastructure as live, invariant 1's other half at its worst moment")
 	}
 }
 
@@ -1064,5 +1205,71 @@ func TestApplyEmitsFailedWithFinalAttemptCount(t *testing.T) {
 	}
 	if failed.Attempt != 2 {
 		t.Errorf("EventFailed.Attempt = %d, want 2 — the number of attempts actually made, not 0 (\"never attempted\" per types.go)", failed.Attempt)
+	}
+}
+
+// TestApplyChainsCallerSuppliedOnRetryAlongsideEventRetrying pins the
+// chaining behavior in execute's own local RetryPolicy copy: a caller's
+// OnRetry must still fire, exactly once per retry, alongside — not instead
+// of — the EventRetrying this run's own wrapper emits. Before this test,
+// nothing in the package ever set Options.Retry.OnRetry, so deleting the
+// userOnRetry(...) call in execute left the whole repository green; this
+// closes that gap directly.
+func TestApplyChainsCallerSuppliedOnRetryAlongsideEventRetrying(t *testing.T) {
+	backend := newLockedBackend(t, "dev")
+	prov := &flakyProvider{resourceType: "test.thing", failures: 2}
+	reg := registry.New()
+	if err := reg.Register(prov); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	plan := planWith(op(addr("a"), "test.thing", planner.OpCreate))
+	g, err := planner.BuildExecution(plan, noDeps)
+	if err != nil {
+		t.Fatalf("BuildExecution: %v", err)
+	}
+	st := state.New("proj", "dev")
+
+	var mu sync.Mutex
+	var callerAttempts []int
+	var retryingEvents int
+
+	result, ds := Apply(context.Background(), plan, g, st, Options{
+		Parallelism: 1, PerProvider: 1, Registry: reg, Backend: backend, Environment: "dev",
+		Retry: RetryPolicy{
+			MaxAttempts: 3,
+			Sleep:       func(context.Context, time.Duration) error { return nil },
+			OnRetry: func(attempt int, err error, delay time.Duration) {
+				mu.Lock()
+				callerAttempts = append(callerAttempts, attempt)
+				mu.Unlock()
+			},
+		},
+		OnEvent: func(e Event) {
+			if e.Kind != EventRetrying {
+				return
+			}
+			mu.Lock()
+			retryingEvents++
+			mu.Unlock()
+		},
+	})
+	if ds.HasErrors() {
+		t.Fatalf("unexpected diagnostics: %+v", ds)
+	}
+	if len(result.Failed) != 0 {
+		t.Fatalf("Failed = %v", result.Failed)
+	}
+
+	mu.Lock()
+	gotAttempts := append([]int(nil), callerAttempts...)
+	gotRetrying := retryingEvents
+	mu.Unlock()
+
+	if want := []int{1, 2}; !reflect.DeepEqual(gotAttempts, want) {
+		t.Fatalf("caller OnRetry attempts = %v, want %v — the caller's own hook must be called exactly once per retry, not skipped in favor of EventRetrying", gotAttempts, want)
+	}
+	if gotRetrying != 2 {
+		t.Fatalf("EventRetrying count = %d, want 2 — must fire alongside the caller's own OnRetry, not instead of it", gotRetrying)
 	}
 }
