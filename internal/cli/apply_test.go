@@ -679,3 +679,115 @@ func TestExecutorOptionsDoesNotConflateTheTwoConcurrencyBounds(t *testing.T) {
 		t.Errorf("PerProvider = %d at the default --parallelism of 10 — the per-provider bound is inert out of the box", got.PerProvider)
 	}
 }
+
+// TestApplyOnADependsOnOnlyChangeUpdatesRecordedDependencies is the other
+// half of TestApplyRecordsDependenciesInStateSoALaterDestroyCanOrderItself
+// (destroy_test.go): recording dependencies on CREATE alone left invariant 4
+// working for resources created afterwards and not for resources whose
+// dependencies later change.
+//
+// The reproduction it pins: `db` is applied depending on `net`; a new
+// resource `other` is added and `db` is made to depend on it too. Before the
+// planner diffed dependency edges, that planned as "1 to create" — only
+// `other` — `db` was never updated, and its recorded Dependencies stayed
+// [net]. The destroy edge for `other` did not exist, so a later destroy could
+// delete `other` first and strand `db`.
+//
+// It is fixed the same way a lifecycle-only change was: configuration's
+// metadata must be able to catch up with what state records, or the recorded
+// copy is authoritative in a direction nobody chose.
+func TestApplyOnADependsOnOnlyChangeUpdatesRecordedDependencies(t *testing.T) {
+	dir := projectDir(t, `
+project: myapp
+resources:
+  net:
+    type: test.network
+    cidr: 10.20.0.0/16
+  db:
+    type: test.database
+    engine: postgres
+    network: ${net.id}
+`)
+	apply := func(t *testing.T) (string, error) {
+		t.Helper()
+		opts := &GlobalOptions{Dir: dir, Parallelism: 4, AutoApprove: true}
+		cmd := newApplyCommand(opts)
+		cmd.SetArgs([]string{"dev"})
+		cmd.SetIn(strings.NewReader(""))
+		var stdout, stderr bytes.Buffer
+		cmd.SetOut(&stdout)
+		cmd.SetErr(&stderr)
+		err := cmd.Execute()
+		return stdout.String() + stderr.String(), err
+	}
+
+	if out, err := apply(t); !errors.Is(err, errChanges) {
+		t.Fatalf("first apply = %v, want errChanges:\n%s", err, out)
+	}
+	st, err := backendFor(dir).Get(context.Background(), "dev")
+	if err != nil {
+		t.Fatalf("reading state: %v", err)
+	}
+	db, _ := st.Get(address.Address{Name: "db"})
+	if len(db.Dependencies) != 1 || db.Dependencies[0].String() != "net" {
+		t.Fatalf("after the first apply db.Dependencies = %v, want [net]", db.Dependencies)
+	}
+
+	// Only the dependency edges change: db's attributes are untouched.
+	if err := os.WriteFile(filepath.Join(dir, "infra.yml"), []byte(`
+project: myapp
+resources:
+  net:
+    type: test.network
+    cidr: 10.20.0.0/16
+  other:
+    type: test.network
+    cidr: 10.50.0.0/16
+  db:
+    type: test.database
+    engine: postgres
+    network: ${net.id}
+    depends_on: [other]
+`), 0o644); err != nil {
+		t.Fatalf("rewriting configuration: %v", err)
+	}
+
+	out, err := apply(t)
+	if !errors.Is(err, errChanges) {
+		t.Fatalf("second apply = %v, want errChanges:\n%s", err, out)
+	}
+	// The user must be told what the update is. An update whose only change
+	// is metadata renders as a bare header without renderMetadataLines.
+	if !strings.Contains(out, "depends_on: [net] -> [net, other]") {
+		t.Errorf("the plan does not show the dependency change it is asking approval for:\n%s", out)
+	}
+
+	st, err = backendFor(dir).Get(context.Background(), "dev")
+	if err != nil {
+		t.Fatalf("reading state after the second apply: %v", err)
+	}
+	db, ok := st.Get(address.Address{Name: "db"})
+	if !ok {
+		t.Fatal("db is not in state")
+	}
+	got := make([]string, 0, len(db.Dependencies))
+	for _, d := range db.Dependencies {
+		got = append(got, d.String())
+	}
+	if len(got) != 2 || got[0] != "net" || got[1] != "other" {
+		t.Fatalf("db.Dependencies = %v, want [net other] — a depends_on-only change must reach state, or the new destroy edge does not exist", got)
+	}
+
+	// And it must have converged: a third plan proposes nothing.
+	planCmd := newPlanCommand(&GlobalOptions{Dir: dir, Parallelism: 4})
+	planCmd.SetArgs([]string{"dev"})
+	var planOut, planErr bytes.Buffer
+	planCmd.SetOut(&planOut)
+	planCmd.SetErr(&planErr)
+	if err := planCmd.Execute(); err != nil {
+		t.Fatalf("re-plan = %v, want no changes:\n%s%s", err, planOut.String(), planErr.String())
+	}
+	if !strings.Contains(planOut.String(), "No changes.") {
+		t.Errorf("invariant 2: the dependency update did not converge:\n%s", planOut.String())
+	}
+}

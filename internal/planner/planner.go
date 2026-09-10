@@ -302,6 +302,17 @@ func operationFor(
 	// wrote down never takes effect: the same silent failure as a create that
 	// never recorded it, one apply later.
 	reasons = append(reasons, lifecycleReasons(rc.Lifecycle, rs.Lifecycle)...)
+	// Dependency edges, for the same reason and against the same source: rs,
+	// the state record, not actual, the provider observation. Dependencies
+	// are bookkeeping infra attaches to a resource and no provider owns them,
+	// so the record is their only source of truth.
+	//
+	// Without this, a depends_on-only change plans as "No changes", nothing is
+	// written, and the new edge never reaches state — leaving invariant 4
+	// working for resources created after dependencies started being recorded
+	// and not for resources whose dependencies later change. Exactly the
+	// asymmetry the lifecycle diff above exists to prevent, one field over.
+	reasons = append(reasons, dependencyReasons(rc.DependsOn, rs.Dependencies)...)
 	kind := OpNoOp
 	switch {
 	case forcesReplacement(reasons):

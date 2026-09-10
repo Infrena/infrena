@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 	"strconv"
+	"strings"
 
 	"infra/internal/diag"
 	"infra/pkg/address"
@@ -164,6 +165,83 @@ func lifecycleReasons(desired, recorded resource.Lifecycle) []ChangeReason {
 	add("prevent_destroy", desired.PreventDestroy, recorded.PreventDestroy)
 	add("retain", desired.Retain, recorded.Retain)
 	return reasons
+}
+
+// dependsOnAttribute marks a ChangeReason as describing this resource's
+// dependency edges rather than a provider attribute — the same role
+// lifecyclePrefix plays, for the same reason: the reason has no entry in
+// Before or After, so the attribute-diff loop would never print it.
+//
+// It is a bare name rather than a prefixed one because it names exactly one
+// thing, and it cannot collide with a real attribute: `depends_on` is a
+// structural key in the resource body (internal/config/decode.go switches on
+// it alongside `type` and `lifecycle`), so it never reaches r.Attributes and
+// diffAttributes can never produce a reason with this name.
+const dependsOnAttribute = "depends_on"
+
+// dependencyReasons reports a change to this resource's dependency edges, so
+// that a depends_on-only change is a visible operation instead of a silent
+// no-op.
+//
+// This exists for the same reason lifecycleReasons does, and its absence was
+// the same bug one field over. state's Dependencies is the ONLY source of
+// destroy-ordering edges once a resource leaves configuration (spec §14), and
+// the executor only writes it when an operation actually runs. Without this
+// diff, adding a dependency to a resource that already exists plans as "No
+// changes", nothing is written, and the new edge never reaches state at all:
+// a later destroy could delete the new dependency first and strand the
+// resource that depends on it. Recording dependencies on create alone made
+// invariant 4 hold for resources created afterwards and not for resources
+// whose dependencies change, which is worse than not holding at all —
+// half-implemented behaviour is what this project refuses (see --var-file,
+// which errors rather than being silently ignored).
+//
+// Configuration wins, always, exactly as for lifecycle: these reasons describe
+// moving state towards config, never the reverse. If state won, an edge could
+// be added but never removed.
+//
+// ForceNew is deliberately false. Dependency edges are metadata infra records
+// about a resource; nothing about the external object changes when they do,
+// and marking it ForceNew would destroy and recreate a resource because
+// something else started pointing at it.
+//
+// Both slices are sorted by construction — compiler's sortedAddresses builds
+// DependsOn, and the executor stamps that same slice into state — so this
+// compares them in order rather than as sets. That is deliberate: two
+// orderings of the same edges would be a bug upstream in canonicalisation
+// (the property TestBindSortsDependsOnEveryTime pins), and silently treating
+// them as equal here would hide it.
+//
+// The Note names addresses, never values, so nothing sensitive can reach it.
+func dependencyReasons(desired, recorded []address.Address) []ChangeReason {
+	if len(desired) == len(recorded) {
+		same := true
+		for i := range desired {
+			if desired[i].String() != recorded[i].String() {
+				same = false
+				break
+			}
+		}
+		if same {
+			return nil
+		}
+	}
+	return []ChangeReason{{
+		Attribute: dependsOnAttribute,
+		Note:      formatAddresses(recorded) + " -> " + formatAddresses(desired),
+	}}
+}
+
+// formatAddresses renders an address list for a ChangeReason's Note.
+func formatAddresses(addrs []address.Address) string {
+	if len(addrs) == 0 {
+		return "[]"
+	}
+	names := make([]string, 0, len(addrs))
+	for _, a := range addrs {
+		names = append(names, a.String())
+	}
+	return "[" + strings.Join(names, ", ") + "]"
 }
 
 // forcesReplacement reports whether any reason names a ForceNew attribute,

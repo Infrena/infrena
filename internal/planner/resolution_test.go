@@ -48,6 +48,26 @@ func dependent(name, typ string, attrs map[string]value.Value, deps ...string) *
 	return r
 }
 
+// recordedDependent is recorded() plus the Dependencies an apply would have
+// written for it.
+//
+// It matters that these fixtures use it. state's Dependencies is what the
+// planner diffs configuration's DependsOn against, so a fixture that recorded
+// a resource with edges in configuration and none in state is describing a
+// state production no longer produces — and it would report an update on
+// every run, which reads as invariant 2 being broken when what is actually
+// broken is the fixture. This is the same class as the lifecycle fixtures
+// that hand-built a ResourceState with Lifecycle set: seed the precondition
+// the way production establishes it, or the test measures the author's
+// assumptions instead of the code.
+func recordedDependent(name, typ string, attrs map[string]value.Value, deps ...string) *resource.ResourceState {
+	rs := recorded(name, typ, attrs)
+	for _, d := range deps {
+		rs.Dependencies = append(rs.Dependencies, addr(d))
+	}
+	return rs
+}
+
 // names renders an address slice for comparison. address.Address contains a
 // slice, so it is not comparable with ==.
 func names(addrs []address.Address) []string {
@@ -110,12 +130,12 @@ func TestPlanConvergesWhenAReferencedAttributeIsAlreadyKnown(t *testing.T) {
 			"cidr": str("10.0.0.0/16").WithSource(value.SourceProvider),
 			"id":   str("net-1").WithSource(value.SourceProvider),
 		}),
-		recorded("database", "test.database", map[string]value.Value{
+		recordedDependent("database", "test.database", map[string]value.Value{
 			"engine":   str("postgres").WithSource(value.SourceProvider),
 			"size":     value.Int(10, value.SourceProvider),
 			"network":  str("net-1").WithSource(value.SourceProvider),
 			"endpoint": str("db-1.db.test").WithSource(value.SourceProvider),
-		}),
+		}, "network"),
 	}
 
 	// Run repeatedly rather than once. Every input here reaches Compute
@@ -170,16 +190,16 @@ func TestPlanConvergesThroughAChainOfReferences(t *testing.T) {
 			"cidr": str("10.0.0.0/16"),
 			"id":   str("net-1"),
 		}),
-		recorded("database", "test.database", map[string]value.Value{
+		recordedDependent("database", "test.database", map[string]value.Value{
 			"engine":   str("postgres"),
 			"network":  str("net-1"),
 			"endpoint": str("db-1.db.test"),
-		}),
-		recorded("application", "test.application", map[string]value.Value{
+		}, "network"),
+		recordedDependent("application", "test.application", map[string]value.Value{
 			"image":        str("web:1"),
 			"database_url": str("postgres://db-1.db.test/app"),
 			"url":          str("app-1.test"),
-		}),
+		}, "database"),
 	}
 
 	p, ds := Compute(cfg, stateOf(live...), present(live...), planOpts(t))
