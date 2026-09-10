@@ -628,6 +628,32 @@ func TestParseDiagnosticsNameTheOffendingSource(t *testing.T) {
 	}
 }
 
+func TestParseBraceInQuotedLiteral(t *testing.T) {
+	// A brace inside a quoted argument is data, not a delimiter. Counting it
+	// would end the interpolation early and report a confusing error about
+	// whatever followed.
+	e := mustParse(t, `${replace(database.engine, "}", "")}`)
+	if e.Op != value.OpCall || e.Function != "replace" {
+		t.Fatalf("Op = %v Function = %q, want OpCall replace", e.Op, e.Function)
+	}
+	if len(e.Args) != 3 {
+		t.Fatalf("Args = %d, want 3", len(e.Args))
+	}
+	if s, _ := e.Args[1].Literal.AsString(); s != "}" {
+		t.Errorf("second argument = %q, want the literal brace", s)
+	}
+}
+
+func TestParseEscapedQuoteInLiteral(t *testing.T) {
+	e := mustParse(t, `${replace(database.engine, "a"b", "c")}`)
+	if len(e.Args) != 3 {
+		t.Fatalf("Args = %d, want 3 — an escaped quote must not end the literal", len(e.Args))
+	}
+	if s, _ := e.Args[1].Literal.AsString(); s != `a"b` {
+		t.Errorf("second argument = %q, want `a\"b`", s)
+	}
+}
+
 func TestParseEscapedDollarIsLiteral(t *testing.T) {
 	// $${not_an_expression} is how a user writes a literal dollar-brace.
 	e := mustParse(t, "$${literal}")
@@ -741,9 +767,25 @@ func split(src string, origin value.Origin, ds *diag.Diagnostics) ([]*value.Expr
 
 // matchBrace returns the index of the } closing the interpolation that starts
 // at from, accounting for nesting, or -1 if there is none.
+//
+// Braces inside a quoted literal are not delimiters: ${replace(x, "}", "")} is
+// one interpolation, not one that ends at the quoted brace. Counting them would
+// truncate the expression and produce a confusing error about the remainder.
 func matchBrace(src string, from int) int {
 	depth := 1
+	quoted := false
 	for i := from; i < len(src); i++ {
+		if quoted && src[i] == '\\' && i+1 < len(src) {
+			i++ // an escaped character is never a delimiter
+			continue
+		}
+		if src[i] == '"' {
+			quoted = !quoted
+			continue
+		}
+		if quoted {
+			continue
+		}
 		switch src[i] {
 		case '{':
 			depth++
@@ -826,11 +868,16 @@ func parseCall(src string, open int, origin value.Origin, ds *diag.Diagnostics) 
 	return &value.Expr{Op: value.OpCall, Function: name, Args: args, Origin: origin}
 }
 
-// splitArgs splits on commas that are not inside parentheses or quotes.
+// splitArgs splits on commas that are not inside parentheses or quotes. An
+// escaped character inside a quoted argument is never a delimiter.
 func splitArgs(src string) []string {
 	var out []string
 	depth, quoted, start := 0, false, 0
 	for i := 0; i < len(src); i++ {
+		if quoted && src[i] == '\\' && i+1 < len(src) {
+			i++
+			continue
+		}
 		switch src[i] {
 		case '"':
 			quoted = !quoted
