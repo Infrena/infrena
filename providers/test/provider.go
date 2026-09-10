@@ -138,10 +138,7 @@ func (p *Provider) Read(ctx context.Context, current *resource.ResourceState) (*
 		return nil, nil // deleted outside infra
 	}
 	st := p.toState(current.Address.String(), obj.Type, current.ProviderID, obj.Attributes)
-	st.CreatedAt = current.CreatedAt
-	st.UpdatedAt = current.UpdatedAt
-	st.Dependencies = append([]address.Address(nil), current.Dependencies...)
-	st.Lifecycle = current.Lifecycle
+	carryForward(st, current)
 	return st, nil
 }
 
@@ -164,10 +161,31 @@ func (p *Provider) Update(ctx context.Context, current *resource.ResourceState, 
 	}
 
 	st := p.toState(d.Address.String(), obj.Type, current.ProviderID, obj.Attributes)
-	st.CreatedAt = current.CreatedAt
+	carryForward(st, current)
+	// An update stamps a new mtime, and the desired lifecycle is what the
+	// configuration now asks for. Everything else carried above is unchanged.
 	st.UpdatedAt = time.Now().UTC()
 	st.Lifecycle = d.Lifecycle
 	return st, nil
+}
+
+// carryForward copies the fields the cloud file does not record — timestamps,
+// dependency edges and lifecycle — from the previous state onto a freshly
+// derived one.
+//
+// Read and Update both need this, and keeping it in one place is what stops
+// them drifting apart: Update previously omitted Dependencies, which spec §14
+// makes the only source of destroy-ordering edges for a resource that is no
+// longer in configuration. Create deliberately does not call it — on a create
+// there is no previous state, and the executor knows the edges from
+// configuration.
+func carryForward(next, current *resource.ResourceState) {
+	next.CreatedAt = current.CreatedAt
+	next.UpdatedAt = current.UpdatedAt
+	next.Lifecycle = current.Lifecycle
+	// Copied, not aliased: a refresh must never mutate the state loaded from
+	// disk.
+	next.Dependencies = append([]address.Address(nil), current.Dependencies...)
 }
 
 // Delete removes a resource from the fake cloud.

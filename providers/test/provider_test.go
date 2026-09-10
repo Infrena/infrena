@@ -4,6 +4,7 @@ import (
 	"context"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"infra/pkg/address"
 	"infra/pkg/provider"
@@ -252,5 +253,81 @@ func TestNthFailureRuleSurvivesAcrossOperations(t *testing.T) {
 	}
 	if got := p.ClassifyError(err); got != provider.NotSafeToRetry {
 		t.Errorf("ClassifyError = %v, want NotSafeToRetry (rule did not set Retryable)", got)
+	}
+}
+
+func TestUpdatePreservesDependencies(t *testing.T) {
+	// Spec §14 makes the Dependencies recorded in state the only source of
+	// destroy-ordering edges for a resource that is no longer in configuration.
+	// An executor that persists Update's return value — what spec §15's "state
+	// is persisted after every operation" implies — would erase those edges for
+	// every resource it ever updates, and the failure would surface much later
+	// as a destroy in the wrong order.
+	p, _ := newTestProvider(t)
+	created, err := p.Create(context.Background(), desired("db", "test.database", map[string]value.Value{
+		"engine": value.String("postgres", value.SourceExplicit),
+	}))
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	created.Dependencies = []address.Address{{Name: "net"}}
+	created.CreatedAt = time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	created.Lifecycle = resource.Lifecycle{PreventDestroy: true}
+
+	updated, err := p.Update(context.Background(), created, desired("db", "test.database", map[string]value.Value{
+		"engine": value.String("mysql", value.SourceExplicit),
+	}))
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+
+	if len(updated.Dependencies) != 1 || updated.Dependencies[0].String() != "net" {
+		t.Errorf("Update returned Dependencies %v, want [net]", updated.Dependencies)
+	}
+	if !updated.CreatedAt.Equal(created.CreatedAt) {
+		t.Errorf("Update returned CreatedAt %v, want %v", updated.CreatedAt, created.CreatedAt)
+	}
+}
+
+func TestReadPreservesCarriedFields(t *testing.T) {
+	p, _ := newTestProvider(t)
+	created, err := p.Create(context.Background(), desired("db", "test.database", map[string]value.Value{
+		"engine": value.String("postgres", value.SourceExplicit),
+	}))
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	created.Dependencies = []address.Address{{Name: "net"}}
+
+	read, err := p.Read(context.Background(), created)
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if len(read.Dependencies) != 1 || read.Dependencies[0].String() != "net" {
+		t.Errorf("Read returned Dependencies %v, want [net]", read.Dependencies)
+	}
+
+	// The carried slice must be a copy: aliasing would let a refresh mutate the
+	// state that was loaded from disk.
+	read.Dependencies[0] = address.Address{Name: "other"}
+	if created.Dependencies[0].Name != "net" {
+		t.Error("Read aliased the caller's Dependencies slice")
+	}
+}
+
+func TestCreateLeavesDependenciesNil(t *testing.T) {
+	// Deliberate: on a create there is no prior state, and the executor knows
+	// the edges from configuration. Asserted so the carry-forward helper is not
+	// extended to Create by mistake.
+	p, _ := newTestProvider(t)
+	st, err := p.Create(context.Background(), desired("net", "test.network", map[string]value.Value{
+		"cidr": value.String("10.0.0.0/16", value.SourceExplicit),
+	}))
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if st.Dependencies != nil {
+		t.Errorf("Create set Dependencies to %v, want nil", st.Dependencies)
 	}
 }
