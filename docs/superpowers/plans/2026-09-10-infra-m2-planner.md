@@ -7223,6 +7223,24 @@ func Compute(cfg compiler.ResolvedConfig, st *state.State, obs refresh.Observati
 		}
 	}
 
+	// An environment mismatch stops planning here, before a single operation
+	// is decided. The diagnostic alone is not enough protection: diffing this
+	// configuration against another environment's state produces a complete,
+	// well-formed, savable list of operations that destroys everything in one
+	// environment and creates everything in the other. Every caller in this
+	// codebase checks HasErrors() first, so nothing today would render it —
+	// but a plan is an artifact that gets written to a file, passed around,
+	// and read by `apply`, and "it is only dangerous if someone ignores the
+	// diagnostics" is not a property worth relying on for the one failure mode
+	// that can empty a production environment. Returning no operations makes
+	// the dangerous plan impossible to produce rather than merely impolite to
+	// use. Compile's returned config follows the same rule for the same
+	// reason, and says so in its doc comment.
+	if ds.HasErrors() {
+		p.Diagnostics = append([]diag.Diagnostic(nil), ds...)
+		return p, ds
+	}
+
 	if opts.Registry == nil {
 		ds.Add(diag.Diagnostic{
 			Severity: diag.SeverityError,
@@ -7489,6 +7507,58 @@ func hashState(st *state.State) (string, error) {
 	return hex.EncodeToString(sum[:]), nil
 }
 ```
+
+Also append this test, which is the one that makes the guard load-bearing:
+
+```go
+// TestEnvironmentMismatchProducesNoOperations is the reason the guard exists.
+// The diagnostic is necessary but not sufficient: without the early return,
+// Compute happily builds a complete list of operations destroying everything
+// recorded in one environment's state and creating everything in the other's
+// configuration — a well-formed plan a user could save to a file and hand to
+// apply. This asserts the operation list is EMPTY, not merely that an error
+// was reported, because the error was always reported.
+func TestEnvironmentMismatchProducesNoOperations(t *testing.T) {
+	cfg := compiler.ResolvedConfig{
+		Project:     "myapp",
+		Environment: "dev",
+		Resources: map[string]*resource.ResolvedResource{
+			"network": {
+				Address: address.Address{Name: "network"},
+				Type:    "test.network",
+				Attrs:   map[string]value.Value{"cidr": value.String("10.0.0.0/16", value.SourceExplicit)},
+			},
+		},
+	}
+	st := &state.State{
+		Version:     1,
+		Serial:      3,
+		Project:     "myapp",
+		Environment: "production",
+		Resources: map[string]*resource.ResourceState{
+			"database": {
+				Address: address.Address{Name: "database"},
+				Type:    "test.database",
+				Attrs:   nil,
+			},
+		},
+	}
+
+	p, ds := Compute(cfg, st, nil, planOpts(t))
+
+	if !ds.HasErrors() {
+		t.Fatal("planning dev configuration against production state must be an error")
+	}
+	if len(p.Operations) != 0 {
+		t.Fatalf("a mismatched-environment plan must contain no operations, got %d: %+v", len(p.Operations), p.Operations)
+	}
+	if p.HasChanges() {
+		t.Error("a plan with no operations must report no changes")
+	}
+}
+```
+
+Note the state's resource carries a nil `Attrs`: the point is that the guard fires before anything reads it, so the test would panic rather than fail if the early return were removed carelessly — and a panic is a louder failure than a wrong count.
 
 - [ ] **Step 5: Run the tests to verify they pass**
 
