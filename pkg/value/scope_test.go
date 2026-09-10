@@ -52,13 +52,19 @@ func TestEqualIgnoresScopeForEveryPairOfScopes(t *testing.T) {
 // Provenance is per-leaf (spec §5.1), so an implementation could pass the
 // scalar test above and still compare Scope inside the KindList and KindMap
 // arms of Equal — which are separate code paths with their own recursion.
+//
+// Both the list ELEMENT and the list VALUE ITSELF (held in the map) vary in
+// scope between a and b. Varying only the element leaves both maps' "tags"
+// entry at ScopeUnset, which the map arm would then compare equal on scope
+// regardless of whether Equal's map arm ignores Scope or not — a test that
+// cannot fail is not testing the map arm at all.
 func TestEqualIgnoresScopeAtEveryDepth(t *testing.T) {
 	for _, s := range allScopes {
 		a := Map(map[string]Value{
-			"tags": List([]Value{String("web", SourceVariable).WithScope(ScopeBaseConfig)}, SourceVariable),
+			"tags": List([]Value{String("web", SourceVariable).WithScope(ScopeBaseConfig)}, SourceVariable).WithScope(ScopeBaseConfig),
 		}, SourceVariable)
 		b := Map(map[string]Value{
-			"tags": List([]Value{String("web", SourceVariable).WithScope(s)}, SourceVariable),
+			"tags": List([]Value{String("web", SourceVariable).WithScope(s)}, SourceVariable).WithScope(s),
 		}, SourceVariable)
 		if !a.Equal(b) {
 			t.Errorf("nested leaf at scope %s compared unequal to the same leaf at ScopeBaseConfig", s)
@@ -194,6 +200,25 @@ func TestSetScopeReachesTheWireUnderItsOwnKey(t *testing.T) {
 	}
 	if !strings.Contains(string(data), `"scope":"cli_override"`) {
 		t.Errorf("marshalled form lacks \"scope\":\"cli_override\": %s", data)
+	}
+}
+
+// TestDecodingAnUnrecognisedScopeErrors is FIX 4: a state file written by a
+// binary that knows a scope this binary does not (e.g. a pre-M5 binary
+// reading state written after M5 adds an eighth precedence level) must fail
+// to decode rather than silently read back as ScopeUnset. Silently degrading
+// provenance in a state file is the wrong-answer shape this project has paid
+// for before — scopeFromWireName already refuses it; this test is the only
+// thing exercising that branch.
+func TestDecodingAnUnrecognisedScopeErrors(t *testing.T) {
+	data := []byte(`{"kind":"integer","known":true,"raw":20,"source":"variable","scope":"not_a_scope"}`)
+	var v Value
+	err := json.Unmarshal(data, &v)
+	if err == nil {
+		t.Fatal("Unmarshal accepted an unrecognised scope name; it should have failed rather than silently producing ScopeUnset")
+	}
+	if !strings.Contains(err.Error(), "not_a_scope") {
+		t.Errorf("error %q does not name the offending scope", err)
 	}
 }
 
@@ -350,6 +375,24 @@ func TestAnnotateNamesTheScopeWhenThereIsOne(t *testing.T) {
 		if got := Annotate(tc.in, planOpts); got != tc.want {
 			t.Errorf("Annotate = %q, want %q", got, tc.want)
 		}
+	}
+}
+
+// TestAnnotateFailsClosedOnAnUnsetSource pins the fail-closed guard for a
+// scoped value whose Source was never set.
+//
+// ValueSource is a string whose zero value is "". Without the guard,
+// annotation's final line builds "[" + string(v.Source) + ", from " +
+// v.Scope.String() + "]" unconditionally once Scope is non-unset, so an empty
+// Source renders as "[, from --var]" — a confident, wrong-looking annotation
+// rather than no annotation. Nothing stamps a Scope without also stamping a
+// Source today, so this is unreachable in the current tree; it stops being
+// unreachable the moment stage 4 exists, which is exactly what this task
+// enables and does not itself build.
+func TestAnnotateFailsClosedOnAnUnsetSource(t *testing.T) {
+	v := Value{Kind: KindInt, Known: true, Raw: int64(5)}.WithScope(ScopeCLIOverride)
+	if got := Annotate(v, planOpts); got != "5" {
+		t.Errorf("Annotate on a scoped value with unset Source = %q, want \"5\" (no annotation)", got)
 	}
 }
 

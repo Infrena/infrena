@@ -81,11 +81,22 @@ func (v Value) WithScope(s Scope) Value {
 // scopeWireNames is the frozen on-disk spelling of every Scope.
 //
 // Deliberately separate from Scope.String(), exactly as kindWireNames is
-// separate from Kind.String(): String() is a diagnostic string and free to
-// change, whereas a state file is a versioned contract. Persisting the uint8
-// would be worse still — M5 inserts ScopeModuleDefault's population and any
-// future level inserted mid-chain would silently reinterpret every state file
-// ever written.
+// separate from Kind.String() — but the two String() methods are NOT free for
+// the same reason, and this comment used to imply they were. There are three
+// distinct contracts here, not two:
+//
+//   - Kind.String() is the CONFIGURATION language: a user writes it as
+//     `type:` in infra.yml. Frozen; renaming one breaks every configuration
+//     file that used it. See ParseKind's doc comment.
+//   - Scope.String() is user-visible PLAN OUTPUT, not a configuration input,
+//     so it is freer than Kind.String() — but not free either: renaming it
+//     moves golden files and changes what a user reads in a plan.
+//   - scopeWireNames (like kindWireNames) is the ON-DISK contract, versioned,
+//     with its own migration path independent of both of the above.
+//
+// Persisting the uint8 instead of this table would be worse still — M5
+// inserts ScopeModuleDefault's population and any future level inserted
+// mid-chain would silently reinterpret every state file ever written.
 //
 // ScopeUnset is deliberately ABSENT. It encodes to the empty string and is
 // omitted from the wire entirely, so state files written before M4 stay

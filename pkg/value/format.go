@@ -173,6 +173,18 @@ func Annotate(v Value, opts FormatOptions) string {
 //     to M3's renderAnnotated today. That is deliberate — a rendering change
 //     and a provenance change landing in the same commit would make it
 //     impossible to tell which one moved a golden test.
+//
+//   - A scoped value with no Source recorded is not annotated either, even
+//     though Scope.String() has an answer. This is the mirror image of how
+//     Format handles a value it cannot verify, and deliberately the OPPOSITE
+//     output for the opposite reason. Format's job is to produce the value
+//     itself, so a silent wrong answer (a blank, or the wrong number) would be
+//     worse than a visible refusal — hence "<unrenderable>". annotation's job
+//     is optional decoration: nothing downstream depends on it being present,
+//     so refusing to speak at all IS the fail-closed answer here, and
+//     "[, from --var]" — string(v.Source) on the empty ValueSource zero value
+//     — would be the silent corruption. Do not "fix" one of these two
+//     functions to match the other; they differ on purpose.
 func annotation(v Value) string {
 	if !v.Known {
 		return ""
@@ -184,6 +196,9 @@ func annotation(v Value) string {
 		if v.Source == SourceDefault {
 			return "[default]"
 		}
+		return ""
+	}
+	if v.Source == "" {
 		return ""
 	}
 	return "[" + string(v.Source) + ", from " + v.Scope.String() + "]"
