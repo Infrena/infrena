@@ -2,6 +2,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"os"
 
@@ -50,6 +51,7 @@ func NewRootCommand() *cobra.Command {
 
 	root.AddCommand(newValidateCommand(opts))
 	root.AddCommand(newStateCommand(opts))
+	root.AddCommand(newPlanCommand(opts))
 
 	return root
 }
@@ -62,6 +64,9 @@ func Execute() int {
 	root.SetErr(os.Stderr)
 
 	if err := root.Execute(); err != nil {
+		if errors.Is(err, errChanges) {
+			return ExitChanges
+		}
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		return ExitError
 	}

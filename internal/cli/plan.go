@@ -1,0 +1,141 @@
+package cli
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"strings"
+	"time"
+
+	"github.com/spf13/cobra"
+
+	"infra/internal/compiler"
+	"infra/internal/config"
+	"infra/internal/planner"
+	"infra/internal/refresh"
+)
+
+// errChanges signals that a plan completed successfully but found changes to
+// propose. It carries exit code 2 (spec §16) and must never be reported to
+// the user as a failure — Execute checks for it with errors.Is before the
+// generic error path runs.
+var errChanges = errors.New("plan has changes")
+
+// newPlanCommand builds `infra plan <environment>`. It never writes state and
+// never takes the environment lock (spec §10), so it is safe to run
+// repeatedly, in CI, and against an environment another command holds
+// locked.
+func newPlanCommand(opts *GlobalOptions) *cobra.Command {
+	return &cobra.Command{
+		Use:   "plan <environment>",
+		Short: "Show what infra would change without applying it",
+		Args:  cobra.ExactArgs(1),
+		// SilenceUsage/SilenceErrors are also set on root, which is enough
+		// in production: cobra's ExecuteC always resolves to the root
+		// command's flags when Execute is called through the root. But
+		// tests build this command standalone and call cmd.Execute()
+		// directly on it with no parent — cobra then treats this command as
+		// its own root for those checks, so without setting them here too,
+		// cobra prints "Usage: ..." to stdout on every RunE error,
+		// including the errChanges success-with-changes path. That would
+		// leak boilerplate onto the stream the plan itself is written to.
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			environment := args[0]
+
+			vars, err := parseVars(opts.Vars)
+			if err != nil {
+				return err
+			}
+
+			files, err := config.Load(opts.Dir)
+			if err != nil {
+				return err
+			}
+
+			reg := buildRegistry(opts.Dir)
+			cfg, ds := compiler.Compile(files, reg, compiler.Options{
+				Environment: environment,
+				Vars:        vars,
+			})
+			if ds.HasErrors() {
+				ds.Render(cmd.ErrOrStderr())
+				return errors.New("configuration is not valid")
+			}
+
+			st, err := backendFor(opts.Dir).Get(cmd.Context(), environment)
+			if err != nil {
+				return err
+			}
+
+			obs, refreshDiags := refresh.Refresh(cmd.Context(), st, reg, opts.Parallelism)
+			ds.Extend(refreshDiags)
+			if ds.HasErrors() {
+				ds.Render(cmd.ErrOrStderr())
+				return errors.New("refreshing provider state failed")
+			}
+
+			p, planDiags := planner.Compute(cfg, st, obs, planner.Options{
+				Environment: environment,
+				Now:         time.Now,
+				// Registry gives the diff the schemas it needs to tell a
+				// ForceNew attribute from an updatable one and a computed
+				// attribute from desired state (spec §11) — reuse the same
+				// registry Compile already built, rather than constructing
+				// a second one.
+				Registry: reg,
+			})
+			ds.Extend(planDiags)
+			// Plan.Diagnostics carries plan-time errors that belong to one
+			// operation, such as prevent_destroy (spec §11). They must gate
+			// the exit code exactly like a compile or refresh error, so they
+			// join the same diagnostic set before anything is rendered.
+			ds.Extend(p.Diagnostics)
+			ds.Render(cmd.ErrOrStderr())
+			if ds.HasErrors() {
+				return errors.New("planning failed")
+			}
+
+			fmt.Fprint(cmd.OutOrStdout(), planner.Render(p, planner.RenderOptions{
+				Verbose: opts.Verbose,
+			}))
+
+			if opts.Output != "" {
+				// The full artifact, CreatedAt included — Canonical() exists
+				// to define determinism over the plan's inputs (spec §12.1)
+				// and deliberately excludes it; a saved plan is a record of
+				// what this run produced. It contains sensitive values, so
+				// 0600 (spec §12.2).
+				data, err := json.MarshalIndent(p, "", "  ")
+				if err != nil {
+					return fmt.Errorf("serializing plan: %w", err)
+				}
+				if err := os.WriteFile(opts.Output, data, 0o600); err != nil {
+					return fmt.Errorf("writing plan: %w", err)
+				}
+			}
+
+			if p.HasChanges() {
+				return errChanges
+			}
+			return nil
+		},
+	}
+}
+
+// parseVars turns --var name=value flags into the map the compiler's
+// variable scope consumes. The full variable system — typed schemas,
+// --var-file, precedence — is M4; M2 only makes the raw strings available.
+func parseVars(raw []string) (map[string]string, error) {
+	out := make(map[string]string, len(raw))
+	for _, v := range raw {
+		name, val, ok := strings.Cut(v, "=")
+		if !ok || name == "" {
+			return nil, fmt.Errorf("--var %q must be in the form name=value", v)
+		}
+		out[name] = val
+	}
+	return out, nil
+}
