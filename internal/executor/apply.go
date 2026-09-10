@@ -12,6 +12,7 @@ import (
 	"infra/pkg/address"
 	"infra/pkg/provider"
 	"infra/pkg/resource"
+	"infra/pkg/value"
 )
 
 // Apply drains the execution graph, dispatching each operation's provider
@@ -480,16 +481,33 @@ func (r *run) execute(node planner.OpNode, snapshot map[string]*resource.Resourc
 		return nil, false, err
 	}
 
-	// Lifecycle is bookkeeping infra attaches to a resource, not something any
-	// provider owns or can be relied on to echo back (pkg/provider says as
-	// much of Read; the same holds here). Stamping it from the operation makes
-	// the guard reach state for every provider, including one that never
-	// thinks about lifecycle at all — a provider that dropped it would lose
-	// the guard silently, which pkg/provider calls the worst failure mode this
-	// product has. Still not a decision: an unconditional assignment of a
-	// value this package never reads.
+	// What the engine knew, restamped onto what the provider returned.
+	//
+	// A provider round trip is lossy in one direction only: it reports the
+	// attributes it manages, and it has no idea what metadata the engine
+	// attached on the way in. Recording its result verbatim therefore drops
+	// everything the engine knew and the provider never learned. Both of this
+	// milestone's silent-metadata-loss bugs were that single fact:
+	//
+	//   - Lifecycle: a configured prevent_destroy or retain never reached
+	//     state, so a later destroy — which reads lifecycle from state,
+	//     correctly, the resource having left configuration by then — found
+	//     no guard at all.
+	//   - Sensitivity: a value that became secret by PROPAGATION through
+	//     ${db.password} (spec §36) arrived here marked, went through the
+	//     provider as a bare string, and was recorded unmarked. The apply
+	//     summary then rendered it from state and printed the secret in
+	//     clear. Schema-declared sensitivity survived only because providers
+	//     re-derive that from their own schema.
+	//
+	// Neither is enforcement and neither is redaction. Lifecycle is copied
+	// and never branched on (the planner remains the single enforcement
+	// point); sensitivity is a flag carried per leaf, and pkg/value.Format
+	// remains the one place anything is ever redacted. What was broken is
+	// only that the value reaching Format had lost the flag.
 	if desired != nil && result != nil {
 		result.Lifecycle = desired.Lifecycle
+		result.Attributes = value.CarrySensitivityAttrs(result.Attributes, desired.Attrs)
 	}
 
 	removed = node.Kind == planner.OpForget || node.Kind == planner.OpDestroy ||

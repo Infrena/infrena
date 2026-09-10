@@ -18,6 +18,7 @@ import (
 	"infra/internal/state"
 	"infra/pkg/address"
 	"infra/pkg/resource"
+	"infra/pkg/value"
 )
 
 // Observation is what Refresh learned about one resource recorded in state.
@@ -135,6 +136,25 @@ func readOne(ctx context.Context, st *state.State, reg *registry.Registry, addr 
 	// current is nil exactly when the provider reports the resource no
 	// longer exists — Read's (nil, nil) contract, and how deletion outside
 	// infra is detected. It is not an error.
+	if current != nil {
+		// Sensitivity that reached state by PROPAGATION (spec §36 — a value
+		// that became secret by flowing through ${db.password}) exists only
+		// in the engine's record. A provider re-derives schema-declared
+		// sensitivity from its own schema and knows nothing about the other
+		// kind, so an observation carries back only half of what state
+		// already knew.
+		//
+		// That matters twice over. `infra refresh` persists whatever Read
+		// returns, so without this it would not leave the flag stale, it
+		// would ERASE it. And every destroy plan renders its Before from the
+		// observation rather than from state, so a propagated secret would be
+		// printed in clear by the one command most likely to be run with
+		// someone watching.
+		//
+		// Carrying, not deciding: this adds flags and never clears one, and
+		// pkg/value.Format is still the only thing that redacts.
+		current.Attributes = value.CarrySensitivityAttrs(current.Attributes, rs.Attributes)
+	}
 	return Observation{Address: addr, State: current}, nil
 }
 
