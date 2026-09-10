@@ -637,6 +637,13 @@ Operations are sorted by canonical address, not execution order. Execution order
 the graph (§14). A stable sort is what makes invariant 6 testable by comparing serialized
 plans byte for byte.
 
+**Determinism is defined over the canonical form, not the saved artifact.** `CreatedAt`
+records when a plan was produced, which is not a property of its inputs, so two identical
+plans made a second apart differ in it. `Plan.Canonical()` therefore emits the plan with
+`CreatedAt` omitted, and that is what invariant 6 compares and what any plan fingerprint is
+taken over. `MarshalJSON` keeps `CreatedAt` for the artifact a user saves and reads.
+Without this split the invariant as stated in §18 is unsatisfiable.
+
 `ConfigHash` is computed over the canonicalized `ResolvedConfig` — attribute values,
 provenance and lifecycle included, `Origin` excluded, since moving a resource between lines
 of a file is not a change in desired state.
@@ -791,7 +798,7 @@ table in §11.
 | 1 | Removing a resource from configuration always yields Destroy, or Forget under `retain`, or an error under `prevent_destroy` |
 | 2 | For any generated configuration, apply then plan yields zero operations |
 | 4 | The fake provider records call order; no resource is ever created before a dependency, nor destroyed after one |
-| 6 | Identical inputs produce byte-identical serialized plans across repeated runs and across map iteration orders |
+| 6 | Identical inputs produce byte-identical output from `Plan.Canonical()` across repeated runs and across map iteration orders (see §12.1: `CreatedAt` is excluded, being a record of when the plan was made rather than a property of its inputs) |
 
 **Golden files** for rendered plans and serialized plans.
 
