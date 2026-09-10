@@ -122,45 +122,69 @@ func TestConcurrentLockAttemptsElectExactlyOneWinner(t *testing.T) {
 	// contract, but a naive stat-then-create implementation would pass every
 	// one of them. This is the only test that actually exercises the race
 	// O_EXCL exists to prevent, and so the only direct proof of invariant 5.
+	//
+	// A single election is a coin flip against a genuine stat-then-create
+	// TOCTOU: mutating Lock to that shape and running this test at
+	// -count=10 landed FAIL/ok/ok/FAIL/ok — a real atomicity bug detected
+	// only 2 times in 5. One election is not evidence; the fix, same as the
+	// map-iteration flakiness measured elsewhere this week, is to make the
+	// property something the test measures across many independent trials
+	// rather than assumes from one. 50 rounds, each releasing the lock
+	// before the next: missing a bug this test catches 40% of the time,
+	// across 50 independent rounds, is 0.6^50 — vanishing. Do not reduce
+	// this loop back to a single round; that is the exact defect this
+	// comment exists to prevent recurring.
 	b := NewLocal(t.TempDir())
 	ctx := context.Background()
 
 	const goroutines = 16
-	var (
-		wg      sync.WaitGroup
-		mu      sync.Mutex
-		granted int
-		refused int
-	)
-	start := make(chan struct{})
+	const rounds = 50
 
-	for i := 0; i < goroutines; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			<-start // release together, to maximise contention
-			_, err := b.Lock(ctx, "production")
+	for round := 1; round <= rounds; round++ {
+		var (
+			wg      sync.WaitGroup
+			mu      sync.Mutex
+			granted int
+			refused int
+		)
+		start := make(chan struct{})
 
-			mu.Lock()
-			defer mu.Unlock()
-			switch {
-			case err == nil:
-				granted++
-			case errors.Is(err, ErrLocked):
-				refused++
-			default:
-				t.Errorf("unexpected lock error: %v", err)
-			}
-		}()
-	}
-	close(start)
-	wg.Wait()
+		for i := 0; i < goroutines; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				<-start // release together, to maximise contention
+				_, err := b.Lock(ctx, "production")
 
-	if granted != 1 {
-		t.Fatalf("%d goroutines acquired the lock, want exactly 1 — invariant 5", granted)
-	}
-	if refused != goroutines-1 {
-		t.Errorf("%d goroutines saw ErrLocked, want %d", refused, goroutines-1)
+				mu.Lock()
+				defer mu.Unlock()
+				switch {
+				case err == nil:
+					granted++
+				case errors.Is(err, ErrLocked):
+					refused++
+				default:
+					t.Errorf("round %d: unexpected lock error: %v", round, err)
+				}
+			}()
+		}
+		close(start)
+		wg.Wait()
+
+		if granted != 1 {
+			t.Fatalf("round %d: %d goroutines acquired the lock, want exactly 1 — invariant 5", round, granted)
+		}
+		if refused != goroutines-1 {
+			t.Errorf("round %d: %d goroutines saw ErrLocked, want %d", round, refused, goroutines-1)
+		}
+
+		// Release before the next round contends for the same environment.
+		// ForceUnlock, not Unlock: this goroutine's own PID never actually
+		// took the lock (one of the 16 spawned goroutines did, and which
+		// one is not tracked), so a PID-checked Unlock would refuse it.
+		if err := b.ForceUnlock("production"); err != nil {
+			t.Fatalf("round %d: ForceUnlock: %v", round, err)
+		}
 	}
 }
 

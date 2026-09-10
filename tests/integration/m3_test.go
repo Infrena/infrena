@@ -540,3 +540,130 @@ resources:
 	requireContains(t, next.Stderr, strconv.Itoa(cmd.Process.Pid))
 	requireContains(t, next.Stderr, "infra state unlock")
 }
+
+// TestSensitiveValueNeverAppearsInCommandOutput closes the M3 DoD line this
+// task's own first report flagged as unmet: "a sensitive value never
+// appears in apply output, summary output, or a progress event, at any
+// nesting depth" — checked against the REAL BINARY, across plan, apply,
+// refresh AND destroy. Nothing before this drove all four: M2's
+// TestPlanNeverLeaksASecret (m2_test.go) only drives plan, and the shared
+// redaction path pkg/value.Format is otherwise proven only at the unit
+// level, through executor.Render (TestRenderRedactsSensitiveAttributes) —
+// never through a real subprocess for apply, refresh or destroy. §36 is a
+// core product requirement specifically because M2 shipped a plaintext
+// password once already, from two redaction paths that had diverged; the
+// whole point of one shared renderer is undermined if nothing checks the
+// actual commands that call it.
+//
+// NOTE on nesting depth. The request behind this test asked for a
+// sensitive value nested inside a map inside a list, to probe deeper than
+// M2's top-level secret did. That fixture cannot be built through
+// configuration as M3 actually ships, confirmed against the real binary
+// while writing this test:
+//
+//	Error: interpolation inside a map is not supported
+//	  Expressions may appear in string values only.
+//
+// (internal/config/decode.go's decodeScalar only recognises "${" at a bare
+// scalar node — decodeValue's Sequence/MappingNode branches recurse into
+// composites but never call it on the composite itself, so a reference
+// inside a list or map is rejected at compile time, before any value ever
+// exists to leak). No schema attribute in providers/test declares a
+// composite with its own sensitive leaf either — schema.go's markSensitive
+// marks a whole attribute's root Value, never a leaf inside one. The
+// deepest sensitivity this engine can construct today is a schema-declared
+// Sensitive SCALAR attribute (test.database.password) — the same depth
+// M2's own test already used. What this test adds over M2's is coverage of
+// apply/refresh/destroy (M2 only had plan), plus a sibling, deliberately
+// VISIBLE value in the same composite (tags.visible_marker) alongside the
+// secret: pkg/value.Format's actual contract is per-leaf redaction, not
+// "hide everything near a secret," and asserting the sibling still renders
+// is what tells those two apart — a renderer that blanked the whole
+// resource near any sensitive field would also pass a test that only
+// checked the secret's absence.
+func TestSensitiveValueNeverAppearsInCommandOutput(t *testing.T) {
+	const secret = "correct-horse-battery-staple"
+	const marker = "not-a-secret-marker"
+	dir := project(t, `
+project: myapp
+resources:
+  network:
+    type: test.network
+    cidr: 10.20.0.0/16
+  database:
+    type: test.database
+    engine: postgres
+    password: `+secret+`
+    network: ${network.id}
+    tags:
+      visible_marker: `+marker+`
+`)
+
+	// assertSecretAbsent checks BOTH streams, deliberately: the point is
+	// that the literal secret must never appear on either one, so it does
+	// not matter which stream a leak would land on (same reasoning as M2's
+	// TestPlanNeverLeaksASecret).
+	assertSecretAbsent := func(t *testing.T, label string, res result) {
+		t.Helper()
+		if strings.Contains(res.Stdout, secret) {
+			t.Errorf("%s: secret leaked on stdout:\n%s", label, res.Stdout)
+		}
+		if strings.Contains(res.Stderr, secret) {
+			t.Errorf("%s: secret leaked on stderr:\n%s", label, res.Stderr)
+		}
+	}
+
+	p := run(t, dir, "plan", "dev")
+	if p.ExitCode != 2 {
+		t.Fatalf("plan exit code %d, want 2\n%s", p.ExitCode, p.combined())
+	}
+	assertSecretAbsent(t, "plan", p)
+	requireContains(t, p.Stdout, "<sensitive>")
+	// The sibling value in the SAME composite attribute must still render —
+	// proof this is selective, per-leaf redaction, not a blanket hide.
+	requireContains(t, p.Stdout, marker)
+
+	a := run(t, dir, "apply", "dev", "--auto-approve", "--verbose")
+	if a.ExitCode != 2 {
+		t.Fatalf("apply exit code %d, want 2\n%s", a.ExitCode, a.combined())
+	}
+	assertSecretAbsent(t, "apply", a)
+	requireContains(t, a.Stdout, "<sensitive>")
+	requireContains(t, a.Stdout, marker)
+
+	// §12.2 permits plaintext state at rest, at 0600 — a documented §53
+	// trade-off, not an oversight, and not something a future reader should
+	// "fix" by adding state-file redaction. This asserts the mode instead
+	// of the mode's absence of plaintext, precisely to document that
+	// distinction rather than let a later change silently narrow it either
+	// way.
+	statePath := filepath.Join(dir, ".infra", "state", "dev.json")
+	info, err := os.Stat(statePath)
+	if err != nil {
+		t.Fatalf("stat state file: %v", err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Errorf("state file mode = %v, want 0600 (plaintext-at-rest is only acceptable under this permission bit)", info.Mode().Perm())
+	}
+	stateBytes, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatalf("reading state file: %v", err)
+	}
+	if !strings.Contains(string(stateBytes), secret) {
+		t.Error("state file does not contain the plaintext secret — expected under §12.2; if this changed, state-level encryption may have landed and this test (and its comment) need updating, not deleting")
+	}
+
+	r := run(t, dir, "refresh", "dev", "--verbose")
+	if r.ExitCode != 0 {
+		t.Fatalf("refresh exit code %d, want 0\n%s", r.ExitCode, r.combined())
+	}
+	assertSecretAbsent(t, "refresh", r)
+
+	d := runStdin(t, dir, "dev\n", "destroy", "dev")
+	if d.ExitCode != 2 {
+		t.Fatalf("destroy exit code %d, want 2\n%s", d.ExitCode, d.combined())
+	}
+	assertSecretAbsent(t, "destroy", d)
+	requireContains(t, d.Stdout, "<sensitive>")
+	requireContains(t, d.Stdout, marker)
+}
