@@ -6697,7 +6697,7 @@ So if a golden DOES change here, that is a signal the stamp reached somewhere it
 should not have — most likely onto explicit values. Investigate it; do not regenerate.
 
 `internal/planner/testdata/scopes.golden`, which renders a provider default as
-`size: 100 [default, from provider defaults]`, is **Task 9's** to write, and it is the
+`size: 100 [default, from provider default]`, is **Task 9's** to write, and it is the
 test that proves this stamp reaches the page. If it is missing or wrong when Task 9
 runs, that is a Task 9 defect, not a licence to change this step.
 
@@ -7645,70 +7645,91 @@ A plan today annotates `[default]` and nothing else, so it can say a value was
 not written by the user but not where it came from. With `Scope` it can, and the
 user's ruling fixes the shape: `replicas: 20 [variable, from --var]`.
 
-### The rule
+**This task WIRES; it does not implement.** Task 1 ships two things this task
+consumes and must not duplicate:
 
-`internal/planner/render.go`'s `renderAnnotated` gains one helper. In order:
+```go
+func Annotate(v Value, opts FormatOptions) string  // Format, plus the bracketed suffix
+func (s Scope) String() string                     // the ONE label table
+```
 
-1. `!v.Known` → no annotation. Unchanged. An unknown already renders
-   `(known after apply)`; its provenance is "computed during apply", and
-   `(known after apply) [variable, from --var]` is noise.
-2. `v.Source == value.SourceExplicit` → no annotation. A value written
-   literally in the configuration the reader is holding needs no explanation,
-   and annotating every literal would double the length of a create plan.
-   This also matches today: explicit values are unannotated now.
-3. Otherwise, if `scopeLabel(v.Scope) != ""` → `[<source>, from <label>]`.
-4. Otherwise (`ScopeUnset`, or a `Scope` value this function was never taught)
-   → `[default]` when `Source == SourceDefault`, else nothing. This is exactly
-   M2/M3 behaviour, and it is what values that predate M4 get — including every
-   value read back from state, which carries `SourceProvider` and
-   `ScopeUnset` because `providers/test/provider.go:272` stamps
-   `SourceProvider` on everything a provider reports. State records what was
-   observed, not which configuration layer asked for it; inventing a scope for
-   those would be a confident wrong answer.
+The renderer's whole job here is to point at them and delete what it used to do
+itself. The reason is written on the code being replaced: `renderLeaf`'s doc
+comment records that the redaction implementation "used to be duplicated here
+and in internal/cli's state inspector, and the two had already diverged — which
+is how a leak fixed in one survived in the other." An annotation table in
+`internal/planner` beside a second one in `pkg/value` is that shape again — two
+near-identical string tables, drifting because nothing compares them. `Format`
+is the one redaction path; `Annotate` is the one annotation path.
 
-The seven scopes render as:
+### The rule (Task 1 owns it; reproduced so you can check the wiring, not edit it)
 
-| Scope | Label | Example line |
-|-------|-------|--------------|
-| `ScopeUnset` | *(no scope clause; rule 4)* | `size: 10 [default]` |
-| `ScopeProviderDefault` | `provider defaults` | `size: 10 [default, from provider defaults]` |
+`value.annotation(v)`, in `pkg/value/format.go`:
+
+1. `!v.Known` → no annotation. An unknown already renders `(known after apply)`;
+   its origin is the expression that will produce it, not a precedence level.
+2. `v.Source == SourceExplicit && (v.Scope == ScopeUnset || v.Scope == ScopeBaseConfig)`
+   → no annotation.
+3. `v.Scope == ScopeUnset` → `[default]` when `Source == SourceDefault`, else
+   nothing. This is M2/M3 behaviour exactly, which is what every value read back
+   from state gets: `providers/test/provider.go:272` restamps provider-reported
+   values `SourceProvider` with no scope, because state records what was
+   observed rather than which layer asked for it.
+4. Otherwise → `[<source>, from <Scope.String()>]`.
+
+**Rule 2 is narrower than "explicit is never annotated", deliberately.** An
+explicit value carrying a non-base scope IS annotated —
+`[explicit, from environment variable]` — and that is precisely the case M4
+exists to expose: an attribute written explicitly and then won by a higher
+layer. In M4 the case is unreachable (environments supply variables, and a
+variable-sourced value is not `SourceExplicit`); M5's modules make it reachable.
+Suppressing it would hand `infra explain` a permanent blind spot in M7. An
+earlier draft of this task suppressed explicit values unconditionally; that was
+wrong, and it is the difference to watch for if you are porting anything from a
+stale copy.
+
+Labels come from `Scope.String()`. This table is a reading aid — if it ever
+disagrees with `Scope.String()`, `Scope.String()` is right:
+
+| Scope | `Scope.String()` | Example line |
+|-------|------------------|--------------|
+| `ScopeUnset` | `unset` (never reaches an annotation; rule 3) | `size: 10 [default]` |
+| `ScopeProviderDefault` | `provider default` | `size: 10 [default, from provider default]` |
 | `ScopeBaseConfig` | `base config` | `cidr: "10.0.0.0/16" [variable, from base config]` |
-| `ScopeModuleDefault` | `module defaults` | *(M5 populates; label exists now so M5 adds no rendering)* |
-| `ScopeEnvironmentInherit` | `inherited environment` | `cidr: "10.1.0.0/16" [environment, from inherited environment]` |
-| `ScopeEnvironmentVar` | `environment config` | `cidr: "10.2.0.0/16" [environment, from environment config]` |
+| `ScopeModuleDefault` | `module default` | *(M5 populates it; nothing here changes then)* |
+| `ScopeEnvironmentInherit` | `environment inheritance` | `cidr: "10.1.0.0/16" [environment, from environment inheritance]` |
+| `ScopeEnvironmentVar` | `environment variable` | `cidr: "10.2.0.0/16" [environment, from environment variable]` |
 | `ScopeCLIOverride` | `--var` | `replicas: 20 [variable, from --var]` |
 
 `ScopeCLIOverride` renders `--var` for `--var-file` values too. That is exact
 under Task 8's published semantics ("`--var-file f` applies each pair as if it
-had been given with `--var`"), and it is the only option available: the
-filename cannot be carried, because `internal/expressions/eval.go:53` replaces a
+had been given with `--var`"), and it is the only option available: the filename
+cannot be carried, because `internal/expressions/eval.go:53` replaces a
 variable's `Origin` with the referencing attribute's when it resolves the
 reference.
 
 Spec §12.3's "values sourced from defaults annotated `[default]`" is still
-satisfied: `[default, from provider defaults]` names `default` as the source.
+satisfied: `[default, from provider default]` names `default` as the source.
 
 **M7 follow-up, recorded not solved:** `infra explain` will want to name the
 FILE a value came from, which needs a carrier that survives expression
-evaluation — `Value.Origin` does not, because
-`internal/expressions/eval.go:53` returns `v.WithOrigin(e.Origin)` and replaces
-the variable's origin with the referencing attribute's. Do not add one in M4;
-the plan has no use for it beyond this annotation, and a carrier added
+evaluation — `Value.Origin` does not, for the reason above. Do not add one in
+M4; the plan has no use for it beyond this annotation, and a carrier added
 speculatively is a field nothing populates correctly.
 
-**Determinism.** The annotation is a pure function of two scalar fields. No
-map iteration, no time, no I/O. `scopeLabel` is a `switch`, not a slice index,
-so a `Scope` outside the enum returns `""` and falls to rule 4 rather than
-panicking on an out-of-range index.
+**Determinism.** `Annotate` is a pure function of `Format`'s output plus two
+scalar fields, and `Scope.String()` is a switch with an explicit default, so a
+`Scope` outside the enum renders `Scope(200)` rather than panicking on an
+out-of-range index or collapsing into a real level. No map iteration, no time,
+no I/O.
 
-**Redaction.** The annotation is appended to `renderLeaf`'s output and never
-touches `Raw`. `pkg/value.Format` remains the one redaction path; a sensitive
-value renders `<sensitive> [variable, from --var]` — redacted regardless of
-scope, and its scope still disclosed, which leaks nothing (a precedence level is
-metadata, not data).
+**Redaction.** `Annotate` appends a suffix to whatever `Format` returned and
+never touches `Raw`. A sensitive value renders `<sensitive> [variable, from --var]`
+— redacted regardless of scope, with its scope still disclosed, which leaks
+nothing: a precedence level is metadata, not data.
 
 **`internal/cli/state.go` needs no change.** `state show` renders state values,
-which are `ScopeUnset` — see rule 4.
+which are `ScopeUnset` — see rule 3.
 
 ### Files
 
@@ -7717,6 +7738,7 @@ which are `ScopeUnset` — see rule 4.
 | modify | `internal/planner/render.go` |
 | modify | `internal/planner/render_test.go` |
 | create | `internal/planner/testdata/scopes.golden` |
+| modify | `internal/executor/summary.go` (two doc comments only, no code) |
 
 `internal/compiler/schema.go` is deliberately NOT in this list: stamping
 `ScopeProviderDefault` on a filled default is Task 7's, for the reason in step
@@ -7724,14 +7746,25 @@ which are `ScopeUnset` — see rule 4.
 
 ### Interfaces
 
-Consumes: `value.Scope`, `Value.Scope`, `Value.WithScope` (Task 1),
-`value.Format`.
-Produces: nothing exported. `scopeLabel` and the modified `renderAnnotated` are
-package-private to `internal/planner`.
+Consumes: `value.Annotate`, `value.Format`, `value.FormatOptions`, `value.Scope`,
+`Scope.String` (all Task 1).
+Produces: nothing exported; `planFormatOptions` is package-private to
+`internal/planner`.
+Deletes: `renderLeaf`, and every trace of a planner-local annotation table.
 
 ### Steps
 
-**9.1 — Failing test for the annotation.**
+**9.1 — Failing test for the annotation, through the renderer.**
+
+The test drives `renderAnnotated`, not `value.Annotate`. That is the point:
+Task 1 already tests `Annotate` directly, and what is unproven until this task
+lands is the WIRING — that the plan renderer reaches it, with the plan's own
+`FormatOptions`. A test here that called `value.Annotate` would pass against a
+renderer that still had its own copy.
+
+These expected strings duplicate `Scope.String()`'s wording, by design: the test
+asserts the user-visible result, `Scope.String()` produces it, and a change to
+either that the other does not expect is exactly what this table catches.
 
 Add to `internal/planner/render_test.go`:
 
@@ -7748,14 +7781,22 @@ func TestRenderAnnotatesEveryScope(t *testing.T) {
 			want: "10 [default]",
 		},
 		{
-			name: "explicit is never annotated whatever its scope",
+			name: "explicit at base config is not annotated",
 			v:    value.String("web", value.SourceExplicit).WithScope(value.ScopeBaseConfig),
 			want: `"web"`,
 		},
 		{
+			// The case an unconditional "explicit is never annotated" rule
+			// would hide: an attribute written explicitly and then won by a
+			// higher layer. Unreachable in M4, reachable in M5.
+			name: "explicit won by a higher layer IS annotated",
+			v:    value.String("web", value.SourceExplicit).WithScope(value.ScopeEnvironmentVar),
+			want: `"web" [explicit, from environment variable]`,
+		},
+		{
 			name: "provider default",
 			v:    value.Int(10, value.SourceDefault).WithScope(value.ScopeProviderDefault),
-			want: "10 [default, from provider defaults]",
+			want: "10 [default, from provider default]",
 		},
 		{
 			name: "base config",
@@ -7765,17 +7806,17 @@ func TestRenderAnnotatesEveryScope(t *testing.T) {
 		{
 			name: "module default",
 			v:    value.Int(2, value.SourceModule).WithScope(value.ScopeModuleDefault),
-			want: "2 [module, from module defaults]",
+			want: "2 [module, from module default]",
 		},
 		{
 			name: "environment inheritance",
 			v:    value.String("small", value.SourceEnvironment).WithScope(value.ScopeEnvironmentInherit),
-			want: `"small" [environment, from inherited environment]`,
+			want: `"small" [environment, from environment inheritance]`,
 		},
 		{
 			name: "environment variables",
 			v:    value.String("large", value.SourceEnvironment).WithScope(value.ScopeEnvironmentVar),
-			want: `"large" [environment, from environment config]`,
+			want: `"large" [environment, from environment variable]`,
 		},
 		{
 			name: "cli override — the shape the user fixed",
@@ -7793,9 +7834,13 @@ func TestRenderAnnotatesEveryScope(t *testing.T) {
 			want: "<sensitive> [variable, from --var]",
 		},
 		{
-			name: "a scope outside the enum falls back rather than panicking",
+			// Scope.String()'s default branch: an unrecognised level reports
+			// as unrecognised rather than collapsing into a real one, because
+			// a value attributed to the WRONG level is worse than one
+			// attributed to none — a user would act on it.
+			name: "a scope outside the enum reports itself",
 			v:    value.Int(1, value.SourceDefault).WithScope(value.Scope(200)),
-			want: "1 [default]",
+			want: "1 [default, from Scope(200)]",
 		},
 	}
 
@@ -7813,112 +7858,91 @@ func TestRenderAnnotatesEveryScope(t *testing.T) {
 }
 ```
 
-Expected failure: every scoped case reports the bare value with no scope clause.
+Expected failure: every scoped case reports the bare value with no scope clause,
+because `renderAnnotated` still appends only `[default]`.
 
-**9.2 — Implement.**
+**9.2 — Wire the renderer to `value.Annotate`.**
 
-In `internal/planner/render.go`, replace `renderAnnotated` and add `scopeLabel`:
+In `internal/planner/render.go`, replace both `renderAnnotated` and `renderLeaf`
+with:
 
 ```go
+// planFormatOptions is how a plan renders a value: an unknown is a promise
+// about what apply will do, and strings are quoted so a leading space or an
+// empty string is visible in a diff.
+//
+// Named once so every caller in this package agrees. Two callers with slightly
+// different options is how the plan renderer and internal/cli's state
+// inspector drifted apart in M2, which is the divergence value.Format's own
+// comment describes.
+var planFormatOptions = value.FormatOptions{
+	Unknown:      "(known after apply)",
+	QuoteStrings: true,
+}
+
 // renderAnnotated renders one value plus, when it applies, the note saying
-// where the value came from.
+// which precedence level supplied it.
 //
-// Two orthogonal facts are disclosed: Source is WHAT KIND of thing the value is
-// (a default, a variable, a value the provider reported), Scope is WHICH
-// PRECEDENCE LEVEL supplied it. A plan that could not tell a --var from a
-// variables.yml entry cannot explain itself, and `infra explain` (M7) would
-// inherit that blindness permanently.
-//
-// Explicit values are deliberately unannotated: they are what the reader wrote
-// in the file they are looking at, and annotating every one of them would
-// double the length of a create plan for no information.
+// The entire implementation — the redaction, the fail-closed handling and the
+// annotation — lives in value.Annotate, which is the ONLY copy in the tree.
+// This function is the wiring and nothing else. Do not reimplement the
+// annotation here, or add a label table: value.Scope.String() is the one label
+// table, and a second one in this package would drift silently because nothing
+// would compare them.
 func renderAnnotated(v value.Value) string {
-	s := renderLeaf(v)
-	if a := annotation(v); a != "" {
-		s += " " + a
-	}
-	return s
-}
-
-// annotation returns the bracketed provenance note, or "" when there is
-// nothing worth saying.
-func annotation(v value.Value) string {
-	if !v.Known {
-		// An unknown already says "(known after apply)". Its provenance is
-		// that it will be computed, which the text already states.
-		return ""
-	}
-	if v.Source == value.SourceExplicit {
-		return ""
-	}
-	if label := scopeLabel(v.Scope); label != "" {
-		return "[" + string(v.Source) + ", from " + label + "]"
-	}
-	// ScopeUnset: a value that predates M4, or one read back from state, where
-	// provenance records what a provider reported rather than which
-	// configuration layer asked for it. Fall back to M2's annotation, which is
-	// still true.
-	if v.Source == value.SourceDefault {
-		return "[default]"
-	}
-	return ""
-}
-
-// scopeLabel names a precedence level for a reader, or returns "" for
-// ScopeUnset and for any value outside the enum.
-//
-// A switch rather than a table lookup: an out-of-range index would panic, and
-// Render is called on every plan a user is asked to approve.
-func scopeLabel(s value.Scope) string {
-	switch s {
-	case value.ScopeProviderDefault:
-		return "provider defaults"
-	case value.ScopeBaseConfig:
-		return "base config"
-	case value.ScopeModuleDefault:
-		return "module defaults"
-	case value.ScopeEnvironmentInherit:
-		return "inherited environment"
-	case value.ScopeEnvironmentVar:
-		return "environment config"
-	case value.ScopeCLIOverride:
-		// --var-file values arrive here too: `--var-file f` is defined as
-		// applying each of f's entries as if it had been given with --var
-		// (Task 8), so this label is exact for both. The filename cannot be
-		// shown — expressions/eval.go replaces a variable's Origin with the
-		// referencing attribute's when it resolves the reference.
-		return "--var"
-	default:
-		return ""
-	}
+	return value.Annotate(v, planFormatOptions)
 }
 ```
 
-`go test -count=1 ./internal/planner/` — the new test passes.
+Then fix the three prose references to the deleted `renderLeaf`, so no comment
+points at a function that no longer exists — a stale comment is one refactor
+away from becoming a wrong instruction:
+
+```bash
+grep -rn "renderLeaf" internal/
+```
+
+- `internal/planner/render.go`, inside `renderSide`'s doc comment: "and
+  renderLeaf renders any unknown value" → "and value.Format renders any unknown
+  value".
+- `internal/executor/summary.go:91`: "redacting through value.Format exactly as
+  planner.Render's renderLeaf does" → "…exactly as planner.Render's
+  renderAnnotated does, through value.Annotate".
+- `internal/executor/summary.go:176`: "sibling to internal/planner/render.go's
+  renderLeaf" → "sibling to internal/planner/render.go's planFormatOptions".
+
+`TestRenderLeafFailsClosedOnUnexpectedShapes` (`render_test.go:243`) calls
+`renderLeaf` directly. Point it at `renderAnnotated` and rename it
+`TestRenderAnnotatedFailsClosedOnUnexpectedShapes`. It gets stronger, not
+weaker: it now covers the annotation path too, and a malformed value must not
+leak through that either. Its `<unrenderable>` expectation is unchanged —
+those fixtures carry the zero `ValueSource` and `ScopeUnset`, so rule 3 adds no
+suffix. Rename rather than leave a test named after a deleted function.
+
+`go test -count=1 ./internal/planner/ ./internal/executor/` — green.
 `testdata/mixed.golden`'s `size: 10 [default]` is unchanged, because that
-fixture's value carries `ScopeUnset` (rule 4). If any golden did change, the
-change is a bug in the rule, not in the golden — re-read rule 4 before
-regenerating anything.
+fixture's value carries `ScopeUnset` (rule 3). If a golden did move, the cause
+is in `pkg/value`, not here: re-read rule 3 before regenerating anything.
 
 **9.3 — A golden covering the ladder.**
 
 `ScopeProviderDefault` is stamped by **Task 7**, not here. The gap is real —
-provider defaults are filled in stage 7 (`internal/compiler/schema.go`'s
-`applyDefaults`), so nothing in stages 3 and 4 sees them, and without a stamp
-the lowest rung of PLAN.md §7's chain is invisible in every plan: a chain that
-cannot show its own floor. But stamping the bottom of the chain is wiring, and
-this is a rendering task. A rendering task reaching into `internal/compiler`
-recreates the two-tasks-editing-one-file collision the plan was split to avoid.
-Task 7 owns the one-line change at `applyDefaults`' single assignment site and
-the test that pins it; this task renders whatever `Scope` it is handed.
+provider defaults are filled in stage 7 (`internal/compiler/schema.go`), so
+nothing in stages 3 and 4 sees them, and without a stamp the lowest rung of
+PLAN.md §7's chain is invisible in every plan: a chain that cannot show its own
+floor. But stamping the bottom of the chain is wiring, and this is a rendering
+task; reaching into `internal/compiler` from here recreates the
+two-tasks-one-file collision the plan was split to avoid. Task 7 owns it at
+`checkedDefault`'s success return, in its steps 7.8-7.11.
 
 If Task 7's stamp is missing when you get here, a provider default renders
-`size: 10 [default]` (rule 4) rather than
-`size: 10 [default, from provider defaults]`. Report that as a Task 7 defect —
+`size: 10 [default]` (rule 3) rather than
+`size: 10 [default, from provider default]`. Report that as a Task 7 defect —
 do not fix it from here, and do not weaken the golden below to match it.
 
 Add a golden covering a whole plan with mixed scopes. Build the fixture in
-`render_test.go` alongside the existing ones and write
+`render_test.go` alongside the existing ones — hand-built, like `mixedPlan()`,
+so this golden depends on no other task's stamping — and write
 `internal/planner/testdata/scopes.golden`:
 
 ```
@@ -7927,7 +7951,7 @@ Plan for project "myapp", environment "production":
   + test.database.db
       engine: "postgres"
       network: "net-1" [variable, from base config]
-      size: 100 [default, from provider defaults]
+      size: 100 [default, from provider default]
 
   ~ test.network.net
       cidr: "10.0.0.0/16" [variable, from base config] -> "10.9.0.0/16" [variable, from --var]
@@ -7945,9 +7969,9 @@ fixture with scoped values rather than writing a second determinism test
 ```bash
 export PATH="$HOME/.local/share/mise/shims:$PATH"
 gofmt -l . && go vet ./... && go test -count=1 ./...
+grep -rn "scopeLabel" internal/   # prints nothing: one label table, in pkg/value
 git commit -am "M4 Task 9: render which precedence level supplied each value"
 ```
-
 ---
 
 ## Task 10 — the three contract invariants, proved end to end
@@ -8966,8 +8990,8 @@ resources:
 
 	for _, tc := range []struct{ resource, want, scopeClause string }{
 		{"a", `"base"`, "from base config"},
-		{"b", `"inherited"`, "from inherited environment"},
-		{"c", `"env"`, "from environment config"},
+		{"b", `"inherited"`, "from environment inheritance"},
+		{"c", `"env"`, "from environment variable"},
 		{"d", `"file"`, "from --var"},
 		{"e", `"cli"`, "from --var"},
 	} {
