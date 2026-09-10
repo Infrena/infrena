@@ -164,6 +164,39 @@ func TestSkipOnASharedDependentIsNotDoubleCounted(t *testing.T) {
 	}
 }
 
+// TestDoneOnASiblingAfterSkipOnASharedDependentIsNotDoubleCounted is the
+// third corner TestSkipOnASharedDependentIsNotDoubleCounted (Skip-then-Skip)
+// and TestDoneCalledTwiceDoesNotDoubleDispatchASharedSuccessor
+// (Done-then-Done) leave uncovered: Skip-then-Done. c depends on both a and
+// b; a fails and is Skip-ed, retiring c along with it, while b is still
+// running. When b later finishes normally, Done(b) must not re-dispatch c —
+// it is already statusSkipped, not waiting on b as its last predecessor —
+// and Remaining must still reach 0 once b itself resolves. This is the
+// executor-review "PROBE B" scenario: a real dependency graph reaches this
+// exact sequence whenever a failed operation and a sibling still in flight
+// share a dependent.
+func TestDoneOnASiblingAfterSkipOnASharedDependentIsNotDoubleCounted(t *testing.T) {
+	g := build(t, []string{"a", "b", "c"}, [][2]string{{"a", "c"}, {"b", "c"}})
+	w, err := g.Walk()
+	if err != nil {
+		t.Fatalf("Walk: %v", err)
+	}
+	w.Ready() // dispatches a and b
+
+	skipped := w.Skip("a")
+	if len(skipped) != 1 || skipped[0].ID() != "c" {
+		t.Fatalf("Skip(a) = %v, want [c]", skipped)
+	}
+
+	done := w.Done("b")
+	if len(done) != 0 {
+		t.Fatalf("Done(b) = %v, want none — c is already skipped, not waiting on b as a last predecessor", done)
+	}
+	if w.Remaining() != 0 {
+		t.Errorf("Remaining() = %d, want 0 — a, b and c are all resolved (a and c via Skip, b via Done)", w.Remaining())
+	}
+}
+
 func TestRemainingCountsDownAsNodesResolve(t *testing.T) {
 	g := build(t, []string{"a", "b"}, [][2]string{{"a", "b"}})
 	w, err := g.Walk()

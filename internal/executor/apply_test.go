@@ -798,6 +798,19 @@ func TestApplyDestroyRemovesFromState(t *testing.T) {
 	if _, ok := st.Get(a); ok {
 		t.Error("state still holds the destroyed resource after Apply — invariant 1's other half: the provider succeeded, state must not still list it")
 	}
+
+	// The Applied-accounting half of this same run was never asserted
+	// before this line: isRemoval's whole purpose is exempting a
+	// successful destroy from the "must have a state entry" check
+	// tracker.result otherwise applies (isolation.go) — without this
+	// assertion, isRemoval returning false for everything (silently
+	// dropping every destroy/forget from Applied) shipped green across the
+	// entire suite. A destroy is applied PRECISELY by being absent from
+	// state, so Applied must still name it even though st.Get above just
+	// confirmed state does not.
+	if !reflect.DeepEqual(result.Applied, []address.Address{a}) {
+		t.Errorf("Applied = %v, want exactly [%s] — a destroy is applied precisely by being absent from state", result.Applied, a)
+	}
 }
 
 // TestApplyForgetNeverCallsProviderAndRemovesFromState covers OpForget,
@@ -852,6 +865,14 @@ func TestApplyForgetNeverCallsProviderAndRemovesFromState(t *testing.T) {
 	// though nothing was ever asked to delete anything.
 	if _, ok := st.Get(a); ok {
 		t.Error("state still holds the forgotten resource after Apply")
+	}
+
+	// See the matching assertion in TestApplyDestroyRemovesFromState for
+	// why this must be checked explicitly rather than inferred: isRemoval
+	// returning false for everything left the whole suite green before
+	// this line existed.
+	if !reflect.DeepEqual(result.Applied, []address.Address{a}) {
+		t.Errorf("Applied = %v, want exactly [%s] — a forget is applied precisely by being dropped from management, absent from state", result.Applied, a)
 	}
 }
 
@@ -1040,6 +1061,17 @@ func TestApplyReplaceLeavesNoStateWhenCreatePhaseFailsAfterDestroySucceeds(t *te
 
 	if _, ok := st.Get(a); ok {
 		t.Error("state still holds an entry for swap after its destroy phase succeeded and its create phase failed — this describes deleted infrastructure as live, invariant 1's other half at its worst moment")
+	}
+
+	// Review round 1, finding C2: without this, swap's destroy-phase
+	// recordSuccess call leaves it in tracker.applied with removal: true,
+	// which survives into Result.Applied even though the create phase
+	// later failed — reporting swap as BOTH applied and failed, with no
+	// state entry either way. Ruling: a replace's unit of success is the
+	// whole replacement, not its destroy half; the address must not appear
+	// in Applied when the same run also reports it in Failed.
+	if len(result.Applied) != 0 {
+		t.Errorf("Applied = %v, want empty — a replace whose create phase failed did not successfully change anything the user asked for, even though its destroy phase genuinely ran", result.Applied)
 	}
 }
 

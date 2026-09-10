@@ -248,6 +248,15 @@ func (w *Walk[T]) Done(id string) []T {
 // it is what makes its own t.skipped[id] dedupe guard provably unreachable
 // today (internal/executor/isolation.go) — so if this filtering is ever
 // changed, that guard becomes load-bearing and needs new test coverage.
+//
+// The traversal below filters statusSkipped but not statusDone: a
+// statusDone node reached transitively would be re-marked statusSkipped and
+// appended to the result. That is unreachable today for the same reason a
+// dependent of a failed node can never be in flight (Ready only dispatches
+// a node once every predecessor is statusDone, and a failed predecessor
+// never reaches statusDone) — noted here only because the guarantee above
+// is now something callers are told to rely on, and this is the boundary of
+// what it currently costs nothing to keep true.
 func (w *Walk[T]) Skip(id string) []T {
 	w.mustKnow("Skip", id)
 	w.mustBeDispatched("Skip", id)

@@ -539,3 +539,45 @@ func TestRecordFailureNeverEmitsEventSkippedTwiceForASharedDependent(t *testing.
 		t.Fatalf("EventSkipped for shared dependent c = %+v, want exactly 1", skipEvents)
 	}
 }
+
+// TestTrackerExcludesAnUpdateNeverReachedByStateEvenThoughItSucceeded pins
+// the other direction of C1: isRemoval must recognize ONLY OpForget,
+// OpDestroy, and the destroy phase of OpReplace as exempt from the
+// presence-in-state check — not, for instance, OpUpdate. An update whose
+// provider call succeeded but whose result never reached state (the
+// nil-state hard error run.record raises — see
+// TestRecordHardErrorsOnNilStateForEveryKindThatCanReachIt, which drives
+// record's default arm for exactly this OpUpdate shape) must NOT appear in
+// Applied, because state genuinely has nothing for it and OpUpdate's goal
+// is a resource left present and current, not absent.
+//
+// An over-broad isRemoval (matching OpUpdate too) would incorrectly skip
+// the presence check here and report the address as applied anyway — this
+// is the fixture that catches that specific mistake; the positive
+// destroy/forget cases (TestApplyDestroyRemovesFromState,
+// TestApplyForgetNeverCallsProviderAndRemovesFromState in apply_test.go)
+// only prove isRemoval isn't too NARROW, not that it isn't too broad.
+func TestTrackerExcludesAnUpdateNeverReachedByStateEvenThoughItSucceeded(t *testing.T) {
+	a := address.Address{Name: "widget"}
+	update := planner.OpNode{Address: a, Kind: planner.OpUpdate, Phase: planner.PhaseCreate}
+
+	g := graph.New[planner.OpNode]()
+	g.Add(update)
+	w, err := g.Walk()
+	if err != nil {
+		t.Fatalf("Walk: %v", err)
+	}
+	w.Ready()
+
+	tr := newTracker(nil, nil)
+	tr.recordSuccess(w, update)
+
+	// st never gets an entry for widget — exactly what run.record's
+	// nil-state hard error leaves behind for a real Update call.
+	st := state.New("proj", "dev")
+
+	res := tr.result(st)
+	if len(res.Applied) != 0 {
+		t.Fatalf("Applied = %v, want empty — an update is not a removal, so it must not bypass the presence-in-state check", res.Applied)
+	}
+}
