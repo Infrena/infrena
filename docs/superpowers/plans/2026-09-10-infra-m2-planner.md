@@ -8742,14 +8742,14 @@ func writeM2State(t *testing.T, dir, environment string, resources map[string]an
 }
 
 // stateResource builds one resource entry for writeM2State. lifecycle may be
-// nil; pass e.g. map[string]any{"PreventDestroy": true} to seed a lifecycle
+// nil; pass e.g. map[string]any{"prevent_destroy": true} to seed a lifecycle
 // guard on a resource that no longer exists in configuration.
 func stateResource(name, resourceType, providerID string, attrs map[string]any, lifecycle map[string]any) map[string]any {
 	r := map[string]any{
 		"Address":    map[string]any{"Name": name},
 		"Type":       resourceType,
 		"Provider":   "test",
-		"ProviderID": providerID,
+		"provider_id": providerID,
 		"Attributes": attrs,
 	}
 	if lifecycle != nil {
@@ -8860,7 +8860,7 @@ resources:
 		}, nil),
 		"database": stateResource("database", "test.database", "db-1", map[string]any{
 			"engine": wireAttr("string", "postgres", false),
-			"size":   wireAttr("int", 50, false),
+			"size":   wireAttr("integer", 50, false),
 		}, nil),
 	})
 	writeFakeCloud(t, dir, map[string]map[string]any{
@@ -8918,7 +8918,7 @@ resources: {}
 		"protected": stateResource("protected", "test.network", "net-42", map[string]any{
 			"cidr": wireAttr("string", "10.6.0.0/16", false),
 			"id":   wireAttr("string", "net-42", false),
-		}, map[string]any{"PreventDestroy": true}),
+		}, map[string]any{"prevent_destroy": true}),
 	})
 	writeFakeCloud(t, dir, map[string]map[string]any{
 		"net-42": cloudResource("test.network", map[string]any{
@@ -9037,7 +9037,7 @@ func readPlanIgnoringCreatedAt(t *testing.T, path string) string {
 	if err := json.Unmarshal(data, &decoded); err != nil {
 		t.Fatalf("%s is not valid JSON: %v", path, err)
 	}
-	delete(decoded, "CreatedAt")
+	delete(decoded, "created_at")
 	stripped, err := json.Marshal(decoded)
 	if err != nil {
 		t.Fatalf("re-marshaling %s: %v", path, err)
