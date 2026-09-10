@@ -3,6 +3,7 @@ package executor
 import (
 	"fmt"
 	"sort"
+	"time"
 
 	"infra/internal/diag"
 	"infra/internal/graph"
@@ -50,10 +51,24 @@ type tracker struct {
 	applied map[string]trackedApply
 	failed  map[string]error
 	skipped map[string]bool
+
+	// emit and now are how recordFailure reports EventSkipped — the same
+	// r.emit/r.now Apply's other Event sites already use (execute, in
+	// apply.go), passed in rather than reached for globally so tracker
+	// stays testable without a *run. Either may be nil: a pure tracker
+	// test that has no opinion about events can call newTracker(nil, nil)
+	// and get diagnostics-only behaviour, same as before EventSkipped
+	// existed. Apply itself always passes real, non-nil closures.
+	emit func(Event)
+	now  func() time.Time
 }
 
-func newTracker() *tracker {
-	return &tracker{applied: map[string]trackedApply{}, failed: map[string]error{}, skipped: map[string]bool{}}
+// newTracker's emit and now let recordFailure report EventSkipped with the
+// run's own event sink and clock (Options.OnEvent / Options.Now) — never a
+// bare time.Now(), so a test that injects a fixed clock sees deterministic
+// timestamps on skip events exactly as it does on every other Event kind.
+func newTracker(emit func(Event), now func() time.Time) *tracker {
+	return &tracker{applied: map[string]trackedApply{}, failed: map[string]error{}, skipped: map[string]bool{}, emit: emit, now: now}
 }
 
 // isRemoval reports whether node's completion means the address is gone
@@ -84,7 +99,10 @@ func (t *tracker) recordSuccess(w *graph.Walk[planner.OpNode], node planner.OpNo
 // (internal/graph/walk.go) — precisely so this loop can read a skipped
 // node's own Address and Kind straight off the value Walk already held,
 // instead of rebuilding an id -> node map purely to recover information the
-// walker never lost.
+// walker never lost. That is also what lets this loop emit EventSkipped
+// itself, once per node, right where the diagnostic for it is already
+// built — the only other place with this information is Walk, which knows
+// nothing about Event or Options.OnEvent and should not.
 func (t *tracker) recordFailure(w *graph.Walk[planner.OpNode], node planner.OpNode, err error, ds *diag.Diagnostics) {
 	t.failed[node.ID()] = err
 	ds.Add(diag.Diagnostic{
@@ -106,6 +124,17 @@ func (t *tracker) recordFailure(w *graph.Walk[planner.OpNode], node planner.OpNo
 			Detail:   fmt.Sprintf("skipped because %s %s failed", node.Kind, node.Address),
 			Related:  []address.Address{n.Address},
 		})
+		if t.emit != nil {
+			at := time.Time{}
+			if t.now != nil {
+				at = t.now()
+			}
+			// Attempt: 0 — types.go documents this explicitly: a skipped
+			// operation is never attempted. Err is deliberately left unset:
+			// the skip is not itself a failure, and the failure that caused
+			// it already has its own EventFailed, emitted from execute.
+			t.emit(Event{Kind: EventSkipped, Address: n.Address, Op: n.Kind, Attempt: 0, At: at})
+		}
 	}
 }
 

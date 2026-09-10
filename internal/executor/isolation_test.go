@@ -74,7 +74,7 @@ func TestTrackerSkipsTransitivelyAndLeavesUnrelatedBranchesAlone(t *testing.T) {
 		t.Fatalf("Ready() = %v, want [%s %s]", idsOf(ready), a.ID(), d.ID())
 	}
 
-	tr := newTracker()
+	tr := newTracker(nil, nil)
 	var ds diag.Diagnostics
 
 	tr.recordFailure(w, a, errors.New("boom"), &ds)
@@ -208,7 +208,7 @@ func TestTrackerCollapsesAReplacesTwoPhasesIntoOneAppliedEntryFavoringTheCreateP
 	}
 	w.Ready() // dispatches both — no edge between them in this fixture
 
-	tr := newTracker()
+	tr := newTracker(nil, nil)
 	tr.recordSuccess(w, destroy)
 	tr.recordSuccess(w, create)
 
@@ -252,7 +252,7 @@ func TestTrackerExcludesAReplaceWhoseCreatePhaseNeverReachedState(t *testing.T) 
 	}
 	w.Ready()
 
-	tr := newTracker()
+	tr := newTracker(nil, nil)
 	tr.recordSuccess(w, destroy)
 	tr.recordSuccess(w, create)
 
@@ -263,5 +263,78 @@ func TestTrackerExcludesAReplaceWhoseCreatePhaseNeverReachedState(t *testing.T) 
 	res := tr.result(st)
 	if len(res.Applied) != 0 {
 		t.Fatalf("Applied = %v, want empty — swap's create phase never reached state, so it must not be reported applied", res.Applied)
+	}
+}
+
+// TestRecordFailureEmitsExactlyOneEventSkippedPerStrandedNode proves
+// recordFailure reports EventSkipped for every node Walk.Skip strands, and
+// only those. The chain a -> b -> c strands TWO nodes from one failure —
+// a single-dependent fixture could not tell "one event per skipped node"
+// apart from "one event per failure, no matter how many nodes it skips";
+// two stranded nodes forces the loop to actually emit per node. d is an
+// independent branch that succeeds on its own, proving isolation extends to
+// events too: unaffected work must not produce a skip event of its own.
+func TestRecordFailureEmitsExactlyOneEventSkippedPerStrandedNode(t *testing.T) {
+	g := graph.New[planner.OpNode]()
+	a, b, c, d := opnode("a"), opnode("b"), opnode("c"), opnode("d")
+	for _, n := range []planner.OpNode{a, b, c, d} {
+		g.Add(n)
+	}
+	g.Edge(a.ID(), b.ID())
+	g.Edge(b.ID(), c.ID())
+
+	w, err := g.Walk()
+	if err != nil {
+		t.Fatalf("Walk: %v", err)
+	}
+	w.Ready() // dispatches a and d
+
+	fixedTime := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
+	var events []Event
+	tr := newTracker(
+		func(e Event) { events = append(events, e) },
+		func() time.Time { return fixedTime },
+	)
+
+	var ds diag.Diagnostics
+	tr.recordFailure(w, a, errors.New("boom"), &ds)
+	tr.recordSuccess(w, d)
+
+	var skipEvents []Event
+	for _, e := range events {
+		if e.Kind == EventSkipped {
+			skipEvents = append(skipEvents, e)
+		}
+	}
+	if len(skipEvents) != 2 {
+		t.Fatalf("EventSkipped events = %+v, want exactly 2 — one per stranded node (b and c)", skipEvents)
+	}
+
+	byAddr := map[string]Event{}
+	for _, e := range skipEvents {
+		byAddr[e.Address.String()] = e
+	}
+	for _, addr := range []string{b.Address.String(), c.Address.String()} {
+		e, ok := byAddr[addr]
+		if !ok {
+			t.Fatalf("no EventSkipped for %s; got %+v", addr, skipEvents)
+		}
+		if e.Op != planner.OpCreate {
+			t.Errorf("%s: Op = %v, want %v", addr, e.Op, planner.OpCreate)
+		}
+		if e.Attempt != 0 {
+			t.Errorf("%s: Attempt = %d, want 0 — a skipped operation is never attempted (types.go)", addr, e.Attempt)
+		}
+		if !e.At.Equal(fixedTime) {
+			t.Errorf("%s: At = %v, want the tracker's injected clock value %v — a fixed clock must produce a deterministic timestamp", addr, e.At, fixedTime)
+		}
+	}
+
+	// d succeeded on its own, unrelated branch: it must produce no
+	// EventSkipped at all. An over-broad emit (e.g. one skip event per
+	// failure rather than per node, or a stray emit outside the dedup
+	// guard) would tend to show up here first.
+	if _, ok := byAddr[d.Address.String()]; ok {
+		t.Fatalf("unexpected EventSkipped for independent branch d: %+v", skipEvents)
 	}
 }

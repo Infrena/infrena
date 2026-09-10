@@ -56,7 +56,7 @@ func Apply(ctx context.Context, p *planner.Plan, g *graph.Graph[planner.OpNode],
 
 	queue := w.Ready()
 	providerInFlight := map[string]int{}
-	tr := newTracker()
+	tr := newTracker(r.emit, r.now)
 	persistFailed := false
 
 	for w.Remaining() > 0 {
