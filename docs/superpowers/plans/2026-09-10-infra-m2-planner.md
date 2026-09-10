@@ -5428,6 +5428,55 @@ func TestCanonicalExcludesCreatedAt(t *testing.T) {
 	}
 }
 
+// TestWireFormatUsesNamesNotNumbers pins the artifact's readability at the
+// place it can actually regress. TestOpKindStringAndSymbol covers String()
+// directly, but the artifact does not call String() — it relies on
+// encoding/json finding OpKind's MarshalText. Delete MarshalText and every
+// String() test still passes while every plan file silently becomes
+// {"kind":1}: unreadable to a human, and pinned to an iota ordering that a
+// later inserted constant would renumber, reinterpreting every plan ever
+// written. Severity is the same shape one field over.
+func TestWireFormatUsesNamesNotNumbers(t *testing.T) {
+	p := samplePlan(time.Now())
+	// samplePlan carries no diagnostics, and a loop over an empty slice
+	// asserts nothing — add one so the severity half of this test can fail.
+	p.Diagnostics = []diag.Diagnostic{{
+		Severity: diag.SeverityWarning,
+		Summary:  "a warning, so severity has something to encode",
+	}}
+
+	out, err := json.Marshal(p)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	var wire struct {
+		Operations []struct {
+			Kind string `json:"kind"`
+		} `json:"operations"`
+		Diagnostics []struct {
+			Severity string `json:"severity"`
+		} `json:"diagnostics"`
+	}
+	// Decoding "kind" into a string fails outright if it was written as a
+	// number, which is the regression this test exists to catch.
+	if err := json.Unmarshal(out, &wire); err != nil {
+		t.Fatalf("plan did not decode with string kinds and severities — the wire format regressed to numbers: %v\n%s", err, out)
+	}
+	if len(wire.Operations) == 0 || len(wire.Diagnostics) == 0 {
+		t.Fatalf("need at least one operation and one diagnostic for this test to mean anything: %s", out)
+	}
+	for i, op := range wire.Operations {
+		if op.Kind == "" {
+			t.Errorf("operation %d has an empty kind: %s", i, out)
+		}
+	}
+	for i, d := range wire.Diagnostics {
+		if d.Severity == "" {
+			t.Errorf("diagnostic %d has an empty severity: %s", i, out)
+		}
+	}
+}
+
 func TestCanonicalIsStableAcrossRepeatedCalls(t *testing.T) {
 	p := samplePlan(time.Now())
 	first, err := p.Canonical()
@@ -5945,7 +5994,7 @@ func (p *Plan) encode(withTimestamp bool) ([]byte, error) {
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `go test ./internal/planner/ -v`
-Expected: PASS — thirteen tests.
+Expected: PASS — fourteen tests.
 
 - [ ] **Step 5: Commit**
 
@@ -7444,7 +7493,7 @@ func hashState(st *state.State) (string, error) {
 - [ ] **Step 5: Run the tests to verify they pass**
 
 Run: `go test ./internal/planner/ -v`
-Expected: PASS — thirteen tests from Task 12 plus twenty-seven here.
+Expected: PASS — fourteen tests from Task 12 plus twenty-seven here.
 
 - [ ] **Step 6: Prove determinism is not a fluke**
 
