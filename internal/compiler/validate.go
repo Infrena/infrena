@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"infra/internal/diag"
+	"infra/internal/graph"
 	"infra/internal/registry"
 	"infra/pkg/address"
 	"infra/pkg/value"
@@ -18,7 +19,7 @@ import (
 func validateGraph(cfg *ResolvedConfig, reg *registry.Registry) diag.Diagnostics {
 	var ds diag.Diagnostics
 
-	if cycle := firstCycle(cfg); cycle != nil {
+	if cycle := cycleFor(cfg); cycle != nil {
 		ds.Add(cycleDiagnostic(cfg, cycle))
 	}
 
@@ -30,97 +31,55 @@ func validateGraph(cfg *ResolvedConfig, reg *registry.Registry) diag.Diagnostics
 
 // --- dependency cycles ------------------------------------------------
 
-// color tracks a node's state during the depth-first walk: not yet visited,
-// on the current path, or fully explored. A plain visited set would say a
-// cycle exists but not which nodes are actually on it versus merely
-// reachable from it; the third state is what lets the walk tell the two
-// apart.
-type color int
-
-const (
-	white color = iota
-	gray
-	black
-)
-
-// firstCycle returns one dependency cycle, or nil when the graph is acyclic.
+// cycleFor reports a dependency cycle in the resolved configuration, or nil.
+// Detection lives in internal/graph so the compiler and the executor cannot
+// disagree about what a cycle is.
 //
-// It reports ONE cycle rather than attempting to enumerate them all. That is a
-// deliberate narrowing of an honest but incomplete predecessor.
+// Edges run resource → dependency, the direction the diagnostic reads in
+// ("a → b" means a depends on b), which is the opposite of the planner's
+// graph, where an edge means "must execute first". Both orientations detect
+// the same cycles; only this one prints in the order the message claims.
 //
-// The enumerate-everything version was never wrong about EXISTENCE: a
-// depth-first walk finds a back edge if and only if a cycle exists, so it could
-// not call a cyclic configuration acyclic. What it could not do is enumerate.
-// It skips already-finished nodes, so distinct cycles sharing a downstream node
-// go unreported and a resource genuinely sitting on a cycle may never be named
-// — the report reads as the complete list and is not. Reporting one cycle
-// honestly beats reporting a subset while implying completeness.
-//
-// Task 18 replaces this with graph.Cycle, which makes the same single-cycle
-// promise, so this is the contract that survives.
-//
-// A cycle of one — a resource referring to itself — is already rejected when
-// stage 6 binds the reference; nothing here special-cases that, though the
-// same walk would still catch one if it ever reached this stage some other
-// way.
-func firstCycle(cfg *ResolvedConfig) []address.Address {
-	colors := map[string]color{}
-	onStack := map[string]int{}
-	var stack []address.Address
-	var found []address.Address
-
-	// visit returns true the moment it finds a back edge, unwinding the
-	// recursion immediately rather than continuing to search — the whole
-	// point of the narrower contract is to never claim to have looked
-	// everywhere.
-	var visit func(addr address.Address) bool
-	visit = func(addr address.Address) bool {
-		key := addr.String()
-		colors[key] = gray
-		onStack[key] = len(stack)
-		stack = append(stack, addr)
-
-		if r, ok := cfg.Get(addr); ok {
-			for _, dep := range r.DependsOn {
-				if _, ok := cfg.Get(dep); !ok {
-					// Not a real node in this graph; nothing to walk into.
-					continue
-				}
-				dk := dep.String()
-				switch colors[dk] {
-				case white:
-					if visit(dep) {
-						return true
-					}
-				case gray:
-					// A back edge to a node still on the path: the cycle is
-					// everything from that node to here, closed by repeating it.
-					start := onStack[dk]
-					found = append([]address.Address{}, stack[start:]...)
-					found = append(found, dep)
-					return true
-				}
-				// black: already fully explored with no cycle found through
-				// it; skip rather than walking into it again.
-			}
-		}
-
-		stack = stack[:len(stack)-1]
-		delete(onStack, key)
-		colors[key] = black
-		return false
-	}
-
+// graph.Cycle returns members without repeating the first at the end. The
+// closing repeat is re-added here because cycleDiagnostic slices
+// cycle[1:len(cycle)-1] for its Related list and would otherwise drop a real
+// member of the cycle.
+func cycleFor(cfg *ResolvedConfig) []address.Address {
+	g := graph.New[addrNode]()
 	for _, addr := range cfg.Addresses() {
-		if colors[addr.String()] == white {
-			if visit(addr) {
-				return found
+		g.Add(addrNode{addr})
+	}
+	for _, addr := range cfg.Addresses() {
+		r := cfg.Resources[addr.String()]
+		for _, dep := range r.DependsOn {
+			if _, ok := cfg.Get(dep); !ok {
+				continue // not a node in this graph; stage 6 already reported it
 			}
+			g.Edge(addr.String(), dep.String())
 		}
 	}
 
-	return nil
+	ids := g.Cycle()
+	if len(ids) == 0 {
+		return nil
+	}
+
+	out := make([]address.Address, 0, len(ids)+1)
+	for _, id := range ids {
+		addr, err := address.Parse(id)
+		if err != nil {
+			// Impossible: every id came from an Address we put in.
+			panic("compiler: graph returned an unparseable address " + strconv.Quote(id) + ": " + err.Error())
+		}
+		out = append(out, addr)
+	}
+	return append(out, out[0])
 }
+
+// addrNode adapts an address to the graph's Node interface.
+type addrNode struct{ addr address.Address }
+
+func (n addrNode) ID() string { return n.addr.String() }
 
 // cycleKey renders a closed cycle as "a → b → c → a", used both as the
 // diagnostic text and as the deduplication key.

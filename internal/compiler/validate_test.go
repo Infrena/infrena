@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"infra/internal/diag"
 	"infra/internal/registry"
 	"infra/pkg/address"
 	"infra/pkg/provider"
@@ -242,5 +243,48 @@ func TestValidateGraphStillReportsACycleAfterAPartialFix(t *testing.T) {
 	graph2.Resources["a"].DependsOn = []address.Address{{Name: "c"}}
 	if ds := validateGraph(&graph2, testRegistry(t)); !ds.HasErrors() {
 		t.Fatal("a→c→d→e→a is still a live cycle; validateGraph must not report the graph as acyclic")
+	}
+}
+
+// TestCycleDiagnosticShapeIsStable pins the two properties that survive the
+// move to internal/graph but that the membership assertion above cannot see:
+// the sequence reads in depends-on order and closes back on its first member,
+// and Related therefore names every member except the one carrying Origin.
+func TestCycleDiagnosticShapeIsStable(t *testing.T) {
+	a := res("a", "test.network", map[string]value.Value{"cidr": value.String("10.0.0.0/16", value.SourceExplicit)})
+	b := res("b", "test.network", map[string]value.Value{"cidr": value.String("10.0.1.0/16", value.SourceExplicit)})
+	c := res("c", "test.network", map[string]value.Value{"cidr": value.String("10.0.2.0/16", value.SourceExplicit)})
+	a.DependsOn = []address.Address{{Name: "b"}}
+	b.DependsOn = []address.Address{{Name: "c"}}
+	c.DependsOn = []address.Address{{Name: "a"}}
+	graph := cfg(a, b, c)
+
+	ds := validateGraph(&graph, testRegistry(t))
+	var d diag.Diagnostic
+	for _, cand := range ds {
+		if strings.HasPrefix(cand.Summary, "dependency cycle: ") {
+			d = cand
+		}
+	}
+	if d.Summary == "" {
+		t.Fatalf("no cycle diagnostic: %+v", ds)
+	}
+
+	// a depends on b depends on c depends on a: the sequence reads in that
+	// order and closes on a. Reversed, it would read "a → c → b → a" and be
+	// a false statement about the configuration.
+	if want := "dependency cycle: a → b → c → a"; d.Summary != want {
+		t.Errorf("summary = %q, want %q", d.Summary, want)
+	}
+
+	// Related is every member but the first, which carries Origin. Without
+	// the closing repeat this slice silently loses c.
+	if len(d.Related) != 2 {
+		t.Fatalf("Related = %v, want 2 entries (b and c)", d.Related)
+	}
+	for i, want := range []string{"b", "c"} {
+		if got := d.Related[i].String(); got != want {
+			t.Errorf("Related[%d] = %q, want %q", i, got, want)
+		}
 	}
 }
