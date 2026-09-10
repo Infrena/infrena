@@ -7,6 +7,7 @@ import (
 
 	"infra/internal/state"
 	"infra/pkg/address"
+	"infra/pkg/resource"
 	"infra/pkg/value"
 )
 
@@ -18,9 +19,21 @@ const (
 )
 
 // RenderOptions controls how a Result is rendered after an apply. It
-// mirrors planner.RenderOptions in shape and meaning — Verbose reserved for
-// future detail, Color wraps markers in ANSI — so the two renderers read as
-// one family of output, not two unrelated ones.
+// mirrors planner.RenderOptions in shape and meaning — Verbose adds detail,
+// Color wraps markers in ANSI — so the two renderers read as one family of
+// output, not two unrelated ones.
+//
+// Verbose adds each applied resource's provider and provider-assigned ID.
+// That is the question an apply leaves a person with that a plan cannot
+// answer — "what is the real thing that now exists?" — and it is the
+// executor's analogue of planner.RenderOptions.Verbose additionally listing
+// no-change resources: both show more about what the command touched.
+//
+// The flag must do something. --verbose is registered globally (root.go) and
+// forwarded to planner.Render by plan.go, so apply and destroy will forward
+// it here symmetrically; a Verbose that changed nothing would be a silently
+// ignored flag, which this project treats as a defect rather than a
+// harmless no-op (see --var-file, which errors rather than being ignored).
 type RenderOptions struct {
 	Verbose bool
 	Color   bool
@@ -82,11 +95,18 @@ func renderAppliedLines(addr address.Address, st *state.State, opts RenderOption
 		return []string{header}
 	}
 	rs, ok := st.Get(addr)
-	if !ok || len(rs.Attributes) == 0 {
+	if !ok {
 		return []string{header}
 	}
 
 	lines := []string{header}
+	if opts.Verbose {
+		lines = append(lines, verboseProvenance(rs)...)
+	}
+	if len(rs.Attributes) == 0 {
+		return lines
+	}
+
 	names := make([]string, 0, len(rs.Attributes))
 	for name := range rs.Attributes {
 		names = append(names, name)
@@ -96,6 +116,37 @@ func renderAppliedLines(addr address.Address, st *state.State, opts RenderOption
 		lines = append(lines, "      "+name+": "+renderValue(rs.Attributes[name]))
 	}
 	return lines
+}
+
+// verboseProvenance renders the provider and provider-assigned ID of an
+// applied resource, for RenderOptions.Verbose.
+//
+// Deliberately parenthesised rather than written as "name: value": every
+// other indented line under an applied resource IS an attribute, and an
+// attribute can legitimately be called "provider" or "id". Parentheses keep
+// metadata unambiguous from data — a person (or a script) reading this
+// output must not have to guess which lines came from the provider's
+// attributes and which the renderer added.
+//
+// Neither field is a value.Value, so neither goes through value.Format:
+// Provider is a provider name and ProviderID is an opaque identifier the
+// provider chose, and both are already strings. Nothing here may render an
+// attribute — that stays in renderAppliedLines, through renderValue.
+//
+// Returns nothing when both fields are empty, which is the honest answer
+// for a resource state that records neither rather than printing empty
+// parentheses.
+func verboseProvenance(rs *resource.ResourceState) []string {
+	switch {
+	case rs.Provider == "" && rs.ProviderID == "":
+		return nil
+	case rs.ProviderID == "":
+		return []string{"      (provider " + rs.Provider + ")"}
+	case rs.Provider == "":
+		return []string{"      (id " + rs.ProviderID + ")"}
+	default:
+		return []string{"      (provider " + rs.Provider + ", id " + rs.ProviderID + ")"}
+	}
 }
 
 // renderValue is this package's one call site into value.Format, sibling to

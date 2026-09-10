@@ -272,3 +272,134 @@ func TestRenderColorWrapsMarkersInANSI(t *testing.T) {
 		t.Fatalf("Render() =\n%q\nwant\n%q", got, want)
 	}
 }
+
+// summaryRSWithProvider is summaryRS plus the provider identity fields,
+// which only RenderOptions.Verbose renders.
+func summaryRSWithProvider(name, provider, providerID string, attrs map[string]value.Value) *resource.ResourceState {
+	return &resource.ResourceState{
+		Address:    address.Address{Name: name},
+		Provider:   provider,
+		ProviderID: providerID,
+		Attributes: attrs,
+	}
+}
+
+// TestRenderVerboseAddsProviderIdentityAndDefaultDoesNot pins BOTH halves of
+// the flag in one exact-output comparison each: that Verbose adds the
+// provider line, and that the default output is byte-identical to what it
+// was before Verbose existed. Asserting only the first would let a Verbose
+// that always rendered — i.e. a flag that is once again not a flag — pass.
+func TestRenderVerboseAddsProviderIdentityAndDefaultDoesNot(t *testing.T) {
+	st := &state.State{}
+	st.Set(summaryRSWithProvider("db", "test", "db-7f3a", map[string]value.Value{
+		"engine": value.String("postgres", value.SourceExplicit),
+	}))
+	r := Result{Applied: []address.Address{{Name: "db"}}, Failed: map[string]error{}, State: st}
+
+	quiet := "Apply complete: 1 applied, 0 failed, 0 skipped.\n" +
+		"\n" +
+		"Applied:\n" +
+		"  + db\n" +
+		"      engine: \"postgres\"\n"
+	if got := Render(r, RenderOptions{}); got != quiet {
+		t.Fatalf("default Render() =\n%q\nwant\n%q", got, quiet)
+	}
+
+	loud := "Apply complete: 1 applied, 0 failed, 0 skipped.\n" +
+		"\n" +
+		"Applied:\n" +
+		"  + db\n" +
+		"      (provider test, id db-7f3a)\n" +
+		"      engine: \"postgres\"\n"
+	if got := Render(r, RenderOptions{Verbose: true}); got != loud {
+		t.Fatalf("verbose Render() =\n%q\nwant\n%q", got, loud)
+	}
+}
+
+// TestRenderVerboseShowsProviderIdentityForAResourceWithNoAttributes guards
+// the early return that the Verbose change had to move. Before Verbose,
+// renderAppliedLines returned the bare header when a resource had no
+// attributes; if that early return is restored above the Verbose block, this
+// resource loses its provider line while the one above keeps its own, so a
+// test using only the attributes-present case cannot catch it.
+func TestRenderVerboseShowsProviderIdentityForAResourceWithNoAttributes(t *testing.T) {
+	st := &state.State{}
+	st.Set(summaryRSWithProvider("empty", "test", "empty-01", nil))
+	r := Result{Applied: []address.Address{{Name: "empty"}}, Failed: map[string]error{}, State: st}
+
+	want := "Apply complete: 1 applied, 0 failed, 0 skipped.\n" +
+		"\n" +
+		"Applied:\n" +
+		"  + empty\n" +
+		"      (provider test, id empty-01)\n"
+	if got := Render(r, RenderOptions{Verbose: true}); got != want {
+		t.Fatalf("Render() =\n%q\nwant\n%q", got, want)
+	}
+}
+
+// TestRenderVerboseOmitsTheLineWhenThereIsNoProviderIdentity covers the
+// destroyed/forgotten shape and any state entry recording neither field:
+// printing "()" would be worse than printing nothing.
+func TestRenderVerboseOmitsTheLineWhenThereIsNoProviderIdentity(t *testing.T) {
+	st := &state.State{}
+	st.Set(summaryRS("bare", map[string]value.Value{"a": value.String("1", value.SourceExplicit)}))
+	r := Result{Applied: []address.Address{{Name: "bare"}}, Failed: map[string]error{}, State: st}
+
+	want := "Apply complete: 1 applied, 0 failed, 0 skipped.\n" +
+		"\n" +
+		"Applied:\n" +
+		"  + bare\n" +
+		"      a: \"1\"\n"
+	if got := Render(r, RenderOptions{Verbose: true}); got != want {
+		t.Fatalf("Render() =\n%q\nwant\n%q", got, want)
+	}
+}
+
+// TestRenderVerboseHandlesEitherIdentityFieldAlone pins the two partial
+// cases separately, because a single implementation that concatenated both
+// unconditionally would produce "(provider test, id )" and still satisfy a
+// test that only ever supplies both.
+func TestRenderVerboseHandlesEitherIdentityFieldAlone(t *testing.T) {
+	for _, tc := range []struct {
+		name, provider, providerID, wantLine string
+	}{
+		{"providerOnly", "test", "", "      (provider test)\n"},
+		{"idOnly", "", "id-9", "      (id id-9)\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st := &state.State{}
+			st.Set(summaryRSWithProvider("r", tc.provider, tc.providerID, nil))
+			res := Result{Applied: []address.Address{{Name: "r"}}, Failed: map[string]error{}, State: st}
+			want := "Apply complete: 1 applied, 0 failed, 0 skipped.\n\nApplied:\n  + r\n" + tc.wantLine
+			if got := Render(res, RenderOptions{Verbose: true}); got != want {
+				t.Fatalf("Render() =\n%q\nwant\n%q", got, want)
+			}
+		})
+	}
+}
+
+// TestRenderVerboseNeverRendersAnAttributeOutsideValueFormat is the §36
+// guard for the new code path: verboseProvenance writes strings directly
+// rather than through value.Format, so this proves it cannot become a second
+// rendering path for attribute data. A sensitive attribute named "provider"
+// must still be redacted, and must not be confusable with the metadata line.
+func TestRenderVerboseNeverRendersAnAttributeOutsideValueFormat(t *testing.T) {
+	secret := value.Value{Kind: value.KindString, Raw: "hunter2", Source: value.SourceProvider, Sensitive: true}
+	st := &state.State{}
+	st.Set(summaryRSWithProvider("db", "test", "db-1", map[string]value.Value{"provider": secret}))
+	r := Result{Applied: []address.Address{{Name: "db"}}, Failed: map[string]error{}, State: st}
+
+	got := Render(r, RenderOptions{Verbose: true})
+	if strings.Contains(got, "hunter2") {
+		t.Fatalf("Render() leaked the raw secret:\n%q", got)
+	}
+	want := "Apply complete: 1 applied, 0 failed, 0 skipped.\n" +
+		"\n" +
+		"Applied:\n" +
+		"  + db\n" +
+		"      (provider test, id db-1)\n" +
+		"      provider: <sensitive>\n"
+	if got != want {
+		t.Fatalf("Render() =\n%q\nwant\n%q", got, want)
+	}
+}
