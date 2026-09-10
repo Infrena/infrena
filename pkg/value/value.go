@@ -48,7 +48,11 @@ type Value struct {
 	Raw       any
 	Source    ValueSource
 	Sensitive bool
-	Origin    Origin
+	// Expr is the expression that will produce this value, set when Known is
+	// false because the value depends on a resource that does not exist yet.
+	// The executor evaluates it once the dependency has been created.
+	Expr   *Expr
+	Origin Origin
 }
 
 func String(s string, src ValueSource) Value {
