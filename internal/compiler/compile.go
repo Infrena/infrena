@@ -26,13 +26,20 @@ import (
 // required attributes — and nothing in it distinguishes the two. Nothing
 // panics; it simply looks valid. `cfg, _ := Compile(...)` is always a bug.
 //
-// The partial config is returned deliberately rather than a zero value,
-// because an empty ResolvedConfig would be the more dangerous shape: zero
-// desired resources diffed against a populated state file is exactly what
-// invariant 1 reads as "removed from configuration", so a syntax error
-// would produce a plan proposing to destroy every managed resource. A
-// partial config degrades one resource at a time; an empty one degrades the
-// whole environment at once.
+// From stage 6 onward the partial config is returned deliberately rather
+// than a zero value, because an empty ResolvedConfig is the more dangerous
+// shape: zero desired resources diffed against a populated state file is
+// exactly what invariant 1 reads as "removed from configuration", so it
+// would describe a plan destroying every managed resource. A partial config
+// degrades one resource at a time; an empty one degrades the whole
+// environment at once.
+//
+// Decode is the exception, and it cannot be otherwise: it fails before any
+// ResolvedConfig exists, so there is nothing partial to return and the zero
+// value is all there is. That is precisely the syntax-error case, so the
+// paragraph above buys NO defence in depth there — the caller's HasErrors()
+// check is the only thing standing between a malformed file and a
+// destroy-everything plan. Both callers make it. A third must too.
 func Compile(files []config.File, reg *registry.Registry, opts Options) (ResolvedConfig, diag.Diagnostics) {
 	var ds diag.Diagnostics
 

@@ -105,11 +105,30 @@ func checkConfiguredAttributes(attrs map[string]value.Value, def *schema.Resourc
 
 		if attr.Validate != nil {
 			if err := attr.Validate(v); err != nil {
-				ds.Add(diag.Diagnostic{
+				// A validator is handed the whole Value and the natural way
+				// to write one is fmt.Errorf("... got %q", s). For an
+				// attribute the schema declares Sensitive — two fields away
+				// from the Validate func being called — that message would
+				// carry the secret onto stderr verbatim. The provider is not
+				// doing anything wrong; this is the only place that knows
+				// both the message and the sensitivity, so it is the only
+				// place that can hold them apart.
+				summary := strconv.Quote(name) + " is not valid"
+				if !attr.Sensitive {
+					summary += ": " + err.Error()
+				}
+				d := diag.Diagnostic{
 					Severity: diag.SeverityError,
-					Summary:  strconv.Quote(name) + " is not valid: " + err.Error(),
+					Summary:  summary,
 					Origin:   v.Origin,
-				})
+				}
+				if attr.Sensitive {
+					d.Detail = "The provider rejected this value. Its message is withheld " +
+						"because the attribute is sensitive and the message may quote it."
+					d.Action = "Check the value against the provider's documented constraints for " +
+						strconv.Quote(name) + "."
+				}
+				ds.Add(d)
 			}
 		}
 	}

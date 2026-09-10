@@ -2,7 +2,6 @@ package cli
 
 import (
 	"fmt"
-	"sort"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -147,73 +146,14 @@ func resolveAddress(input string, known []address.Address, typeOf func(address.A
 // the top-level flag and otherwise printing Raw with %v would leak such a leaf
 // straight through Go's struct formatting. formatValue instead walks lists and
 // maps and redacts every sensitive leaf it finds, wherever it is nested.
-// unrenderable stands in for a value this function cannot safely display.
-// It is deliberately not empty: silently rendering nothing would hide the
-// existence of data, and the reader needs to know something is there.
-const unrenderable = "<unrenderable>"
-
-// formatValue renders one value for display, redacting sensitive data.
+// formatValue renders one value for `state show`, redacting sensitive data.
 //
-// The kind switch is an ALLOWLIST, and that is the whole point. An earlier
-// version ended in `default: fmt.Sprintf("%v", v.Raw)`, which looks harmless
-// because sensitivity is checked at the top — but the check at the top only
-// covers the value in hand, not the leaves inside it. value.KindInvalid is
-// the zero value of value.Kind, so any Value whose Kind was never set carries
-// its Raw straight into %v, and %v on a map[string]value.Value prints every
-// nested field of every leaf. Measured, not assumed: that path rendered
-//
-//	map[password:{string true hunter2 provider true  <generated>}]
-//
-// printing the secret in clear text with its own Sensitive flag sitting next
-// to it, ignored.
-//
-// This is the same defect M1 fixed once already. That fix hardened the List
-// and Map branches and left `default` as an open escape hatch — the recurring
-// shape in this project, where the instance gets fixed and the pattern lives
-// on. An allowlist has no escape hatch: a kind nobody taught this function
-// about renders as unrenderable rather than as whatever %v decides.
-//
-// The composite branches fail closed for the same reason. A failed type
-// assertion used to yield an empty {} or [], which claims the composite was
-// empty when it was really unreadable.
+// The whole implementation lives in value.Format, which is the ONLY copy in
+// the tree. It used to be duplicated here and in the plan renderer, and the
+// two had already diverged in three ways — which is how a leak fixed in one
+// survived in the other. See value.Format's comment for the two measured
+// leaks that produced this rule.
 func formatValue(v value.Value) string {
-	if v.Sensitive {
-		return "<sensitive>"
-	}
-	if !v.Known {
-		return "(unknown)"
-	}
-	switch v.Kind {
-	case value.KindList:
-		items, ok := v.Raw.([]value.Value)
-		if !ok {
-			return unrenderable
-		}
-		parts := make([]string, len(items))
-		for i, item := range items {
-			parts[i] = formatValue(item)
-		}
-		return "[" + strings.Join(parts, ", ") + "]"
-	case value.KindMap:
-		m, ok := v.Raw.(map[string]value.Value)
-		if !ok {
-			return unrenderable
-		}
-		keys := make([]string, 0, len(m))
-		for k := range m {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
-		parts := make([]string, len(keys))
-		for i, k := range keys {
-			parts[i] = k + ": " + formatValue(m[k])
-		}
-		return "{" + strings.Join(parts, ", ") + "}"
-	case value.KindString, value.KindInt, value.KindFloat, value.KindBool:
-		return fmt.Sprintf("%v", v.Raw)
-	default:
-		// KindInvalid, or a kind added later that nobody taught this
-		// function about. Both must fail closed. See the comment above.
-		return unrenderable
-	}
+	// Bare strings, not quoted: `state show` is for reading, not diffing.
+	return value.Format(v, value.FormatOptions{Unknown: "(unknown)"})
 }

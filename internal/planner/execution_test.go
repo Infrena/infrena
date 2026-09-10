@@ -118,20 +118,35 @@ func TestReplaceBecomesTwoNodesDestroyThenCreate(t *testing.T) {
 func TestReplaceOrdersDependentsAroundBothPhases(t *testing.T) {
 	// Replacing a network with an application on top: the app must be
 	// destroyed before the network's destroy, and created after its create.
+	//
+	// The dependent is "webapp", not "app", and the choice is load-bearing.
+	// graph.Layers breaks ties among ready nodes alphabetically. With "app",
+	// alphabetical order ("app" < "network") happened to AGREE with the
+	// required destroy order, so deleting the teardown edge block entirely
+	// left both destroy nodes at in-degree zero in one layer, tie-broken into
+	// the very order this test asserts — it passed with the logic removed.
+	// "webapp" > "network", so alphabetical order now DISAGREES with the
+	// required destroy order and only a real edge can produce it.
+	//
+	// The create assertion below was always sound for the same reason in
+	// reverse: "create:webapp" > "create:network" alphabetically, which is
+	// the opposite of what a missing build-side edge would produce. Half this
+	// test was live and half was not, which is why it survived a sweep that
+	// fixed the identical defect in TestDestroysRunInReverseDependencyOrder.
 	p := planWith(
 		Operation{Address: addr("network"), Type: "test.network", Kind: OpReplace},
-		Operation{Address: addr("app"), Type: "test.application", Kind: OpReplace},
+		Operation{Address: addr("webapp"), Type: "test.application", Kind: OpReplace},
 	)
-	g, err := BuildExecution(p, depsFrom(map[string][]string{"network": {"app"}}))
+	g, err := BuildExecution(p, depsFrom(map[string][]string{"network": {"webapp"}}))
 	if err != nil {
 		t.Fatalf("BuildExecution: %v", err)
 	}
 
 	order := orderOf(t, g)
-	if indexOf(t, order, "destroy:app") > indexOf(t, order, "destroy:network") {
+	if indexOf(t, order, "destroy:webapp") > indexOf(t, order, "destroy:network") {
 		t.Errorf("order = %v; the dependent's destroy must precede its dependency's destroy", order)
 	}
-	if indexOf(t, order, "create:network") > indexOf(t, order, "create:app") {
+	if indexOf(t, order, "create:network") > indexOf(t, order, "create:webapp") {
 		t.Errorf("order = %v; the dependency's create must precede its dependent's create", order)
 	}
 }

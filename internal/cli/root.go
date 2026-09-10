@@ -42,12 +42,24 @@ func NewRootCommand() *cobra.Command {
 
 	f := root.PersistentFlags()
 	f.StringArrayVar(&opts.Vars, "var", nil, "set a variable (name=value); repeatable")
-	f.StringArrayVar(&opts.VarFiles, "var-file", nil, "load variables from a file; repeatable")
+	// Registered so the flag exists and reports honestly, NOT because it
+	// works. Nothing reads opts.VarFiles; variable files arrive in M4. A
+	// flag that is advertised in --help and silently ignored is worse than
+	// an absent one, and --var working end to end since M2 gives a user
+	// every reason to assume its sibling does too. checkUnsupportedFlags
+	// turns any use of it into an error.
+	f.StringArrayVar(&opts.VarFiles, "var-file", nil, "load variables from a file; repeatable (not yet supported)")
 	f.BoolVar(&opts.Verbose, "verbose", false, "include provider-level detail in output")
 	f.StringVar(&opts.Output, "output", "", "write machine-readable output to this path")
 	f.IntVar(&opts.Parallelism, "parallelism", 10, "maximum concurrent operations")
 	f.BoolVar(&opts.AutoApprove, "auto-approve", false, "skip interactive approval")
 	f.StringVar(&opts.Dir, "chdir", ".", "run as if infra had been started in this directory")
+
+	// One place, so a command added later inherits the check rather than
+	// having to remember it.
+	root.PersistentPreRunE = func(cmd *cobra.Command, args []string) error {
+		return checkUnsupportedFlags(opts)
+	}
 
 	root.AddCommand(newValidateCommand(opts))
 	root.AddCommand(newStateCommand(opts))
@@ -71,4 +83,16 @@ func Execute() int {
 		return ExitError
 	}
 	return ExitOK
+}
+
+// checkUnsupportedFlags refuses flags that are registered but not yet wired,
+// rather than accepting them and doing nothing. Each entry here is a promise
+// the CLI cannot currently keep; the fix is to implement it and delete the
+// entry, never to delete the entry alone.
+func checkUnsupportedFlags(opts *GlobalOptions) error {
+	if len(opts.VarFiles) > 0 {
+		return errors.New("--var-file is not supported yet; variable files arrive with the " +
+			"variable system. Pass individual variables with --var name=value")
+	}
+	return nil
 }
