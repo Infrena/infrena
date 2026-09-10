@@ -111,6 +111,12 @@ func diffAttributes(addr address.Address, def *schema.ResourceDefinition, desire
 		reasons = append(reasons, ChangeReason{Attribute: name, ForceNew: attr.ForceNew, Note: note})
 	}
 
+	// Redundant with unionKeys above, which already returns names sorted, so
+	// reasons are appended in sorted order — measured: neutralising this
+	// sort alone leaves the whole suite green, while neutralising unionKeys'
+	// fails TestRenderIsDeterministicAcrossRepeatedCalls. Kept because the
+	// loop appends from three separate branches and a fourth added later
+	// could easily not come from unionKeys' sequence.
 	sortReasons(reasons)
 	return reasons, ds
 }

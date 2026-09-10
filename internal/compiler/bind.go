@@ -206,6 +206,14 @@ func variableScope(opts Options) map[string]value.Value {
 
 // sortedAttributeNames returns an attribute map's keys in sorted order, so
 // resolution and diagnostics do not depend on Go's randomised map order.
+//
+// Redundancy note (measured): removing this sort fails nothing in the suite.
+// Nothing downstream re-sorts it — what it orders is the sequence in which
+// per-attribute diagnostics are emitted for ONE resource — and no fixture
+// today has two failing attributes on one resource, which is the only shape
+// that could observe it. It is kept: the alternative is diagnostics that
+// reorder themselves between runs, which is invisible in a test suite and
+// obvious to a user diffing two outputs.
 func sortedAttributeNames(attrs map[string]config.AttributeDecl) []string {
 	out := make([]string, 0, len(attrs))
 	for name := range attrs {
@@ -217,6 +225,11 @@ func sortedAttributeNames(attrs map[string]config.AttributeDecl) []string {
 
 // sortedNames returns a name set's members in sorted order, for diagnostics
 // that list known resources.
+//
+// Redundancy note (measured): removing this sort fails nothing. It orders a
+// list printed INSIDE one diagnostic's text, and no fixture has enough
+// candidate names for an unsorted order to differ from a sorted one. Same
+// ruling as sortedAttributeNames above.
 func sortedNames(set map[string]bool) []string {
 	out := make([]string, 0, len(set))
 	for name := range set {
@@ -227,6 +240,13 @@ func sortedNames(set map[string]bool) []string {
 }
 
 // sortedAddresses returns an edge set as addresses, sorted canonically.
+//
+// LOAD-BEARING, unlike the two sorts above, and pinned:
+// TestBindSortsDependsOnEveryTime (bind_test.go) fails without it. This is
+// what puts ResolvedResource.DependsOn in canonical order, built from a map,
+// and it is what makes ResolvedConfig.Hash's own sort.Strings(deps)
+// redundant — invariant 6 (plan determinism) rests on one of the two, and
+// each now has its own test so that removing either is caught.
 func sortedAddresses(edges map[string]value.Origin) []address.Address {
 	out := make([]address.Address, 0, len(edges))
 	for name := range edges {

@@ -58,6 +58,12 @@ func (r ResolvedResource) Desired() (DesiredResource, error) {
 		attrs[name] = v
 	}
 	if len(unresolved) > 0 {
+		// Redundancy note (measured): removing this sort fails nothing —
+		// the names it orders appear inside one error message, and no
+		// fixture has two unresolved attributes on one resource. Kept
+		// because this error reaches a user verbatim, and an error string
+		// that reorders itself between identical runs is the kind of
+		// nondeterminism that makes a tool look untrustworthy.
 		sort.Strings(unresolved)
 		return DesiredResource{}, fmt.Errorf("%s: attributes still unknown: %v", r.Address, unresolved)
 	}

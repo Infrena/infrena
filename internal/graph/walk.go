@@ -139,6 +139,14 @@ func (w *Walk[T]) mustBeDispatched(method, id string) {
 // rather than holding a *Graph[T]; the graph is finished being built by the
 // time a Walk exists (Add and Edge are always complete before Walk is
 // called), so nothing here needs the rest of Graph's API.
+//
+// Redundancy note (measured): removing this sort fails nothing. Both callers
+// feed their results back through a sort that IS pinned — Ready sorts its
+// ids (walk.go, 8/8 caught) and Skip sorts skippedIDs before returning
+// (8/8) — so an unsorted traversal order here cannot reach a caller. Kept
+// because "the traversal itself is deterministic" is a cheaper thing to
+// keep true than to re-establish after a future caller reads the traversal
+// order directly.
 func (w *Walk[T]) sortedOut(id string) []string {
 	next := w.out[id]
 	out := make([]string, 0, len(next))

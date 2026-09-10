@@ -155,6 +155,14 @@ func renderMarker(k OpKind, color bool) string {
 // renderForcedBy names the attributes whose change forced a replacement,
 // sorted so Render's own output does not depend on the order Compute
 // produced Reasons in.
+//
+// Redundant with diff.go's sortReasons, which sorts Reasons before Compute
+// ever returns them, which is in turn redundant with unionKeys building them
+// in sorted order in the first place — three sorts, one property. Kept
+// because Render is documented as pure in its argument: a Plan from any
+// other producer (M4 reads one back from disk) gets the same output. Pinned
+// by TestRenderForcedByIsSortedRegardlessOfReasonOrder, which hands it the
+// unsorted Reasons Compute would never produce.
 func renderForcedBy(reasons []ChangeReason) string {
 	var names []string
 	for _, r := range reasons {

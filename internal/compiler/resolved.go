@@ -76,6 +76,13 @@ func (c ResolvedConfig) Hash() (string, error) {
 		for _, d := range r.DependsOn {
 			deps = append(deps, d.String())
 		}
+		// Redundant with bind.go's sortedAddresses, which already sorted
+		// DependsOn when it built it from a map — deliberately kept as
+		// defence in depth, because Hash is a pure function of the
+		// ResolvedConfig it is handed and M4 will hand it configs from
+		// sources other than bind. Pinned in its own right by
+		// TestHashIsIndependentOfDependencyOrder (resolved_test.go), which
+		// hands Hash the unsorted input bind would never produce.
 		sort.Strings(deps)
 		for _, d := range deps {
 			write("depends_on", d)

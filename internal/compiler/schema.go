@@ -42,6 +42,11 @@ func bindSchemas(cfg *ResolvedConfig, reg *registry.Registry, opts Options) diag
 }
 
 // checkConfiguredAttributes rejects what configuration must not set.
+// Redundancy note (measured): removing the sort below fails nothing. It
+// orders the per-attribute diagnostics this function emits for one resource,
+// and no fixture has two rejected attributes on one resource. Kept for the
+// same reason as bind.go's sortedAttributeNames: unstable diagnostic order
+// is a user-visible defect no test would notice.
 func checkConfiguredAttributes(attrs map[string]value.Value, def *schema.ResourceDefinition, origin value.Origin, ds *diag.Diagnostics) {
 	names := make([]string, 0, len(attrs))
 	for name := range attrs {
@@ -140,6 +145,12 @@ func checkConfiguredAttributes(attrs map[string]value.Value, def *schema.Resourc
 // model cannot express, or one that does not match its attribute's declared
 // kind, is a provider bug and is reported rather than silently filled in —
 // see checkedDefault.
+//
+// Redundancy note (measured): removing the sort below fails nothing. Filling
+// defaults is order-independent — each attribute is independent of the
+// others — so the sort exists only so that any DIAGNOSTICS a bad default
+// resolver produces come out in a stable order. No fixture has two bad
+// defaults on one resource, which is the only way to observe it.
 func applyDefaults(attrs map[string]value.Value, def *schema.ResourceDefinition, ctx schema.DefaultContext, origin value.Origin, ds *diag.Diagnostics) {
 	names := make([]string, 0, len(def.Attributes))
 	for name := range def.Attributes {
@@ -286,6 +297,12 @@ func environmentType(name string) string {
 
 // attributeNames returns a definition's attribute names in sorted order, for
 // diagnostics that list what a resource type supports.
+//
+// Redundancy note (measured): removing this sort fails nothing, because the
+// list it orders appears inside one diagnostic's text and every fixture that
+// triggers it has too few attributes for the orders to differ. It is the
+// most user-visible of this file's three: "did you mean" style suggestions
+// that shuffle between runs read as a broken tool.
 func attributeNames(def *schema.ResourceDefinition) []string {
 	out := make([]string, 0, len(def.Attributes))
 	for name := range def.Attributes {

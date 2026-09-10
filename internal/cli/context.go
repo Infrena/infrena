@@ -33,6 +33,15 @@ func backendFor(dir string) *state.Local {
 
 // sortedAttributeKeys lists an attribute map's keys in sorted order, so
 // output is deterministic across runs.
+//
+// Redundancy note (measured): removing this sort fails nothing, and unlike
+// most of its siblings it has no upstream protector at all — it is the ONLY
+// thing making `infra state show`'s attribute order stable. What hides it is
+// fixture size: the tests that exercise state show print resources with too
+// few attributes for a randomised map order to differ from a sorted one. The
+// property is the same one TestRenderIsDeterministicAcrossRepeatedCalls
+// pins for plan output; this is its `state show` counterpart, and it is
+// untested rather than redundant.
 func sortedAttributeKeys(attrs map[string]value.Value) []string {
 	names := make([]string, 0, len(attrs))
 	for name := range attrs {
