@@ -1062,6 +1062,36 @@ func TestFunctionsPreserveSensitivity(t *testing.T) {
 	}
 }
 
+func TestSensitivityUnionsEveryArgumentPosition(t *testing.T) {
+	// Both leaks this project shipped were an argument position omitted from a
+	// hand-written union: join's separator, then replace's search string. A
+	// secret search term reveals its own position through an unclassified
+	// result, which is a side channel on the secret's content.
+	secret := str("hunter2").WithSensitive(true)
+	plain := str("plain")
+
+	cases := []struct {
+		name string
+		fn   string
+		args []value.Value
+	}{
+		{"replace: sensitive subject", "replace", []value.Value{secret, plain, plain}},
+		{"replace: sensitive search term", "replace", []value.Value{plain, secret, plain}},
+		{"replace: sensitive replacement", "replace", []value.Value{plain, plain, secret}},
+		{"join: sensitive separator", "join", []value.Value{secret, value.List([]value.Value{plain}, value.SourceExplicit)}},
+		{"join: sensitive element", "join", []value.Value{plain, value.List([]value.Value{plain, secret}, value.SourceExplicit)}},
+		{"lower: sensitive subject", "lower", []value.Value{secret}},
+		{"upper: sensitive subject", "upper", []value.Value{secret}},
+		{"trim: sensitive subject", "trim", []value.Value{secret}},
+	}
+
+	for _, tc := range cases {
+		if got := call(t, tc.fn, tc.args...); !got.Sensitive {
+			t.Errorf("%s: result is not sensitive — a secret in any argument position classifies the result", tc.name)
+		}
+	}
+}
+
 func TestWrongArityIsAnError(t *testing.T) {
 	fn, _, _ := Lookup("replace")
 	if _, err := fn([]value.Value{str("only-one")}); err == nil {
@@ -1153,6 +1183,48 @@ var builtins = map[string]builtin{
 	"default": {arity: 2, fn: defaultFunc},
 }
 
+// sensitiveAnywhere reports whether a value, or any leaf inside it, is
+// sensitive. Sensitivity is a per-leaf property: a list is classified when any
+// element is, even when the list itself carries no flag.
+func sensitiveAnywhere(v value.Value) bool {
+	if v.Sensitive {
+		return true
+	}
+	switch v.Kind {
+	case value.KindList:
+		items, _ := v.Raw.([]value.Value)
+		for _, item := range items {
+			if sensitiveAnywhere(item) {
+				return true
+			}
+		}
+	case value.KindMap:
+		m, _ := v.Raw.(map[string]value.Value)
+		for _, item := range m {
+			if sensitiveAnywhere(item) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// anySensitive reports whether any argument contributes sensitivity.
+//
+// Every built-in whose result derives from all its arguments uses this rather
+// than hand-writing its own union. Hand-written unions are how this shipped
+// wrong twice: join() omitted its separator, and replace() omitted its search
+// string — which let a secret search term reveal its own position through an
+// unclassified result.
+func anySensitive(args ...value.Value) bool {
+	for _, a := range args {
+		if sensitiveAnywhere(a) {
+			return true
+		}
+	}
+	return false
+}
+
 // stringFunc lifts a string transform into a Func, preserving sensitivity:
 // transforming a secret does not declassify it.
 func stringFunc(transform func(string) string) Func {
@@ -1165,7 +1237,7 @@ func stringFunc(transform func(string) string) Func {
 			return value.Value{}, fmt.Errorf("expected a string, got %s", args[0].Kind)
 		}
 		return value.String(transform(s), value.SourceComputed).
-			WithSensitive(args[0].Sensitive).
+			WithSensitive(anySensitive(args...)).
 			WithOrigin(args[0].Origin), nil
 	}
 }
@@ -1187,7 +1259,7 @@ func replaceFunc(args []value.Value) (value.Value, error) {
 		return value.Value{}, fmt.Errorf("third argument must be a string, got %s", args[2].Kind)
 	}
 	return value.String(strings.ReplaceAll(in, old, replacement), value.SourceComputed).
-		WithSensitive(args[0].Sensitive || args[2].Sensitive).
+		WithSensitive(anySensitive(args...)).
 		WithOrigin(args[0].Origin), nil
 }
 
@@ -1205,20 +1277,17 @@ func joinFunc(args []value.Value) (value.Value, error) {
 	}
 
 	parts := make([]string, 0, len(items))
-	// The separator is part of the result, so a secret separator classifies it
-	// just as a secret element does. Sensitivity is a union over everything
-	// that contributes.
-	sensitive := args[0].Sensitive || args[1].Sensitive
 	for _, item := range items {
 		s, ok := item.AsString()
 		if !ok {
 			return value.Value{}, fmt.Errorf("join needs a list of strings, found %s", item.Kind)
 		}
-		sensitive = sensitive || item.Sensitive
 		parts = append(parts, s)
 	}
+	// anySensitive recurses into the list, so a secret element classifies the
+	// result just as a secret separator does.
 	return value.String(strings.Join(parts, sep), value.SourceComputed).
-		WithSensitive(sensitive).
+		WithSensitive(anySensitive(args...)).
 		WithOrigin(args[1].Origin), nil
 }
 
