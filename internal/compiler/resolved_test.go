@@ -97,6 +97,47 @@ func TestHashIncludesLifecycle(t *testing.T) {
 	}
 }
 
+func TestHashDistinguishesDifferentUnresolvedReferences(t *testing.T) {
+	// Both values are unknown at compile time, so everything Hash() looked at
+	// before — kind, source, known, sensitive — is identical. What differs is
+	// which resource the attribute will resolve from, which is the whole point
+	// of a reference.
+	unknownRef := func(res, attr string) value.Value {
+		v := value.Unknown(value.KindString, value.SourceComputed)
+		v.Expr = &value.Expr{
+			Op:  value.OpResourceRef,
+			Ref: value.Reference{Resource: res, Attribute: attr},
+		}
+		return v
+	}
+
+	a := cfg(res("db", "test.database", map[string]value.Value{"network": unknownRef("network_a", "id")}))
+	b := cfg(res("db", "test.database", map[string]value.Value{"network": unknownRef("network_b", "id")}))
+
+	ha, _ := a.Hash()
+	hb, _ := b.Hash()
+	if ha == hb {
+		t.Error("two unresolved values referencing different resources must not hash alike — M6 staleness would miss a changed dependency")
+	}
+}
+
+func TestHashDistinguishesDifferentCalls(t *testing.T) {
+	call := func(fn string) value.Value {
+		v := value.Unknown(value.KindString, value.SourceComputed)
+		v.Expr = &value.Expr{
+			Op:       value.OpCall,
+			Function: fn,
+			Args:     []*value.Expr{{Op: value.OpResourceRef, Ref: value.Reference{Resource: "db", Attribute: "engine"}}},
+		}
+		return v
+	}
+	ha, _ := cfg(res("r", "test.network", map[string]value.Value{"cidr": call("lower")})).Hash()
+	hb, _ := cfg(res("r", "test.network", map[string]value.Value{"cidr": call("upper")})).Hash()
+	if ha == hb {
+		t.Error("lower() and upper() over the same reference are different desired states")
+	}
+}
+
 func TestHashChangesWithAValue(t *testing.T) {
 	a := cfg(res("db", "test.database", map[string]value.Value{"engine": value.String("postgres", value.SourceExplicit)}))
 	b := cfg(res("db", "test.database", map[string]value.Value{"engine": value.String("mysql", value.SourceExplicit)}))

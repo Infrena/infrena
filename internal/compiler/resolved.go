@@ -88,33 +88,53 @@ func (c ResolvedConfig) Hash() (string, error) {
 		sort.Strings(names)
 		for _, name := range names {
 			write("attr", name)
-			if err := hashValue(h, r.Attrs[name], write); err != nil {
-				return "", err
-			}
+			hashValue(r.Attrs[name], write)
 		}
 	}
 
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-func hashValue(h interface{ Write([]byte) (int, error) }, v value.Value, write func(...string)) error {
+var exprOpNames = map[value.ExprOp]string{
+	value.OpLiteral:     "literal",
+	value.OpVarRef:      "var",
+	value.OpResourceRef: "resource",
+	value.OpConcat:      "concat",
+	value.OpCall:        "call",
+}
+
+func hashValue(v value.Value, write func(...string)) {
 	write("kind", v.Kind.String(), "source", string(v.Source))
 	write("known", strconv.FormatBool(v.Known), "sensitive", strconv.FormatBool(v.Sensitive))
 	if !v.Known {
-		return nil
+		// An unresolved value's identity is the expression that will produce
+		// it. Without this, two configurations differing only in WHICH
+		// resource an attribute references hash identically — exactly the case
+		// references exist to express, and exactly what M6's staleness check
+		// must not miss.
+		hashExpr(v.Expr, write)
+		return
 	}
 
 	switch v.Kind {
 	case value.KindList:
-		items, _ := v.Raw.([]value.Value)
+		items, ok := v.Raw.([]value.Value)
+		if !ok {
+			// A malformed value must not hash like an empty one.
+			write("malformed", "list")
+			return
+		}
 		write("list", strconv.Itoa(len(items)))
 		for _, item := range items {
-			if err := hashValue(h, item, write); err != nil {
-				return err
-			}
+			hashValue(item, write)
 		}
 	case value.KindMap:
-		m, _ := v.Raw.(map[string]value.Value)
+		m, ok := v.Raw.(map[string]value.Value)
+		if !ok {
+			// A malformed value must not hash like an empty one.
+			write("malformed", "map")
+			return
+		}
 		keys := make([]string, 0, len(m))
 		for k := range m {
 			keys = append(keys, k)
@@ -123,12 +143,29 @@ func hashValue(h interface{ Write([]byte) (int, error) }, v value.Value, write f
 		write("map", strconv.Itoa(len(keys)))
 		for _, k := range keys {
 			write("key", k)
-			if err := hashValue(h, m[k], write); err != nil {
-				return err
-			}
+			hashValue(m[k], write)
 		}
 	default:
 		write("raw", fmt.Sprintf("%v", v.Raw))
 	}
-	return nil
+}
+
+// hashExpr folds an unresolved value's expression into the hash.
+func hashExpr(e *value.Expr, write func(...string)) {
+	if e == nil {
+		write("expr", "none")
+		return
+	}
+	name, ok := exprOpNames[e.Op]
+	if !ok {
+		name = "unknown-op"
+	}
+	write("expr", name, "fn", e.Function, "ref", e.Ref.String())
+	if e.Op == value.OpLiteral {
+		write("lit", fmt.Sprintf("%v", e.Literal.Raw))
+	}
+	write("args", strconv.Itoa(len(e.Args)))
+	for _, a := range e.Args {
+		hashExpr(a, write)
+	}
 }
