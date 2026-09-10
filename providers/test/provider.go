@@ -107,7 +107,7 @@ func (p *Provider) Create(ctx context.Context, d *resource.DesiredResource) (*re
 	id := c.AllocateID(idPrefix(d.Type))
 	attrs := map[string]any{}
 	for name, v := range d.Attrs {
-		attrs[name] = v.Raw
+		attrs[name] = toRaw(v)
 	}
 	for name, computed := range p.computedFor(d.Type, id) {
 		attrs[name] = computed
@@ -154,7 +154,7 @@ func (p *Provider) Update(ctx context.Context, current *resource.ResourceState, 
 		return nil, fmt.Errorf("cannot update %s: %s no longer exists", d.Address, current.ProviderID)
 	}
 	for name, v := range d.Attrs {
-		obj.Attributes[name] = v.Raw
+		obj.Attributes[name] = toRaw(v)
 	}
 	if err := c.Save(p.cloudPath); err != nil {
 		return nil, err
@@ -266,6 +266,34 @@ func idPrefix(resourceType string) string {
 		return "app"
 	default:
 		return strings.ReplaceAll(resourceType, ".", "-")
+	}
+}
+
+// toRaw converts a typed Value into the plain JSON datum the cloud file holds,
+// the inverse of fromRaw.
+//
+// Writing v.Raw directly would work for scalars but serialise a composite's
+// []value.Value or map[string]value.Value through Value.MarshalJSON, putting
+// the engine's internal wire objects into a file spec §8.4 requires a human to
+// be able to hand-edit — and reading them back would produce nested garbage.
+func toRaw(v value.Value) any {
+	switch v.Kind {
+	case value.KindList:
+		items, _ := v.Raw.([]value.Value)
+		out := make([]any, 0, len(items))
+		for _, item := range items {
+			out = append(out, toRaw(item))
+		}
+		return out
+	case value.KindMap:
+		items, _ := v.Raw.(map[string]value.Value)
+		out := make(map[string]any, len(items))
+		for k, item := range items {
+			out[k] = toRaw(item)
+		}
+		return out
+	default:
+		return v.Raw
 	}
 }
 

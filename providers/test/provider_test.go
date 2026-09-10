@@ -1,7 +1,10 @@
 package test
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -330,4 +333,96 @@ func TestCreateLeavesDependenciesNil(t *testing.T) {
 	if st.Dependencies != nil {
 		t.Errorf("Create set Dependencies to %v, want nil", st.Dependencies)
 	}
+}
+
+// TestCompositeAttributesRoundTripAsPlainJSON asserts the cloud file holds
+// plain JSON for a composite attribute.
+//
+// Writing v.Raw directly serialises []value.Value or map[string]value.Value
+// through Value.MarshalJSON, so the file gets the engine's internal wire
+// objects. That defeats spec §8.4's premise that a human can hand-edit fake
+// infrastructure, and reading it back yields a Map whose every leaf is itself a
+// four-key kind/known/raw/source Map — which presents in M3 as inexplicable
+// permanent drift rather than an obvious serialisation bug.
+func TestCompositeAttributesRoundTripAsPlainJSON(t *testing.T) {
+	p, path := newTestProvider(t)
+	tags := value.Map(map[string]value.Value{
+		"env":   value.String("dev", value.SourceExplicit),
+		"tier":  value.Int(2, value.SourceExplicit),
+		"inner": value.List([]value.Value{value.String("a", value.SourceExplicit)}, value.SourceExplicit),
+	}, value.SourceExplicit)
+
+	st, err := p.Create(context.Background(), desired("db", "test.database", map[string]value.Value{
+		"engine": value.String("postgres", value.SourceExplicit),
+		"tags":   tags,
+	}))
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	requirePlainTags := func(t *testing.T, when string) {
+		t.Helper()
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("ReadFile: %v", err)
+		}
+		if bytes.Contains(data, []byte(`"kind"`)) || bytes.Contains(data, []byte(`"source"`)) {
+			t.Errorf("cloud file after %s contains the engine's internal wire shape:\n%s", when, data)
+		}
+		var doc struct {
+			Resources map[string]struct {
+				Attributes map[string]any `json:"attributes"`
+			} `json:"resources"`
+		}
+		if err := json.Unmarshal(data, &doc); err != nil {
+			t.Fatalf("unmarshal cloud file: %v", err)
+		}
+		got, ok := doc.Resources[st.ProviderID].Attributes["tags"].(map[string]any)
+		if !ok {
+			t.Fatalf("tags is %T, want a plain JSON object", doc.Resources[st.ProviderID].Attributes["tags"])
+		}
+		if got["env"] != "dev" {
+			t.Errorf(`tags.env after %s = %#v, want "dev"`, when, got["env"])
+		}
+	}
+	requirePlainTags(t, "Create")
+
+	// And back out again, with no nesting garbage.
+	requireLeaves := func(t *testing.T, v value.Value, when string) {
+		t.Helper()
+		m, ok := v.Raw.(map[string]value.Value)
+		if !ok {
+			t.Fatalf("tags after %s is %T, want map[string]value.Value", when, v.Raw)
+		}
+		if got, ok := m["env"].AsString(); !ok || got != "dev" {
+			t.Errorf("tags.env after %s = %#v; want the string dev, not a re-wrapped wire object", when, m["env"])
+		}
+		if got, ok := m["tier"].AsInt(); !ok || got != 2 {
+			t.Errorf("tags.tier after %s = %#v, want 2", when, m["tier"])
+		}
+		items, ok := m["inner"].Raw.([]value.Value)
+		if !ok || len(items) != 1 {
+			t.Fatalf("tags.inner after %s = %#v, want a one-element list", when, m["inner"])
+		}
+		if got, ok := items[0].AsString(); !ok || got != "a" {
+			t.Errorf("tags.inner[0] after %s = %#v, want the string a", when, items[0])
+		}
+	}
+	requireLeaves(t, st.Attributes["tags"], "Create")
+
+	read, err := p.Read(context.Background(), st)
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	requireLeaves(t, read.Attributes["tags"], "Read")
+
+	updated, err := p.Update(context.Background(), st, desired("db", "test.database", map[string]value.Value{
+		"engine": value.String("postgres", value.SourceExplicit),
+		"tags":   tags,
+	}))
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	requirePlainTags(t, "Update")
+	requireLeaves(t, updated.Attributes["tags"], "Update")
 }

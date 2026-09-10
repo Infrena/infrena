@@ -8,8 +8,8 @@ import (
 // definitions returns the resource definitions the fake provider supports.
 // Their shapes are chosen to exercise the engine: test.network has no
 // dependencies, test.database has a ForceNew attribute plus a computed one
-// plus a sensitive one and requires a network, and test.application requires
-// a database.
+// plus a sensitive one plus a composite one and requires a network, and
+// test.application requires a database.
 func definitions() []*schema.ResourceDefinition {
 	return []*schema.ResourceDefinition{
 		{
@@ -35,6 +35,10 @@ func definitions() []*schema.ResourceDefinition {
 				}},
 				"password": {Kind: value.KindString, Sensitive: true, Description: "Administrator password"},
 				"network":  {Kind: value.KindString, Description: "Network this database sits in"},
+				// A composite attribute is deliberately present: without one,
+				// nothing exercises the conversion between a typed Value and
+				// the plain JSON the hand-editable cloud file must hold.
+				"tags":     {Kind: value.KindMap, Description: "Free-form labels"},
 				"endpoint": {Kind: value.KindString, Computed: true, Description: "Connection endpoint"},
 			},
 			Requirements: []schema.Requirement{{
