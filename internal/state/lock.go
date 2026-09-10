@@ -108,8 +108,8 @@ func (l *Local) requireOwnLock(environment string) error {
 		return fmt.Errorf("refusing to write state for %q: no lock is held; call Lock first: %w", environment, ErrNotLocked)
 	}
 	if held.PID != os.Getpid() || held.Host != hostname() {
-		return fmt.Errorf("refusing to write state for %q: locked by %s on %s (pid %d), not by this process: %w",
-			environment, held.User, held.Host, held.PID, ErrNotLocked)
+		return fmt.Errorf("refusing to write state for %q: locked by %s on %s (pid %d), not by this process; if that lock is stale, release it with `infra state unlock %s`: %w",
+			environment, held.User, held.Host, held.PID, environment, ErrNotLocked)
 	}
 	return nil
 }

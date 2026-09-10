@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"infra/pkg/address"
@@ -174,6 +175,14 @@ func TestPutWithoutLockRefuses(t *testing.T) {
 	if _, statErr := os.Stat(filepath.Join(root, "state", "dev.json")); !errors.Is(statErr, fs.ErrNotExist) {
 		t.Error("a refused Put must not have written a state file")
 	}
+	// This refusal is addressed to a programmer who called Put without ever
+	// calling Lock: there is no lock to unlock, so suggesting `infra state
+	// unlock` here would be actively misleading. That remedy belongs only on
+	// the other refusal, below, where a lock genuinely exists and might be
+	// stale.
+	if strings.Contains(err.Error(), "infra state unlock") {
+		t.Errorf("error = %q, must not suggest `infra state unlock` — no lock exists to unlock when Put is called without ever calling Lock", err.Error())
+	}
 }
 
 func TestPutRefusesWhenLockedByAnotherProcess(t *testing.T) {
@@ -196,6 +205,14 @@ func TestPutRefusesWhenLockedByAnotherProcess(t *testing.T) {
 	}
 	if !errors.Is(err, ErrNotLocked) {
 		t.Errorf("error = %v, want one wrapping ErrNotLocked", err)
+	}
+	// Unlike the no-lock-at-all case, a lock genuinely exists here and may
+	// simply be stale (the holder died, or is on another host) — so this
+	// refusal, addressed to whoever is stuck looking at it, must name the
+	// concrete remedy the same way Unlock's own conflict message already
+	// does.
+	if !strings.Contains(err.Error(), "infra state unlock production") {
+		t.Errorf("error = %q, want it to suggest `infra state unlock production` as the remedy for a stale lock held by another process", err.Error())
 	}
 }
 
