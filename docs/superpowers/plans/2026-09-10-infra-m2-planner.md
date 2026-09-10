@@ -1205,7 +1205,10 @@ func joinFunc(args []value.Value) (value.Value, error) {
 	}
 
 	parts := make([]string, 0, len(items))
-	sensitive := args[1].Sensitive
+	// The separator is part of the result, so a secret separator classifies it
+	// just as a secret element does. Sensitivity is a union over everything
+	// that contributes.
+	sensitive := args[0].Sensitive || args[1].Sensitive
 	for _, item := range items {
 		s, ok := item.AsString()
 		if !ok {
