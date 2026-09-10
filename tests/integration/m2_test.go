@@ -11,7 +11,7 @@ import (
 // writeM2State seeds a state file directly, standing in for the apply that M3
 // will provide. resources is keyed by address string in the shape
 // state.Decode expects: the JSON tags resource.ResourceState actually
-// carries (internal/pkg/resource/resource.go) — lowercase snake_case, e.g.
+// carries (pkg/resource/resource.go) — lowercase snake_case, e.g.
 // "provider_id" rather than "ProviderID" — plus value.Value's wire format
 // (kind/known/raw/source/sensitive) for each attribute. See stateResource and
 // wireAttr below.

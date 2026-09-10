@@ -70,19 +70,30 @@ func TestCreatesRunAfterWhatTheyDependOn(t *testing.T) {
 }
 
 func TestDestroysRunInReverseDependencyOrder(t *testing.T) {
+	// webapp depends on network, so the required order is destroy:webapp
+	// before destroy:network. The names are deliberately chosen so
+	// alphabetical order ("network" < "webapp") DISAGREES with that
+	// required order: graph.Layers breaks ties alphabetically, so if the
+	// destroy-side edge were never drawn at all, both nodes would land in
+	// one untied layer and sort_strings would put destroy:network first —
+	// which happens to be wrong. An earlier version of this test used
+	// "network" and "database", where the required order (destroy:database
+	// before destroy:network) coincided with alphabetical order, so the
+	// assertion passed even with the destroy-side edge logic deleted
+	// outright (Task 18 fix round 1 found this).
 	p := planWith(
 		Operation{Address: addr("network"), Type: "test.network", Kind: OpDestroy},
-		Operation{Address: addr("database"), Type: "test.database", Kind: OpDestroy},
+		Operation{Address: addr("webapp"), Type: "test.application", Kind: OpDestroy},
 	)
-	g, err := BuildExecution(p, depsFrom(map[string][]string{"network": {"database"}}))
+	g, err := BuildExecution(p, depsFrom(map[string][]string{"network": {"webapp"}}))
 	if err != nil {
 		t.Fatalf("BuildExecution: %v", err)
 	}
 
 	order := orderOf(t, g)
-	if indexOf(t, order, "destroy:database") > indexOf(t, order, "destroy:network") {
+	if indexOf(t, order, "destroy:webapp") > indexOf(t, order, "destroy:network") {
 		t.Errorf("order = %v; a dependent must be destroyed BEFORE what it depends on — "+
-			"destroying the network first would strand the database", order)
+			"destroying the network first would strand webapp", order)
 	}
 }
 
@@ -178,6 +189,39 @@ func TestOrderingIsDeterministic(t *testing.T) {
 		if got := strings.Join(orderOf(t, g), ","); got != first {
 			t.Fatalf("ordering varies between runs: %q then %q", first, got)
 		}
+	}
+}
+
+// TestForgetSharingADestroyEdgeDoesNotPanic is a regression test for a real
+// panic found during Task 18's fix round: an earlier version of addEdges
+// reconstructed each side's node ID from a "destroy:"/"create:" string
+// prefix rather than asking the node for its own ID. OpForget's
+// destroy-phase node renders as "forget:", not "destroy:" (see OpNode.ID),
+// so whenever a forgotten resource shared a destroy-side edge with another
+// operation, that reconstruction named a node — "destroy:<the forgotten
+// address>" — that was never Add-ed, and graph.Edge panicked. Keying `has`
+// to the OpNode itself, so every edge asks the node for ID() instead of
+// rebuilding one, is what fixes this; this test is what proves it stays
+// fixed.
+func TestForgetSharingADestroyEdgeDoesNotPanic(t *testing.T) {
+	p := planWith(
+		Operation{Address: addr("forgotten"), Type: "test.network", Kind: OpForget},
+		Operation{Address: addr("dependent"), Type: "test.database", Kind: OpDestroy},
+	)
+	// dependent depends on forgotten, so BuildExecution draws a
+	// destroy-side edge from dependent's destroy to forgotten's
+	// destroy-phase (forget) node.
+	g, err := BuildExecution(p, depsFrom(map[string][]string{"forgotten": {"dependent"}}))
+	if err != nil {
+		t.Fatalf("BuildExecution: %v", err)
+	}
+
+	order := orderOf(t, g)
+	if len(order) != 2 {
+		t.Fatalf("order = %v, want both the forget and the destroy scheduled", order)
+	}
+	if indexOf(t, order, "destroy:dependent") > indexOf(t, order, "forget:forgotten") {
+		t.Errorf("order = %v; the dependent must be destroyed before the resource it depends on is forgotten", order)
 	}
 }
 

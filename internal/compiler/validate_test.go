@@ -288,3 +288,41 @@ func TestCycleDiagnosticShapeIsStable(t *testing.T) {
 		}
 	}
 }
+
+// TestCycleForSkipsDanglingReferenceWithoutPanicking is a regression test
+// for the skip in cycleFor: "if _, ok := cfg.Get(dep); !ok { continue }".
+// Ordinarily stage 6 (bind) already rejects a reference to a resource
+// absent from configuration before validateGraph ever runs, but cycleFor
+// builds its own graph.Graph directly from DependsOn and calls g.Edge for
+// every dependency — including one that names a resource that was never
+// g.Add-ed to this graph, which graph.Edge panics on (see
+// internal/graph/graph.go's Edge). The skip is what turns that would-be
+// crash into "not a node in this graph, nothing to walk into", exactly as
+// firstCycle's equivalent skip did before this task's swap. This
+// configuration combines a dangling reference with a genuine, unrelated
+// cycle so the test also confirms the dangling reference does not swallow
+// the real diagnostic.
+func TestCycleForSkipsDanglingReferenceWithoutPanicking(t *testing.T) {
+	a := res("a", "test.network", map[string]value.Value{"cidr": value.String("10.0.0.0/16", value.SourceExplicit)})
+	b := res("b", "test.network", map[string]value.Value{"cidr": value.String("10.0.1.0/16", value.SourceExplicit)})
+	c := res("c", "test.network", map[string]value.Value{"cidr": value.String("10.0.2.0/16", value.SourceExplicit)})
+	a.DependsOn = []address.Address{{Name: "b"}}
+	b.DependsOn = []address.Address{{Name: "a"}}
+	// c depends on a resource absent from this configuration entirely.
+	c.DependsOn = []address.Address{{Name: "ghost"}}
+	graph := cfg(a, b, c)
+
+	ds := validateGraph(&graph, testRegistry(t))
+	if !ds.HasErrors() {
+		t.Fatal("the a<->b cycle must still be reported even though c references a resource absent from configuration")
+	}
+	found := false
+	for _, d := range ds {
+		if strings.HasPrefix(d.Summary, "dependency cycle: ") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("no cycle diagnostic among: %+v", ds)
+	}
+}

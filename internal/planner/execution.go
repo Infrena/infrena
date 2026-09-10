@@ -98,8 +98,13 @@ func BuildExecution(p *Plan, deps func(address.Address) []address.Address) (*gra
 			add(OpNode{Address: op.Address, Kind: op.Kind, Phase: PhaseCreate})
 		case OpDestroy, OpForget:
 			add(OpNode{Address: op.Address, Kind: op.Kind, Phase: PhaseDestroy})
-		default: // OpCreate, OpUpdate
+		case OpCreate, OpUpdate:
 			add(OpNode{Address: op.Address, Kind: op.Kind, Phase: PhaseCreate})
+			// No default: OpKind is a closed enum (see plan.go). A future kind
+			// landing here unhandled should be visible — nothing added, so it
+			// never becomes a node and never gets scheduled — rather than
+			// silently absorbed as a create, which could be actively wrong for
+			// whatever that kind turns out to mean.
 		}
 	}
 
@@ -114,7 +119,22 @@ func BuildExecution(p *Plan, deps func(address.Address) []address.Address) (*gra
 			// other edge in this function relates two DIFFERENT addresses,
 			// so without this, a dependent-free replacement's own pair is
 			// left unconstrained and can be scheduled in either order.
-			d, c := has[op.Address.String()][PhaseDestroy], has[op.Address.String()][PhaseCreate]
+			//
+			// Both lookups are checked explicitly, unlike every other Edge
+			// call in this file which already goes through an `ok` check
+			// via addEdges: the node-adding switch above and this check both
+			// key on op.Kind == OpReplace over the same p.Operations slice,
+			// so today they can never disagree. If that invariant is ever
+			// broken by an edit to one side and not the other, panicking
+			// here with a named cause is more legible than the alternative
+			// — Edge panicking on a zero-value OpNode whose ID() is
+			// "noop:<addr>", which reads as an unrelated mystery.
+			d, dok := has[op.Address.String()][PhaseDestroy]
+			c, cok := has[op.Address.String()][PhaseCreate]
+			if !dok || !cok {
+				panic("planner: BuildExecution: replace at " + op.Address.String() +
+					" is missing a phase node — the node-adding and edge-adding passes disagree")
+			}
 			g.Edge(d.ID(), c.ID())
 		}
 		for _, dependent := range deps(op.Address) {
