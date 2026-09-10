@@ -98,15 +98,7 @@ func newApplyCommand(opts *GlobalOptions) *cobra.Command {
 			// stale. Signal handling lives in internal/cli and never in the
 			// executor, so a library import cannot install a handler behind
 			// a caller's back.
-			return runInterruptible(environment, func(ctx context.Context) error {
-				ctx = state.WithOperation(ctx, "apply")
-				if _, err := backend.Lock(ctx, environment); err != nil {
-					// Lock's own error already names the holder (spec §9.2) —
-					// nothing to add.
-					return err
-				}
-				defer releaseLock(backend, environment, cmd.ErrOrStderr())
-
+			return withLockedEnvironment(environment, "apply", backend, cmd.ErrOrStderr(), func(ctx context.Context) error {
 				// Re-plan inside the lock — see this task's doc comment above
 				// for why: apply must never execute against state or provider
 				// reality gathered before the lock was held.

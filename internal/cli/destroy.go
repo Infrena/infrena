@@ -11,7 +11,6 @@ import (
 	"infra/internal/compiler"
 	"infra/internal/executor"
 	"infra/internal/planner"
-	"infra/internal/state"
 )
 
 // newDestroyCommand builds `infra destroy <environment>`: plan the removal
@@ -75,15 +74,7 @@ func newDestroyCommand(opts *GlobalOptions) *cobra.Command {
 
 			// Same seam as apply (Task 13): Task 11's runInterruptible owns
 			// SIGINT, and Task 12's executor.Render owns the result summary.
-			return runInterruptible(environment, func(ctx context.Context) error {
-				ctx = state.WithOperation(ctx, "destroy")
-				if _, err := backend.Lock(ctx, environment); err != nil {
-					// Lock's own error already names the holder (spec §9.2) —
-					// nothing to add.
-					return err
-				}
-				defer releaseLock(backend, environment, cmd.ErrOrStderr())
-
+			return withLockedEnvironment(environment, "destroy", backend, cmd.ErrOrStderr(), func(ctx context.Context) error {
 				// Re-plan inside the lock — apply's doc comment explains why:
 				// destroy must never execute against state or provider
 				// reality gathered before the lock was held.

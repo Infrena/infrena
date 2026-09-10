@@ -667,3 +667,115 @@ resources:
 	requireContains(t, d.Stdout, "<sensitive>")
 	requireContains(t, d.Stdout, marker)
 }
+
+// setCloudLatency adds a simulated per-operation delay to an EXISTING fake
+// cloud, preserving the resources already in it. seedCloudLatency above
+// writes a fresh, empty document, which is right for a test whose apply is
+// about to create everything and wrong for one that must first seed
+// resources and then slow their deletion down.
+func setCloudLatency(t *testing.T, dir string, ms int) {
+	t.Helper()
+	path := filepath.Join(dir, ".infra", "fake-cloud.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading fake cloud: %v", err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(data, &doc); err != nil {
+		t.Fatalf("parsing fake cloud: %v", err)
+	}
+	doc["latency_ms"] = ms
+	out, err := json.MarshalIndent(doc, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal fake cloud: %v", err)
+	}
+	if err := os.WriteFile(path, out, 0o600); err != nil {
+		t.Fatalf("write fake cloud: %v", err)
+	}
+}
+
+// waitForLock blocks until environment's lock file exists, so a test can
+// signal a run at a point it KNOWS the lock is held rather than at a
+// wall-clock guess. Polling a file the run creates is the only ordering
+// signal available across a process boundary, and it is exact: the lock
+// existing is precisely the condition whose cleanup is under test.
+func waitForLock(t *testing.T, dir, environment string) {
+	t.Helper()
+	path := filepath.Join(dir, ".infra", "state", environment+".lock")
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(path); err == nil {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %s to be locked", environment)
+}
+
+// TestDestroyOnInterruptExitsCleanlyAndReleasesTheLock is the destroy-side
+// counterpart of the apply interrupt test above.
+//
+// It exists because measurement inverted an assumption: removing
+// runInterruptible from apply's copy of the lock preamble was caught here,
+// and from refresh's copy was caught by internal/cli, but removing it from
+// destroy's copy failed NOTHING in the whole suite. Destroy is the command
+// where a stranded lock is worst — the environment is mid-teardown, and the
+// next destroy is refused — and it was the one nothing pinned.
+//
+// Without the wrapper, ctx is never cancellable and SIGINT gets its default
+// disposition: the process dies where it stands, with the lock file still
+// on disk. With it, the run unwinds through its deferred release. So the
+// discriminating assertion is the lock, not the exit code — and the signal
+// is sent once the lock file is observed to exist, which makes the test
+// exact rather than a wall-clock guess.
+//
+// The structural fix (withLockedEnvironment, internal/cli/interrupt.go) is
+// what makes the omission unrepresentable going forward; this pins the
+// behaviour for the one command that had no evidence of it at all.
+func TestDestroyOnInterruptExitsCleanlyAndReleasesTheLock(t *testing.T) {
+	dir := project(t, `
+project: myapp
+resources:
+  first:
+    type: test.network
+    cidr: 10.20.0.0/16
+  second:
+    type: test.network
+    cidr: 10.21.0.0/16
+`)
+	// Exit code 2 is "changes were applied" (root.go's errChanges arm), not
+	// a failure — the same code the MVP round trip asserts for a first apply.
+	if res := run(t, dir, "apply", "dev", "--auto-approve"); res.ExitCode != 2 {
+		t.Fatalf("seeding apply exit code %d, want 2:\n%s", res.ExitCode, res.combined())
+	}
+	// Slow enough that the run is still inside the lock when the signal
+	// lands, however loaded the machine is.
+	setCloudLatency(t, dir, 1500)
+
+	cmd, stdout, stderr := startAsync(t, dir, "destroy", "dev", "--auto-approve", "--parallelism", "1")
+	waitForLock(t, dir, "dev")
+	if err := cmd.Process.Signal(os.Interrupt); err != nil {
+		t.Fatalf("sending SIGINT: %v", err)
+	}
+
+	waitErr := cmd.Wait()
+	if waitErr == nil {
+		t.Fatalf("process exited 0, want non-zero (interrupted is not success)\n%s%s", stdout.String(), stderr.String())
+	}
+	if _, ok := waitErr.(*exec.ExitError); !ok {
+		t.Fatalf("waiting for the interrupted destroy: %v", waitErr)
+	}
+
+	lockPath := filepath.Join(dir, ".infra", "state", "dev.lock")
+	if _, err := os.Stat(lockPath); !os.IsNotExist(err) {
+		t.Fatalf("the lock on dev is still held after an interrupted destroy (Stat: %v)\n%s%s",
+			err, stdout.String(), stderr.String())
+	}
+
+	// The lock file being gone is the mechanism; this is the consequence a
+	// user actually meets.
+	next := run(t, dir, "destroy", "dev", "--auto-approve")
+	if strings.Contains(next.Stderr, "is locked") {
+		t.Fatalf("subsequent destroy refused as locked — the interrupted run left the lock held:\n%s", next.combined())
+	}
+}

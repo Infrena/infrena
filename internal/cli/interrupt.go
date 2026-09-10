@@ -4,8 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
+
+	"infra/internal/state"
 )
 
 // errInterrupted signals that a run stopped because of a SIGINT rather than
@@ -115,4 +118,49 @@ func runInterruptible(environment string, fn func(ctx context.Context) error) er
 			return nil // unreachable; os.Exit does not return
 		}
 	}
+}
+
+// withLockedEnvironment runs fn holding environment's lock, under a context
+// SIGINT cancels, with the lock released on every exit path.
+//
+// It exists because apply, destroy and refresh — spec §9.2's three
+// whole-run lock holders — had five identical lines each:
+//
+//	runInterruptible(env, func(ctx context.Context) error {
+//	    ctx = state.WithOperation(ctx, "<op>")
+//	    if _, err := backend.Lock(ctx, env); err != nil { return err }
+//	    defer releaseLock(backend, env, errOut)
+//	    ...
+//	})
+//
+// Duplicated five lines are not the problem; what they guard is. Removing
+// runInterruptible from destroy's copy failed NOTHING in the whole suite —
+// measured — while apply's and refresh's copies each happened to be pinned.
+// So the command where stranding a lock is worst was the one where dropping
+// the wrapper was invisible, and the reason is simply that it was three
+// separate opportunities to forget rather than one.
+//
+// Folding them into one unexported helper makes the omission
+// unrepresentable rather than merely detectable: a command cannot take the
+// lock without also getting SIGINT handling and the release, because there
+// is no longer a place to put the Lock call that skips them. That is the
+// same reasoning that settled operationContext (internal/state) — the
+// guarantee is structural, so no future command has to remember it and no
+// test has to catch them not remembering.
+//
+// operation is the label recorded in the lock file (spec §9.2: the next
+// run's error names who holds it and what they are doing), so it is
+// required rather than derived — a command whose lock says "apply" while it
+// destroys is worse than one that says nothing.
+func withLockedEnvironment(environment, operation string, backend *state.Local, errOut io.Writer, fn func(ctx context.Context) error) error {
+	return runInterruptible(environment, func(ctx context.Context) error {
+		ctx = state.WithOperation(ctx, operation)
+		if _, err := backend.Lock(ctx, environment); err != nil {
+			// Lock's own error already names the holder (spec §9.2) —
+			// nothing to add.
+			return err
+		}
+		defer releaseLock(backend, environment, errOut)
+		return fn(ctx)
+	})
 }

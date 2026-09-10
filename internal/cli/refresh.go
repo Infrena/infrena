@@ -55,15 +55,7 @@ func newRefreshCommand(opts *GlobalOptions) *cobra.Command {
 			reg := buildRegistry(opts.Dir)
 			backend := backendFor(opts.Dir)
 
-			return runInterruptible(environment, func(ctx context.Context) error {
-				ctx = state.WithOperation(ctx, "refresh")
-				if _, err := backend.Lock(ctx, environment); err != nil {
-					// Lock's own error already names the holder (spec §9.2) —
-					// nothing to add.
-					return err
-				}
-				defer releaseLock(backend, environment, cmd.ErrOrStderr())
-
+			return withLockedEnvironment(environment, "refresh", backend, cmd.ErrOrStderr(), func(ctx context.Context) error {
 				st, err := backend.Get(ctx, environment)
 				if err != nil {
 					return err
