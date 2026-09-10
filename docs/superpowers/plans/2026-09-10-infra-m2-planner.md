@@ -1573,9 +1573,21 @@ func evaluateConcat(e *value.Expr, scope Scope, ds *diag.Diagnostics) value.Valu
 			known = false
 			continue
 		}
-		s, ok := v.AsString()
+		s, ok := stringify(v)
 		if !ok {
-			s = stringify(v)
+			// A composite cannot be interpolated into a string. Schema binding
+			// (Task 7) will eventually reject this before evaluation runs, but
+			// it does not exist yet, so the evaluator must refuse it here
+			// rather than emitting "" — a fabricated empty string is a plan
+			// that lies about what it will build.
+			ds.Add(diag.Diagnostic{
+				Severity: diag.SeverityError,
+				Summary:  "cannot interpolate a " + v.Kind.String() + " value into a string",
+				Detail:   "Interpolation accepts only string, integer, float and boolean values.",
+				Origin:   arg.Origin,
+			})
+			known = false
+			continue
 		}
 		b.WriteString(s)
 	}
@@ -1628,6 +1640,14 @@ func evaluateCall(e *value.Expr, scope Scope, ds *diag.Diagnostics) value.Value 
 		})
 		return unknownFrom(e, value.KindString, sensitive)
 	}
+	// `default` may return an argument verbatim, and that argument's Expr
+	// points only at the sub-expression it came from. If the result is still
+	// unknown, rebuild it around the whole call — otherwise M3 re-evaluating
+	// it would resolve the fallback directly and permanently skip the
+	// primary-versus-fallback choice this call exists to make.
+	if !out.Known {
+		return unknownFrom(e, out.Kind, out.Sensitive || sensitive)
+	}
 	return out.WithSensitive(out.Sensitive || sensitive).WithOrigin(e.Origin)
 }
 
@@ -1640,23 +1660,26 @@ func unknownFrom(e *value.Expr, kind value.Kind, sensitive bool) value.Value {
 	return v
 }
 
-// stringify renders a non-string value for concatenation. It never reaches a
-// composite: schema binding rejects a composite inside an interpolation before
-// evaluation runs.
-func stringify(v value.Value) string {
+// stringify renders a scalar for concatenation, reporting whether it could.
+//
+// It returns false for a composite rather than an empty string. The caller
+// turns that into a diagnostic: silently splicing "" into a result would make
+// the plan describe infrastructure nobody asked for.
+func stringify(v value.Value) (string, bool) {
 	switch v.Kind {
+	case value.KindString:
+		return v.AsString()
 	case value.KindInt:
-		n, _ := v.AsInt()
-		return strconv.FormatInt(n, 10)
+		n, ok := v.AsInt()
+		return strconv.FormatInt(n, 10), ok
 	case value.KindBool:
-		b, _ := v.AsBool()
-		return strconv.FormatBool(b)
+		b, ok := v.AsBool()
+		return strconv.FormatBool(b), ok
 	case value.KindFloat:
-		f, _ := v.Raw.(float64)
-		return strconv.FormatFloat(f, 'g', -1, 64)
+		f, ok := v.Raw.(float64)
+		return strconv.FormatFloat(f, 'g', -1, 64), ok
 	default:
-		s, _ := v.AsString()
-		return s
+		return "", false
 	}
 }
 ```
