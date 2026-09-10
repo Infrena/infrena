@@ -3,6 +3,7 @@ package executor
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -336,5 +337,205 @@ func TestRecordFailureEmitsExactlyOneEventSkippedPerStrandedNode(t *testing.T) {
 	// guard) would tend to show up here first.
 	if _, ok := byAddr[d.Address.String()]; ok {
 		t.Fatalf("unexpected EventSkipped for independent branch d: %+v", skipEvents)
+	}
+}
+
+// TestApplyEmitsExactlyOneEventSkippedPerStrandedNodeThroughOnEvent is
+// TestRecordFailureEmitsExactlyOneEventSkippedPerStrandedNode's end-to-end
+// counterpart: it drives a real Apply run through Options.OnEvent, the
+// actual production entry point a caller (the CLI, eventually) observes,
+// rather than calling tracker directly. a's create fails; b depends on a;
+// c depends on b, so ONE failure strands TWO nodes transitively — a single
+// stranded node cannot distinguish "one event per skipped node" from "one
+// event per failure" (see the sibling test above for why that matters). d
+// is unrelated and succeeds.
+//
+// Options.OnEvent is called concurrently from worker goroutines (its own
+// doc comment says so), so the collector below is mutex-guarded — recording
+// without one would be a data race Apply's real worker pool can actually
+// trigger, caught by `go test -race`.
+func TestApplyEmitsExactlyOneEventSkippedPerStrandedNodeThroughOnEvent(t *testing.T) {
+	cloudPath := t.TempDir() + "/fake-cloud.json"
+	cloud := &testprovider.Cloud{
+		Resources: map[string]*testprovider.CloudResource{},
+		Failures: []testprovider.FailureRule{
+			{Op: "create", Address: "a", Nth: 1},
+		},
+	}
+	if err := cloud.Save(cloudPath); err != nil {
+		t.Fatalf("seeding fake cloud: %v", err)
+	}
+
+	reg := registry.New()
+	if err := reg.Register(testprovider.New(cloudPath)); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	p := &planner.Plan{
+		Version: planner.PlanVersion,
+		Operations: []planner.Operation{
+			{Address: address.Address{Name: "a"}, Type: "test.network", Kind: planner.OpCreate,
+				After: map[string]value.Value{"cidr": value.String("10.0.0.0/24", value.SourceExplicit)}},
+			{Address: address.Address{Name: "b"}, Type: "test.network", Kind: planner.OpCreate,
+				After: map[string]value.Value{"cidr": value.String("10.0.1.0/24", value.SourceExplicit)}},
+			{Address: address.Address{Name: "c"}, Type: "test.network", Kind: planner.OpCreate,
+				After: map[string]value.Value{"cidr": value.String("10.0.2.0/24", value.SourceExplicit)}},
+			{Address: address.Address{Name: "d"}, Type: "test.network", Kind: planner.OpCreate,
+				After: map[string]value.Value{"cidr": value.String("10.0.3.0/24", value.SourceExplicit)}},
+		},
+	}
+	// deps reports DEPENDENTS of the given address (BuildExecution's own
+	// doc comment): deps(a) = [b] means b depends on a. Chaining a -> b -> c
+	// strands both b and c from a's single failure; d has no entry at all,
+	// so it is nobody's dependent and nobody's dependency — genuinely
+	// unrelated.
+	deps := func(addr address.Address) []address.Address {
+		switch addr.Name {
+		case "a":
+			return []address.Address{{Name: "b"}}
+		case "b":
+			return []address.Address{{Name: "c"}}
+		}
+		return nil
+	}
+	g, err := planner.BuildExecution(p, deps)
+	if err != nil {
+		t.Fatalf("BuildExecution: %v", err)
+	}
+
+	backend := state.NewLocal(t.TempDir())
+	st, err := backend.Get(context.Background(), "dev")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+
+	fixedTime := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
+
+	var mu sync.Mutex
+	var events []Event
+	opts := Options{
+		Parallelism: 2, PerProvider: 2, Registry: reg, Backend: backend,
+		Environment: "dev", Retry: RetryPolicy{MaxAttempts: 1},
+		Now: func() time.Time { return fixedTime },
+		OnEvent: func(e Event) {
+			mu.Lock()
+			defer mu.Unlock()
+			events = append(events, e)
+		},
+	}
+
+	type outcome struct {
+		res Result
+		ds  diag.Diagnostics
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		res, ds := Apply(context.Background(), p, g, st, opts)
+		done <- outcome{res, ds}
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("Apply did not return within 10s")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	var skipEvents []Event
+	for _, e := range events {
+		if e.Kind == EventSkipped {
+			skipEvents = append(skipEvents, e)
+		}
+	}
+	if len(skipEvents) != 2 {
+		t.Fatalf("EventSkipped events = %+v, want exactly 2 — one per stranded node (b and c)", skipEvents)
+	}
+
+	byAddr := map[string]Event{}
+	for _, e := range skipEvents {
+		byAddr[e.Address.String()] = e
+	}
+	for _, addr := range []string{"b", "c"} {
+		e, ok := byAddr[addr]
+		if !ok {
+			t.Fatalf("no EventSkipped for %s; got %+v", addr, skipEvents)
+		}
+		if e.Op != planner.OpCreate {
+			t.Errorf("%s: Op = %v, want %v", addr, e.Op, planner.OpCreate)
+		}
+		if e.Attempt != 0 {
+			t.Errorf("%s: Attempt = %d, want 0 — a skipped operation is never attempted (types.go)", addr, e.Attempt)
+		}
+		// Not asserting a specific wall-clock value — asserting it equals
+		// the fixed clock Options.Now supplies, which is what actually
+		// proves the clock is plumbed through rather than reached for
+		// directly via time.Now().
+		if !e.At.Equal(fixedTime) {
+			t.Errorf("%s: At = %v, want %v (Options.Now) — a real time.Now() call would not match a fixed injected clock", addr, e.At, fixedTime)
+		}
+	}
+
+	// d is a genuinely unrelated, independent, successful branch: it must
+	// produce no EventSkipped.
+	if _, ok := byAddr["d"]; ok {
+		t.Fatalf("unexpected EventSkipped for independent branch d: %+v", skipEvents)
+	}
+}
+
+// TestRecordFailureNeverEmitsEventSkippedTwiceForASharedDependent locks in
+// a property found while mutation-verifying this task: c depends on BOTH a
+// and b; both fail, independently, in two separate recordFailure calls. A
+// naive reading of "recordFailure emits per node" might expect c's second
+// arrival (via w.Skip(b.ID())) to emit a second EventSkipped for it. It
+// does not, and the reason is worth stating precisely: Walk.Skip's own
+// internal status tracking already marks c statusSkipped the first time
+// (TestSkipOnASharedDependentIsNotDoubleCounted, internal/graph/walk_test.go)
+// and excludes an already-skipped node from every later Skip() call's
+// return value — so the SECOND w.Skip(b.ID()) never hands c to this loop at
+// all. tracker's own t.skipped[id] guard is therefore defensive, not the
+// thing actually preventing the double: this test is what proves that,
+// rather than asserting it in a comment.
+//
+// Recorded because it directly answers a mutation the isolation.go
+// EventSkipped work was asked to try: moving the emit call outside the
+// t.skipped[id] guard (so tracker's OWN dedup no longer gates it) does NOT
+// make this test fail, precisely because Walk's contract removes c from
+// the second call's return before tracker's loop body ever runs for it. A
+// fixture that could force the double would need Walk.Skip to hand back an
+// already-skipped node, which its own contract and graph-package test
+// forbid — so no reasonable fixture in this package can turn that mutation
+// red.
+func TestRecordFailureNeverEmitsEventSkippedTwiceForASharedDependent(t *testing.T) {
+	g := graph.New[planner.OpNode]()
+	a, b, c := opnode("a"), opnode("b"), opnode("c")
+	for _, n := range []planner.OpNode{a, b, c} {
+		g.Add(n)
+	}
+	g.Edge(a.ID(), c.ID())
+	g.Edge(b.ID(), c.ID())
+
+	w, err := g.Walk()
+	if err != nil {
+		t.Fatalf("Walk: %v", err)
+	}
+	w.Ready() // dispatches a and b
+
+	var events []Event
+	tr := newTracker(func(e Event) { events = append(events, e) }, nil)
+	var ds diag.Diagnostics
+
+	tr.recordFailure(w, a, errors.New("boom a"), &ds)
+	tr.recordFailure(w, b, errors.New("boom b"), &ds)
+
+	var skipEvents []Event
+	for _, e := range events {
+		if e.Kind == EventSkipped {
+			skipEvents = append(skipEvents, e)
+		}
+	}
+	if len(skipEvents) != 1 {
+		t.Fatalf("EventSkipped for shared dependent c = %+v, want exactly 1", skipEvents)
 	}
 }
