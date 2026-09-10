@@ -6,10 +6,23 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Current state
 
-This repository contains **only `PLAN.md`** — a complete product and implementation
-specification for a declarative infrastructure management tool (working name `infra`).
-No code, no `go.mod`, no git repository exists yet. The first implementation task is
-repository scaffolding.
+**M1 and M2 are merged to `main`** (tags `m1`, `m2`). `infra validate` and
+`infra plan <environment>` both work end to end against the fake provider — compile,
+refresh, diff, render. ~14,000 lines of Go across 18 packages.
+
+Present: the value model with per-leaf provenance and sensitivity, addressing, diagnostics,
+declarative resource schemas, the provider interface, a hand-editable file-backed fake
+provider, versioned state with atomic writes and `O_EXCL` locking, compiler stages 1-2 and
+6-8, a generic dependency graph, provider refresh, the planner, the plan renderer, and the
+execution graph M3's executor will consume.
+
+Absent until M3-M7: `apply`, `destroy`, the `refresh` *command* (the engine exists),
+variables, environments, modules, reading a saved plan back, `explain`, `graph`, `discover`,
+`import`. Nothing half-implements one of those; `--var-file` errors rather than being
+silently ignored, which is the standard to hold.
+
+`PLAN.md` remains the product spec. The Phase 1 design spec and the M1/M2 implementation
+plans are under `docs/superpowers/`.
 
 `PLAN.md` is the authoritative spec. Read the relevant section before implementing a
 feature; the sections below summarise the architecture but do not replace it. Section
@@ -29,8 +42,12 @@ The governing philosophy:
 
 ## Stack and commands
 
-Go 1.24+, Cobra CLI, `gopkg.in/yaml.v3`, AWS SDK for Go v2, SQLite where a local
-cache/state store is appropriate. Standard Go tooling — once `go.mod` exists:
+Go 1.24 (pinned via `mise.toml`), Cobra, `gopkg.in/yaml.v3`. Those two are the **entire**
+third-party budget so far; AWS SDK v2 arrives with Phase 3.
+
+**`mise` is not active in non-interactive shells.** Either use the `make` targets, which set
+the shim path structurally, or `export PATH="$HOME/.local/share/mise/shims:$PATH"` first.
+A bare `go` resolves to 1.20 and fails. Check with `go version` if anything looks odd.
 
 ```bash
 go build ./cmd/infra          # build the binary
