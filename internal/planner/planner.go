@@ -9,6 +9,8 @@ import (
 
 	"infra/internal/compiler"
 	"infra/internal/diag"
+	"infra/internal/expressions"
+	"infra/internal/graph"
 	"infra/internal/refresh"
 	"infra/internal/registry"
 	"infra/internal/state"
@@ -137,14 +139,42 @@ func Compute(cfg compiler.ResolvedConfig, st *state.State, obs refresh.Observati
 		return p, ds
 	}
 
-	for _, addr := range planAddresses(cfg, st) {
-		op, opDS := operationFor(addr, cfg, st, obs, opts)
-		ds.Extend(opDS)
+	// Operations are decided in dependency order, not address order, because
+	// deciding one resource's operation can require another's answer:
+	// ${network.id} in a database's configuration is knowable only once the
+	// plan knows what network.id will be after apply. scope accumulates each
+	// decided operation's After for exactly that, and dependency order is what
+	// guarantees a dependency's After is already in it. Operations are sorted
+	// by address afterwards, so the plan's own ordering contract is unchanged.
+	scope := expressions.ResourceScope{}
+	decided := map[string]Operation{}
+	reported := map[string]diag.Diagnostics{}
+
+	for _, addr := range resolutionOrder(cfg, st) {
+		op, opDS := operationFor(addr, cfg, st, obs, opts, scope)
+		reported[addr.String()] = opDS
 		if op != nil {
 			// Which side of the graph the edges come from depends on the
 			// operation, so this runs once the kind has been decided.
 			op.Dependents = dependentsOf(addr, op.Kind, cfg, st)
-			p.Operations = append(p.Operations, *op)
+			decided[addr.String()] = *op
+			if op.After != nil {
+				scope[addr.String()] = op.After
+			}
+		}
+	}
+
+	// Operations and their diagnostics are emitted in planAddresses order
+	// rather than by re-sorting what the pass above produced, so the plan's
+	// "sorted by canonical address" contract — and the order a user reads
+	// diagnostics in — still comes from the one helper that has always
+	// provided them, unchanged by the fact that the decisions themselves are
+	// now made in dependency order. resolutionOrder and planAddresses cover
+	// the same set of addresses; only the order differs.
+	for _, addr := range planAddresses(cfg, st) {
+		ds.Extend(reported[addr.String()])
+		if op, ok := decided[addr.String()]; ok {
+			p.Operations = append(p.Operations, op)
 		}
 	}
 
@@ -161,6 +191,7 @@ func operationFor(
 	st *state.State,
 	obs refresh.Observations,
 	opts Options,
+	scope expressions.ResourceScope,
 ) (*Operation, diag.Diagnostics) {
 	var ds diag.Diagnostics
 
@@ -215,6 +246,26 @@ func operationFor(
 		return nil, ds
 	}
 
+	// Configuration is bound at compile time, when no resource exists, so a
+	// ${other.attr} reference is necessarily unknown by then — correctly, and
+	// that must stay correct (spec §6). Planning is the first phase that knows
+	// what the referenced resource will actually look like, so it is the phase
+	// that finishes those references. Skipping this step is what made
+	// invariant 2 false for every configuration containing one: the diff
+	// compared a real recorded value against a permanently unknown desired
+	// value and proposed the same update forever, apply after apply.
+	//
+	// Only references whose target is already decided AND whose referenced
+	// attribute is already known resolve here; everything else is left exactly
+	// as the compiler bound it, still carrying its expression, so a genuinely
+	// not-yet-knowable value still plans and renders as "(known after apply)"
+	// and still reaches the executor intact.
+	attrs, _, resolveDS := expressions.ResolveDeferred(rc.Attrs, scope)
+	ds.Extend(resolveDS)
+	if ds.HasErrors() {
+		return nil, ds
+	}
+
 	if !inState || actual == nil {
 		var reasons []ChangeReason
 		if inState {
@@ -226,12 +277,12 @@ func operationFor(
 			Address: addr,
 			Type:    rc.Type,
 			Kind:    OpCreate,
-			After:   afterAttributes(def, rc.Attrs, nil, OpCreate),
+			After:   afterAttributes(def, attrs, nil, OpCreate),
 			Reasons: reasons,
 		}, ds
 	}
 
-	reasons, diffDS := diffAttributes(addr, def, rc.Attrs, actual.Attributes)
+	reasons, diffDS := diffAttributes(addr, def, attrs, actual.Attributes)
 	ds.Extend(diffDS)
 	if ds.HasErrors() {
 		return nil, ds
@@ -249,7 +300,7 @@ func operationFor(
 		Type:    rc.Type,
 		Kind:    kind,
 		Before:  copyAttrs(actual.Attributes),
-		After:   afterAttributes(def, rc.Attrs, actual.Attributes, kind),
+		After:   afterAttributes(def, attrs, actual.Attributes, kind),
 		Reasons: reasons,
 	}, ds
 }
@@ -373,6 +424,88 @@ func dependentsOf(target address.Address, kind OpKind, cfg compiler.ResolvedConf
 		}
 	}
 	address.Sort(out)
+	return out
+}
+
+// resolutionNode adapts an address to the graph's Node interface. The graph is
+// generic over anything with an ID, and an address is not one; a named type
+// here is cheaper than giving address.Address a method it exists only to
+// satisfy.
+type resolutionNode struct{ addr address.Address }
+
+// ID returns the node's canonical address.
+func (n resolutionNode) ID() string { return n.addr.String() }
+
+// resolutionOrder returns every address to decide an operation for, ordered so
+// that a configured resource always comes after the resources it depends on.
+//
+// That order is what lets Compute finish one resource's ${other.attr}
+// references against the operation already decided for other: a dependency's
+// After is guaranteed to be in scope by the time its dependent is reached.
+// Addresses that appear only in state come last, in address order — they are
+// removals, so nothing in configuration can reference them and nothing about
+// them needs resolving.
+//
+// A cycle falls back to planAddresses order rather than failing. The compiler
+// already rejects a dependency cycle (internal/compiler/validate.go), so this
+// is unreachable through the real pipeline; but Compute is a pure function of
+// its arguments, not of "the caller went through Compile", and refusing to
+// produce a plan at all — or panicking out of graph.Edge — would be a worse
+// answer to a malformed input than producing the plan this function produced
+// before it ordered anything. Resolution simply leaves the references in the
+// cycle unfinished, which is exactly what happened for every reference before
+// this existed.
+func resolutionOrder(cfg compiler.ResolvedConfig, st *state.State) []address.Address {
+	configured := cfg.Addresses()
+
+	g := graph.New[resolutionNode]()
+	for _, addr := range configured {
+		g.Add(resolutionNode{addr: addr})
+	}
+	// Edges are recorded in a second pass: graph.Edge panics on an ID that was
+	// never added, and a dependency may be seen before the node it names.
+	for _, addr := range configured {
+		rc, ok := cfg.Get(addr)
+		if !ok {
+			continue
+		}
+		for _, dep := range rc.DependsOn {
+			if _, inConfig := cfg.Get(dep); !inConfig {
+				// A dependency on something outside configuration cannot be
+				// resolved against anyway; the compiler reports it.
+				continue
+			}
+			g.Edge(dep.String(), addr.String())
+		}
+	}
+
+	layers, err := g.Layers()
+	if err != nil {
+		return planAddresses(cfg, st)
+	}
+
+	out := make([]address.Address, 0, len(configured))
+	for _, layer := range layers {
+		for _, node := range layer {
+			out = append(out, node.addr)
+		}
+	}
+
+	if st != nil {
+		inConfig := make(map[string]bool, len(configured))
+		for _, addr := range configured {
+			inConfig[addr.String()] = true
+		}
+		var removals []address.Address
+		for _, addr := range st.Addresses() {
+			if !inConfig[addr.String()] {
+				removals = append(removals, addr)
+			}
+		}
+		address.Sort(removals)
+		out = append(out, removals...)
+	}
+
 	return out
 }
 
