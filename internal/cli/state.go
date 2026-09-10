@@ -21,9 +21,11 @@ func newStateCommand(opts *GlobalOptions) *cobra.Command {
 // newStateListCommand builds `infra state list`.
 func newStateListCommand(opts *GlobalOptions) *cobra.Command {
 	return &cobra.Command{
-		Use:   "list <environment>",
-		Short: "List managed resources",
-		Args:  cobra.ExactArgs(1),
+		Use:           "list <environment>",
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		Short:         "List managed resources",
+		Args:          cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			s, err := backendFor(opts.Dir).Get(cmd.Context(), args[0])
 			if err != nil {
@@ -46,9 +48,11 @@ func newStateListCommand(opts *GlobalOptions) *cobra.Command {
 // newStateShowCommand builds `infra state show`.
 func newStateShowCommand(opts *GlobalOptions) *cobra.Command {
 	return &cobra.Command{
-		Use:   "show <environment> <address>",
-		Short: "Show one managed resource",
-		Args:  cobra.ExactArgs(2),
+		Use:           "show <environment> <address>",
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		Short:         "Show one managed resource",
+		Args:          cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			s, err := backendFor(opts.Dir).Get(cmd.Context(), args[0])
 			if err != nil {
@@ -83,9 +87,11 @@ func newStateShowCommand(opts *GlobalOptions) *cobra.Command {
 // newStateUnlockCommand builds `infra state unlock`.
 func newStateUnlockCommand(opts *GlobalOptions) *cobra.Command {
 	return &cobra.Command{
-		Use:   "unlock <environment>",
-		Short: "Release a lock left behind by an interrupted run",
-		Args:  cobra.ExactArgs(1),
+		Use:           "unlock <environment>",
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		Short:         "Release a lock left behind by an interrupted run",
+		Args:          cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			b := backendFor(opts.Dir)
 			lock, held, err := b.Inspect(args[0])

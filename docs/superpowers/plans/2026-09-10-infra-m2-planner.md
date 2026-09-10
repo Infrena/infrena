@@ -9852,8 +9852,10 @@ Every box must be true before M3 begins.
 - [ ] `infra plan dev --output plan.json` writes valid JSON at mode `0600`.
 - [ ] **Invariant 6:** twenty consecutive `Compute` calls over identical inputs produce byte-identical `Canonical()` output, and two `infra plan` runs produce identical stdout.
 - [ ] Four concurrent fake-provider reads with injected latency complete in roughly one delay, not four.
-- [ ] `graph.BuildExecution` orders creates forward, destroys in reverse, and splits a replacement into destroy-then-create with dependents ordered around both halves.
-- [ ] Exactly one cycle detector exists in the tree: `grep -rn 'func findCycles' internal/` prints nothing, and `internal/compiler` uses `graph.Cycle`.
+- [ ] `planner.BuildExecution` orders creates forward, destroys in reverse, and splits a replacement into destroy-then-create with dependents ordered around both halves. (It lives in `internal/planner`, not `internal/graph` — `graph` stays a leaf package; see Task 18.)
+- [ ] Exactly one cycle detector exists in the tree: `grep -rn 'func firstCycle\|func findCycles\|white color' internal/` prints nothing, and `internal/compiler` uses `graph.Cycle`.
+
+      (The current name is `firstCycle`. A Task 8 fix round renamed it from `findCycles`, and this box — like Task 18's own verification step, fixed earlier — still named the old one, so it would have reported success whether or not the duplicate survived. Third appearance of this exact stale name. A verification that cannot fail is not a verification.)
 
 ## What M2 deliberately leaves undone
 

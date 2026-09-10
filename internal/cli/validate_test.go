@@ -35,7 +35,7 @@ resources:
     engine: postgres
     network: ${network.id}
 `)
-	ds := validateProject(dir, buildRegistry(dir))
+	ds := validateProject(dir, buildRegistry(dir), nil)
 	if ds.HasErrors() {
 		t.Fatalf("valid project reported errors: %+v", ds)
 	}
@@ -49,7 +49,7 @@ resources:
     type: aws.rds
     engine: postgres
 `)
-	ds := validateProject(dir, buildRegistry(dir))
+	ds := validateProject(dir, buildRegistry(dir), nil)
 	if !ds.HasErrors() {
 		t.Fatal("an unregistered resource type must be an error")
 	}
@@ -71,7 +71,7 @@ resources:
     engine: postgres
     nonsense: true
 `)
-	ds := validateProject(dir, buildRegistry(dir))
+	ds := validateProject(dir, buildRegistry(dir), nil)
 	if !ds.HasErrors() {
 		t.Fatal("an attribute the schema does not define must be an error")
 	}
@@ -89,7 +89,7 @@ resources:
     engine: postgres
     endpoint: nope.example.com
 `)
-	ds := validateProject(dir, buildRegistry(dir))
+	ds := validateProject(dir, buildRegistry(dir), nil)
 	if !ds.HasErrors() {
 		t.Fatal("configuration must not set a computed attribute")
 	}
@@ -150,7 +150,7 @@ resources:
   c:
     type: nope.three
 `)
-	ds := validateProject(dir, buildRegistry(dir))
+	ds := validateProject(dir, buildRegistry(dir), nil)
 	if len(ds) < 3 {
 		t.Errorf("got %d diagnostics, want at least 3", len(ds))
 	}
@@ -187,7 +187,7 @@ resources:
     engine: postgres
     nonexistent: 1
 `)
-	ds := validateProject(dir, buildRegistry(dir))
+	ds := validateProject(dir, buildRegistry(dir), nil)
 	if !ds.HasErrors() {
 		t.Fatal("an unknown attribute must be an error")
 	}
@@ -218,7 +218,7 @@ resources:
     type: test.database
     engine: postgres
 `)
-	ds := validateProject(dir, buildRegistry(dir))
+	ds := validateProject(dir, buildRegistry(dir), nil)
 	if !ds.HasErrors() {
 		t.Fatal("a database with no network anywhere in the project must be an error")
 	}
@@ -291,4 +291,65 @@ func TestFormatValueStillRendersScalars(t *testing.T) {
 			t.Errorf("formatValue = %q, want %q", got, tc.want)
 		}
 	}
+}
+
+// TestValidateHonoursVarsLikePlanDoes pins the two commands to the same
+// answer. validateProject used to pass compiler.Options{} with no Vars, on
+// the mistaken belief that nothing consumed them yet, so `infra validate`
+// rejected a configuration that `infra plan` accepted:
+//
+//	$ infra --var cidr=10.0.0.0/16 validate
+//	Error: undefined variable "cidr"
+//	$ infra --var cidr=10.0.0.0/16 plan dev
+//	Plan: 1 to create, ...
+//
+// A command whose whole purpose is answering "is this configuration valid?"
+// must not say no to configuration that plans fine.
+func TestValidateHonoursVarsLikePlanDoes(t *testing.T) {
+	dir := projectDir(t, `
+project: myapp
+resources:
+  network:
+    type: test.network
+    cidr: ${cidr}
+`)
+
+	// Without the variable, the reference is genuinely undefined.
+	if ds := validateProject(dir, buildRegistry(dir), nil); !ds.HasErrors() {
+		t.Fatal("an undefined variable must still be an error when no --var supplies it")
+	}
+
+	// With it, the configuration is valid — the same answer plan gives.
+	ds := validateProject(dir, buildRegistry(dir), map[string]string{"cidr": "10.0.0.0/16"})
+	if ds.HasErrors() {
+		t.Errorf("--var must satisfy the reference, as it does for plan:\n%s", renderToString(ds))
+	}
+}
+
+// TestEveryCommandSilencesUsageAndErrors covers the class rather than the
+// instance. cobra's ExecuteC consults c.Root()'s Silence* fields only when the
+// executing command has a parent; a standalone-constructed command — which is
+// how tests build them — has cobra consult its own zero-valued fields and
+// print usage boilerplate to STDOUT on every non-nil RunE return, including
+// success paths. `plan` shipped with that gap and it was caught only because
+// one test happened to assert stdout was empty. validate and the three state
+// subcommands had the same gap and no test exposure at all.
+func TestEveryCommandSilencesUsageAndErrors(t *testing.T) {
+	var walk func(c *cobra.Command)
+	walk = func(c *cobra.Command) {
+		for _, sub := range c.Commands() {
+			// A group parent with no RunE cannot return an error, so cobra
+			// never reaches the usage-printing path for it.
+			if sub.RunE != nil || sub.Run != nil {
+				if !sub.SilenceUsage {
+					t.Errorf("command %q does not set SilenceUsage", sub.CommandPath())
+				}
+				if !sub.SilenceErrors {
+					t.Errorf("command %q does not set SilenceErrors", sub.CommandPath())
+				}
+			}
+			walk(sub)
+		}
+	}
+	walk(NewRootCommand())
 }
