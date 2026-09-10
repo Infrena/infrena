@@ -55,7 +55,9 @@ func decodeDocument(path string, doc *yaml.Node, out *ProjectDecl, ds *diag.Diag
 		key, val := doc.Content[i], doc.Content[i+1]
 		switch key.Value {
 		case "project":
-			out.Project = val.Value
+			if text, ok := requireScalar(path, "`project`", val, ds); ok {
+				out.Project = text
+			}
 		case "resources":
 			decodeResources(path, val, out, ds, seen)
 		default:
@@ -112,6 +114,11 @@ func decodeResources(path string, node *yaml.Node, out *ProjectDecl, ds *diag.Di
 			continue
 		}
 
+		// typeReported records that `type` was present but unusable, so the
+		// "has no `type`" check below does not fire a second, misleading
+		// diagnostic for the same key.
+		typeReported := false
+
 		// Keys are tracked separately from r.Attributes because `type`,
 		// `depends_on` and `lifecycle` are keys too, and repeating one of those
 		// silently loses a value just as an attribute does.
@@ -134,7 +141,15 @@ func decodeResources(path string, node *yaml.Node, out *ProjectDecl, ds *diag.Di
 
 			switch key.Value {
 			case "type":
-				r.Type = val.Value
+				text, ok := requireScalar(path, "`type`", val, ds)
+				if !ok {
+					// The `type` key is present but unusable. Reporting "has no
+					// `type`" as well would name a symptom rather than the
+					// problem.
+					typeReported = true
+					break
+				}
+				r.Type = text
 			case "depends_on":
 				if val.Kind != yaml.SequenceNode {
 					ds.Add(diag.Diagnostic{
@@ -146,13 +161,17 @@ func decodeResources(path string, node *yaml.Node, out *ProjectDecl, ds *diag.Di
 					})
 					break
 				}
-				for _, item := range val.Content {
-					r.DependsOn = append(r.DependsOn, item.Value)
+				for i, item := range val.Content {
+					text, ok := requireScalar(path, "`depends_on`["+strconv.Itoa(i)+"]", item, ds)
+					if !ok {
+						continue
+					}
+					r.DependsOn = append(r.DependsOn, text)
 				}
 			case "lifecycle":
 				decodeLifecycle(path, val, r, ds)
 			default:
-				v, hasExpr := decodeValue(path, val)
+				v, hasExpr := decodeValue(path, "attribute "+strconv.Quote(key.Value), val, ds)
 				r.Attributes[key.Value] = AttributeDecl{
 					Name:           key.Value,
 					Value:          v,
@@ -162,7 +181,7 @@ func decodeResources(path string, node *yaml.Node, out *ProjectDecl, ds *diag.Di
 			}
 		}
 
-		if r.Type == "" {
+		if r.Type == "" && !typeReported {
 			ds.Add(diag.Diagnostic{
 				Severity: diag.SeverityError,
 				Summary:  "resource " + strconv.Quote(r.Name) + " has no `type`",
@@ -229,17 +248,60 @@ func decodeLifecycleBool(path string, key, val *yaml.Node, ds *diag.Diagnostics)
 	return b, true
 }
 
+// requireScalar reads a node's scalar text, refusing anything that is not one.
+//
+// Reading node.Value without checking the node's kind is the defect class that
+// has already bitten this branch twice. A mapping or sequence node has an empty
+// Value, so the value silently became ""; an alias node's Value is the
+// anchor's name, so `type: *base` silently became the string "base"; and a
+// !!null scalar's Value is "" too, so a blank required attribute would satisfy
+// requiredness in M2's stage 7. None of them produced a diagnostic.
+//
+// `what` names the offending position, already quoted or backticked.
+func requireScalar(path, what string, node *yaml.Node, ds *diag.Diagnostics) (string, bool) {
+	switch {
+	case node.Kind == yaml.AliasNode:
+		ds.Add(diag.Diagnostic{
+			Severity: diag.SeverityError,
+			Summary:  what + " is a YAML alias, which M1 does not resolve",
+			Detail:   "An alias node carries the anchor's name rather than its value, so accepting it would silently substitute " + strconv.Quote(node.Value) + ".",
+			Action:   "Write the value out in full.",
+			Origin:   originOf(path, node),
+		})
+	case node.Kind != yaml.ScalarNode:
+		ds.Add(diag.Diagnostic{
+			Severity: diag.SeverityError,
+			Summary:  what + " must be a single value, not a list or a mapping",
+			Detail:   "A list or mapping has no scalar text, so it would silently read as an empty value.",
+			Origin:   originOf(path, node),
+		})
+	case node.Tag == "!!null":
+		ds.Add(diag.Diagnostic{
+			Severity: diag.SeverityError,
+			Summary:  what + " has no value",
+			Detail:   "An empty value would silently read as the empty string, which is indistinguishable from a value that was deliberately set to \"\".",
+			Action:   "Give it a value, or remove the key.",
+			Origin:   originOf(path, node),
+		})
+	default:
+		return node.Value, true
+	}
+	return "", false
+}
+
 // decodeValue converts a YAML node into a typed Value, reporting whether any
 // string within it contains an interpolation.
-func decodeValue(path string, node *yaml.Node) (value.Value, bool) {
+//
+// `what` names the position being decoded, for diagnostics.
+func decodeValue(path, what string, node *yaml.Node, ds *diag.Diagnostics) (value.Value, bool) {
 	origin := originOf(path, node)
 
 	switch node.Kind {
 	case yaml.SequenceNode:
 		items := make([]value.Value, 0, len(node.Content))
 		anyExpr := false
-		for _, item := range node.Content {
-			v, has := decodeValue(path, item)
+		for i, item := range node.Content {
+			v, has := decodeValue(path, what+"["+strconv.Itoa(i)+"]", item, ds)
 			anyExpr = anyExpr || has
 			items = append(items, v)
 		}
@@ -249,19 +311,25 @@ func decodeValue(path string, node *yaml.Node) (value.Value, bool) {
 		items := map[string]value.Value{}
 		anyExpr := false
 		for i := 0; i+1 < len(node.Content); i += 2 {
-			v, has := decodeValue(path, node.Content[i+1])
+			key := node.Content[i]
+			v, has := decodeValue(path, what+"."+key.Value, node.Content[i+1], ds)
 			anyExpr = anyExpr || has
-			items[node.Content[i].Value] = v
+			items[key.Value] = v
 		}
 		return value.Map(items, value.SourceExplicit).WithOrigin(origin), anyExpr
 
 	default:
-		return decodeScalar(node, origin)
+		return decodeScalar(path, what, node, ds, origin)
 	}
 }
 
-func decodeScalar(node *yaml.Node, origin value.Origin) (value.Value, bool) {
-	raw := node.Value
+func decodeScalar(path, what string, node *yaml.Node, ds *diag.Diagnostics, origin value.Origin) (value.Value, bool) {
+	raw, ok := requireScalar(path, what, node, ds)
+	if !ok {
+		// KindInvalid rather than an empty string: a value that could not be
+		// read must not masquerade as one that was.
+		return value.Value{Source: value.SourceExplicit, Origin: origin}, false
+	}
 
 	// An interpolation is kept verbatim; stage 6 parses it in M2.
 	if strings.Contains(raw, "${") {

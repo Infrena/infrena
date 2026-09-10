@@ -370,3 +370,146 @@ func render(t *testing.T, ds diag.Diagnostics) string {
 	ds.Render(&buf)
 	return buf.String()
 }
+
+// The surviving instances of the branch's recurring defect class: a value read
+// by its surface text rather than its type. Each produced a silently wrong
+// string — usually empty — with no diagnostic at all.
+func TestNonScalarsAreRejectedRatherThanReadAsText(t *testing.T) {
+	cases := []struct {
+		name    string
+		body    string
+		wants   []string
+		notWant string
+	}{
+		{
+			name: "project given a mapping",
+			body: `
+project:
+  a: b
+
+resources:
+  net:
+    type: test.network
+    cidr: 10.0.0.0/16
+`,
+			wants: []string{"`project`", "must be"},
+		},
+		{
+			name: "project given a list",
+			body: `
+project: [myapp]
+
+resources:
+  net:
+    type: test.network
+    cidr: 10.0.0.0/16
+`,
+			wants: []string{"`project`", "must be"},
+		},
+		{
+			name: "type given a list",
+			body: `
+project: myapp
+
+resources:
+  net:
+    type: [test.network]
+    cidr: 10.0.0.0/16
+`,
+			wants: []string{"`type`", "must be"},
+			// "has no `type`" is the confusing downstream message the old code
+			// produced instead of naming the real problem.
+			notWant: "has no `type`",
+		},
+		{
+			name: "depends_on item is not a scalar",
+			body: `
+project: myapp
+
+resources:
+  net:
+    type: test.network
+    cidr: 10.0.0.0/16
+  db:
+    type: test.database
+    engine: postgres
+    depends_on: [[net]]
+`,
+			wants: []string{"depends_on", "must be"},
+		},
+		{
+			name: "attribute given no value at all",
+			body: `
+project: myapp
+
+resources:
+  db:
+    type: test.database
+    engine:
+`,
+			wants: []string{"engine", "no value"},
+		},
+		{
+			name: "attribute given a YAML alias",
+			body: `
+project: myapp
+
+resources:
+  net:
+    type: test.network
+    cidr: &shared 10.0.0.0/16
+  db:
+    type: test.database
+    engine: *shared
+`,
+			wants: []string{"engine", "alias"},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, ds := Decode(writeConfig(t, tc.body))
+			rendered := render(t, ds)
+			if !ds.HasErrors() {
+				t.Fatalf("expected an error diagnostic, got:\n%s", rendered)
+			}
+			for _, want := range tc.wants {
+				if !strings.Contains(rendered, want) {
+					t.Errorf("diagnostic does not mention %q:\n%s", want, rendered)
+				}
+			}
+			if tc.notWant != "" && strings.Contains(rendered, tc.notWant) {
+				t.Errorf("diagnostic still reports the downstream symptom %q:\n%s", tc.notWant, rendered)
+			}
+		})
+	}
+}
+
+// TestAliasDoesNotBecomeTheAnchorName is the sharpest form of the alias defect:
+// `engine: *shared` decoded to the string "shared", the anchor's name, so a
+// resource silently got a plausible-looking wrong value rather than an empty
+// one.
+func TestAliasDoesNotBecomeTheAnchorName(t *testing.T) {
+	got, ds := Decode(writeConfig(t, `
+project: myapp
+
+resources:
+  net:
+    type: test.network
+    cidr: &shared 10.0.0.0/16
+  db:
+    type: test.database
+    engine: *shared
+`))
+	if !ds.HasErrors() {
+		t.Fatal("a YAML alias must produce a diagnostic")
+	}
+	for _, r := range got.Resources {
+		if r.Name != "db" {
+			continue
+		}
+		if s, ok := r.Attributes["engine"].Value.AsString(); ok && s == "shared" {
+			t.Errorf("engine decoded to the anchor's name %q", s)
+		}
+	}
+}
