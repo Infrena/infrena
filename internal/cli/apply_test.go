@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -62,6 +63,25 @@ resources:
 	st.Set(rs)
 	seedState(t, dir, "dev", st)
 
+	// Pre-lock dev as another holder before running the no-op apply, and
+	// leave it held for the whole test. Checking dev.lock's absence AFTER
+	// Execute returns — the only check this test used to make — cannot
+	// distinguish "apply never locked" from "apply locked, then
+	// releaseLock released it": both end with no lock file on disk.
+	// Reviewer-proven directly: a mutation that adds a lock+release inside
+	// the !p.HasChanges() branch left this test (and all six other
+	// TestApply* tests) green. Holding the lock as someone else for the
+	// duration instead is what actually pins the decision this test is
+	// named for: if apply's no-changes path ever called backend.Lock, that
+	// call would fail immediately against this existing holder (Lock's
+	// O_EXCL create), and Execute would return a non-nil error.
+	backend := backendFor(dir)
+	lockCtx := state.WithOperation(context.Background(), "some-other-run")
+	if _, err := backend.Lock(lockCtx, "dev"); err != nil {
+		t.Fatalf("pre-locking dev: %v", err)
+	}
+	defer backend.ForceUnlock("dev")
+
 	opts := &GlobalOptions{Dir: dir, Parallelism: 4}
 	cmd := newApplyCommand(opts)
 	cmd.SetArgs([]string{"dev"})
@@ -71,13 +91,17 @@ resources:
 	cmd.SetErr(&stderr)
 
 	if err := cmd.Execute(); err != nil {
-		t.Fatalf("Execute() = %v, want nil (no changes is success)", err)
+		t.Fatalf("Execute() = %v, want nil — a no-op apply must succeed even though another process holds the environment lock; it never needed the lock at all", err)
 	}
 	if !strings.Contains(stdout.String(), "No changes") {
 		t.Errorf("stdout does not report a clean plan:\n%s", stdout.String())
 	}
-	if _, err := os.Stat(filepath.Join(dir, ".infra", "state", "dev.lock")); !os.IsNotExist(err) {
-		t.Error("apply with no changes must not take the environment lock")
+	lock, held, err := backend.Inspect("dev")
+	if err != nil {
+		t.Fatalf("inspecting the lock after apply: %v", err)
+	}
+	if !held || lock.Operation != "some-other-run" {
+		t.Errorf("lock after apply = (held=%v, operation=%q), want the pre-existing lock untouched", held, lock.Operation)
 	}
 }
 
@@ -297,6 +321,185 @@ resources:
 	}
 	if _, err := os.Stat(filepath.Join(dir, ".infra", "state", "dev.lock")); !os.IsNotExist(err) {
 		t.Error("apply must release the lock even when an operation fails")
+	}
+}
+
+// TestApplyRePlansInsideTheLockNotJustBeforeIt pins this task's core design
+// requirement: apply computes the plan twice — once unlocked, to show it
+// and take approval, and once again immediately after the lock is
+// acquired, so execution never runs against state or provider reality read
+// before the lock was held (this task's own doc comment on computePlan and
+// newApplyCommand's RunE). A version of apply that collapsed the two into
+// one computePlan call — reusing the pre-lock plan and state rather than
+// recomputing — would still pass every other test in this file, because
+// nothing else here changes anything between the two calls.
+//
+// The fake provider's own failure-injection is the seam: refresh.Refresh
+// calls provider.Read exactly once per resource already in state
+// (internal/refresh/refresh.go's readOne, with no internal retry), and
+// computePlan calls refresh.Refresh once per invocation. network is
+// already in state and matches the fake cloud exactly (so it proposes no
+// change on its own), while database is a fresh create — giving a plan
+// with changes on both passes without ever calling Read on network more
+// than once per computePlan call. A FailureRule with Nth: 2 therefore
+// fires on exactly the SECOND read of network across the whole apply run
+// — the in-lock re-plan — and never on the first, unlocked preview.
+func TestApplyRePlansInsideTheLockNotJustBeforeIt(t *testing.T) {
+	dir := projectDir(t, `
+project: myapp
+resources:
+  network:
+    type: test.network
+    cidr: 10.20.0.0/16
+  database:
+    type: test.database
+    engine: postgres
+    network: ${network.id}
+`)
+	ctx := context.Background()
+	cloudPath := filepath.Join(dir, testprovider.DefaultCloudPath)
+	prov := testprovider.New(cloudPath)
+	rs, err := prov.Create(ctx, &resource.DesiredResource{
+		Address: address.Address{Name: "network"},
+		Type:    "test.network",
+		Attrs: map[string]value.Value{
+			"cidr": value.String("10.20.0.0/16", value.SourceExplicit),
+		},
+	})
+	if err != nil {
+		t.Fatalf("seeding the fake cloud: %v", err)
+	}
+	st := state.New("myapp", "dev")
+	st.Set(rs)
+	seedState(t, dir, "dev", st)
+
+	cloud, err := testprovider.LoadCloud(cloudPath)
+	if err != nil {
+		t.Fatalf("loading the fake cloud to add a failure rule: %v", err)
+	}
+	cloud.Failures = append(cloud.Failures, testprovider.FailureRule{
+		Op: "read", Address: "network", Nth: 2, Message: "second-refresh-marker",
+	})
+	if err := cloud.Save(cloudPath); err != nil {
+		t.Fatalf("saving the fake cloud with a failure rule: %v", err)
+	}
+
+	opts := &GlobalOptions{Dir: dir, Parallelism: 4, AutoApprove: true}
+	cmd := newApplyCommand(opts)
+	cmd.SetArgs([]string{"dev"})
+	cmd.SetIn(strings.NewReader(""))
+	var stdout, stderr bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stderr)
+
+	execErr := cmd.Execute()
+	if execErr == nil || errors.Is(execErr, errChanges) {
+		t.Fatalf("Execute() = %v, want a plain error from the second, in-lock refresh failing", execErr)
+	}
+	if !strings.Contains(stderr.String(), "second-refresh-marker") {
+		t.Errorf("stderr does not show the injected second-read failure — the in-lock re-plan did not run refresh a second time:\n%s", stderr.String())
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".infra", "state", "dev.lock")); !os.IsNotExist(err) {
+		t.Error("apply must release the lock even when the in-lock re-plan fails")
+	}
+}
+
+// mutatingReader wraps body but runs before, once, on its very first Read
+// call — before returning any of body's bytes — then behaves exactly like
+// body from then on. It stands in for a real concurrent actor: a custom
+// io.Reader is a genuine seam here, not a workaround, because
+// bufio.Scanner.Scan (confirm, apply.go) calls Read at the exact moment a
+// human's approval keystroke would arrive — after the unlocked preview,
+// before backend.Lock — which is precisely where a real race with another
+// process would land.
+type mutatingReader struct {
+	before func()
+	body   io.Reader
+	done   bool
+}
+
+func (r *mutatingReader) Read(p []byte) (int, error) {
+	if !r.done {
+		r.before()
+		r.done = true
+	}
+	return r.body.Read(p)
+}
+
+// TestApplyPlanConvergesToNoChangesInsideTheLock reaches the one branch of
+// apply.go no other test in this file does: the post-lock
+// "!p2.HasChanges()" path, printing "No changes remained once the
+// environment lock was acquired". Every other test keeps provider reality
+// identical across apply's two computePlan calls, so p2 always agrees with
+// p and this branch is never taken. This constructs, deterministically,
+// the exact race re-planning inside the lock exists to guard against
+// (this task's own doc comment on computePlan): real infrastructure
+// changing in the window between the unlocked preview a human approved and
+// the lock being granted. mutatingReader fixes the fake cloud's drift —
+// the very drift the first, unlocked plan proposed to correct via a
+// replace — the moment "yes" is read, standing in for another process
+// having already applied the same fix out of band. The second,
+// in-lock computePlan then observes reality already matching configuration
+// and finds nothing left to do.
+func TestApplyPlanConvergesToNoChangesInsideTheLock(t *testing.T) {
+	dir := projectDir(t, `
+project: myapp
+resources:
+  network:
+    type: test.network
+    cidr: 10.0.0.0/16
+`)
+	ctx := context.Background()
+	cloudPath := filepath.Join(dir, testprovider.DefaultCloudPath)
+	prov := testprovider.New(cloudPath)
+	// Seeded drifted from configuration (10.1.0.0/16 vs the desired
+	// 10.0.0.0/16, a ForceNew attribute) so the unlocked preview proposes a
+	// replace and apply reaches the approval prompt at all.
+	rs, err := prov.Create(ctx, &resource.DesiredResource{
+		Address: address.Address{Name: "network"},
+		Type:    "test.network",
+		Attrs: map[string]value.Value{
+			"cidr": value.String("10.1.0.0/16", value.SourceExplicit),
+		},
+	})
+	if err != nil {
+		t.Fatalf("seeding the fake cloud: %v", err)
+	}
+	st := state.New("myapp", "dev")
+	st.Set(rs)
+	seedState(t, dir, "dev", st)
+
+	fixDrift := func() {
+		cloud, err := testprovider.LoadCloud(cloudPath)
+		if err != nil {
+			t.Fatalf("loading the fake cloud to fix drift: %v", err)
+		}
+		res, ok := cloud.Resources[rs.ProviderID]
+		if !ok {
+			t.Fatalf("network (%s) not found in the fake cloud", rs.ProviderID)
+		}
+		res.Attributes["cidr"] = "10.0.0.0/16"
+		if err := cloud.Save(cloudPath); err != nil {
+			t.Fatalf("saving the fixed fake cloud: %v", err)
+		}
+	}
+
+	opts := &GlobalOptions{Dir: dir, Parallelism: 4}
+	cmd := newApplyCommand(opts)
+	cmd.SetArgs([]string{"dev"})
+	cmd.SetIn(&mutatingReader{before: fixDrift, body: strings.NewReader("yes\n")})
+	var stdout, stderr bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stderr)
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() = %v, want nil — nothing was left to apply once the in-lock re-plan converged", err)
+	}
+	if !strings.Contains(stdout.String(), "No changes remained once the environment lock was acquired") {
+		t.Errorf("stdout does not report the post-lock convergence:\n%s", stdout.String())
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".infra", "state", "dev.lock")); !os.IsNotExist(err) {
+		t.Error("apply must release the lock after the post-lock convergence path")
 	}
 }
 
