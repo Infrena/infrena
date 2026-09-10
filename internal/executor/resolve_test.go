@@ -93,6 +93,45 @@ func TestResolveAfterLeavesKnownValuesUntouched(t *testing.T) {
 	}
 }
 
+// TestResolveAfterOmitsUnsetComputedAttributeWithNoExpression pins a fix
+// found while building Task 13's end-to-end apply test: afterAttributes
+// (internal/planner/diff.go) stages every not-yet-set Computed schema
+// attribute as value.Unknown(kind, SourceProvider) with a nil Expr, purely
+// so planner.Render can show "id: (known after apply)" — the fake
+// provider's test.network.id is exactly this shape. Such a value carries no
+// expression at all (see Value.Expr's own doc comment: it is set only when
+// the value depends on a resource that does not exist yet), so there is
+// nothing for this function to evaluate. Before this fix, resolveAfter
+// still ran it through expressions.Evaluate(nil, scope) — which succeeds
+// with an unknown result and no diagnostics of its own — and then reported
+// the empty result as a broken-dependency-ordering error, unconditionally,
+// for the plain create of ANY resource with an unset computed attribute,
+// dependency or not. The correct behavior is to omit the key entirely: the
+// provider assigns it, and the caller never supplies it — see
+// providers/test's Provider.Create, which fills its own "id" (and other
+// computedFor entries) independent of whatever the caller's Attrs holds.
+func TestResolveAfterOmitsUnsetComputedAttributeWithNoExpression(t *testing.T) {
+	op := &planner.Operation{
+		Address: address.Address{Name: "net"},
+		Type:    "test.network",
+		After: map[string]value.Value{
+			"cidr": value.String("10.0.0.0/16", value.SourceExplicit),
+			"id":   value.Unknown(value.KindString, value.SourceProvider),
+		},
+	}
+
+	got, ds := resolveAfter(op, map[string]*resource.ResourceState{}, "dev")
+	if ds.HasErrors() {
+		t.Fatalf("unexpected diagnostics: %+v", ds)
+	}
+	if _, ok := got["id"]; ok {
+		t.Errorf(`got["id"] = %+v, want the key absent — an unset computed attribute with no expression is never a provider input`, got["id"])
+	}
+	if s, _ := got["cidr"].AsString(); s != "10.0.0.0/16" {
+		t.Errorf("cidr = %q, want \"10.0.0.0/16\" — an ordinary known attribute alongside it must be untouched", s)
+	}
+}
+
 func TestResolveAfterReportsUnresolvedDependencyAsDiagnostic(t *testing.T) {
 	op := &planner.Operation{
 		Address: address.Address{Name: "app"},

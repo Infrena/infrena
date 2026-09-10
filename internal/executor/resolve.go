@@ -130,6 +130,30 @@ func resolveAfter(op *planner.Operation, resources map[string]*resource.Resource
 			out[name] = v
 			continue
 		}
+		if v.Expr == nil {
+			// Nothing to resolve: Value.Expr's own doc comment (pkg/value)
+			// says Expr "is set when Known is false because the value
+			// depends on a resource that does not exist yet" — a nil Expr
+			// here is not a deferred cross-resource reference at all. It is
+			// afterAttributes (internal/planner/diff.go) staging a
+			// Computed schema attribute — one the provider assigns itself
+			// and the caller never supplies, e.g. test.network's "id" — as
+			// value.Unknown purely so planner.Render can show "(known
+			// after apply)" in the plan. Evaluating it here would call
+			// expressions.Evaluate(nil, scope), which returns an unknown
+			// with no error (eval.go's own nil-Expr branch), and the
+			// unresolved-value check below would then report it as a
+			// dependency-ordering failure it never was — turning the plain
+			// create of ANY resource with an unset computed attribute into
+			// an "X is still unknown after its dependencies were applied"
+			// error, unconditionally, dependency or not. Omitting the key
+			// from out — rather than carrying it through Known=false — is
+			// what lets resource.ResolvedResource.Desired() build a
+			// DesiredResource without tripping its own unknown-attribute
+			// refusal on an attribute that was never a provider input to
+			// begin with.
+			continue
+		}
 
 		resolved, evalDS := expressions.Evaluate(v.Expr, scope)
 		ds.Extend(evalDS)
