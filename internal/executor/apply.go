@@ -341,6 +341,18 @@ func (r *run) record(res nodeResult) error {
 		// from record into a diagnostic and stops scheduling further work,
 		// same as a Put failure) is the closest this layer can come to
 		// refusing a silent success outright.
+		//
+		// Stopping the whole run here, rather than failing only this one
+		// operation and continuing elsewhere, is deliberate, not an
+		// accident of reusing the Put-failure path: an ordinary failed
+		// provider call leaves state accurate (nothing changed), so
+		// skipping just that operation's dependents and continuing is
+		// safe. This case leaves this address's accuracy genuinely
+		// unknown — the same class of uncertainty a Put I/O failure
+		// produces, not an ordinary provider error — so it is routed
+		// through the identical stopping gate on purpose: continuing to
+		// schedule more work against a document already known to be
+		// silently incomplete would compound the risk, not contain it.
 		return fmt.Errorf("%s: provider %q returned success for %s with no resource state — state cannot record what happened, and if the provider call actually took effect the underlying infrastructure is now orphaned", res.node.Address, r.providerNameFor(res.node), res.node.Kind)
 	}
 	// context.WithoutCancel, not r.ctx directly: a state write must not be

@@ -517,3 +517,113 @@ func TestApplyPersistsAnAlreadyCompletedOperationEvenAfterItsOwnContextIsCancell
 		t.Fatal("root completed but never reached disk — record must persist with a context that survives Apply's own cancellation (context.WithoutCancel), not r.ctx directly")
 	}
 }
+
+// TestRecordHardErrorsOnNilStateForEveryKindThatCanReachIt is the verbFor
+// pattern again (see TestVerbForMapsEveryOpNodeShapeToTheRightVerb in
+// apply_test.go): record's nil-state default arm is reached by three
+// distinct OpNode shapes — create, update, and replace's create phase, the
+// same three needsDesired recognizes — and
+// TestApplyRecordsAHardErrorWhenAProviderReturnsSuccessWithNoResourceState
+// above only ever drove it through OpCreate. Nothing proved the identical
+// switch arm for OpUpdate or OpReplace/PhaseCreate before this test — the
+// exact shape of gap a Task 8 fix round was needed for, where a
+// misclassified create was invisible to every test in the package. Calls
+// record directly, on a hand-built *run, rather than driving a full Apply
+// run for each shape — cheaper, and isolates the switch arm itself the
+// same way TestVerbForMapsEveryOpNodeShapeToTheRightVerb isolates verbFor.
+func TestRecordHardErrorsOnNilStateForEveryKindThatCanReachIt(t *testing.T) {
+	cases := []struct {
+		name  string
+		kind  planner.OpKind
+		phase planner.Phase
+	}{
+		{"create", planner.OpCreate, planner.PhaseCreate},
+		{"update", planner.OpUpdate, planner.PhaseCreate},
+		{"replace create phase", planner.OpReplace, planner.PhaseCreate},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			backend := newLockedBackend(t, "dev")
+			reg := registry.New()
+			if err := reg.Register(&nilStateOnCreateProvider{resourceType: "test.thing"}); err != nil {
+				t.Fatalf("Register: %v", err)
+			}
+
+			a := addr("root")
+			node := planner.OpNode{Address: a, Kind: tc.kind, Phase: tc.phase}
+			r := &run{
+				ctx: context.Background(),
+				st:  state.New("proj", "dev"),
+				ops: map[string]*planner.Operation{a.String(): {Address: a, Type: "test.thing", Kind: tc.kind}},
+				opts: Options{
+					Registry: reg, Backend: backend, Environment: "dev",
+				},
+			}
+
+			err := r.record(nodeResult{node: node, state: nil, removed: false})
+			if err == nil {
+				t.Fatalf("record returned nil for Kind=%s Phase=%d — a successful create/update/replace-create-phase with no resource state must be a hard error", tc.kind, tc.phase)
+			}
+			if !strings.Contains(err.Error(), a.String()) {
+				t.Errorf("error %q does not name the address", err.Error())
+			}
+			if !strings.Contains(err.Error(), "nilstate") {
+				t.Errorf("error %q does not name the provider", err.Error())
+			}
+			if _, ok := r.st.Get(a); ok {
+				t.Error("state must not record a resource the provider never actually described")
+			}
+		})
+	}
+}
+
+// TestApplyStopsSchedulingASiblingAfterANilStateReturn proves the nil-state
+// hard error routes through the same stopping gate as a real Put I/O
+// failure (TestApplyStopsSchedulingAfterAPersistFailureButKeepsAccurateState
+// above): not just that Apply reports an error, but that a completely
+// independent sibling operation — ready to launch the moment root finishes,
+// with no dependency relationship to it at all — never gets scheduled. See
+// the comment on record's default arm (apply.go) for why stopping the
+// whole run, not just failing this one operation, is the right call here.
+func TestApplyStopsSchedulingASiblingAfterANilStateReturn(t *testing.T) {
+	backend := newLockedBackend(t, "dev")
+	reg := registry.New()
+	if err := reg.Register(&nilStateOnCreateProvider{resourceType: "test.nilthing"}); err != nil {
+		t.Fatalf("Register nilstate provider: %v", err)
+	}
+	if err := reg.Register(&countingProvider{resourceType: "test.thing"}); err != nil {
+		t.Fatalf("Register sibling provider: %v", err)
+	}
+
+	// root and sibling are independent — noDeps, no edge between them at
+	// all. What makes root the one that runs first under Parallelism: 1,
+	// deterministically, is graph.Walk.Ready sorting node IDs
+	// (internal/graph/walk.go): "create:root" sorts before
+	// "create:sibling".
+	plan := planWith(
+		op(addr("root"), "test.nilthing", planner.OpCreate),
+		op(addr("sibling"), "test.thing", planner.OpCreate),
+	)
+	g, err := planner.BuildExecution(plan, noDeps)
+	if err != nil {
+		t.Fatalf("BuildExecution: %v", err)
+	}
+	st := state.New("proj", "dev")
+
+	result, ds := Apply(context.Background(), plan, g, st, Options{
+		Parallelism: 1, PerProvider: 1, Registry: reg, Backend: backend, Environment: "dev",
+	})
+
+	if !ds.HasErrors() {
+		t.Fatal("expected a diagnostic reporting the nil-state failure")
+	}
+	if _, ok := st.Get(addr("root")); ok {
+		t.Error("state must not record root — the provider never described it")
+	}
+	if _, ok := st.Get(addr("sibling")); ok {
+		t.Error("sibling must not have been created — a nil-state return must stop scheduling new work, exactly like a Put I/O failure does")
+	}
+	if !reflect.DeepEqual(result.Applied, []address.Address{addr("root")}) {
+		t.Errorf("Applied = %v, want exactly [root] — root's provider call did succeed, same accounting as a Put failure", result.Applied)
+	}
+}
