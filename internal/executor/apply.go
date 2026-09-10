@@ -350,6 +350,13 @@ func (r *run) record(res nodeResult) error {
 	// context.WithTimeout from this uncancelled context — never from r.ctx,
 	// which by then may already be cancelled for the very reason this
 	// write needs to happen.
+	//
+	// This is the second of internal/executor's two context.WithoutCancel
+	// call sites; the other is operationContext (context.go), which
+	// detaches a dispatched operation's own provider call from the same
+	// cancellation for a different reason (an in-flight create must not be
+	// told to abort mid-call). Kept as two separate calls deliberately —
+	// see operationContext's doc comment for why they are not merged.
 	return r.opts.Backend.Put(context.WithoutCancel(r.ctx), r.opts.Environment, r.st)
 }
 

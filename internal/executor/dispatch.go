@@ -62,7 +62,10 @@ func dispatch(
 		if desired == nil {
 			return nil, fmt.Errorf("%s: dispatch: create requires a resolved desired resource", node.Address)
 		}
-		return prov.Create(ctx, desired)
+		// operationContext detaches this call from Apply's own cancellation: a
+		// SIGINT must finish an in-flight operation, not abort it (spec §15; see
+		// executor/context.go).
+		return prov.Create(operationContext(ctx), desired)
 
 	case node.Kind == planner.OpUpdate:
 		if prov == nil {
@@ -74,7 +77,10 @@ func dispatch(
 		if desired == nil {
 			return nil, fmt.Errorf("%s: dispatch: update requires a resolved desired resource", node.Address)
 		}
-		return prov.Update(ctx, current, desired)
+		// operationContext detaches this call from Apply's own cancellation: a
+		// SIGINT must finish an in-flight operation, not abort it (spec §15; see
+		// executor/context.go).
+		return prov.Update(operationContext(ctx), current, desired)
 
 	case node.Kind == planner.OpDestroy,
 		node.Kind == planner.OpReplace && node.Phase == planner.PhaseDestroy:
@@ -84,7 +90,10 @@ func dispatch(
 		if current == nil {
 			return nil, fmt.Errorf("%s: dispatch: destroy requires the resource's current state", node.Address)
 		}
-		return nil, prov.Delete(ctx, current)
+		// operationContext detaches this call from Apply's own cancellation: a
+		// SIGINT must finish an in-flight operation, not abort it (spec §15; see
+		// executor/context.go).
+		return nil, prov.Delete(operationContext(ctx), current)
 
 	default:
 		// Reachable only by an OpKind this switch was never taught about —
