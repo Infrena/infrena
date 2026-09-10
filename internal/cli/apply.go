@@ -164,6 +164,21 @@ func computePlan(ctx context.Context, cmd *cobra.Command, backend *state.Local, 
 	if err != nil {
 		return nil, nil, err
 	}
+	// Stamp the project name from the compiled configuration into the state
+	// this run will persist if it reaches executor.Apply. Before this fix,
+	// nothing in production ever set state.State.Project — every state.New
+	// call outside a _test.go file grepped to nothing — so every real state
+	// file on disk carried "" regardless of the project's actual name.
+	// destroy (task 14) is the only command that reads its project name
+	// FROM state rather than from compiled configuration (see destroy.go's
+	// doc comment on why), which is what surfaced this: its one destructive
+	// confirmation screen printed a blank project name instead of the real
+	// one. cfg.Project is authoritative here — apply's cfg comes from
+	// compiler.Compile (config wins over a stored value, this project's
+	// usual rule), and destroy's own cfg.Project is already st.Project
+	// itself (see newDestroyCommand's emptyCfg), so this line is a harmless
+	// no-op re-assignment on that path.
+	st.Project = cfg.Project
 
 	obs, refreshDiags := refresh.Refresh(ctx, st, reg, opts.Parallelism)
 	refreshDiags.Render(cmd.ErrOrStderr())
