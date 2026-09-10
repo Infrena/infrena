@@ -3033,27 +3033,28 @@ func applyDefaults(attrs map[string]value.Value, def *schema.ResourceDefinition,
 
 // fromDefault wraps a resolver's datum as a value marked SourceDefault, which
 // is what lets a plan print [default] and import generate minimal config.
-func fromDefault(raw any, kind value.Kind) value.Value {
+func fromDefault(raw any, kind value.Kind) (value.Value, bool) {
 	switch v := raw.(type) {
 	case string:
-		return value.String(v, value.SourceDefault)
+		return value.String(v, value.SourceDefault), true
 	case int64:
-		return value.Int(v, value.SourceDefault)
+		return value.Int(v, value.SourceDefault), true
 	case int:
-		return value.Int(int64(v), value.SourceDefault)
+		return value.Int(int64(v), value.SourceDefault), true
 	case float64:
-		return value.Float(v, value.SourceDefault)
+		return value.Float(v, value.SourceDefault), true
 	case bool:
-		return value.Bool(v, value.SourceDefault)
+		return value.Bool(v, value.SourceDefault), true
 	case []value.Value:
-		return value.List(v, value.SourceDefault)
+		return value.List(v, value.SourceDefault), true
 	case map[string]value.Value:
-		return value.Map(v, value.SourceDefault)
+		return value.Map(v, value.SourceDefault), true
 	default:
 		// A resolver returning a type the value model cannot express is a
-		// provider bug. Yield an unknown of the declared kind rather than
-		// fabricating a string, so it fails loudly downstream.
-		return value.Unknown(kind, value.SourceDefault)
+		// provider bug. It must NOT become an unknown: an unknown never
+		// resolves, so the planner could not prove it unchanged and would
+		// report a change on every plan, forever. Report it instead.
+		return value.Value{}, false
 	}
 }
 
@@ -3084,8 +3085,11 @@ func markSensitive(attrs map[string]value.Value, def *schema.ResourceDefinition)
 
 func defaultContextFor(cfg *ResolvedConfig, resourceType string, opts Options) schema.DefaultContext {
 	return schema.DefaultContext{
-		Environment:     cfg.Environment,
-		EnvironmentType: environmentType(cfg.Environment),
+		// Options is the authoritative environment for this compilation.
+		// cfg.Environment is a copy stage 6 wrote from the same source, and
+		// reading the copy invites the two to disagree.
+		Environment:     opts.Environment,
+		EnvironmentType: environmentType(opts.Environment),
 		Region:          opts.Region,
 		Account:         opts.Account,
 		Project:         cfg.Project,
@@ -3116,7 +3120,7 @@ func attributeNames(def *schema.ResourceDefinition) []string {
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `go test ./internal/compiler/ -v`
-Expected: PASS — twelve new tests plus the previous eighteen.
+Expected: PASS — twelve new tests plus the twenty-three already in the package.
 
 - [ ] **Step 5: Commit**
 
