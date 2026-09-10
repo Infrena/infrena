@@ -5457,7 +5457,7 @@ func TestStateUnlockOnUnlockedEnvironment(t *testing.T) {
 - [ ] **Step 3: Run the integration tests**
 
 Run: `go test ./tests/integration/ -v`
-Expected: PASS — nine tests. A failure here after green unit tests means a wiring problem
+Expected: PASS — eight tests. A failure here after green unit tests means a wiring problem
 between packages, which is exactly what these tests exist to find.
 
 - [ ] **Step 4: Run everything**
