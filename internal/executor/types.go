@@ -56,8 +56,13 @@ type Options struct {
 	// Registry resolves a resource type to the provider that implements it.
 	Registry *registry.Registry
 	// Backend is where state is read from and persisted to, under a lock
-	// held for the whole run.
-	Backend *state.Local
+	// held for the whole run. state.Backend rather than the concrete
+	// *state.Local so a test can substitute a double that behaves
+	// differently from Local in one specific way (e.g. actually honouring
+	// ctx cancellation, which Local.Put does not) without editing Local
+	// itself; every production caller still passes a *state.Local, which
+	// satisfies this interface directly.
+	Backend state.Backend
 	// Environment names which environment's lock and state this run uses.
 	Environment string
 	// Retry governs how a failed provider call is retried, per the

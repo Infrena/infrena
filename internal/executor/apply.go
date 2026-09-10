@@ -170,9 +170,14 @@ func Apply(ctx context.Context, p *planner.Plan, g *graph.Graph[planner.OpNode],
 			ds.Add(diag.Diagnostic{
 				Severity: diag.SeverityError,
 				Summary:  "failed to persist state after " + res.node.ID() + ": " + err.Error(),
-				Detail: res.node.Address.String() + " was applied successfully and Result.State reflects it, " +
-					"but the write to disk failed. The run is stopping rather than scheduling further " +
-					"operations against a state file that can no longer be kept in sync with reality.",
+				// Deliberately does not claim "Result.State reflects it" —
+				// true when record's error came from a failed Put (the
+				// in-memory mutation already ran), false when it came from
+				// a provider returning no resource state (nothing was set
+				// to reflect). See the error above for which happened here.
+				Detail: res.node.Address.String() + "'s provider call reported success, but state could not be " +
+					"kept in sync with it. The run is stopping rather than scheduling further operations " +
+					"against a state file that may no longer describe reality.",
 				Related: []address.Address{res.node.Address},
 			})
 			persistFailed = true
@@ -305,15 +310,55 @@ func (r *run) snapshot() map[string]*resource.ResourceState {
 // A Put failure does not undo the mutation: st.Set/st.Remove already ran,
 // and what they recorded is true. Rolling it back to match a stale disk
 // file would make Result.State lie about reality, which is worse than a
-// state file that is one write behind it. The caller (Apply's loop) is
-// what decides the run stops after this — see Apply's stopping gate.
+// state file that is behind it — by at most opts.Parallelism writes (every
+// operation still in flight when the first Put failed, each attempting and
+// possibly failing its own Put in turn), not by exactly one: measured
+// directly at Parallelism 3, three failed Puts land in one run. The design
+// still holds at that width: Put serialises the whole document on every
+// call, so the next successful Put resynchronises everything at once, not
+// just the one operation behind it, and Serial — which only Put advances —
+// does not drift from a failed attempt (confirmed: 0 after three failed
+// writes, matching that nothing was ever committed). The caller (Apply's
+// loop) is what decides the run stops after this — see Apply's stopping
+// gate.
 func (r *run) record(res nodeResult) error {
-	if res.removed {
+	switch {
+	case res.removed:
 		r.st.Remove(res.node.Address)
-	} else if res.state != nil {
+	case res.state != nil:
 		r.st.Set(res.state)
+	default:
+		// A provider whose Create/Update returned (nil, nil): res.err is
+		// nil (this function is never called otherwise — see Apply's loop),
+		// so as far as the provider is concerned the call succeeded, but
+		// there is no resource state to record. Provider.Create/Update's
+		// doc comment makes this a contract violation, not a valid outcome
+		// — silently doing nothing here would report Applied for an
+		// operation state has no record of, and if the underlying call
+		// really took effect, the result is a real resource orphaned:
+		// created for real, tracked nowhere, invisible to a later plan or
+		// destroy. Surfacing it as an error (Apply's loop turns any error
+		// from record into a diagnostic and stops scheduling further work,
+		// same as a Put failure) is the closest this layer can come to
+		// refusing a silent success outright.
+		return fmt.Errorf("%s: provider %q returned success for %s with no resource state — state cannot record what happened, and if the provider call actually took effect the underlying infrastructure is now orphaned", res.node.Address, r.providerNameFor(res.node), res.node.Kind)
 	}
-	return r.opts.Backend.Put(r.ctx, r.opts.Environment, r.st)
+	// context.WithoutCancel, not r.ctx directly: a state write must not be
+	// cancelled by the same signal that told Apply to stop — the entire
+	// point of stopping is to record what already happened, and a write
+	// cancelled by that same signal would defeat it. Lock already reads a
+	// context value (operationFromContext, internal/state/lock.go), so
+	// values need to keep flowing through here too — WithoutCancel keeps
+	// them and only strips cancellation, unlike context.Background(). This
+	// has no effect against Local.Put today, which ignores ctx entirely,
+	// but Task 11's SIGINT handling and a future remote-state Phase 4
+	// backend both depend on it: a backend that does honour ctx must still
+	// be able to complete this write after Apply's own ctx is cancelled. If
+	// such a backend wants to bound how long it waits, it derives a
+	// context.WithTimeout from this uncancelled context — never from r.ctx,
+	// which by then may already be cancelled for the very reason this
+	// write needs to happen.
+	return r.opts.Backend.Put(context.WithoutCancel(r.ctx), r.opts.Environment, r.st)
 }
 
 func (r *run) now() time.Time {

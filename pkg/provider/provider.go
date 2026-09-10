@@ -49,9 +49,18 @@ type Provider interface {
 	// Read returns the current state of a managed resource. A nil state with a
 	// nil error means the resource no longer exists.
 	Read(ctx context.Context, current *resource.ResourceState) (*resource.ResourceState, error)
-	// Create creates a resource.
+	// Create creates a resource. On success it MUST return the created
+	// resource's state, never (nil, nil): the executor persists exactly
+	// what is returned here as the record of what now exists, and a nil
+	// result with a nil error is indistinguishable from "nothing happened"
+	// to every caller above this interface. If the underlying call actually
+	// took effect, that resource is now orphaned — created for real but
+	// tracked nowhere, unfindable by a later plan or destroy. Report a
+	// failure through the error return instead if the created state cannot
+	// be determined.
 	Create(ctx context.Context, desired *resource.DesiredResource) (*resource.ResourceState, error)
-	// Update updates a resource.
+	// Update updates a resource. Same non-nil-on-success requirement as
+	// Create, for the same reason.
 	Update(ctx context.Context, current *resource.ResourceState, desired *resource.DesiredResource) (*resource.ResourceState, error)
 	// Delete deletes a resource.
 	Delete(ctx context.Context, current *resource.ResourceState) error
