@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -388,5 +389,180 @@ func TestRefreshDiagnosticsAreSortedByAddressNotCompletionOrder(t *testing.T) {
 	}
 	if !strings.Contains(ds[0].Summary, "aaa") || !strings.Contains(ds[1].Summary, "zzz") {
 		t.Errorf("diagnostics = %+v, want aaa before zzz — sorted by address, not by which read finished first", ds)
+	}
+}
+
+// mutatingReadProvider is a Provider double whose Read mutates the
+// *resource.ResourceState it is handed instead of treating it as read-only.
+// It exists to prove Refresh clones state before handing it to a provider —
+// pkg/resource.ResourceState.Clone's own doc comment names this package:
+// "Refresh and planning must never mutate the state that was loaded from
+// disk." If Refresh ever hands a provider the live pointer state.State
+// holds, this double corrupts that state in memory with no write call
+// anywhere in the trace.
+type mutatingReadProvider struct {
+	resourceType string
+}
+
+func (p *mutatingReadProvider) Name() string { return "mutating" }
+
+func (p *mutatingReadProvider) Definitions() []*schema.ResourceDefinition {
+	return []*schema.ResourceDefinition{{Type: p.resourceType}}
+}
+
+func (p *mutatingReadProvider) Read(ctx context.Context, current *resource.ResourceState) (*resource.ResourceState, error) {
+	current.ProviderID = "mutated-in-place"
+	current.Attributes["injected"] = value.String("hacked", value.SourceProvider)
+	return current.Clone(), nil
+}
+
+func (p *mutatingReadProvider) Create(context.Context, *resource.DesiredResource) (*resource.ResourceState, error) {
+	return nil, provider.ErrNotImplemented
+}
+
+func (p *mutatingReadProvider) Update(context.Context, *resource.ResourceState, *resource.DesiredResource) (*resource.ResourceState, error) {
+	return nil, provider.ErrNotImplemented
+}
+
+func (p *mutatingReadProvider) Delete(context.Context, *resource.ResourceState) error {
+	return provider.ErrNotImplemented
+}
+
+func (p *mutatingReadProvider) Discover(context.Context, provider.DiscoverRequest) ([]provider.DiscoveredResource, error) {
+	return nil, provider.ErrNotImplemented
+}
+
+func (p *mutatingReadProvider) Import(context.Context, string, string) (*resource.ResourceState, error) {
+	return nil, provider.ErrNotImplemented
+}
+
+func (p *mutatingReadProvider) ClassifyError(error) provider.Retryability {
+	return provider.NotSafeToRetry
+}
+
+var _ provider.Provider = (*mutatingReadProvider)(nil)
+
+func TestRefreshDoesNotExposeLiveStateToProviderRead(t *testing.T) {
+	const resourceType = "mutating.thing"
+	prov := &mutatingReadProvider{resourceType: resourceType}
+	reg := registry.New()
+	if err := reg.Register(prov); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	addr := address.Address{Name: "net"}
+	st := state.New("myapp", "dev")
+	st.Set(&resource.ResourceState{
+		Address:    addr,
+		Type:       resourceType,
+		ProviderID: "orig-id",
+		Attributes: map[string]value.Value{
+			"cidr": value.String("10.0.0.0/16", value.SourceProvider),
+		},
+	})
+
+	if _, ds := Refresh(context.Background(), st, reg, 1); ds.HasErrors() {
+		t.Fatalf("unexpected diagnostics: %+v", ds)
+	}
+
+	// The state.State Refresh was handed must be exactly as it was before:
+	// a provider that mutates the *resource.ResourceState it receives must
+	// never be able to corrupt the state Refresh was given, because Refresh
+	// never writes and ResourceState.Clone's contract applies to this
+	// package by name.
+	after, ok := st.Get(addr)
+	if !ok {
+		t.Fatal("resource vanished from state — Refresh must never mutate st")
+	}
+	if after.ProviderID != "orig-id" {
+		t.Errorf("ProviderID = %q, want unchanged %q — the provider's Read mutated the live state pointer", after.ProviderID, "orig-id")
+	}
+	if _, injected := after.Attributes["injected"]; injected {
+		t.Error("state gained an attribute the provider injected by mutating the live pointer in place")
+	}
+	if cidr, _ := after.Attributes["cidr"].AsString(); cidr != "10.0.0.0/16" {
+		t.Errorf("cidr = %q, state was mutated", cidr)
+	}
+}
+
+// countingReadProvider counts how many times Read is invoked, to prove
+// Refresh skips calling a provider's Read entirely once its context is
+// already cancelled, rather than depending on the provider to notice.
+type countingReadProvider struct {
+	resourceType string
+	calls        int32
+}
+
+func (p *countingReadProvider) Name() string { return "counting" }
+
+func (p *countingReadProvider) Definitions() []*schema.ResourceDefinition {
+	return []*schema.ResourceDefinition{{Type: p.resourceType}}
+}
+
+func (p *countingReadProvider) Read(ctx context.Context, current *resource.ResourceState) (*resource.ResourceState, error) {
+	atomic.AddInt32(&p.calls, 1)
+	return current.Clone(), nil
+}
+
+func (p *countingReadProvider) Create(context.Context, *resource.DesiredResource) (*resource.ResourceState, error) {
+	return nil, provider.ErrNotImplemented
+}
+
+func (p *countingReadProvider) Update(context.Context, *resource.ResourceState, *resource.DesiredResource) (*resource.ResourceState, error) {
+	return nil, provider.ErrNotImplemented
+}
+
+func (p *countingReadProvider) Delete(context.Context, *resource.ResourceState) error {
+	return provider.ErrNotImplemented
+}
+
+func (p *countingReadProvider) Discover(context.Context, provider.DiscoverRequest) ([]provider.DiscoveredResource, error) {
+	return nil, provider.ErrNotImplemented
+}
+
+func (p *countingReadProvider) Import(context.Context, string, string) (*resource.ResourceState, error) {
+	return nil, provider.ErrNotImplemented
+}
+
+func (p *countingReadProvider) ClassifyError(error) provider.Retryability {
+	return provider.NotSafeToRetry
+}
+
+var _ provider.Provider = (*countingReadProvider)(nil)
+
+func TestRefreshSkipsProviderReadWhenContextAlreadyCancelled(t *testing.T) {
+	const resourceType = "counting.thing"
+	prov := &countingReadProvider{resourceType: resourceType}
+	reg := registry.New()
+	if err := reg.Register(prov); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	st := state.New("myapp", "dev")
+	for i := 0; i < 4; i++ {
+		name := fmt.Sprintf("r%d", i)
+		st.Set(&resource.ResourceState{Address: address.Address{Name: name}, Type: resourceType, ProviderID: name})
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	obs, ds := Refresh(ctx, st, reg, 4)
+	if !ds.HasErrors() {
+		t.Fatal("a cancelled refresh must surface as diagnostics, not silently succeed")
+	}
+	if len(obs) != 4 {
+		t.Fatalf("Observations = %d, want 4", len(obs))
+	}
+	for addr, o := range obs {
+		if o.Err == nil {
+			t.Errorf("%s: Err must be set when the context was already cancelled", addr)
+		}
+		if o.State != nil {
+			t.Errorf("%s: State must be nil — cancellation is never treated as deletion", addr)
+		}
+	}
+	if calls := atomic.LoadInt32(&prov.calls); calls != 0 {
+		t.Errorf("provider Read was called %d times; want 0 — Refresh must check ctx before dispatching, not rely on the provider to notice", calls)
 	}
 }

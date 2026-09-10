@@ -109,20 +109,47 @@ func readOne(ctx context.Context, st *state.State, reg *registry.Registry, addr 
 		return Observation{Address: addr, Err: err}, ds
 	}
 
-	current, err := prov.Read(ctx, rs)
+	// Checked immediately before the read, not once up front in Refresh: a
+	// cancellation that lands mid-flight must still stop resources that
+	// haven't started yet from calling the provider, and this is the last
+	// point before that call. It is folded into the same "error, never a
+	// deletion" path as any other read failure below, so Ctrl+C does not
+	// depend on a provider bothering to check its own ctx.
+	if err := ctx.Err(); err != nil {
+		return readErrorObservation(addr, err)
+	}
+
+	// rs is the pointer state.State.Get returns, which is the same pointer
+	// state.State.Resources holds — not a copy. Handing it to prov.Read
+	// directly would let a provider that mutates its `current` argument in
+	// place corrupt live in-memory state with no write call anywhere in the
+	// trace; pkg/resource.ResourceState.Clone's own doc comment names this
+	// package's obligation here: "Refresh and planning must never mutate the
+	// state that was loaded from disk." Cloning is what makes that true
+	// regardless of how a given provider's Read happens to behave.
+	current, err := prov.Read(ctx, rs.Clone())
 	if err != nil {
-		var ds diag.Diagnostics
-		ds.Add(diag.Diagnostic{
-			Severity: diag.SeverityError,
-			Summary:  "failed to read " + addr.String() + ": " + err.Error(),
-			Detail:   "A read failure is a diagnostic, never a deletion: treating it as absence would propose destroying infrastructure that may still exist.",
-			Related:  []address.Address{addr},
-		})
-		return Observation{Address: addr, Err: err}, ds
+		return readErrorObservation(addr, err)
 	}
 
 	// current is nil exactly when the provider reports the resource no
 	// longer exists — Read's (nil, nil) contract, and how deletion outside
 	// infra is detected. It is not an error.
 	return Observation{Address: addr, State: current}, nil
+}
+
+// readErrorObservation builds the Observation and Diagnostics for a failed
+// read, whether the failure came from the provider or from ctx being
+// cancelled before the provider was even called. Both are the same fact:
+// reality is unknown right now, and that must never be mistaken for the
+// resource having been deleted.
+func readErrorObservation(addr address.Address, err error) (Observation, diag.Diagnostics) {
+	var ds diag.Diagnostics
+	ds.Add(diag.Diagnostic{
+		Severity: diag.SeverityError,
+		Summary:  "failed to read " + addr.String() + ": " + err.Error(),
+		Detail:   "A read failure is a diagnostic, never a deletion: treating it as absence would propose destroying infrastructure that may still exist.",
+		Related:  []address.Address{addr},
+	})
+	return Observation{Address: addr, Err: err}, ds
 }
