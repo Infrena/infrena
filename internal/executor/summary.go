@@ -90,14 +90,26 @@ func Render(r Result, opts RenderOptions) string {
 // forgotten: State.Get's comma-ok reports that plainly rather than this
 // treating a missing entry as a bug.
 func renderAppliedLines(addr address.Address, st *state.State, opts RenderOptions) []string {
-	header := "  " + appliedMarker(opts.Color) + " " + addr.String()
 	if st == nil {
-		return []string{header}
+		// Nothing to consult, so nothing to distinguish: a bare applied
+		// marker is the only honest answer.
+		return []string{"  " + appliedMarker(opts.Color) + " " + addr.String()}
 	}
 	rs, ok := st.Get(addr)
 	if !ok {
-		return []string{header}
+		// Applied, but absent from the state this run produced: the
+		// operation was a removal — a destroy, a forget, or the destroy
+		// half of a replace whose create did not land. Marking it "+"
+		// tells the user the opposite of what happened, which after
+		// `infra destroy` means every deleted resource reads as created.
+		// This is the same "applied means absent" rule the tracker uses to
+		// decide Result.Applied membership (isRemoval, isolation.go), read
+		// here from the state rather than the operation kind because
+		// Result carries addresses, not kinds.
+		return []string{"  " + removedMarker(opts.Color) + " " + addr.String()}
 	}
+
+	header := "  " + appliedMarker(opts.Color) + " " + addr.String()
 
 	lines := []string{header}
 	if opts.Verbose {
@@ -189,6 +201,16 @@ func splitOpID(id string) (verb, addr string) {
 		return "operation", id
 	}
 	return parts[0], parts[1]
+}
+
+// removedMarker marks a resource that was applied by ceasing to exist —
+// destroyed or forgotten. It mirrors planner.Render's "-" for a destroy so a
+// plan and the summary of applying it read the same way round.
+func removedMarker(color bool) string {
+	if !color {
+		return "-"
+	}
+	return summaryAnsiBoldRed + "-" + summaryAnsiReset
 }
 
 func appliedMarker(color bool) string {

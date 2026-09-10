@@ -201,12 +201,25 @@ func TestRenderAppliedResourceMissingFromStateShowsHeaderOnly(t *testing.T) {
 	r := Result{Applied: []address.Address{{Name: "gone"}}, Failed: map[string]error{}, State: st}
 
 	got := Render(r, RenderOptions{})
+	// "-", not "+": applied-but-absent-from-state IS the definition of a
+	// removal, so this is the destroy/forget rendering. Marking it "+"
+	// told the user the opposite of what happened — after `infra destroy`
+	// every deleted resource read as created.
 	want := "Apply complete: 1 applied, 0 failed, 0 skipped.\n" +
 		"\n" +
 		"Applied:\n" +
-		"  + gone\n"
+		"  - gone\n"
 	if got != want {
 		t.Fatalf("Render() =\n%q\nwant\n%q", got, want)
+	}
+	// Pin the distinction itself, not just this branch: the SAME address,
+	// present in state, must render "+". Without this, swapping both
+	// markers would leave the test above green.
+	present := &state.State{}
+	present.Set(summaryRS("gone", nil))
+	r2 := Result{Applied: []address.Address{{Name: "gone"}}, Failed: map[string]error{}, State: present}
+	if got2 := Render(r2, RenderOptions{}); !strings.Contains(got2, "  + gone") {
+		t.Fatalf("a resource present in state must render \"+\", got:\n%q", got2)
 	}
 }
 

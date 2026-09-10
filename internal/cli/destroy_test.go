@@ -96,8 +96,15 @@ func TestDestroyWithCorrectConfirmationRemovesEverything(t *testing.T) {
 	if !strings.Contains(stdout.String(), "Apply complete: 1 applied, 0 failed, 0 skipped.") {
 		t.Errorf("stdout does not report completion:\n%s", stdout.String())
 	}
-	if !strings.Contains(stdout.String(), "+ network") {
-		t.Errorf("stdout does not list the destroyed resource as applied:\n%s", stdout.String())
+	// "- network", not "+": the summary marks a resource that was applied
+	// by ceasing to exist with "-", matching the "-" the plan above used
+	// to propose destroying it. A "+" here would tell someone who just
+	// destroyed their environment that every resource had been created.
+	if !strings.Contains(stdout.String(), "- network") {
+		t.Errorf("stdout does not list the destroyed resource with a removal marker:\n%s", stdout.String())
+	}
+	if strings.Contains(stdout.String(), "+ network") {
+		t.Errorf("stdout marks a DESTROYED resource as created:\n%s", stdout.String())
 	}
 
 	st, gerr := backendFor(dir).Get(context.Background(), "dev")
