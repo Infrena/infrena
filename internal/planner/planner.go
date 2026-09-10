@@ -274,11 +274,12 @@ func operationFor(
 			reasons = []ChangeReason{{Note: "the provider no longer reports this resource; it will be recreated"}}
 		}
 		return &Operation{
-			Address: addr,
-			Type:    rc.Type,
-			Kind:    OpCreate,
-			After:   afterAttributes(def, attrs, nil, OpCreate),
-			Reasons: reasons,
+			Address:   addr,
+			Type:      rc.Type,
+			Kind:      OpCreate,
+			After:     afterAttributes(def, attrs, nil, OpCreate),
+			Reasons:   reasons,
+			Lifecycle: rc.Lifecycle,
 		}, ds
 	}
 
@@ -287,6 +288,19 @@ func operationFor(
 	if ds.HasErrors() {
 		return nil, ds
 	}
+	// Lifecycle is diffed against rs, the state record, not against actual,
+	// the provider observation. Lifecycle is bookkeeping infra attaches to a
+	// resource and no provider owns it, so the record is its only source of
+	// truth; diffing the observation instead would propose a spurious update
+	// on every plan against any provider whose Read forgot to carry it
+	// forward. rs is necessarily non-nil here — the branch above returned for
+	// every case where it is not.
+	//
+	// Without this, adding lifecycle to a resource that already exists plans
+	// as "no changes", state is never rewritten, and the guard the user just
+	// wrote down never takes effect: the same silent failure as a create that
+	// never recorded it, one apply later.
+	reasons = append(reasons, lifecycleReasons(rc.Lifecycle, rs.Lifecycle)...)
 	kind := OpNoOp
 	switch {
 	case forcesReplacement(reasons):
@@ -296,12 +310,13 @@ func operationFor(
 	}
 
 	return &Operation{
-		Address: addr,
-		Type:    rc.Type,
-		Kind:    kind,
-		Before:  copyAttrs(actual.Attributes),
-		After:   afterAttributes(def, attrs, actual.Attributes, kind),
-		Reasons: reasons,
+		Address:   addr,
+		Type:      rc.Type,
+		Kind:      kind,
+		Before:    copyAttrs(actual.Attributes),
+		After:     afterAttributes(def, attrs, actual.Attributes, kind),
+		Reasons:   reasons,
+		Lifecycle: rc.Lifecycle,
 	}, ds
 }
 

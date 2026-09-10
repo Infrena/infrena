@@ -188,6 +188,14 @@ resources: {}
 		t.Fatalf("seeding the fake cloud: %v", err)
 	}
 
+	// The state record carries the guard explicitly. The fake provider's
+	// Create no longer echoes DesiredResource.Lifecycle back onto the state
+	// it returns: the executor stamps lifecycle onto state from the plan
+	// (internal/executor/apply.go), so a provider that also set it would be
+	// a second writer of a field it does not own. Seeding it here says out
+	// loud what this fixture needs — a state record whose guard is set —
+	// instead of borrowing it from a provider round trip.
+	rs.Lifecycle = resource.Lifecycle{PreventDestroy: true}
 	st := state.New("myapp", "dev")
 	st.Set(rs)
 	b := backendFor(dir)

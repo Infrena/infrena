@@ -75,6 +75,13 @@ type Provider interface {
 	// tracked nowhere, unfindable by a later plan or destroy. Report a
 	// failure through the error return instead if the created state cannot
 	// be determined.
+	//
+	// It need not set Lifecycle. The executor stamps that onto the returned
+	// state from the plan, because lifecycle is bookkeeping infra attaches to
+	// a resource rather than anything the remote system knows about, and a
+	// provider that forgot it would silently lose a prevent_destroy or retain
+	// guard. Read is the exception, above: no executor is involved in a
+	// refresh, so Read must carry it forward itself.
 	Create(ctx context.Context, desired *resource.DesiredResource) (*resource.ResourceState, error)
 	// Update updates a resource. Same non-nil-on-success requirement as
 	// Create, for the same reason.

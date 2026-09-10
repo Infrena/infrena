@@ -147,7 +147,6 @@ func (p *Provider) Create(ctx context.Context, d *resource.DesiredResource) (*re
 	now := time.Now().UTC()
 	st := p.toState(d.Address.String(), d.Type, id, attrs)
 	st.CreatedAt, st.UpdatedAt = now, now
-	st.Lifecycle = d.Lifecycle
 	return st, nil
 }
 
@@ -202,10 +201,11 @@ func (p *Provider) Update(ctx context.Context, current *resource.ResourceState, 
 
 	st := p.toState(d.Address.String(), obj.Type, current.ProviderID, obj.Attributes)
 	carryForward(st, current)
-	// An update stamps a new mtime, and the desired lifecycle is what the
-	// configuration now asks for. Everything else carried above is unchanged.
+	// An update stamps a new mtime. Everything else carried above is
+	// unchanged — including Lifecycle, which the executor overwrites from the
+	// plan on its way to state (internal/executor/apply.go), so a provider
+	// setting it here would be a second writer of a field it does not own.
 	st.UpdatedAt = time.Now().UTC()
-	st.Lifecycle = d.Lifecycle
 	return st, nil
 }
 

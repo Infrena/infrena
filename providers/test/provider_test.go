@@ -305,6 +305,7 @@ func TestReadPreservesCarriedFields(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 	created.Dependencies = []address.Address{{Name: "net"}}
+	created.Lifecycle = resource.Lifecycle{PreventDestroy: true}
 
 	read, err := p.Read(context.Background(), created)
 	if err != nil {
@@ -312,6 +313,16 @@ func TestReadPreservesCarriedFields(t *testing.T) {
 	}
 	if len(read.Dependencies) != 1 || read.Dependencies[0].String() != "net" {
 		t.Errorf("Read returned Dependencies %v, want [net]", read.Dependencies)
+	}
+	// Lifecycle is carried for a sharper reason than the others: `infra
+	// refresh` persists whatever Read returns (internal/cli/refresh.go calls
+	// st.Set on it and Puts the result), so a Read that dropped it would not
+	// leave state stale — it would ERASE a prevent_destroy or retain guard from
+	// state outright, and the next destroy would proceed with nothing to stop
+	// it. This is the one carried field whose loss is silent and destructive,
+	// and it was the field this test did not check.
+	if !read.Lifecycle.PreventDestroy {
+		t.Error("Read dropped Lifecycle — a refresh would erase the guard from state")
 	}
 
 	// The carried slice must be a copy: aliasing would let a refresh mutate the

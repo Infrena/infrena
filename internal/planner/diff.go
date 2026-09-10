@@ -7,6 +7,7 @@ import (
 
 	"infra/internal/diag"
 	"infra/pkg/address"
+	"infra/pkg/resource"
 	"infra/pkg/schema"
 	"infra/pkg/value"
 )
@@ -112,6 +113,51 @@ func diffAttributes(addr address.Address, def *schema.ResourceDefinition, desire
 
 	sortReasons(reasons)
 	return reasons, ds
+}
+
+// lifecyclePrefix marks a ChangeReason as describing a lifecycle setting
+// rather than a provider attribute. Reasons carry no other type tag, and the
+// renderer needs to tell the two apart: a lifecycle reason has no entry in
+// Before or After, so the attribute-diff loop would never print it.
+const lifecyclePrefix = "lifecycle."
+
+// lifecycleReasons reports the lifecycle settings that differ between
+// configuration and what state records, so that changing only a lifecycle
+// setting is a visible operation instead of a silent no-op.
+//
+// Configuration wins, always — these reasons describe moving state towards
+// config, never the reverse. Spec §15 makes lifecycle something the user
+// declares in configuration, and §7's "explicit config always wins over an
+// implicit default" settles the direction: if state won, clearing
+// prevent_destroy from configuration could never take effect, the guard would
+// be permanently unremovable, and removalOperation's own suggested fix
+// ("clear prevent_destroy if you really mean to destroy it") would be a lie.
+// State's copy is authoritative in exactly one situation — when the resource
+// has left configuration, which is when removalOperation reads it and there is
+// no config lifecycle to compare against at all.
+//
+// ForceNew is deliberately false on both: lifecycle is metadata infra records
+// about a resource, and nothing about the external object changes when it
+// does. Marking either ForceNew would promote a guard being switched on into
+// a replacement, i.e. destroying the resource in the act of protecting it.
+//
+// A returned reason never carries a value that could be sensitive: these are
+// two booleans the user typed in configuration, which is why they may be shown
+// literally where ChangeReason's doc otherwise forbids values.
+func lifecycleReasons(desired, recorded resource.Lifecycle) []ChangeReason {
+	var reasons []ChangeReason
+	add := func(name string, want, got bool) {
+		if want == got {
+			return
+		}
+		reasons = append(reasons, ChangeReason{
+			Attribute: lifecyclePrefix + name,
+			Note:      strconv.FormatBool(got) + " -> " + strconv.FormatBool(want),
+		})
+	}
+	add("prevent_destroy", desired.PreventDestroy, recorded.PreventDestroy)
+	add("retain", desired.Retain, recorded.Retain)
+	return reasons
 }
 
 // forcesReplacement reports whether any reason names a ForceNew attribute,

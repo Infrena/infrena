@@ -15,6 +15,7 @@ import (
 
 	"infra/internal/diag"
 	"infra/pkg/address"
+	"infra/pkg/resource"
 	"infra/pkg/value"
 )
 
@@ -115,6 +116,29 @@ type Operation struct {
 	// a resource with dependents is the case spec §20 wants called out loudly,
 	// and the count is not recoverable from the plan without it.
 	Dependents []address.Address
+	// Lifecycle is the lifecycle the CONFIGURATION declares for this resource,
+	// carried here purely as data for the executor to record in state. It is
+	// zero for OpDestroy and OpForget, where the resource has by definition
+	// left configuration and there is nothing left to record.
+	//
+	// It is emphatically not a decision input. Every lifecycle DECISION is
+	// already encoded in Kind by removalOperation — retain becomes OpForget,
+	// prevent_destroy becomes a plan-time error that produces no operation at
+	// all — and that stays the single enforcement point. Nothing downstream of
+	// the planner may branch on this field; internal/executor copies it onto
+	// the ResourceState it records and never reads it otherwise.
+	//
+	// It has to travel on the operation rather than being looked up from
+	// configuration at execute time because the plan is the executor's
+	// complete instruction set: M6 saves a plan and applies it later, and a
+	// lifecycle read from configuration at that point could disagree with the
+	// plan the user approved.
+	//
+	// Recording it is what makes the guards work at all. A destroy reads
+	// lifecycle from STATE — correctly, since the resource is gone from
+	// configuration by then — so a lifecycle that never reaches state is a
+	// guard that silently does nothing.
+	Lifecycle resource.Lifecycle
 }
 
 // Plan is what `infra plan` produces and `infra apply` consumes.
@@ -202,6 +226,11 @@ type operationWire struct {
 	After      map[string]value.Value `json:"after,omitempty"`
 	Reasons    []ChangeReason         `json:"reasons,omitempty"`
 	Dependents []string               `json:"dependents,omitempty"`
+	// omitzero, not omitempty: encoding/json cannot omit a zero struct any
+	// other way, and a plan for a configuration that sets no lifecycle at all
+	// must encode byte-for-byte as it did before this field existed
+	// (invariant 6).
+	Lifecycle resource.Lifecycle `json:"lifecycle,omitzero"`
 }
 
 type diagnosticWire struct {
@@ -250,12 +279,13 @@ func (p *Plan) encode(withTimestamp bool) ([]byte, error) {
 		address.Sort(dependents)
 
 		entry := operationWire{
-			Address: op.Address.String(),
-			Type:    op.Type,
-			Kind:    op.Kind,
-			Before:  op.Before,
-			After:   op.After,
-			Reasons: op.Reasons,
+			Address:   op.Address.String(),
+			Type:      op.Type,
+			Kind:      op.Kind,
+			Before:    op.Before,
+			After:     op.After,
+			Reasons:   op.Reasons,
+			Lifecycle: op.Lifecycle,
 		}
 		for _, dependent := range dependents {
 			entry.Dependents = append(entry.Dependents, dependent.String())

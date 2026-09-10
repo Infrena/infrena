@@ -92,6 +92,25 @@ func renderOperationLines(op Operation, opts RenderOptions) []string {
 			}
 			lines = append(lines, "      "+k+": "+renderSide(before, hadBefore)+" -> "+renderSide(after, hasAfter))
 		}
+		lines = append(lines, renderLifecycleLines(op.Reasons)...)
+	}
+	return lines
+}
+
+// renderLifecycleLines prints the lifecycle settings an update changes.
+//
+// They cannot come out of the attribute loop above: a lifecycle setting is not
+// an attribute and appears in neither Before nor After, so without this an
+// update whose only change is a lifecycle setting renders as a bare header
+// with nothing under it — a change the user is asked to approve without being
+// told what it is.
+func renderLifecycleLines(reasons []ChangeReason) []string {
+	var lines []string
+	for _, r := range reasons {
+		if !strings.HasPrefix(r.Attribute, lifecyclePrefix) || r.Note == "" {
+			continue
+		}
+		lines = append(lines, "      "+r.Attribute+": "+r.Note)
 	}
 	return lines
 }

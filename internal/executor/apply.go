@@ -421,17 +421,23 @@ func (r *run) execute(node planner.OpNode, snapshot map[string]*resource.Resourc
 		if resolveDS.HasErrors() {
 			return nil, false, fmt.Errorf("%s: could not resolve deferred values: %s", node.Address, firstErrorSummary(resolveDS))
 		}
-		lifecycle := resource.Lifecycle{}
-		if node.Kind == planner.OpUpdate && current != nil {
-			// Operation deliberately carries no Lifecycle: the planner already
-			// encodes every lifecycle decision into the operation kind — retain
-			// becomes OpForget, prevent_destroy produces no operation at all — so
-			// enforcing it again here would be a second enforcement point that can
-			// disagree with the first. An
-			// update carries forward whatever is already on record.
-			lifecycle = current.Lifecycle
-		}
-		d, desiredErr := (resource.ResolvedResource{Address: node.Address, Type: op.Type, Attrs: after, Lifecycle: lifecycle}).Desired()
+		// op.Lifecycle is the lifecycle the configuration declares, carried on
+		// the operation as data. This is a copy, not a decision: nothing in
+		// this package branches on its value, so the planner remains the
+		// single enforcement point (retain becomes OpForget, prevent_destroy
+		// becomes a plan-time error and no operation at all). A second check
+		// here could disagree with that one, which is how a resource gets
+		// destroyed despite a guard.
+		//
+		// Recording it is not optional, though. A destroy reads lifecycle from
+		// STATE, because by then the resource has left configuration — so a
+		// lifecycle that never reaches state is a guard that silently does
+		// nothing. This used to read resource.Lifecycle{} on a create and
+		// current.Lifecycle on an update, which meant no configured lifecycle
+		// ever reached state at all: `prevent_destroy: true` applied cleanly
+		// and then destroyed without complaint, and `retain: true` deleted the
+		// resource it was written to preserve.
+		d, desiredErr := (resource.ResolvedResource{Address: node.Address, Type: op.Type, Attrs: after, Lifecycle: op.Lifecycle}).Desired()
 		if desiredErr != nil {
 			return nil, false, desiredErr
 		}
@@ -472,6 +478,18 @@ func (r *run) execute(node planner.OpNode, snapshot map[string]*resource.Resourc
 	}
 	if err != nil {
 		return nil, false, err
+	}
+
+	// Lifecycle is bookkeeping infra attaches to a resource, not something any
+	// provider owns or can be relied on to echo back (pkg/provider says as
+	// much of Read; the same holds here). Stamping it from the operation makes
+	// the guard reach state for every provider, including one that never
+	// thinks about lifecycle at all — a provider that dropped it would lose
+	// the guard silently, which pkg/provider calls the worst failure mode this
+	// product has. Still not a decision: an unconditional assignment of a
+	// value this package never reads.
+	if desired != nil && result != nil {
+		result.Lifecycle = desired.Lifecycle
 	}
 
 	removed = node.Kind == planner.OpForget || node.Kind == planner.OpDestroy ||

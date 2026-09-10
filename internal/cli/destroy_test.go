@@ -143,6 +143,14 @@ resources: {}
 	if err != nil {
 		t.Fatalf("seeding the fake cloud: %v", err)
 	}
+	// The state record carries the guard explicitly. The fake provider's
+	// Create no longer echoes DesiredResource.Lifecycle back onto the state
+	// it returns: the executor stamps lifecycle onto state from the plan
+	// (internal/executor/apply.go), so a provider that also set it would be
+	// a second writer of a field it does not own. Seeding it here says out
+	// loud what this fixture needs — a state record whose guard is set —
+	// instead of borrowing it from a provider round trip.
+	rs.Lifecycle = resource.Lifecycle{Retain: true}
 	st := state.New("myapp", "dev")
 	st.Set(rs)
 	seedState(t, dir, "dev", st)
@@ -237,6 +245,14 @@ resources: {}
 		t.Fatalf("seeding the plain resource: %v", err)
 	}
 
+	// The state record carries the guard explicitly. The fake provider's
+	// Create no longer echoes DesiredResource.Lifecycle back onto the state
+	// it returns: the executor stamps lifecycle onto state from the plan
+	// (internal/executor/apply.go), so a provider that also set it would be
+	// a second writer of a field it does not own. Seeding it here says out
+	// loud what this fixture needs — a state record whose guard is set —
+	// instead of borrowing it from a provider round trip.
+	guarded.Lifecycle = resource.Lifecycle{PreventDestroy: true}
 	st := state.New("myapp", "dev")
 	st.Set(guarded)
 	st.Set(plain)
@@ -326,6 +342,14 @@ resources: {}
 		t.Fatalf("seeding the retained resource: %v", err)
 	}
 
+	// The state record carries the guard explicitly. The fake provider's
+	// Create no longer echoes DesiredResource.Lifecycle back onto the state
+	// it returns: the executor stamps lifecycle onto state from the plan
+	// (internal/executor/apply.go), so a provider that also set it would be
+	// a second writer of a field it does not own. Seeding it here says out
+	// loud what this fixture needs — a state record whose guard is set —
+	// instead of borrowing it from a provider round trip.
+	keeper.Lifecycle = resource.Lifecycle{Retain: true}
 	st := state.New("myapp", "dev")
 	st.Set(doomed)
 	st.Set(keeper)
