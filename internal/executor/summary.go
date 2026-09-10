@@ -55,9 +55,13 @@ func Render(r Result, opts RenderOptions) string {
 		len(applied), len(r.Failed), len(r.Skipped)))
 
 	if len(applied) > 0 {
+		forgotten := make(map[string]bool, len(r.Forgotten))
+		for _, a := range r.Forgotten {
+			forgotten[a.String()] = true
+		}
 		lines = append(lines, "", "Applied:")
 		for _, addr := range applied {
-			lines = append(lines, renderAppliedLines(addr, r.State, opts)...)
+			lines = append(lines, renderAppliedLines(addr, r.State, forgotten, opts)...)
 		}
 	}
 
@@ -89,7 +93,7 @@ func Render(r Result, opts RenderOptions) string {
 // A resource can be Applied with nothing in st when it was destroyed or
 // forgotten: State.Get's comma-ok reports that plainly rather than this
 // treating a missing entry as a bug.
-func renderAppliedLines(addr address.Address, st *state.State, opts RenderOptions) []string {
+func renderAppliedLines(addr address.Address, st *state.State, forgotten map[string]bool, opts RenderOptions) []string {
 	if st == nil {
 		// Nothing to consult, so nothing to distinguish: a bare applied
 		// marker is the only honest answer.
@@ -97,6 +101,13 @@ func renderAppliedLines(addr address.Address, st *state.State, opts RenderOption
 	}
 	rs, ok := st.Get(addr)
 	if !ok {
+		if forgotten[addr.String()] {
+			// Absent from state, but NOT deleted: dropped from management
+			// with the real resource left standing. State absence alone
+			// cannot tell this apart from a destroy, which is why
+			// Result.Forgotten exists.
+			return []string{"  " + forgetMarker(opts.Color) + " " + addr.String()}
+		}
 		// Applied, but absent from the state this run produced: the
 		// operation was a removal — a destroy, a forget, or the destroy
 		// half of a replace whose create did not land. Marking it "+"
@@ -203,14 +214,30 @@ func splitOpID(id string) (verb, addr string) {
 	return parts[0], parts[1]
 }
 
-// removedMarker marks a resource that was applied by ceasing to exist —
-// destroyed or forgotten. It mirrors planner.Render's "-" for a destroy so a
-// plan and the summary of applying it read the same way round.
+// removedMarker marks a resource that was applied by being DELETED. It
+// mirrors planner.Render's "-" for a destroy so a plan and the summary of
+// applying it read the same way round.
 func removedMarker(color bool) string {
 	if !color {
 		return "-"
 	}
 	return summaryAnsiBoldRed + "-" + summaryAnsiReset
+}
+
+// forgetMarker marks a resource dropped from management that still exists at
+// the provider — spec §11's retain, planner.Render's "=".
+//
+// It is not a cosmetic distinction from removedMarker. "-" says the resource
+// was deleted. For a retained resource that is false, and false in the
+// direction that matters: `retain` exists precisely so a resource is NOT
+// deleted, and a summary claiming otherwise sends a user looking for
+// infrastructure they still have, or worse, reassures them something is gone
+// when it is still running and still costing money.
+func forgetMarker(color bool) string {
+	if !color {
+		return "="
+	}
+	return summaryAnsiCyan + "=" + summaryAnsiReset
 }
 
 func appliedMarker(color bool) string {

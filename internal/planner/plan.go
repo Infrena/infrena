@@ -139,6 +139,23 @@ type Operation struct {
 	// configuration by then — so a lifecycle that never reaches state is a
 	// guard that silently does nothing.
 	Lifecycle resource.Lifecycle
+	// DependsOn is what the CONFIGURATION says this resource depends on,
+	// sorted, carried here for the executor to record in state — the same
+	// arrangement, and for the same reasons, as Lifecycle above. It is zero
+	// for OpDestroy and OpForget, where the resource has left configuration
+	// and there is nothing current to record.
+	//
+	// It is not a scheduling input: BuildExecution draws its create-side
+	// edges from Operation.Dependents, and this field is never read there.
+	// What it is for is the NEXT plan. Once a resource leaves configuration,
+	// state's Dependencies is the only surviving record of what it depended
+	// on (spec §14), and dependentsOf reads exactly that to order destroys.
+	// Nothing wrote it: every ResourceState in every state file carried an
+	// empty Dependencies, so a destroy of resources already removed from
+	// configuration had no ordering edges at all — invariant 4 held for
+	// everything still configured and silently did not for the one case
+	// where state is the only source.
+	DependsOn []address.Address
 }
 
 // Plan is what `infra plan` produces and `infra apply` consumes.

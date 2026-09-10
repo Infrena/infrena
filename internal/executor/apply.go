@@ -520,6 +520,12 @@ func (r *run) execute(node planner.OpNode, snapshot map[string]*resource.Resourc
 	//     state, so a later destroy — which reads lifecycle from state,
 	//     correctly, the resource having left configuration by then — found
 	//     no guard at all.
+	//   - Dependencies: what a resource depends on is configuration's
+	//     business and no provider's, so nothing came back with it. State's
+	//     Dependencies stayed empty for every resource ever created, and
+	//     that field is the ONLY source of destroy-ordering edges once a
+	//     resource leaves configuration (spec §14) — so a destroy of
+	//     already-removed resources ran with no ordering at all.
 	//   - Sensitivity: a value that became secret by PROPAGATION through
 	//     ${db.password} (spec §36) arrived here marked, went through the
 	//     provider as a bare string, and was recorded unmarked. The apply
@@ -534,12 +540,14 @@ func (r *run) execute(node planner.OpNode, snapshot map[string]*resource.Resourc
 	// only that the value reaching Format had lost the flag.
 	if desired != nil && result != nil {
 		result.Lifecycle = desired.Lifecycle
+		result.Dependencies = append([]address.Address(nil), op.DependsOn...)
 		result.Attributes = value.CarrySensitivityAttrs(result.Attributes, desired.Attrs)
 	}
 
-	removed = node.Kind == planner.OpForget || node.Kind == planner.OpDestroy ||
-		(node.Kind == planner.OpReplace && node.Phase == planner.PhaseDestroy)
-	return result, removed, nil
+	// isRemoval (isolation.go), not a second copy of its body: this used to
+	// re-write the same three-way condition inline, so a fix to one would
+	// silently not reach the other.
+	return result, isRemoval(node), nil
 }
 
 // verbFor maps an OpNode to the provider verb its dispatch call will use —

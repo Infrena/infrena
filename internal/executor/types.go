@@ -27,6 +27,19 @@ type Result struct {
 	// address collapse into a single entry — and sorts it exactly once, at
 	// the very end, never appending in completion order.
 	Applied []address.Address
+	// Forgotten is the subset of Applied that was dropped from management
+	// without being deleted — OpForget, spec §11's retain. It is a subset,
+	// not a separate category: a forget IS applied work, and the run did
+	// exactly what was planned.
+	//
+	// It exists because the summary renderer cannot recover the distinction
+	// any other way. It marks a removal by finding the address absent from
+	// Result.State, and a forgotten resource is absent for exactly the same
+	// reason a destroyed one is — so every forget rendered with a destroy's
+	// "-", telling the user their retained resource had been deleted. The
+	// plan renderer distinguishes them ("=" versus "-") because it has the
+	// operation kind; this is how the summary gets it too.
+	Forgotten []address.Address
 	// Failed maps the planner.OpNode.ID() of every operation that failed to
 	// the error it failed with. It is keyed by node ID rather than address
 	// because a Replace is two nodes at one address ("destroy:x" and

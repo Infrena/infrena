@@ -174,6 +174,19 @@ resources: {}
 		t.Errorf("plan did not render the retained resource as forgotten:\n%s", stdout.String())
 	}
 
+	// The apply SUMMARY must agree with the plan. It marks removals by
+	// finding the address absent from state, and a forgotten resource is
+	// absent for exactly the same reason a destroyed one is — so this used
+	// to print "- network", telling the user the resource retain exists to
+	// protect had been deleted. Result.Forgotten is what lets the summary
+	// say "=" here, matching the plan the user just approved.
+	if !strings.Contains(stdout.String(), "= network") {
+		t.Errorf("the apply summary did not mark the retained resource as forgotten:\n%s", stdout.String())
+	}
+	if strings.Contains(stdout.String(), "- network") {
+		t.Errorf("the apply summary marked a RETAINED resource as deleted — the one claim retain exists to make false:\n%s", stdout.String())
+	}
+
 	afterSt, gerr := backendFor(dir).Get(ctx, "dev")
 	if gerr != nil {
 		t.Fatalf("reading state: %v", gerr)
@@ -713,4 +726,76 @@ resources: {}
 	st.Set(rs)
 	seedState(t, dir, environment, st)
 	return dir
+}
+
+// TestApplyRecordsDependenciesInStateSoALaterDestroyCanOrderItself pins the
+// one bookkeeping field the executor was still dropping.
+//
+// Spec §14 makes ResourceState.Dependencies the ONLY source of
+// destroy-ordering edges once a resource leaves configuration: the planner's
+// dependentsOf reads state, not config, for OpDestroy and OpForget, because
+// by then neither the resource nor some of its dependents are in
+// configuration at all. Nothing ever wrote the field. Every state file in
+// existence carried an empty Dependencies, so invariant 4 held for
+// everything still configured and silently did not for the one case where
+// state is the only source — a teardown of resources already deleted from
+// the YAML.
+//
+// The two halves are asserted together on purpose: that apply WRITES the
+// field, and that destroy planning READS it back as a dependent warning.
+// Either alone would pass with the other broken.
+func TestApplyRecordsDependenciesInStateSoALaterDestroyCanOrderItself(t *testing.T) {
+	dir := projectDir(t, `
+project: myapp
+resources:
+  network:
+    type: test.network
+    cidr: 10.20.0.0/16
+  db:
+    type: test.database
+    engine: postgres
+    network: ${network.id}
+`)
+	applyOpts := &GlobalOptions{Dir: dir, Parallelism: 4, AutoApprove: true}
+	applyCmd := newApplyCommand(applyOpts)
+	applyCmd.SetArgs([]string{"dev"})
+	applyCmd.SetIn(strings.NewReader(""))
+	var applyOut, applyErr bytes.Buffer
+	applyCmd.SetOut(&applyOut)
+	applyCmd.SetErr(&applyErr)
+	if err := applyCmd.Execute(); !errors.Is(err, errChanges) {
+		t.Fatalf("apply = %v, want errChanges:\n%s%s", err, applyOut.String(), applyErr.String())
+	}
+
+	st, err := backendFor(dir).Get(context.Background(), "dev")
+	if err != nil {
+		t.Fatalf("reading state: %v", err)
+	}
+	db, ok := st.Get(address.Address{Name: "db"})
+	if !ok {
+		t.Fatal("db is not in state")
+	}
+	if len(db.Dependencies) != 1 || db.Dependencies[0].String() != "network" {
+		t.Fatalf("db.Dependencies = %v, want [network] — configuration's dependency edges must survive into state, or a later destroy has no ordering at all", db.Dependencies)
+	}
+	if net, ok := st.Get(address.Address{Name: "network"}); !ok || len(net.Dependencies) != 0 {
+		t.Errorf("network.Dependencies = %v, want empty — it depends on nothing", net.Dependencies)
+	}
+
+	// Now the consumer. Destroy plans from state alone (it compiles no
+	// configuration), so the dependent warning on network can only have come
+	// from db's recorded Dependencies.
+	destroyOpts := &GlobalOptions{Dir: dir, Parallelism: 4}
+	destroyCmd := newDestroyCommand(destroyOpts)
+	destroyCmd.SetArgs([]string{"dev"})
+	destroyCmd.SetIn(strings.NewReader("no\n"))
+	var destroyOut, destroyErr bytes.Buffer
+	destroyCmd.SetOut(&destroyOut)
+	destroyCmd.SetErr(&destroyErr)
+	_ = destroyCmd.Execute() // declined at the prompt; the plan is what matters
+
+	out := destroyOut.String()
+	if !strings.Contains(out, "This resource has 1 dependent resource.") {
+		t.Errorf("the destroy plan does not warn that network has a dependent — state's Dependencies did not reach the planner:\n%s", out)
+	}
 }

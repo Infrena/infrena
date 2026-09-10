@@ -25,11 +25,20 @@ type trackedApply struct {
 	// result's doc comment). node only carries Kind/Phase, not this
 	// judgement, so it is computed once here, at recordSuccess time,
 	// mirroring the identical (Kind, Phase) -> removed mapping run.execute
-	// already makes for nodeResult.removed — there is no shared accessor to
-	// call instead because, unlike Walk.Skip's transitivity, this is a
-	// plain field mapping, not a rule this package has ever gotten wrong by
-	// duplicating.
+	// already makes for nodeResult.removed — through the same isRemoval
+	// call, which run.execute now uses too rather than re-writing its body
+	// inline.
 	removal bool
+	// forget distinguishes the one removal that is NOT a deletion. A forget
+	// drops a resource from management and deliberately leaves it standing
+	// at the provider (spec §11's retain), so the summary must not mark it
+	// with a destroy's "-": telling a user their retained resource was
+	// deleted is the exact opposite of what happened, and it is what
+	// `retain` exists to prevent. The plan renderer already distinguishes
+	// them ("=" versus "-"); the apply summary could not, because Result
+	// carries addresses and state, and a forgotten address is absent from
+	// state for the same reason a destroyed one is.
+	forget bool
 }
 
 // tracker accumulates what happened to every operation the coordinating
@@ -82,7 +91,11 @@ func isRemoval(node planner.OpNode) bool {
 // as a direct call to Walk.Done would — call this INSTEAD of Done, never
 // alongside it, or a completed node gets marked done twice.
 func (t *tracker) recordSuccess(w *graph.Walk[planner.OpNode], node planner.OpNode) []planner.OpNode {
-	t.applied[node.Address.String()] = trackedApply{addr: node.Address, removal: isRemoval(node)}
+	t.applied[node.Address.String()] = trackedApply{
+		addr:    node.Address,
+		removal: isRemoval(node),
+		forget:  node.Kind == planner.OpForget,
+	}
 	return w.Done(node.ID())
 }
 
@@ -212,6 +225,7 @@ func (t *tracker) recordFailureWith(w *graph.Walk[planner.OpNode], node planner.
 // check once a real *state.State is in hand.
 func (t *tracker) result(st *state.State) Result {
 	applied := make([]address.Address, 0, len(t.applied))
+	var forgotten []address.Address
 	for _, a := range t.applied {
 		if !a.removal && st != nil {
 			if _, ok := st.Get(a.addr); !ok {
@@ -219,8 +233,12 @@ func (t *tracker) result(st *state.State) Result {
 			}
 		}
 		applied = append(applied, a.addr)
+		if a.forget {
+			forgotten = append(forgotten, a.addr)
+		}
 	}
 	address.Sort(applied)
+	address.Sort(forgotten)
 	// address.Sort alone does not dedup: applied is built from map values
 	// above, so it already has at most one entry per address — nothing left
 	// to collapse here. The dedup lives in recordSuccess's map write, not
@@ -233,9 +251,10 @@ func (t *tracker) result(st *state.State) Result {
 	sort.Strings(skipped)
 
 	return Result{
-		Applied: applied,
-		Failed:  t.failed,
-		Skipped: skipped,
-		State:   st,
+		Applied:   applied,
+		Forgotten: forgotten,
+		Failed:    t.failed,
+		Skipped:   skipped,
+		State:     st,
 	}
 }

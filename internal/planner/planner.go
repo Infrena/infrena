@@ -280,6 +280,7 @@ func operationFor(
 			After:     afterAttributes(def, attrs, nil, OpCreate),
 			Reasons:   reasons,
 			Lifecycle: rc.Lifecycle,
+			DependsOn: append([]address.Address(nil), rc.DependsOn...),
 		}, ds
 	}
 
@@ -317,6 +318,7 @@ func operationFor(
 		After:     afterAttributes(def, attrs, actual.Attributes, kind),
 		Reasons:   reasons,
 		Lifecycle: rc.Lifecycle,
+		DependsOn: append([]address.Address(nil), rc.DependsOn...),
 	}, ds
 }
 
