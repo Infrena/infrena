@@ -41,6 +41,42 @@ func TestRetryableTableMatchesSpec(t *testing.T) {
 	}
 }
 
+// TestRetryableFailsClosedOnUnrecognizedClassification pins the fix for
+// review finding #1 (task-5 fix round 1): provider.Retryability is a plain
+// uint8, not a validated closed type, so a provider built against a future
+// core — or one with a bug — could return a value outside
+// {NotSafeToRetry, ConditionallyRetryable, SafeToRetry}. Before this fix,
+// retryable's catch-all default treated any such value identically to
+// ConditionallyRetryable, which meant Read and Update would silently retry
+// on a classification nobody defined. The core owns the policy (spec §15),
+// and the conservative policy for an unrecognized classification is never
+// retry, for every verb — including Read and Update, which have no
+// Create/Delete-style asymmetry to fall back on for protection.
+func TestRetryableFailsClosedOnUnrecognizedClassification(t *testing.T) {
+	const unrecognized provider.Retryability = 99
+	for _, verb := range []Verb{VerbRead, VerbCreate, VerbUpdate, VerbDelete} {
+		if got := retryable(verb, unrecognized); got != false {
+			t.Errorf("retryable(%s, unrecognized=99) = %v, want false — an unrecognized classification must fail closed, not be treated as ConditionallyRetryable", verb, got)
+		}
+	}
+}
+
+// TestRetryableRefusesVerbInvalid pins the fix for review finding #2 (task-5
+// fix round 1): VerbInvalid — the zero value of Verb — must never be
+// eligible for retry, under any classification including SafeToRetry. An
+// uninitialized or unrecognized Verb reaching retryable is itself a bug,
+// and the safe answer to that bug is "do not retry," not "retry because the
+// classification looked fine." This matters because Verb's zero value
+// would otherwise number the same as VerbRead under plain iota, which is
+// the most permissive verb, not the least.
+func TestRetryableRefusesVerbInvalid(t *testing.T) {
+	for _, r := range []provider.Retryability{provider.NotSafeToRetry, provider.ConditionallyRetryable, provider.SafeToRetry, 99} {
+		if got := retryable(VerbInvalid, r); got != false {
+			t.Errorf("retryable(VerbInvalid, %d) = %v, want false", r, got)
+		}
+	}
+}
+
 func TestBackoffDoublesThenCapsAtMax(t *testing.T) {
 	policy := RetryPolicy{
 		Base:   time.Second,
@@ -96,6 +132,27 @@ func TestAttemptWithZeroMaxAttemptsMeansOne(t *testing.T) {
 	}
 	if calls != 1 {
 		t.Errorf("fn called %d times, want exactly 1 — MaxAttempts below 1 means exactly one attempt, no retry", calls)
+	}
+}
+
+// TestAttemptWithNegativeMaxAttemptsMeansOne covers the negative half of
+// "MaxAttempts below 1 means 1" (doubt #4 in the task-5 brief asked for
+// both 0 and a negative value explicitly; the zero case alone was the only
+// one pinned before this fix round). The `< 1` guard in Attempt makes 0 and
+// a negative value provably the same branch, so this is not expected to
+// catch a different bug than the zero case does — it is here so the stated
+// coverage matches what was asked for, not left as an unverified inference.
+func TestAttemptWithNegativeMaxAttemptsMeansOne(t *testing.T) {
+	calls := 0
+	err := Attempt(context.Background(), VerbRead, RetryPolicy{MaxAttempts: -5}, alwaysSafe, func() error {
+		calls++
+		return errors.New("fails")
+	})
+	if err == nil {
+		t.Fatal("want an error")
+	}
+	if calls != 1 {
+		t.Errorf("fn called %d times, want exactly 1 — a negative MaxAttempts means exactly one attempt, no retry, same as 0", calls)
 	}
 }
 
@@ -239,13 +296,29 @@ func TestAttemptStopsWhenSleepIsInterrupted(t *testing.T) {
 	}
 }
 
+// TestDefaultJitterStaysWithinZeroToD bounds-checks defaultJitter's output
+// and additionally requires more than one distinct value across 50 calls
+// (fix round 1, Minor #2). A bounds-only check would also pass a fixed,
+// non-random implementation — e.g. one that always returns d, or always
+// returns 0 — since both are within [0, d]; that implementation would
+// silently defeat the point of jitter (spreading retries out so operations
+// that failed at the same instant do not all wake up and hammer the
+// provider in lockstep) while this test stayed green. The distinctness
+// check is not flaky in practice: defaultJitter draws uniformly from a
+// nanosecond-resolution range of 100ms, so the odds of 50 independent draws
+// all landing on the same value are negligible.
 func TestDefaultJitterStaysWithinZeroToD(t *testing.T) {
 	d := 100 * time.Millisecond
+	seen := map[time.Duration]bool{}
 	for i := 0; i < 50; i++ {
 		got := defaultJitter(d)
 		if got < 0 || got > d {
 			t.Fatalf("defaultJitter(%v) = %v, want within [0, %v]", d, got, d)
 		}
+		seen[got] = true
+	}
+	if len(seen) < 2 {
+		t.Errorf("defaultJitter(%v) returned %d distinct value(s) across 50 calls, want more than 1 — a fixed implementation (e.g. always returning d, or always 0) would pass a bounds-only check", d, len(seen))
 	}
 }
 

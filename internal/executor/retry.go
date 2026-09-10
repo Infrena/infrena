@@ -19,11 +19,22 @@ import (
 // dispatched separately — and a Forget makes no provider call at all. The
 // dispatch layer resolves one OpNode's (Kind, Phase) pair down to the
 // single provider verb it actually invokes, and passes that verb here.
+//
+// VerbInvalid is deliberately the zero value. An uninitialized Verb must
+// never come out permissive: VerbRead and VerbUpdate are the two verbs
+// retryable() allows on ConditionallyRetryable, so a zero value landing on
+// Read (as plain iota numbering would give it) would silently retry
+// wherever a Verb was constructed but never set. VerbInvalid instead fails
+// closed — see retryable().
 type Verb uint8
 
 const (
+	// VerbInvalid is the zero value: an unset or unrecognized Verb. It is
+	// never eligible for retry under any classification, including
+	// SafeToRetry — see retryable().
+	VerbInvalid Verb = iota
 	// VerbRead is a provider Read call.
-	VerbRead Verb = iota
+	VerbRead
 	// VerbCreate is a provider Create call.
 	VerbCreate
 	// VerbUpdate is a provider Update call.
@@ -35,6 +46,8 @@ const (
 // String names a verb for logging and test failure messages.
 func (v Verb) String() string {
 	switch v {
+	case VerbInvalid:
+		return "invalid"
 	case VerbRead:
 		return "read"
 	case VerbCreate:
@@ -74,21 +87,35 @@ const (
 // asymmetry — both are naturally safe to repeat — so they retry on
 // SafeToRetry and ConditionallyRetryable alike.
 //
-// provider.NotSafeToRetry is the zero value of Retryability, so any
-// classification this switch does not recognize (including a provider that
-// forgets to set one) falls through the default case rather than the
-// SafeToRetry case — an unrecognized classification is conditionally
-// retryable at most, never unconditionally retried, and for Create/Delete
-// that means never retried at all. The safe direction is never accidentally
-// bypassed.
+// provider.Retryability is a plain uint8, not a validated closed type —
+// nothing stops a provider built against a future core, or one with a bug,
+// from returning a value outside {NotSafeToRetry, ConditionallyRetryable,
+// SafeToRetry}. Spec §15 puts the core in charge of the policy ("the
+// provider classifies; the core owns backoff"), and the conservative policy
+// for a classification the core does not recognize is never retry, for any
+// verb — not silently reusing ConditionallyRetryable's answer, which is
+// what falling through a catch-all default would do. So every known
+// Retryability value is cased explicitly below, and anything else — an
+// unrecognized value — takes the same branch as NotSafeToRetry.
+//
+// VerbInvalid gets the same fail-closed treatment independent of
+// classification, including SafeToRetry: an uninitialized or unrecognized
+// Verb reaching this function is itself a bug, and the safe answer to a bug
+// is "do not retry," not "retry because the classification looked fine."
 func retryable(verb Verb, r provider.Retryability) bool {
+	if verb == VerbInvalid {
+		return false
+	}
 	switch r {
 	case provider.SafeToRetry:
 		return true
 	case provider.NotSafeToRetry:
 		return false
-	default: // provider.ConditionallyRetryable, and anything unrecognized
+	case provider.ConditionallyRetryable:
 		return verb == VerbRead || verb == VerbUpdate
+	default:
+		// Unrecognized classification: fail closed for every verb.
+		return false
 	}
 }
 
