@@ -3658,7 +3658,7 @@ EOF
 
 Concretely: `checkRequirements` in Task 8 needs `reg.Definition(r.Type)` to succeed to know what a resource requires; if stage 7 already reported that type as unresolved, running stage 8 over the same resource anyway would either skip it silently (masking that stage 8 never got a chance to check it) or, worse, report a second and unrelated diagnostic about the same broken resource. Stopping at the first stage boundary with errors avoids the question entirely — cleanly, and without any resource-by-resource bookkeeping to decide which stage 8 checks are still meaningful for which resources.
 
-`internal/cli/validate.go`'s `validateProject` is rewritten to call `Compile` directly instead of the three checks M1 shipped inline (type registered, attribute exists, attribute not computed — a strict subset of what stage 7 alone now does, before stage 8 even runs). `infra validate` has no `<environment>` argument — that arrives with `infra plan` in Task 15 — so it calls `Compile` with the environment left as the empty string. This is harmless: `${environment}` is always a defined variable regardless of its value (Task 6), and an empty `EnvironmentType` only changes *which* environment-varying default gets filled in, never whether the configuration is valid. `--var` is not threaded through in this task: `GlobalOptions.Vars` has existed as a parsed flag since M1 but nothing has ever consumed it, and wiring it into `compiler.Options.Vars` is variable-system work that belongs with M4, not with this rewiring.
+`internal/cli/validate.go`'s `validateProject` is rewritten to call `Compile` directly instead of the three checks M1 shipped inline (type registered, attribute exists, attribute not computed — a strict subset of what stage 7 alone now does, before stage 8 even runs). `infra validate` has no `<environment>` argument — that arrives with `infra plan` in Task 15 — so it calls `Compile` with the environment left as the empty string. This is harmless: `${environment}` is always a defined variable regardless of its value (Task 6), and an empty `EnvironmentType` only changes *which* environment-varying default gets filled in, never whether the configuration is valid. `--var` IS threaded through. An earlier version of this paragraph claimed `GlobalOptions.Vars` had never been consumed and that wiring it to `compiler.Options.Vars` was M4 work. Both are false: `internal/compiler`'s `variableScope` has always turned `Options.Vars` into `${name}` values. Omitting it made `infra validate --var cidr=10.0.0.0/16` report `undefined variable "cidr"` for configuration that `infra plan` planned fine. `validateProject` takes `vars map[string]string`.Vars` is variable-system work that belongs with M4, not with this rewiring.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -9591,7 +9591,11 @@ func BuildExecution(p *Plan, deps func(address.Address) []address.Address) (*gra
 
 	// Which phases exist for each address, so edges are only drawn to nodes
 	// that were actually added.
-	has := map[string]map[Phase]bool{}
+	// Stores the node itself, not a bool: edges must be drawn from a node's
+	// real ID(), never from a reconstructed "phase:address" string. A forgotten
+	// resource's destroy-phase node does not carry the destroy prefix, so
+	// rebuilding the ID by hand panics inside Edge.
+	has := map[string]map[Phase]OpNode{}
 
 	add := func(n OpNode) {
 		g.Add(n)
