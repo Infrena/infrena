@@ -273,8 +273,14 @@ func (p *Plan) encode(withTimestamp bool) ([]byte, error) {
 		if d.Origin.File != "" {
 			entry.Origin = d.Origin.String()
 		}
-		for _, related := range d.Related {
-			entry.Related = append(entry.Related, related.String())
+		// Sort a copy, for the same reason Dependents is sorted from a copy
+		// above: Related has no ordering contract of its own, and encoding
+		// must never reorder the caller's plan.
+		related := make([]address.Address, len(d.Related))
+		copy(related, d.Related)
+		address.Sort(related)
+		for _, r := range related {
+			entry.Related = append(entry.Related, r.String())
 		}
 		w.Diagnostics = append(w.Diagnostics, entry)
 	}

@@ -298,6 +298,33 @@ func TestDiagnosticsAreCarriedInTheArtifact(t *testing.T) {
 	}
 }
 
+func TestDiagnosticsRelatedAreSortedInTheCanonicalForm(t *testing.T) {
+	// diag.Diagnostic.Related is a plain []address.Address with no ordering
+	// contract of its own — nothing upstream guarantees callers build it in
+	// address order. Task 13's planner builds diagnostics for dependency
+	// relationships, so this is a real map-to-slice-shaped boundary, the same
+	// as Dependents a few lines above in encode. Three entries, not two: with
+	// two, a wrong implementation has a 50% chance of looking right.
+	p := &Plan{
+		Version: PlanVersion,
+		Diagnostics: []diag.Diagnostic{{
+			Severity: diag.SeverityError,
+			Summary:  "database is protected by prevent_destroy",
+			Related:  []address.Address{addr("zebra"), addr("alpha"), addr("middle")},
+		}},
+	}
+	data, err := p.Canonical()
+	if err != nil {
+		t.Fatalf("Canonical: %v", err)
+	}
+	if !strings.Contains(string(data), `"related":["alpha","middle","zebra"]`) {
+		t.Errorf("related addresses must serialise sorted, regardless of build order:\n%s", data)
+	}
+	if p.Diagnostics[0].Related[0].String() != "zebra" {
+		t.Error("encoding must sort a copy, never reorder the plan it was given")
+	}
+}
+
 func TestDependentsAreCarriedAndSortedInTheCanonicalForm(t *testing.T) {
 	// Spec §12.3 needs the count to warn on a destructive change, and Render
 	// sees nothing but the plan. Encoding sorts, so two plans over identical
