@@ -28,7 +28,7 @@ Each one, if violated, breaks something an earlier milestone paid for. Each gets
 
 1. **`Equal` MUST IGNORE `Scope`.** Two values differing only in which scope supplied them are the same value. If `Equal` compares `Scope`, a `--var` matching what `variables.yml` already said plans as a change forever — the phantom-diff shape M3 spent a Critical fixing, and a direct breach of acceptance invariant 2.
 2. **`ConfigHash` MUST NOT include `Scope`.** A value of `20` is the same input whether it came from a file or a flag. Hashing `Scope` makes unchanged configuration look stale in M6.
-3. **`Scope` MUST round-trip through JSON.** `Value` marshals through an explicit `jsonValue` struct, so a missing tag fails silently and reads back as `ScopeUnset` — a confident wrong answer rather than an error.
+3. **`Scope` MUST round-trip through JSON.** `Value` marshals through an explicit `wireValue` struct, so a missing tag fails silently and reads back as `ScopeUnset` — a confident wrong answer rather than an error.
 
 ## Committing
 
@@ -38,6 +38,7 @@ Other agents may share this worktree. NEVER `git add` followed by a bare `git co
 
 ---
 
+# M4 implementation plan — Tasks 1–3
 # M4 implementation plan — Tasks 1–3
 
 Numbering is FINAL. Cross-references elsewhere in the plan use these numbers.
@@ -88,7 +89,9 @@ the second because it makes `Source` mean two things at once.
 | create | `pkg/value/scope_test.go` |
 | create | `internal/compiler/scope_hash_test.go` |
 | modify | `pkg/value/value.go` — add the `Scope` field, add `AsFloat`, document the `Equal` rule at the site |
-| modify | `pkg/value/json.go` — wire field and tag |
+| modify | `pkg/value/kind.go` — add `ParseKind` and `KindNames` |
+| modify | `pkg/value/json.go` — wire field and tag; correct one now-false comment |
+| modify | `pkg/value/wire_test.go` — correct the same now-false claim |
 | modify | `pkg/value/format.go` — add `Annotate` |
 
 **This task touches no file outside `pkg/value` and
@@ -134,16 +137,21 @@ func (s Scope) String() string
 func (v Value) WithScope(s Scope) Value
 func Annotate(v Value, opts FormatOptions) string   // Task 9 wires the renderer to this
 func (v Value) AsFloat() (float64, bool)            // Task 4's min/max checking needs it
+func ParseKind(name string) (Kind, bool)            // inverse of Kind.String()
+func KindNames() []string                           // sorted, for diagnostics that list the types
 // Value gains: Scope Scope
 ```
 
-**Do NOT add a `ParseKind` to `pkg/value`.** `Kind.String()` maps
-`KindInt → "integer"` and has no inverse, which looks like an omission and is
-not: giving it one would make the configuration language's `type:` spellings
-derive from a string `pkg/value/json.go` explicitly documents as "a diagnostic
-string and free to change". An error-message tidy-up would then silently change
-what `type: integer` means in every user's file. Task 3 keeps its own frozen
-table for that reason, and explains it there.
+**`ParseKind` is the reverse direction `pkg/value` was missing, and M4 is the
+milestone that makes it correct to add.** `Kind.String()` already maps
+`KindInt → "integer"`; nothing mapped back, so Task 3 would otherwise need its
+own spelling table. Until now those six strings were internal — a diagnostic
+string and a wire format — which is why `pkg/value/json.go` documents
+`Kind.String()` as "free to change". **M4 makes `type: integer` a configuration
+keyword**, so that freedom is retired by this milestone rather than overturned
+in passing, and step 1.7 corrects the two comments that still claim it.
+`kindWireNames` stays independent: the on-disk spelling is a third contract
+with its own migration path.
 
 **`AsFloat` is safe as written, because stage 2 coerces.** It matches `AsInt`'s
 shape exactly — a plain type assertion on `Raw` — so it returns `(0, false)` for
@@ -666,7 +674,207 @@ Replace that sentence with:
 // Pinned by TestEqualIgnoresScopeForEveryPairOfScopes (scope_test.go).
 ```
 
-#### 1.7 — Add `AsFloat`
+#### 1.7 — Add `ParseKind` and `KindNames`, and fix the comments they falsify
+
+Task 3 decodes `type: integer` in a user's configuration. `Kind.String()`
+already spells `KindInt` as `"integer"`; nothing maps back. The reverse
+direction goes here, in the same file, pinned as an exact inverse — a spelling
+table in `internal/config` would be a second copy of what this file owns.
+
+**This changes what `Kind.String()` is allowed to be, and two existing comments
+say otherwise.** `pkg/value/json.go` and `pkg/value/wire_test.go` both assert
+that `Kind.String()` is "a diagnostic string and free to change". That was true
+while nothing but diagnostics consumed it. **M4 is the milestone that makes
+`type: integer` a configuration keyword** — so M4 is precisely the event that
+retires the claim, not a variables feature quietly overturning an unrelated
+decision. Once `ParseKind` is `String()`'s inverse, those six strings are the
+CONFIGURATION LANGUAGE, and `CLAUDE.md` makes the configuration language a
+product API: renaming `"integer"` to `"int"` would break every `infra.yml` in
+the wild. Leaving the old comments would leave the tree contradicting itself,
+and the next person to improve an error message would follow the comment
+saying they may.
+
+Write the three tests at the end of this step FIRST and run them —
+
+```bash
+export PATH="$HOME/.local/share/mise/shims:$PATH"
+go test -count=1 -run 'TestKind' ./pkg/value/
+```
+
+— expecting `undefined: ParseKind`, `undefined: KindNames`. Then add to
+`pkg/value/kind.go`:
+
+```go
+// ParseKind resolves a type name written in configuration back to its Kind.
+//
+// INVERSE OF Kind.String(), AND THEY MUST BE CHANGED TOGETHER. This is a
+// deliberate switch rather than a shared table, so the pair reads as one unit
+// in one file; TestKindStringAndParseKindAreInverses pins the round trip over
+// every Kind, so drift cannot survive a test run.
+//
+// Because this exists, those six strings are no longer merely diagnostic
+// output: they are what a user writes as `type:` in infra.yml, and CLAUDE.md
+// makes the configuration language a product API. Renaming one breaks every
+// configuration file that used it, so a rename needs the same deliberation as
+// a state format change — see kindWireNames in json.go, which keeps the
+// ON-DISK spelling independent of both and has its own migration path.
+//
+// "invalid" is deliberately NOT accepted. Kind.String() answers it for
+// KindInvalid so a diagnostic can name an unset Kind, but `type: invalid` in
+// configuration is a user error and must reach the unknown-type diagnostic
+// rather than quietly producing the zero Kind.
+func ParseKind(name string) (Kind, bool) {
+	switch name {
+	case "string":
+		return KindString, true
+	case "integer":
+		return KindInt, true
+	case "float":
+		return KindFloat, true
+	case "boolean":
+		return KindBool, true
+	case "list":
+		return KindList, true
+	case "map":
+		return KindMap, true
+	default:
+		return KindInvalid, false
+	}
+}
+
+// KindNames returns every type name ParseKind accepts, sorted, for diagnostics
+// that must tell a user what is available.
+//
+// Sorted and fixed so an error message does not reorder itself between
+// identical runs — invisible in a test suite, obvious to a user diffing two
+// outputs.
+func KindNames() []string {
+	return []string{"boolean", "float", "integer", "list", "map", "string"}
+}
+```
+
+Now correct the two comments this falsifies.
+
+```bash
+grep -n "diagnostic string" pkg/value/json.go pkg/value/wire_test.go
+```
+
+In `pkg/value/json.go`, replace the sentence inside `kindWireNames`'s comment
+beginning "It is deliberately separate from Kind.String(), which is a
+diagnostic string and free to change." with:
+
+```go
+// It is deliberately separate from Kind.String(). Since ParseKind exists,
+// Kind.String()'s spellings are the CONFIGURATION language and change only
+// with the same care; this table is the ON-DISK language. They remain
+// independent contracts with different consumers and different migration
+// paths. A state file is a versioned contract: renaming a spelling on either
+// side must not silently invalidate every state file ever written, and only a
+// table nothing else consults can guarantee that. Entries here change only
+// alongside a CurrentVersion bump and a migration.
+```
+
+In `pkg/value/wire_test.go`, `TestKindWireNameIsIndependentOfString`'s comment
+makes the same claim. Replace "never from Kind.String(), which is a diagnostic
+string and free to change" with "never from Kind.String(), which is now the
+configuration language's spelling and answers for KindInvalid where this table
+must refuse it". **The test body is unchanged and still correct** — it proves
+`kindToWireName` rejects `KindInvalid` where `Kind.String()` answers
+`"invalid"`, which is exactly the asymmetry `ParseKind` relies on too.
+
+Add to `pkg/value/scope_test.go`:
+
+```go
+// allKinds is every Kind ParseKind is expected to handle, plus the zero value.
+var allKinds = []Kind{KindInvalid, KindString, KindInt, KindFloat, KindBool, KindList, KindMap}
+
+// TestKindStringAndParseKindAreInverses is what makes two switches safe to keep
+// as two switches. It loops every Kind rather than sampling: an exhaustive
+// round trip cannot be satisfied by an implementation that happens to agree on
+// the two cases a test author picked.
+func TestKindStringAndParseKindAreInverses(t *testing.T) {
+	for _, k := range allKinds {
+		name := k.String()
+		got, ok := ParseKind(name)
+		if k == KindInvalid {
+			// The one deliberate asymmetry: String() answers "invalid" so a
+			// diagnostic can name an unset Kind, but `type: invalid` in a
+			// configuration file must reach the unknown-type diagnostic.
+			if ok {
+				t.Errorf("ParseKind(%q) accepted the KindInvalid spelling; `type: invalid` would silently become the zero Kind", name)
+			}
+			continue
+		}
+		if !ok || got != k {
+			t.Errorf("ParseKind(%q) = %v, %v; want %v, true — String and ParseKind have drifted", name, got, ok, k)
+		}
+	}
+}
+
+// TestKindNamesMatchesParseKindExactly stops the diagnostic list from
+// advertising a name that does not work, or omitting one that does. Both
+// directions, because either alone is satisfied by an empty list.
+func TestKindNamesMatchesParseKindExactly(t *testing.T) {
+	names := KindNames()
+	for _, name := range names {
+		if _, ok := ParseKind(name); !ok {
+			t.Errorf("KindNames lists %q, which ParseKind rejects", name)
+		}
+	}
+	for _, k := range allKinds {
+		if k == KindInvalid {
+			continue
+		}
+		found := false
+		for _, name := range names {
+			if name == k.String() {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("ParseKind accepts %q but KindNames omits it, so no diagnostic offers it", k.String())
+		}
+	}
+	for i := 1; i < len(names); i++ {
+		if names[i-1] >= names[i] {
+			t.Fatalf("KindNames is not sorted: %q before %q", names[i-1], names[i])
+		}
+	}
+}
+
+// TestKindSpellingsAreFrozen duplicates the six literals deliberately. They are
+// what a user writes in infra.yml, so deriving them from the implementation
+// would assert nothing about the product API they now are.
+func TestKindSpellingsAreFrozen(t *testing.T) {
+	frozen := map[string]Kind{
+		"string":  KindString,
+		"integer": KindInt,
+		"float":   KindFloat,
+		"boolean": KindBool,
+		"list":    KindList,
+		"map":     KindMap,
+	}
+	if len(KindNames()) != len(frozen) {
+		t.Fatalf("KindNames has %d entries, the frozen language contract has %d", len(KindNames()), len(frozen))
+	}
+	for name, want := range frozen {
+		if got, ok := ParseKind(name); !ok || got != want {
+			t.Errorf("ParseKind(%q) = %v, %v; want %v, true", name, got, ok, want)
+		}
+		if got := want.String(); got != name {
+			t.Errorf("%v.String() = %q, want %q", want, got, name)
+		}
+	}
+	// The near-misses a user actually types must NOT resolve.
+	for _, wrong := range []string{"int", "bool", "str", "number", "Integer", "invalid", ""} {
+		if _, ok := ParseKind(wrong); ok {
+			t.Errorf("ParseKind accepted %q", wrong)
+		}
+	}
+}
+```
+
+#### 1.8 — Add `AsFloat`
 
 Task 4 checks resolved values against `min` and `max` and needs a float
 accessor. `pkg/value/value.go` has `AsString`, `AsInt` and `AsBool` and no
@@ -710,7 +918,7 @@ func TestAsFloatDoesNotCoerceIntegers(t *testing.T) {
 }
 ```
 
-#### 1.8 — Wire `Scope` through JSON
+#### 1.9 — Wire `Scope` through JSON
 
 In `pkg/value/json.go`:
 
@@ -752,7 +960,7 @@ Note `err` is already declared in both functions by the `kindToWireName` /
 `kindFromWireName` calls, so use `=` not `:=` where appropriate; let the
 compiler tell you which.
 
-#### 1.9 — Add `Annotate` to `pkg/value/format.go`
+#### 1.10 — Add `Annotate` to `pkg/value/format.go`
 
 Append to `pkg/value/format.go`:
 
@@ -814,7 +1022,7 @@ func annotation(v Value) string {
 }
 ```
 
-#### 1.10 — Test `Annotate` directly
+#### 1.11 — Test `Annotate` directly
 
 Append to `pkg/value/scope_test.go`. These assert on `Annotate`'s RETURN VALUE,
 not on rendered plan output: Task 9 owns the renderer, and a test here that
@@ -925,7 +1133,7 @@ func TestAnnotateRedactsThroughFormat(t *testing.T) {
 two agree by construction today — that is what the first test above pins — so
 there is no live duplication to fix in this task.
 
-#### 1.11 — Run everything
+#### 1.12 — Run everything
 
 ```bash
 export PATH="$HOME/.local/share/mise/shims:$PATH"
@@ -934,7 +1142,7 @@ gofmt -l . && go vet ./... && go test -count=1 ./...
 
 All green. `gofmt -l .` must print nothing.
 
-#### 1.12 — Commit
+#### 1.13 — Commit
 
 ```bash
 git add -A && git commit -m "$(cat <<'EOF'
@@ -966,10 +1174,15 @@ AsInt it does not coerce, so a KindInt value reads false; that is safe
 because stage 2 coerces a declared bound to its declared type, so a
 bound's Kind always matches the variable's.
 
-Kind.String() deliberately gains no inverse: it is diagnostic output and
-free to change, and deriving the configuration language's `type:`
-spellings from it would let an error-message tidy-up change what
-`type: integer` means in every user's file.
+ParseKind is the reverse of Kind.String(), which had no inverse — so
+stage 2's variable declarations need no spelling table of their own, and
+pkg/value owns those six strings in both directions.
+
+M4 is what makes that correct: until now the spellings were internal, so
+json.go documented Kind.String() as free to change. `type: integer` is a
+configuration keyword from this milestone on, so the two comments still
+claiming that freedom are corrected. kindWireNames stays independent —
+the on-disk spelling is a separate contract with its own migration path.
 
 Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
 EOF
@@ -1706,7 +1919,9 @@ func (v Value) WithSource(src ValueSource) Value
 func (v Value) WithOrigin(o Origin) Value
 func (v Value) AsInt() (int64, bool)
 
-// pkg/value — from Task 1
+// pkg/value — from Task 1. This package must NOT define its own copies.
+func ParseKind(name string) (Kind, bool)   // inverse of Kind.String()
+func KindNames() []string                  // sorted, for diagnostics
 func (v Value) AsFloat() (float64, bool)
 ```
 
@@ -1785,15 +2000,13 @@ must not be merged.
    `min` / `max`. `replicas: 2` under `variables:` is an error, not a shorthand
    default. A bare value would be ambiguous with a declaration whose type is
    `map`, and stage 2 would have to guess. Values belong in `variables.yml`.
-2. **Variable type spellings are a frozen table in `config`**, not derived from
-   `value.Kind.String()`. `pkg/value/json.go` documents `Kind.String()` as a
-   diagnostic string free to change; `type: integer` in a user's `infra.yml` is
-   a product API (`CLAUDE.md`: "the configuration language is a product API").
-   Three tables share these six strings today and are three separate
-   contracts — diagnostic, state format, configuration language — which must be
-   able to change independently. The table's own comment spells this out, so
-   that whoever next notices the duplication finds the answer instead of
-   "fixing" it.
+2. **Variable type spellings come from `pkg/value`, which owns them in both
+   directions.** `value.ParseKind` is the inverse of `value.Kind.String()` and
+   `value.KindNames()` supplies the diagnostic list, both added in Task 1. This
+   package keeps NO table of its own: `Kind.String()` already spelled `KindInt`
+   as `"integer"`, so a table here would be a second copy that drifts from the
+   one the parser consults. The on-disk spelling (`kindWireNames`) stays
+   separate — that is a different contract with its own migration path.
 3. **`min`/`max` are numeric-only, checked after the whole mapping is walked.**
    `type:` may appear textually after `min:`, so checking as you go would accept
    `min: 1` on a string whenever the file happened to be written in that order.
@@ -2053,44 +2266,21 @@ func TestUnknownVariableTypeIsRejected(t *testing.T) {
 	}
 }
 
-// TestVariableTypeNamesAreFrozen pins the configuration language's spelling of
-// each type, independently of value.Kind.String().
-//
-// The literals are duplicated deliberately. Deriving them from
-// variableTypeNames would assert nothing; deriving them from Kind.String()
-// would create the very coupling the table exists to break, since
-// pkg/value/json.go documents Kind.String() as a diagnostic string free to
-// change. These six strings are what a user writes in infra.yml, so a rename
-// breaks every configuration file in the wild.
-func TestVariableTypeNamesAreFrozen(t *testing.T) {
-	frozen := map[string]value.Kind{
-		"string":  value.KindString,
-		"integer": value.KindInt,
-		"float":   value.KindFloat,
-		"boolean": value.KindBool,
-		"list":    value.KindList,
-		"map":     value.KindMap,
-	}
-	if len(variableTypeNames) != len(frozen) {
-		t.Fatalf("variableTypeNames has %d entries, the frozen language contract has %d", len(variableTypeNames), len(frozen))
-	}
-	for spelling, kind := range frozen {
-		got, ok := variableTypeNames[spelling]
-		if !ok || got != kind {
-			t.Errorf("type %q maps to %v, %v; want %v, true", spelling, got, ok, kind)
-		}
-	}
-}
-
 // TestUnknownTypeDiagnosticOffersEveryRealType. The message must list what IS
 // available, or a user who typed `int` learns only that it is wrong.
+//
+// The list is driven from value.KindNames rather than a copy here, so a type
+// added to value.ParseKind cannot start working while the diagnostic keeps
+// advertising the old set. The frozen spelling of each type is pinned in
+// pkg/value, beside ParseKind and Kind.String(), which own it in both
+// directions; this package has no table of its own to freeze.
 func TestUnknownTypeDiagnosticOffersEveryRealType(t *testing.T) {
 	_, ds := decodeTree(t, map[string]string{
 		ProjectFileName: projectWithNoResources + "variables:\n  v:\n    type: widget\n",
 	})
 	d := requireErrorAbout(t, ds, "widget")
 	text := d.Summary + " | " + d.Detail + " | " + d.Action
-	for name := range variableTypeNames {
+	for _, name := range value.KindNames() {
 		if !strings.Contains(text, name) {
 			t.Errorf("diagnostic does not offer %q: %s", name, text)
 		}
@@ -2809,9 +2999,10 @@ go test -count=1 ./internal/config/
 ```
 
 Expected: **compilation failure** — `undefined: VariableDecl`, `undefined:
-EnvironmentDecl`, `undefined: OverrideDecl`, `undefined: variableTypeNames`,
-`p.Variables undefined`, `p.Environments undefined`, `p.VariableValues
-undefined`.
+EnvironmentDecl`, `undefined: OverrideDecl`, `p.Variables undefined`,
+`p.Environments undefined`, `p.VariableValues undefined`. If instead you see
+`undefined: value.ParseKind` or `undefined: value.KindNames`, Task 1 has not
+landed — stop and rebase onto it rather than adding a spelling table here.
 
 #### 3.4 — Add the declarations
 
@@ -3052,50 +3243,18 @@ one call site if you prefer; the map's contents are unchanged.
 Append to `internal/config/decode.go`:
 
 ```go
-// variableTypeNames is the frozen spelling of every variable type in the
-// CONFIGURATION LANGUAGE (PLAN.md §9).
+// variableTypeList renders the accepted type spellings for a diagnostic.
 //
-// IF YOU ARE HERE TO REMOVE THIS AS A DUPLICATE, READ ON. Three tables in this
-// tree hold the same six strings today, and they are three separate contracts
-// that must be able to change independently:
+// The spellings come from pkg/value, which owns them in both directions:
+// value.ParseKind is the inverse of value.Kind.String(), pinned as such by
+// TestKindStringAndParseKindAreInverses. This package deliberately keeps NO
+// table of its own — a second copy would drift from the one the parser
+// actually consults.
 //
-//	Kind.String()      pkg/value/kind.go — DIAGNOSTIC output. Free to change;
-//	                   pkg/value/json.go says so in as many words.
-//	kindWireNames      pkg/value/json.go — the STATE FILE format. Frozen;
-//	                   changes only with a CurrentVersion bump and a migration.
-//	variableTypeNames  here — the CONFIGURATION LANGUAGE. Frozen; `type:
-//	                   integer` in a user's infra.yml is a product API
-//	                   (CLAUDE.md), and renaming it breaks every file in the
-//	                   wild.
-//
-// The one-implementation rule that governs redaction does not apply. That rule
-// exists because one CONCEPT — rendering a value safely — was implemented
-// twice and diverged. The discriminator is whether the sites must change
-// TOGETHER: the two redaction copies had to and did not, whereas these three
-// must NOT. Deriving this table from Kind.String() would mean improving one
-// error message silently changed what `type: integer` means in every user's
-// configuration. Similarity is not the test.
-//
-// TestVariableTypeNamesAreFrozen duplicates these literals deliberately, for
-// the same reason: deriving them from this map would assert nothing.
-var variableTypeNames = map[string]value.Kind{
-	"string":  value.KindString,
-	"integer": value.KindInt,
-	"float":   value.KindFloat,
-	"boolean": value.KindBool,
-	"list":    value.KindList,
-	"map":     value.KindMap,
-}
-
-// variableTypeList renders the accepted spellings for a diagnostic, sorted so
-// the message does not reorder itself between identical runs.
+// value.KindNames is already sorted, so the message does not reorder itself
+// between identical runs.
 func variableTypeList() string {
-	names := make([]string, 0, len(variableTypeNames))
-	for n := range variableTypeNames {
-		names = append(names, n)
-	}
-	sort.Strings(names)
-	return strings.Join(names, ", ")
+	return strings.Join(value.KindNames(), ", ")
 }
 
 func decodeVariables(path string, node *yaml.Node, out *ProjectDecl, ds *diag.Diagnostics, seen map[string]value.Origin) {
@@ -3179,7 +3338,7 @@ func decodeVariable(path, name string, body *yaml.Node, origin value.Origin, ds 
 				typeReported = true
 				break
 			}
-			kind, known := variableTypeNames[text]
+			kind, known := value.ParseKind(text)
 			if !known {
 				ds.Add(diag.Diagnostic{
 					Severity: diag.SeverityError,
@@ -3688,11 +3847,8 @@ in infra.yml's block and in environments/<name>.yml merges, since §7 puts
 extends in the block and §8 puts overrides in the file; only a key set in
 both places is an error, because one value would silently disappear.
 
-Variable type spellings are a frozen table here rather than derived from
-value.Kind.String(), which pkg/value documents as free to change. Three
-tables share those six strings and are three contracts — diagnostic,
-state format, configuration language — that must change independently;
-the table's comment says so, so the duplication is not "fixed" later.
+Variable type spellings come from value.ParseKind, so this package keeps
+no table of its own and cannot drift from the one the parser consults.
 
 A declaration with neither a type nor a default is an error. Dropping it
 would discard something the user wrote and carry on as though they had
@@ -3726,150 +3882,6 @@ project-level diagnostic at the last environment file.
 Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
 EOF
 )"
-```
-# M4 implementation plan — Tasks 4 to 7
-
-Compiler stages 3 and 4: typed variable schemas, environment resolution, variable
-resolution, and the wiring that deletes `internal/compiler/bind.go`'s `variableScope`.
-
-Task numbers are FINAL. Cross-references in these tasks use these numbers.
-
-## Before you start (applies to every task here)
-
-**Toolchain.** `mise` is not active in non-interactive shells. Before any `go`
-command, in every shell:
-
-```bash
-export PATH="$HOME/.local/share/mise/shims:$PATH"
-go version   # must print go1.24.x — a bare `go` resolves to 1.20 and fails
-```
-
-**Always `-count=1`.** `tests/integration` shells out to `go build` rather than
-importing infra packages, so Go's test cache once reported `ok ... (cached)` while
-production code was sabotaged. A cached pass is not evidence.
-
-**Global constraints.** Exactly two third-party dependencies exist — `cobra` and
-`gopkg.in/yaml.v3` — and M4 adds none. Stage 2 (`internal/config`) is the only stage
-permitted to touch `yaml.Node`; nothing in `internal/environments` or
-`internal/variables` may import `yaml.v3`. Diagnostics collect rather than fail fast
-(spec §7.4): a stage reports every problem it can see in one pass. No AWS types
-anywhere in the core.
-
-**What Tasks 1 to 3 hand you.** Do not re-derive or redefine these; consume them by
-these names.
-
-```go
-// pkg/value  (Task 1)
-type Scope uint8
-const (
-    ScopeUnset Scope = iota
-    ScopeProviderDefault
-    ScopeBaseConfig
-    ScopeModuleDefault
-    ScopeEnvironmentInherit
-    ScopeEnvironmentVar
-    ScopeCLIOverride
-)
-func (s Scope) String() string
-func (v Value) WithScope(s Scope) Value   // sibling of the existing WithSource
-func (v Value) AsFloat() (float64, bool)  // sibling of AsString/AsInt/AsBool
-// Value gains the field: Scope Scope
-
-// internal/config  (Task 3)
-type VariableDecl struct {
-    Name       string
-    Type       value.Kind   // KindInvalid when the declaration gave no `type`
-    Default    value.Value
-    HasDefault bool
-    Min        value.Value  // inclusive bound, valid only when HasMin
-    HasMin     bool
-    Max        value.Value
-    HasMax     bool
-    Origin     value.Origin
-}
-
-type OverrideDecl struct {
-    Name   string
-    Value  value.Value   // already tagged SourceEnvironment by stage 2
-    Origin value.Origin
-}
-
-type EnvironmentDecl struct {
-    Name          string
-    Extends       string        // "" when the environment has no parent
-    ExtendsOrigin value.Origin
-    Overrides     []OverrideDecl // sorted by Name
-    Origin        value.Origin
-}
-
-// ProjectDecl gains:
-//   Variables      []VariableDecl           sorted by Name — the `variables:` block
-//   Environments   []EnvironmentDecl        sorted by Name
-//   VariableValues map[string]value.Value   variables.yml's flat name→value pairs
-```
-
-Stage 2 maps the YAML `type:` spelling to a `value.Kind` (`variableTypeNames` in
-`internal/config/decode.go`) and reports an unknown spelling as a decode-time
-diagnostic carrying the line and column. Nothing in `internal/variables` re-derives
-that mapping or re-reports that error: by the time a `VariableDecl` reaches Task 4,
-its `Type` is either a real `Kind` or `KindInvalid` meaning "no `type` was given",
-which is legal — `PLAN.md` §9 calls variable schemas optional.
-
-**Three guarantees stage 2 makes that Tasks 4 and 6 rely on**, and which Task 3 is
-responsible for enforcing:
-
-1. Every declaration **that reaches stage 4 at all** has a real `Kind` or a default.
-
-   Read the qualifier: this is NOT an unconditional property of declarations. A
-   declaration with neither is a decode-time error ("a variable declaration must
-   specify at least a type or a default") — but stage 2 SUPPRESSES that error when
-   another diagnostic on the same declaration already names the root cause, such as
-   an unusable `type`, an unusable `default`, or a `min`/`max` whose own message
-   already says "add `type: integer` or `type: float`". A did that so one mistake on
-   one line produces one message. So empty declarations carrying no empty-declaration
-   error DO exist.
-
-   They never reach stage 4 **because `Compile` halts at the stage boundary when
-   `HasErrors()` is true** — the suppressed case always has some other error beside
-   it, and that error is what stops the pipeline.
-
-   Stage 4 may therefore assume the property, but it is assuming the HALTING, not the
-   declaration. Anyone who makes decode errors non-fatal, or who moves stage 4 ahead
-   of the boundary check, breaks Task 6's unset-variable branch — which would then
-   build an unknown of `KindInvalid` and hand an indeterminate value to the rest of
-   the pipeline. That is why the dependency is named here rather than left implicit:
-   a guarantee that holds because something else halts first fails silently when the
-   halting changes.
-2. `Default`'s provenance is **left unset**. A declaration is not a resolution;
-   stage 4 is the only place that decides which precedence level won.
-3. A bound's `Kind` **equals its variable's `Type`**. `decodeBound` accepts either
-   numeric spelling — YAML tags `min: 1` as `!!int` even under `type: float` — and
-   then `coerceBound` converts it, reporting rather than truncating a conversion that
-   would lose information (`min: 1.5` on an `integer`; a bound too large to survive
-   `int64`→`float64`). Stage 2 also rejects a bound on a non-numeric or untyped
-   variable, a non-numeric bound, and `min` above `max`.
-
-   **Tasks 4 to 7 therefore do no declaration-level bound validation at all.** Every
-   one of those checks has the line and column the user wrote the mistake at, which
-   `PLAN.md` §44 asks for and stage 4 does not have. Task 4 switches on a single
-   `Kind` for both the bound and the value, with no cross product to handle.
-
-If any of these is missing or differently shaped when you arrive, STOP and report it
-rather than defining your own. An unnamed seam is how two M3 groups built the same
-thing twice.
-
-`value.Scope.String()` must return exactly these strings, because Task 9's renderer
-composes `"[" + Source + ", from " + Scope.String() + "]"` to produce
-`replicas: 20 [variable, from --var]`:
-
-```
-ScopeUnset               "unset"
-ScopeProviderDefault     "provider default"
-ScopeBaseConfig          "base configuration"
-ScopeModuleDefault       "module default"
-ScopeEnvironmentInherit  "environment inheritance"
-ScopeEnvironmentVar      "environment"
-ScopeCLIOverride         "--var"
 ```
 
 ---
@@ -6519,7 +6531,179 @@ grep -rn "variableScope" --include=*.go .    # must print nothing
 
 Commit: `M4 task 7: wire stages 3 and 4 into Compile, delete variableScope`.
 
-### 7.8 Failing test: end to end through the CLI
+### 7.8 Failing test: the bottom rung of the chain is stamped
+
+`PLAN.md` §7's chain is provider defaults → base config → module defaults →
+environment inheritance → environment variables → CLI overrides. Stages 3 and 4 stamp
+the top five. The floor — provider defaults — is filled in **stage 7**
+(`internal/compiler/schema.go`'s `applyDefaults`), which the wiring above does not
+touch, so without this step a plan can name every rung of the chain except the one it
+stands on.
+
+It belongs here rather than in Task 9 because stamping a value as it is produced is
+wiring, and Task 9 renders whatever `Scope` it is handed. A rendering task reaching
+into `internal/compiler` would be the two-tasks-one-file collision the plan is split
+to avoid.
+
+Locate the code by grep, not by line number:
+
+```bash
+export PATH="$HOME/.local/share/mise/shims:$PATH"
+grep -n "func applyDefaults\|func checkedDefault\|func fromDefault" internal/compiler/schema.go
+```
+
+`applyDefaults` is unexported, so this is an in-package test. Add to
+`internal/compiler/schema_test.go`, reusing the `oneResource` and `testRegistry`
+helpers already at the top of that file:
+
+```go
+func TestSchemaStampsProviderDefaultsWithTheirScope(t *testing.T) {
+    // test.database's `size` is optional with a default (providers/test's
+    // definitions.go): 10 outside production. Filling it is the only rung of
+    // PLAN.md §7's chain that stages 3 and 4 never see.
+    cfg := oneResource("test.database", map[string]value.Value{
+        "engine": value.String("postgres", value.SourceExplicit),
+    })
+    ds := bindSchemas(cfg, testRegistry(t), Options{Environment: "dev"})
+    if ds.HasErrors() {
+        t.Fatalf("unexpected diagnostics: %+v", ds)
+    }
+
+    size, ok := cfg.Resources["r"].Attrs["size"]
+    if !ok {
+        t.Fatal("the default for `size` was not filled in at all")
+    }
+    if size.Source != value.SourceDefault {
+        t.Errorf("Source = %v, want SourceDefault", size.Source)
+    }
+    if size.Scope != value.ScopeProviderDefault {
+        t.Errorf("Scope = %v, want ScopeProviderDefault — provider defaults are the floor of PLAN.md §7's precedence chain, and a chain that cannot show its own floor is not explainable", size.Scope)
+    }
+}
+
+func TestSchemaDoesNotStampValuesConfigurationSupplied(t *testing.T) {
+    // The other direction, and the one that matters more: applyDefaults'
+    // contract is that an explicit value always beats an implicit one, so a
+    // stamp that leaked onto explicit values would make a plan claim the
+    // provider supplied something the user wrote. That is a precedence lie,
+    // and unlike a missing stamp it is invisible — the value is right and only
+    // its provenance is wrong.
+    cfg := oneResource("test.database", map[string]value.Value{
+        "engine": value.String("postgres", value.SourceExplicit),
+        "size":   value.Int(50, value.SourceExplicit),
+    })
+    ds := bindSchemas(cfg, testRegistry(t), Options{Environment: "dev"})
+    if ds.HasErrors() {
+        t.Fatalf("unexpected diagnostics: %+v", ds)
+    }
+
+    size := cfg.Resources["r"].Attrs["size"]
+    if n, _ := size.AsInt(); n != 50 {
+        t.Fatalf("size = %d, want the explicit 50 — applyDefaults must never overwrite a configured value", n)
+    }
+    if size.Scope != value.ScopeUnset {
+        t.Errorf("Scope = %v, want ScopeUnset: nothing in stage 7 supplied this value, so stage 7 must not claim it did", size.Scope)
+    }
+}
+
+func TestSchemaStampingADefaultDoesNotMakeItCompareUnequal(t *testing.T) {
+    // Task 1's invariant 1 at this site. Equal ignores Scope; if it ever
+    // stopped doing so, every resource with a filled default would diff
+    // against the same value from configuration or state, and acceptance
+    // invariant 2 (no-op plan) would fail for most resources in most projects.
+    cfg := oneResource("test.database", map[string]value.Value{
+        "engine": value.String("postgres", value.SourceExplicit),
+    })
+    if ds := bindSchemas(cfg, testRegistry(t), Options{Environment: "dev"}); ds.HasErrors() {
+        t.Fatalf("unexpected diagnostics: %+v", ds)
+    }
+
+    stamped := cfg.Resources["r"].Attrs["size"]
+    plain := value.Int(10, value.SourceDefault)
+    if !stamped.Equal(plain) {
+        t.Error("a stamped default must still be Equal to the same datum with no Scope — provenance describes how a value was arrived at, not what the desired state is")
+    }
+}
+```
+
+### 7.9 Run it, see it fail
+
+```bash
+go test -count=1 -run "TestSchemaStamps|TestSchemaDoesNotStamp" ./internal/compiler/
+```
+
+Expect `TestSchemaStampsProviderDefaultsWithTheirScope` to fail with
+`Scope = unset, want ScopeProviderDefault`. The other two must PASS already — they
+assert what the code does today, and their job is to fail if the change in 7.10
+overreaches. If either fails now, stop: the premise that `applyDefaults` never
+touches an explicit value is wrong, and this step is not the place to discover that.
+
+### 7.10 Minimal code: stamp the default where it is built
+
+In `internal/compiler/schema.go`, change `checkedDefault`'s success return:
+
+```go
+func checkedDefault(raw any, kind value.Kind) (value.Value, bool) {
+    v, ok := fromDefault(raw, kind)
+    if !ok || v.Kind != kind {
+        return value.Value{}, false
+    }
+    return v.WithScope(value.ScopeProviderDefault), true
+}
+```
+
+**Why here and not the other two candidates.** `fromDefault` sets `SourceDefault` in
+seven arms, one per kind, and `Scope` is `Source`'s orthogonal partner — stamping
+beside it would mean seven edits and seven chances to stamp six kinds and miss the
+seventh. `applyDefaults`' `attrs[name] = v` is a single site too, but there the scope
+would be a property of "was assigned by `applyDefaults`" rather than of "came from a
+provider default", and it would not travel if the value were ever built elsewhere.
+`checkedDefault` is the one choke point every provider default passes through, and it
+already exists to enforce a property of defaults rather than to construct them, so a
+second such property sits naturally next to the first.
+
+Add a line to `fromDefault`'s doc comment so the pairing is discoverable from the arm
+that sets `SourceDefault`:
+
+```go
+// The matching Scope — ScopeProviderDefault, the floor of PLAN.md §7's
+// precedence chain — is stamped once by checkedDefault rather than in each arm
+// here, so it cannot be applied to six kinds and missed on the seventh.
+```
+
+Do **not** touch `value.Equal` or `ResolvedConfig.Hash`. Task 1 fixed both:
+`Equal` ignores `Scope`, and `ConfigHash` excludes it. A provider default that
+compared unequal to the same datum from configuration would break acceptance
+invariant 2 for every resource that has a default, which is most of them; a hash that
+included `Scope` would make an unchanged configuration read as stale in M6.
+
+### 7.11 Run it, see it pass, and check the goldens
+
+```bash
+go test -count=1 ./internal/compiler/ ./internal/planner/ ./tests/integration/
+```
+
+**No golden is regenerated by this step, and none should change.** Two reasons,
+both checked rather than assumed:
+
+- `internal/planner/testdata/mixed.golden` shows `size: 10 [default]`, but its
+  fixture never goes through `applyDefaults`: `mixedPlan()` in `render_test.go`
+  hand-builds `value.Int(10, value.SourceDefault)`, which carries `ScopeUnset`. Verify
+  before you believe it — `grep -n "SourceDefault" internal/planner/render_test.go`.
+- Nothing renders a scope suffix yet. Task 9 is what wires `renderAnnotated` to
+  `value.Annotate`; until then the stamp is carried and not printed.
+
+So if a golden DOES change here, that is a signal the stamp reached somewhere it
+should not have — most likely onto explicit values. Investigate it; do not regenerate.
+
+`internal/planner/testdata/scopes.golden`, which renders a provider default as
+`size: 100 [default, from provider defaults]`, is **Task 9's** to write, and it is the
+test that proves this stamp reaches the page. If it is missing or wrong when Task 9
+runs, that is a Task 9 defect, not a licence to change this step.
+
+Commit: `M4 task 7: stamp provider defaults with ScopeProviderDefault`.
+
+### 7.12 Failing test: end to end through the CLI
 
 Create `tests/integration/m4_variables_test.go`. The unit tests above prove the
 compiler; this proves the wiring the user actually reaches, and it is the test that
@@ -6620,7 +6804,7 @@ test is the integration-level guard on the synthetic `environment` variable: it 
 if stage 4 stops seeding it, and it exercises a project with no `environments:` block
 at all, which is the M2 shape that must keep working.
 
-### 7.9 Run it, see it pass
+### 7.13 Run it, see it pass
 
 ```bash
 go test -count=1 ./tests/integration/
@@ -6630,7 +6814,7 @@ go test -count=1 ./tests/integration/
 importing infra packages, so a cached result once reported `ok` while production code
 was sabotaged.
 
-### 7.10 Full verification and commit
+### 7.14 Full verification and commit
 
 ```bash
 go build ./cmd/infra
