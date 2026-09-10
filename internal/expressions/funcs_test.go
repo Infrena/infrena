@@ -73,6 +73,36 @@ func TestFunctionsPreserveSensitivity(t *testing.T) {
 	}
 }
 
+func TestSensitivityUnionsEveryArgumentPosition(t *testing.T) {
+	// Both leaks this project shipped were an argument position omitted from a
+	// hand-written union: join's separator, then replace's search string. A
+	// secret search term reveals its own position through an unclassified
+	// result, which is a side channel on the secret's content.
+	secret := str("hunter2").WithSensitive(true)
+	plain := str("plain")
+
+	cases := []struct {
+		name string
+		fn   string
+		args []value.Value
+	}{
+		{"replace: sensitive subject", "replace", []value.Value{secret, plain, plain}},
+		{"replace: sensitive search term", "replace", []value.Value{plain, secret, plain}},
+		{"replace: sensitive replacement", "replace", []value.Value{plain, plain, secret}},
+		{"join: sensitive separator", "join", []value.Value{secret, value.List([]value.Value{plain}, value.SourceExplicit)}},
+		{"join: sensitive element", "join", []value.Value{plain, value.List([]value.Value{plain, secret}, value.SourceExplicit)}},
+		{"lower: sensitive subject", "lower", []value.Value{secret}},
+		{"upper: sensitive subject", "upper", []value.Value{secret}},
+		{"trim: sensitive subject", "trim", []value.Value{secret}},
+	}
+
+	for _, tc := range cases {
+		if got := call(t, tc.fn, tc.args...); !got.Sensitive {
+			t.Errorf("%s: result is not sensitive — a secret in any argument position classifies the result", tc.name)
+		}
+	}
+}
+
 func TestWrongArityIsAnError(t *testing.T) {
 	fn, _, _ := Lookup("replace")
 	if _, err := fn([]value.Value{str("only-one")}); err == nil {

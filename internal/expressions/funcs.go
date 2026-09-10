@@ -45,6 +45,48 @@ var builtins = map[string]builtin{
 	"default": {arity: 2, fn: defaultFunc},
 }
 
+// sensitiveAnywhere reports whether a value, or any leaf inside it, is
+// sensitive. Sensitivity is a per-leaf property: a list is classified when any
+// element is, even when the list itself carries no flag.
+func sensitiveAnywhere(v value.Value) bool {
+	if v.Sensitive {
+		return true
+	}
+	switch v.Kind {
+	case value.KindList:
+		items, _ := v.Raw.([]value.Value)
+		for _, item := range items {
+			if sensitiveAnywhere(item) {
+				return true
+			}
+		}
+	case value.KindMap:
+		m, _ := v.Raw.(map[string]value.Value)
+		for _, item := range m {
+			if sensitiveAnywhere(item) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// anySensitive reports whether any argument contributes sensitivity.
+//
+// Every built-in whose result derives from all its arguments uses this rather
+// than hand-writing its own union. Hand-written unions are how this shipped
+// wrong twice: join() omitted its separator, and replace() omitted its search
+// string — which let a secret search term reveal its own position through an
+// unclassified result.
+func anySensitive(args ...value.Value) bool {
+	for _, a := range args {
+		if sensitiveAnywhere(a) {
+			return true
+		}
+	}
+	return false
+}
+
 // stringFunc lifts a string transform into a Func, preserving sensitivity:
 // transforming a secret does not declassify it.
 func stringFunc(transform func(string) string) Func {
@@ -57,7 +99,7 @@ func stringFunc(transform func(string) string) Func {
 			return value.Value{}, fmt.Errorf("expected a string, got %s", args[0].Kind)
 		}
 		return value.String(transform(s), value.SourceComputed).
-			WithSensitive(args[0].Sensitive).
+			WithSensitive(anySensitive(args...)).
 			WithOrigin(args[0].Origin), nil
 	}
 }
@@ -79,7 +121,7 @@ func replaceFunc(args []value.Value) (value.Value, error) {
 		return value.Value{}, fmt.Errorf("third argument must be a string, got %s", args[2].Kind)
 	}
 	return value.String(strings.ReplaceAll(in, old, replacement), value.SourceComputed).
-		WithSensitive(args[0].Sensitive || args[2].Sensitive).
+		WithSensitive(anySensitive(args...)).
 		WithOrigin(args[0].Origin), nil
 }
 
@@ -97,17 +139,15 @@ func joinFunc(args []value.Value) (value.Value, error) {
 	}
 
 	parts := make([]string, 0, len(items))
-	sensitive := args[0].Sensitive || args[1].Sensitive
 	for _, item := range items {
 		s, ok := item.AsString()
 		if !ok {
 			return value.Value{}, fmt.Errorf("join needs a list of strings, found %s", item.Kind)
 		}
-		sensitive = sensitive || item.Sensitive
 		parts = append(parts, s)
 	}
 	return value.String(strings.Join(parts, sep), value.SourceComputed).
-		WithSensitive(sensitive).
+		WithSensitive(anySensitive(args...)).
 		WithOrigin(args[1].Origin), nil
 }
 
