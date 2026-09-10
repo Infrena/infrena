@@ -87,12 +87,23 @@ func newPlanCommand(opts *GlobalOptions) *cobra.Command {
 				// a second one.
 				Registry: reg,
 			})
+			// planDiags already carries every plan-time diagnostic,
+			// including operation-level refusals such as prevent_destroy
+			// (spec §11): Compute accumulates each resource's diagnostics
+			// into the same value it returns here before copying that value,
+			// unchanged, into p.Diagnostics for the saved plan artifact.
+			// p.Diagnostics and planDiags are therefore always identical in
+			// content — confirmed by reading planner.Compute, where every
+			// return path sets p.Diagnostics from a copy of the same ds it
+			// is about to return, and by internal/planner's own
+			// TestPreventDestroyIsAPlanTimeError, which asserts against
+			// Compute's returned diagnostics directly, never against
+			// p.Diagnostics. Extending ds with p.Diagnostics a second time
+			// would not catch anything planDiags missed; it would print
+			// every plan-time diagnostic twice. p.Diagnostics still matters
+			// — it is what --output writes into the saved plan artifact —
+			// it just is not a second channel this command needs to gate on.
 			ds.Extend(planDiags)
-			// Plan.Diagnostics carries plan-time errors that belong to one
-			// operation, such as prevent_destroy (spec §11). They must gate
-			// the exit code exactly like a compile or refresh error, so they
-			// join the same diagnostic set before anything is rendered.
-			ds.Extend(p.Diagnostics)
 			ds.Render(cmd.ErrOrStderr())
 			if ds.HasErrors() {
 				return errors.New("planning failed")
