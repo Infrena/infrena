@@ -117,6 +117,20 @@ func (t *tracker) recordFailure(w *graph.Walk[planner.OpNode], node planner.OpNo
 		if id == node.ID() || t.skipped[id] {
 			continue
 		}
+		// t.skipped[id] above is defensive depth, not what currently
+		// prevents a double report for a node stranded by two independent
+		// failures (a diamond: c depends on both a and b, both fail).
+		// Walk.Skip itself already filters statusSkipped nodes before
+		// collecting (internal/graph/walk.go), so a node it has already
+		// returned once is never returned by a later Skip() call on the
+		// same Walk — verified directly: Skip(a) on such a diamond returns
+		// [c], and the subsequent Skip(b) returns []. That makes this
+		// branch of the guard provably unreachable today: t.skipped[id] can
+		// never be true when this line runs. It stays anyway, cheap
+		// insurance against Walk.Skip's filtering ever changing — but if
+		// that ever happens, this guard becomes load-bearing, and there is
+		// no test today that could have caught it silently stopping being
+		// true, because there is nothing beneath it to break yet.
 		t.skipped[id] = true
 		ds.Add(diag.Diagnostic{
 			Severity: diag.SeverityWarning,

@@ -240,6 +240,14 @@ func (w *Walk[T]) Done(id string) []T {
 // the returned slice double-counts it. That is about a node reached
 // TRANSITIVELY through the walk below, not about id itself — id itself is
 // covered by the panic above, before the walk ever starts.
+//
+// A caller may rely on this as a standing guarantee, not just a detail of
+// this call: for the lifetime of one Walk, any given node is returned by at
+// most one Skip call, ever, no matter how many separate failures reach it
+// transitively. executor.tracker.recordFailure already depends on this —
+// it is what makes its own t.skipped[id] dedupe guard provably unreachable
+// today (internal/executor/isolation.go) — so if this filtering is ever
+// changed, that guard becomes load-bearing and needs new test coverage.
 func (w *Walk[T]) Skip(id string) []T {
 	w.mustKnow("Skip", id)
 	w.mustBeDispatched("Skip", id)
