@@ -9195,7 +9195,7 @@ func (p *Provider) begin(ctx context.Context, op, addr string) (*Cloud, error) {
 		if msg == "" {
 			msg = fmt.Sprintf("injected %s failure for %s", op, addr)
 		}
-		return nil, &ErrInjected{Message: msg, Retryable: rule.Retryable}
+		return nil, &ErrInjected{Message: msg, Retryability: rule.Retryability}
 	}
 	return c, nil
 }
