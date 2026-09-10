@@ -59,9 +59,10 @@ func Apply(ctx context.Context, p *planner.Plan, g *graph.Graph[planner.OpNode],
 	providerInFlight := map[string]int{}
 	appliedSet := map[string]address.Address{}
 	var skipped []string
+	persistFailed := false
 
 	for w.Remaining() > 0 {
-		stopping := ctx.Err() != nil
+		stopping := ctx.Err() != nil || persistFailed
 
 		var deferred []planner.OpNode
 		// launched counts how many nodes this pass actually started. It is
@@ -165,7 +166,17 @@ func Apply(ctx context.Context, p *planner.Plan, g *graph.Graph[planner.OpNode],
 			continue
 		}
 
-		r.record(res)
+		if err := r.record(res); err != nil {
+			ds.Add(diag.Diagnostic{
+				Severity: diag.SeverityError,
+				Summary:  "failed to persist state after " + res.node.ID() + ": " + err.Error(),
+				Detail: res.node.Address.String() + " was applied successfully and Result.State reflects it, " +
+					"but the write to disk failed. The run is stopping rather than scheduling further " +
+					"operations against a state file that can no longer be kept in sync with reality.",
+				Related: []address.Address{res.node.Address},
+			})
+			persistFailed = true
+		}
 		appliedSet[res.node.Address.String()] = res.node.Address
 		queue = append(queue, w.Done(res.node.ID())...)
 	}
@@ -282,17 +293,27 @@ func (r *run) snapshot() map[string]*resource.ResourceState {
 	return out
 }
 
-// record applies a successful completion to state. Called only from the
-// owner goroutine, which is what makes an unsynchronised st.Set / st.Remove
-// here safe. Modified by Task 9 to also persist.
-func (r *run) record(res nodeResult) {
+// record applies a successful completion to state and persists
+// immediately — not batched until the run ends (spec §15: "A crash then
+// leaves state that accurately describes reality. Batching writes until
+// completion guarantees the opposite precisely when accuracy matters
+// most."). Called only from the owner goroutine, which both makes the
+// unsynchronised st.Set/st.Remove safe (Apply's doc comment) and is what
+// serializes successive Put calls without an extra lock: the owner never
+// dispatches new work before finishing this one.
+//
+// A Put failure does not undo the mutation: st.Set/st.Remove already ran,
+// and what they recorded is true. Rolling it back to match a stale disk
+// file would make Result.State lie about reality, which is worse than a
+// state file that is one write behind it. The caller (Apply's loop) is
+// what decides the run stops after this — see Apply's stopping gate.
+func (r *run) record(res nodeResult) error {
 	if res.removed {
 		r.st.Remove(res.node.Address)
-		return
-	}
-	if res.state != nil {
+	} else if res.state != nil {
 		r.st.Set(res.state)
 	}
+	return r.opts.Backend.Put(r.ctx, r.opts.Environment, r.st)
 }
 
 func (r *run) now() time.Time {
