@@ -3027,7 +3027,17 @@ func applyDefaults(attrs map[string]value.Value, def *schema.ResourceDefinition,
 		if !ok {
 			continue
 		}
-		attrs[name] = fromDefault(raw, attr.Kind)
+		v, ok := checkedDefault(raw, attr.Kind)
+		if !ok {
+			ds.Add(diag.Diagnostic{
+				Severity: diag.SeverityError,
+				Summary:  def.Type + ": the default for " + strconv.Quote(name) + " is not a " + attr.Kind.String(),
+				Detail:   "A provider default must produce the kind its attribute declares. This is a provider bug, not a configuration error.",
+				Origin:   origin,
+			})
+			continue
+		}
+		attrs[name] = v
 	}
 }
 
@@ -3056,6 +3066,22 @@ func fromDefault(raw any, kind value.Kind) (value.Value, bool) {
 		// report a change on every plan, forever. Report it instead.
 		return value.Value{}, false
 	}
+}
+
+// checkedDefault converts a resolver's datum and confirms it produced the kind
+// the attribute declares.
+//
+// Matching a Go type is not the same as matching the declared kind: a resolver
+// for a float attribute that returns int64 builds a perfectly valid KindInt
+// value, which would then sail past the kind check that exists to catch exactly
+// this. The declared kind is the contract; the Go type is only how it happens
+// to arrive.
+func checkedDefault(raw any, kind value.Kind) (value.Value, bool) {
+	v, ok := fromDefault(raw, kind)
+	if !ok || v.Kind != kind {
+		return value.Value{}, false
+	}
+	return v, true
 }
 
 func checkRequired(attrs map[string]value.Value, def *schema.ResourceDefinition, origin value.Origin, ds *diag.Diagnostics) {
