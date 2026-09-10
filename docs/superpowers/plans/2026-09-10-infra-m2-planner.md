@@ -8518,12 +8518,16 @@ func newPlanCommand(opts *GlobalOptions) *cobra.Command {
 				// a second one.
 				Registry: reg,
 			})
+			// planDiags already carries every plan-time diagnostic, including
+			// per-operation ones like prevent_destroy (spec §11), and they
+			// must gate the exit code exactly like a compile or refresh
+			// error. Compute copies that same set into p.Diagnostics for the
+			// saved artifact — every return path does
+			// `p.Diagnostics = append(nil, ds...); return p, ds` — so the two
+			// are always identical. Extending with both would not catch
+			// anything planDiags missed; it would print every plan-time
+			// diagnostic twice. Measured: it did.
 			ds.Extend(planDiags)
-			// Plan.Diagnostics carries plan-time errors that belong to one
-			// operation, such as prevent_destroy (spec §11). They must gate
-			// the exit code exactly like a compile or refresh error, so they
-			// join the same diagnostic set before anything is rendered.
-			ds.Extend(p.Diagnostics)
 			ds.Render(cmd.ErrOrStderr())
 			if ds.HasErrors() {
 				return errors.New("planning failed")
