@@ -205,3 +205,24 @@ resources:
 		}
 	}
 }
+
+// TestValidateCatchesMissingRequiredInfrastructure is stage 8, reachable only
+// because validate now delegates to the full Compile pipeline. M1's
+// three-check subset — type registered, attribute exists, attribute not
+// computed — had no way to catch this.
+func TestValidateCatchesMissingRequiredInfrastructure(t *testing.T) {
+	dir := projectDir(t, `
+project: myapp
+resources:
+  database:
+    type: test.database
+    engine: postgres
+`)
+	ds := validateProject(dir, buildRegistry(dir))
+	if !ds.HasErrors() {
+		t.Fatal("a database with no network anywhere in the project must be an error")
+	}
+	if !strings.Contains(renderToString(ds), "network") {
+		t.Errorf("diagnostic must name the missing requirement:\n%s", renderToString(ds))
+	}
+}
