@@ -115,11 +115,22 @@ func TestResolveAfterReportsUnresolvedDependencyAsDiagnostic(t *testing.T) {
 func TestResolveAfterMixesVariableAndResourceReference(t *testing.T) {
 	// Unknownness is contagious (spec §6): the whole concat goes unknown
 	// because net.id is unresolvable at compile time, even though
-	// "environment" resolves immediately. The stored Expr is the ORIGINAL
-	// tree, so re-evaluating it at apply time must resolve BOTH the
-	// variable and the resource reference again — this is the test that
-	// proves runtimeScope.Variable actually does that (Task 3 folds resolved parts into the deferred expression, so a residual
-	// contains no variable reference and this scope needs no variables.)
+	// "environment" resolves immediately.
+	//
+	// Corrected from an earlier version of this comment, which claimed this
+	// test "proves runtimeScope.Variable" resolves "environment" again at
+	// apply time. It does not, and cannot: residual() (internal/expressions,
+	// Task 3) folds "environment" into an OpLiteral the moment its own
+	// compile-time sub-evaluation succeeds, so the Expr stored on this
+	// deferred value already has "environment" baked in as a literal —
+	// runtimeScope.Variable is never consulted for it. Reviewer-verified by
+	// running this test with runtimeScope.Variable stubbed to always report
+	// unavailable: it still passes. What this test actually proves is that a
+	// residual mixing an already-folded literal with a still-unresolved
+	// resource reference (net.id) evaluates to the right concatenation once
+	// the reference resolves — see
+	// TestResolveAfterTreatsResidualVarRefAsCompilerBug for the test that
+	// exercises runtimeScope.Variable itself.
 	op := &planner.Operation{
 		Address: address.Address{Name: "app"},
 		After: map[string]value.Value{
@@ -169,5 +180,47 @@ func TestResolveAfterUsesLiveSnapshotNotPlanTimeBefore(t *testing.T) {
 	}
 	if s, _ := got["network_id"].AsString(); s != "net-1" {
 		t.Errorf("network_id = %q, want the live value \"net-1\", not Before's stale one", s)
+	}
+}
+
+// TestResolveAfterTreatsResidualVarRefAsCompilerBug pins the fix-round-1
+// decision: runtimeScope.Variable always reports unavailable rather than
+// resolving "environment" (or any variable) specially.
+//
+// No well-formed residual can carry an OpVarRef — see the doc comment on
+// runtimeScope in resolve.go for why — so this test cannot construct one
+// through the real parser and compile-time evaluator the way deferredValue
+// does for every other test in this file. It hand-builds the malformed
+// shape directly, standing in for a hypothetical compiler bug that lets an
+// unfolded variable reference leak into a stored Expr. resolveAfter must
+// not silently resolve it: expressions.Evaluate's own "undefined variable"
+// diagnostic must fire, and the attribute must stay unknown, exactly as it
+// would for a genuinely unresolved dependency — the bug must surface
+// loudly rather than being quietly patched over by the scope.
+func TestResolveAfterTreatsResidualVarRefAsCompilerBug(t *testing.T) {
+	malformed := &value.Expr{
+		Op:     value.OpVarRef,
+		Ref:    value.Reference{Resource: "environment"},
+		Origin: value.Origin{File: "infra.yml", Line: 1},
+	}
+	op := &planner.Operation{
+		Address: address.Address{Name: "app"},
+		After: map[string]value.Value{
+			"name": {
+				Kind:   value.KindString,
+				Known:  false,
+				Source: value.SourceComputed,
+				Expr:   malformed,
+				Origin: malformed.Origin,
+			},
+		},
+	}
+
+	got, ds := resolveAfter(op, map[string]*resource.ResourceState{}, "dev")
+	if !ds.HasErrors() {
+		t.Fatal("expected a diagnostic: a residual carrying an OpVarRef must not resolve silently")
+	}
+	if got["name"].Known {
+		t.Error("name must remain unknown; a residual OpVarRef is a compiler bug, not a value to fabricate")
 	}
 }

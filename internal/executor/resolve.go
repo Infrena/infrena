@@ -13,42 +13,47 @@ import (
 
 // runtimeScope resolves expression references at apply time: attribute
 // references against resources already applied earlier in this run (or
-// present in state before it started), and the one variable the compiler
-// always injects regardless of --var. It implements expressions.Scope so
+// present in state before it started). It implements expressions.Scope so
 // resolution goes through internal/expressions.Evaluate — the exact
 // evaluator the compiler used to produce the unknown value in the first
 // place (spec §6, §15) — rather than a second, hand-rolled evaluator that
 // could disagree with it about what a function or a concatenation means.
 //
-// Variable only ever resolves "environment" because Task 3 folds every
-// resolvable part into the deferred expression before it is stored. A
-// residual therefore holds resource references and literals — never a
-// variable — so the apply-time scope needs no variable table. environment
-// is kept anyway because a residual that concatenates an already-resolved
-// variable with a still-unresolved resource reference (see
-// TestResolveAfterMixesVariableAndResourceReference) still contains the
-// original OpVarRef node for that variable: Task 3 only folds an argument
-// once ITS OWN sub-evaluation succeeds, and evaluation of the whole
-// expression only ran once, at compile time, before the resource reference
-// was known — so the compile-time result for "environment" was never
-// substituted into the stored residual either. Re-evaluating the residual
-// at apply time therefore visits that OpVarRef node again and needs an
-// answer for it.
+// Variable always reports unavailable, deliberately. A well-formed residual
+// (internal/expressions' residual, Task 3) can never contain an OpVarRef at
+// all: every variable name the compiler's compileScope can resolve —
+// "environment" unconditionally, plus --var/region/account
+// (internal/compiler/bind.go, variableScope) — evaluates successfully in
+// the very first, compile-time pass, and residual() folds any argument
+// whose OWN sub-evaluation succeeded into an OpLiteral before the
+// expression is ever stored as a deferred value (eval.go's residual, on
+// the rule stated in its own comment: fold what resolved, keep the
+// sub-expression's own residual for what did not). A variable that does
+// NOT resolve at compile time is a hard compile error (bindAttribute adds
+// an "undefined variable" diagnostic), which stops the pipeline before a
+// Plan — and so before an Operation — is ever produced. Either way, no
+// OpVarRef survives into an Operation.After that reaches an apply run.
+//
+// So an OpVarRef appearing in a residual here would mean that invariant
+// broke somewhere upstream — a compiler bug, not a normal unresolved
+// dependency. Reporting it "unavailable" rather than defensively answering
+// for it (as an earlier version of this scope did, incorrectly assuming a
+// residual could still carry a resolved-at-compile-time variable
+// reference — see TestResolveAfterTreatsResidualVarRefAsCompilerBug) makes
+// that bug surface loudly: expressions.Evaluate reports it as an undefined
+// variable, an error diagnostic ends up in the returned Diagnostics, and
+// the attribute stays unknown rather than being silently resolved. That is
+// preferable to a scope that quietly covers for a broken invariant.
 //
 // resources is a snapshot, not a live *state.State; see Task 8's
 // run.snapshot for why a snapshot is what a worker goroutine is handed.
 type runtimeScope struct {
-	resources   map[string]*resource.ResourceState
-	environment string
+	resources map[string]*resource.ResourceState
 }
 
-// Variable resolves the one variable a residual can still contain.
-func (s runtimeScope) Variable(name string) (value.Value, bool) {
-	if name == "environment" {
-		return value.String(s.environment, value.SourceEnvironment), true
-	}
-	return value.Value{}, false
-}
+// Variable always reports unavailable — see the type doc comment for why
+// that is correct rather than merely unimplemented.
+func (s runtimeScope) Variable(string) (value.Value, bool) { return value.Value{}, false }
 
 // Attribute resolves a resource reference against the apply-time snapshot.
 // A resource missing from the snapshot — not yet applied, or never going to
@@ -95,9 +100,19 @@ func (s runtimeScope) Attribute(ref value.Reference) (value.Value, bool) {
 // determined, so the caller must see this as a failure rather than pass an
 // unknown to a provider as though it were real (pkg/resource's
 // ResolvedResource.Desired applies the same rule one layer down).
+//
+// environment is part of this function's interface contract (Task 7's
+// brief, consumed by Task 8) rather than something runtimeScope reads: per
+// the invariant documented on runtimeScope's Variable, no well-formed
+// residual can contain a reference to "environment" (or any other
+// variable) for runtimeScope to resolve, so there is currently nothing for
+// this parameter to feed. It is kept in the signature rather than dropped
+// because Task 8 calls resolveAfter through this exact contract; if that
+// invariant is ever deliberately relaxed, this is where an environment
+// value would be threaded back in.
 func resolveAfter(op *planner.Operation, resources map[string]*resource.ResourceState, environment string) (map[string]value.Value, diag.Diagnostics) {
 	var ds diag.Diagnostics
-	scope := runtimeScope{resources: resources, environment: environment}
+	scope := runtimeScope{resources: resources}
 
 	// Sorted rather than ranged directly: diagnostic order must not depend
 	// on Go's randomised map iteration, or two runs of the identical apply
