@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"infra/internal/config"
+	"infra/pkg/address"
 	"infra/pkg/value"
 )
 
@@ -312,5 +313,61 @@ func TestRecordEdgeKeepsEarliestOrigin(t *testing.T) {
 	recordEdge(edges, "network", value.Origin{File: "infra.yml", Line: 20})
 	if got := edges["network"].Line; got != 3 {
 		t.Errorf("edges[\"network\"].Line = %d, want 3 (the earliest of the origins recorded)", got)
+	}
+}
+
+// TestBindSortsDependsOnEveryTime pins bind.go's address.Sort in
+// sortedAddresses. DependsOn is built by ranging a map, so the order is
+// randomised per run: one compile that happens to come out sorted proves
+// nothing, and Go's small-map range is skewed toward insertion order, so the
+// accidental-pass rate is high. Hence the loop, and hence four dependencies
+// rather than two.
+//
+// Seeded through Compile rather than by constructing a ResolvedResource,
+// because the property under test is that PRODUCTION establishes the ordering —
+// a hand-built fixture would assert only that the test author sorted a slice.
+func TestBindSortsDependsOnEveryTime(t *testing.T) {
+	body := `
+project: myapp
+resources:
+  zulu:
+    type: test.network
+    cidr: 10.0.0.0/16
+  yankee:
+    type: test.network
+    cidr: 10.1.0.0/16
+  xray:
+    type: test.network
+    cidr: 10.2.0.0/16
+  whiskey:
+    type: test.network
+    cidr: 10.3.0.0/16
+  app:
+    type: test.network
+    cidr: 10.9.0.0/16
+    depends_on: [zulu, yankee, xray, whiskey]
+`
+	want := []string{"whiskey", "xray", "yankee", "zulu"}
+	for i := 0; i < 20; i++ {
+		resolved, ds := Compile(loadFiles(t, body), testRegistry(t), Options{Environment: "dev"})
+		if ds.HasErrors() {
+			t.Fatalf("unexpected diagnostics: %+v", ds)
+		}
+		app, ok := resolved.Get(address.Address{Name: "app"})
+		if !ok {
+			t.Fatal("app resource missing from the resolved config")
+		}
+		got := make([]string, 0, len(app.DependsOn))
+		for _, d := range app.DependsOn {
+			got = append(got, d.Name)
+		}
+		if len(got) != len(want) {
+			t.Fatalf("DependsOn = %v, want %v", got, want)
+		}
+		for j := range want {
+			if got[j] != want[j] {
+				t.Fatalf("iteration %d: DependsOn = %v, want it sorted as %v", i, got, want)
+			}
+		}
 	}
 }

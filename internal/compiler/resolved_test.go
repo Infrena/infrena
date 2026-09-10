@@ -318,3 +318,58 @@ resources:
 			"in another call (%s); a saved plan would be accepted against configuration it was not computed from", a)
 	}
 }
+
+// TestHashIsIndependentOfDependencyOrder pins invariant 6 (plan determinism) at
+// the Hash() level: DependsOn arrives from map iteration upstream, so Hash must
+// canonicalise it rather than trusting its caller. Four dependencies are used
+// because two collide often enough that a single comparison is not a
+// measurement. Paired with TestBindSortsDependsOnEveryTime, which pins the
+// upstream sort that makes Hash's own sort.Strings(deps) redundant; either test
+// alone leaves one of the two sorts removable with nothing failing.
+func TestHashIsIndependentOfDependencyOrder(t *testing.T) {
+	deps := func(names ...string) *resource.ResolvedResource {
+		r := res("app", "test.application", map[string]value.Value{
+			"image": value.String("nginx", value.SourceExplicit),
+		})
+		for _, n := range names {
+			r.DependsOn = append(r.DependsOn, address.Address{Name: n})
+		}
+		return r
+	}
+
+	orders := [][]string{
+		{"alpha", "beta", "gamma", "delta"},
+		{"delta", "gamma", "beta", "alpha"},
+		{"gamma", "alpha", "delta", "beta"},
+		{"beta", "delta", "alpha", "gamma"},
+	}
+
+	want, err := cfg(deps(orders[0]...)).Hash()
+	if err != nil {
+		t.Fatalf("Hash: %v", err)
+	}
+	for _, order := range orders[1:] {
+		got, err := cfg(deps(order...)).Hash()
+		if err != nil {
+			t.Fatalf("Hash: %v", err)
+		}
+		if got != want {
+			t.Fatalf("Hash depends on dependency order: %v hashed to %s, want %s (from %v)",
+				order, got, want, orders[0])
+		}
+	}
+
+	// Stability across repeated calls on one config, for the same reason:
+	// every map the encoding walks must be canonicalised, not merely
+	// self-consistent within a single call.
+	c := cfg(deps(orders[0]...))
+	for i := 0; i < 50; i++ {
+		got, err := c.Hash()
+		if err != nil {
+			t.Fatalf("Hash: %v", err)
+		}
+		if got != want {
+			t.Fatalf("Hash is not stable across calls: iteration %d gave %s, want %s", i, got, want)
+		}
+	}
+}

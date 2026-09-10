@@ -314,3 +314,100 @@ func TestRenderDistinguishesRemovedFromUnknown(t *testing.T) {
 		t.Errorf("an ordinary change must still render normally:\n%s", out)
 	}
 }
+
+// TestRenderForcedByIsSortedRegardlessOfReasonOrder pins render.go's
+// sort.Strings in renderForcedBy.
+//
+// Reasons normally arrive sorted (diff.go's sortReasons, itself fed by
+// unionKeys), which is why removing this sort fails nothing: the sort is
+// defence in depth against a Plan built by some other producer — a plan read
+// back from disk in M4, or a second planner. Render's documented contract is
+// that identical plans render identical text, and the input here is the
+// adversarial one that contract has to survive, so the fixture hands it
+// reasons in an order Compute would never produce.
+//
+// Four forcing attributes, not two: with two, the wrong order is still one of
+// only two strings and a reader can talk themselves into either.
+func TestRenderForcedByIsSortedRegardlessOfReasonOrder(t *testing.T) {
+	p := &Plan{
+		Project:     "myapp",
+		Environment: "dev",
+		Operations: []Operation{{
+			Address: address.Address{Name: "db"}, Type: "test.database", Kind: OpReplace,
+			Before: map[string]value.Value{"engine": value.String("postgres", value.SourceProvider)},
+			After:  map[string]value.Value{"engine": value.String("mysql", value.SourceExplicit)},
+			Reasons: []ChangeReason{
+				{Attribute: "zone", ForceNew: true},
+				{Attribute: "engine", ForceNew: true},
+				{Attribute: "size", ForceNew: false}, // not forcing: must not appear
+				{Attribute: "region", ForceNew: true},
+				{Attribute: "account", ForceNew: true},
+			},
+		}},
+	}
+
+	got := Render(p, RenderOptions{})
+	const want = "-/+ test.database.db  (replacement forced by: account, engine, region, zone)"
+	if !strings.Contains(got, want) {
+		t.Errorf("replacement header is not canonically ordered.\n--- want line ---\n%s\n--- got ---\n%s", want, got)
+	}
+}
+
+// TestRenderIsDeterministicAcrossRepeatedCalls pins the plan-text half of
+// invariant 6 (spec §12.1): the same plan must render the same bytes every
+// time. Render walks Before and After as maps, so the ordering comes from
+// unionKeys and nothing else; without it Go's randomised range order leaks
+// into the artifact a user reads before approving a change.
+//
+// The loop is the measurement. A single render cannot distinguish "sorted" from
+// "whatever order this run produced", and Go's small-map range is skewed toward
+// insertion order, so a one-shot comparison against a hand-written expectation
+// passes most of the time even when the sort is gone. Five attributes give
+// enough orderings that 30 renders effectively never all agree by accident.
+func TestRenderIsDeterministicAcrossRepeatedCalls(t *testing.T) {
+	plan := func() *Plan {
+		return &Plan{
+			Project:     "myapp",
+			Environment: "dev",
+			Operations: []Operation{{
+				Address: address.Address{Name: "db"}, Type: "test.database", Kind: OpReplace,
+				Before: map[string]value.Value{
+					"engine":   value.String("postgres", value.SourceProvider),
+					"size":     value.Int(10, value.SourceProvider),
+					"network":  value.String("net-1", value.SourceProvider),
+					"zone":     value.String("a", value.SourceProvider),
+					"endpoint": value.String("db-1.test", value.SourceProvider),
+				},
+				After: map[string]value.Value{
+					"engine":   value.String("mysql", value.SourceExplicit),
+					"size":     value.Int(50, value.SourceExplicit),
+					"network":  value.String("net-2", value.SourceExplicit),
+					"zone":     value.String("b", value.SourceExplicit),
+					"endpoint": value.Unknown(value.KindString, value.SourceComputed),
+				},
+				// Already in canonical order, so renderForcedBy's own sort
+				// is a no-op here: this test is about the attribute maps,
+				// and TestRenderForcedByIsSortedRegardlessOfReasonOrder is
+				// about the reasons. Keeping them separate is what lets each
+				// name which decision it pins.
+				Reasons: []ChangeReason{
+					{Attribute: "engine", ForceNew: true},
+					{Attribute: "network", ForceNew: true},
+					{Attribute: "size"},
+					{Attribute: "zone", ForceNew: true},
+				},
+			}},
+		}
+	}
+
+	want := Render(plan(), RenderOptions{})
+	if !strings.Contains(want, `network: "net-1" -> "net-2"`) {
+		t.Fatalf("fixture did not reach the attribute-diff loop:\n%s", want)
+	}
+	for i := 0; i < 30; i++ {
+		if got := Render(plan(), RenderOptions{}); got != want {
+			t.Fatalf("Render is not deterministic; iteration %d differs.\n--- first ---\n%s--- iteration %d ---\n%s",
+				i, want, i, got)
+		}
+	}
+}
