@@ -9660,7 +9660,9 @@ Expected: PASS — eight new tests plus Task 10's.
 
 *The closing repeat.* `firstCycle` returned the cycle with its first address repeated at the end; `graph.Cycle()` returns it without. This is not cosmetic — `cycleDiagnostic` computes `Related: cycle[1 : len(cycle)-1]`, which assumes the repeat is there. Hand it an unwrapped slice and it silently drops the last genuine member of the cycle from `Related`, and for a two-node cycle it yields an empty `Related` instead of the one other member. `cycleFor` therefore re-adds the repeat, restoring exactly the slice `cycleDiagnostic` already expects, and `cycleDiagnostic` is left untouched.
 
-In `internal/compiler/validate.go`:
+In `internal/compiler/validate.go`, add `"infra/internal/graph"` to the import block — it currently imports `strconv`, `strings`, `infra/internal/diag`, `infra/internal/registry`, `infra/pkg/address` and `infra/pkg/value`, all of which stay. `strconv` and `address` are both already there and both are used by the code below, so no other import changes.
+
+Then:
 
 ```go
 // cycleFor reports a dependency cycle in the resolved configuration, or nil.
