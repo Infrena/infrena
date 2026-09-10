@@ -240,3 +240,81 @@ resources:
 			"call (%s); a saved plan would be accepted against configuration it was not computed from", a)
 	}
 }
+
+// TestConfigHashSeesAVariableFeedingANestedDeferredCallInAConcat is Task 3's
+// round 2 defect: residual()'s unknown branch reused the source arg instead
+// of the evaluated Value's own Expr, so a partially-resolved OpCall nested
+// inside an OpConcat had its inner fold discarded, and the unfolded source —
+// naming the variable but not its value — went into the residual instead.
+// hashExpr can then only see the ref NAME again, exactly the blindness Task 3
+// exists to close, reopened for this shape.
+func TestConfigHashSeesAVariableFeedingANestedDeferredCallInAConcat(t *testing.T) {
+	body := `
+project: myapp
+resources:
+  network:
+    type: test.network
+    cidr: 10.0.0.0/16
+  database:
+    type: test.database
+    engine: postgres
+    network: ${replace(network.id, "old", prefix)}-tail
+`
+	hashWith := func(prefix string) string {
+		t.Helper()
+		cfg, ds := Compile(loadFiles(t, body), testRegistry(t), Options{
+			Vars: map[string]string{"prefix": prefix},
+		})
+		if ds.HasErrors() {
+			t.Fatalf("compile with prefix=%q: %+v", prefix, ds)
+		}
+		h, err := cfg.Hash()
+		if err != nil {
+			t.Fatalf("Hash: %v", err)
+		}
+		return h
+	}
+
+	if a, b := hashWith("acme"), hashWith("totally-different"); a == b {
+		t.Errorf("ConfigHash is identical for two different --var values feeding a call nested "+
+			"in a concat (%s); a saved plan would be accepted against configuration it was not computed from", a)
+	}
+}
+
+// TestConfigHashSeesAVariableFeedingANestedDeferredCallInACall is the same
+// defect, one level of nesting different: a partially-resolved call as the
+// ARGUMENT of another call, rather than a part of a concat. The parser
+// permits this (parseCall recurses through parseExpr back into parseCall),
+// so residual must handle it too.
+func TestConfigHashSeesAVariableFeedingANestedDeferredCallInACall(t *testing.T) {
+	body := `
+project: myapp
+resources:
+  network:
+    type: test.network
+    cidr: 10.0.0.0/16
+  database:
+    type: test.database
+    engine: postgres
+    network: ${upper(replace(network.id, "old", prefix))}
+`
+	hashWith := func(prefix string) string {
+		t.Helper()
+		cfg, ds := Compile(loadFiles(t, body), testRegistry(t), Options{
+			Vars: map[string]string{"prefix": prefix},
+		})
+		if ds.HasErrors() {
+			t.Fatalf("compile with prefix=%q: %+v", prefix, ds)
+		}
+		h, err := cfg.Hash()
+		if err != nil {
+			t.Fatalf("Hash: %v", err)
+		}
+		return h
+	}
+
+	if a, b := hashWith("acme"), hashWith("totally-different"); a == b {
+		t.Errorf("ConfigHash is identical for two different --var values feeding a call nested "+
+			"in another call (%s); a saved plan would be accepted against configuration it was not computed from", a)
+	}
+}

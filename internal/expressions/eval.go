@@ -226,6 +226,19 @@ func unknownFrom(e *value.Expr, kind value.Kind, sensitive bool) value.Value {
 // therefore keeps its source expression, which is already correct because
 // nothing in it resolved.
 //
+// The rule for each argument position is: a residual's argument IS the
+// sub-expression's own residual, whatever depth it came from. A resolved
+// argument folds to a literal. An unresolved one keeps evaluated[i].Expr —
+// not the raw source arg — because the parser lets OpCall nest inside
+// OpConcat and inside another OpCall's arguments, so an unresolved argument
+// may itself be a partially-resolved call whose own residual already folded
+// what it could. Reusing the source arg there would silently discard that
+// inner fold and put the unfolded source back in, the same blindness this
+// function exists to close, one level out. For a genuinely unresolved leaf
+// reference, evaluate() sets Expr to the source node itself
+// (unknownFrom(e, ...) does exactly that), so evaluated[i].Expr equals arg in
+// that case — this is a strict generalisation, not a special case for calls.
+//
 // evaluated[i] is the result of evaluating e.Args[i]; the two slices are
 // parallel. The source expression is never modified: it belongs to the caller's
 // AST, is shared by every value that references it, and is what a diagnostic
@@ -240,8 +253,15 @@ func residual(e *value.Expr, evaluated []value.Value) *value.Expr {
 	for i, arg := range e.Args {
 		v := evaluated[i]
 		if !v.Known {
-			// Still unknown: keep the reference so the executor can resolve it.
-			out.Args[i] = arg
+			// Still unknown: keep whatever residual the sub-evaluation itself
+			// produced, so a partial fold inside a nested call is not thrown
+			// away. Falls back to the source arg only when the sub-value
+			// carries no Expr of its own.
+			if v.Expr != nil {
+				out.Args[i] = v.Expr
+			} else {
+				out.Args[i] = arg
+			}
 			continue
 		}
 		// Resolved: fold the VALUE in, sensitivity and all. A folded literal
