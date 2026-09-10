@@ -74,3 +74,79 @@ func TestWithSensitiveIsSticky(t *testing.T) {
 		t.Error("changing source must not clear sensitivity")
 	}
 }
+
+// TestEqualFailsClosedOnMalformedValues pins the conservative rule for values
+// whose Raw does not match their Kind. Both behaviours below were measured
+// against the previous implementation before this test existed: the composite
+// cases returned true, and the KindInvalid case panicked.
+//
+// Equal is the core of the diff, so "equal" means the planner emits no
+// operation. A false equal is a real change that is never planned.
+func TestEqualFailsClosedOnMalformedValues(t *testing.T) {
+	cases := []struct {
+		name string
+		a, b Value
+	}{
+		{
+			// Previously true: the discarded type assertion made both look empty.
+			name: "list kind, wrong Raw type, different contents",
+			a:    Value{Kind: KindList, Known: true, Raw: []any{"one"}},
+			b:    Value{Kind: KindList, Known: true, Raw: []any{"two", "three"}},
+		},
+		{
+			name: "map kind, wrong Raw type, different contents",
+			a:    Value{Kind: KindMap, Known: true, Raw: map[string]any{"k": "v1"}},
+			b:    Value{Kind: KindMap, Known: true, Raw: map[string]any{"k": "v2", "j": "x"}},
+		},
+		{
+			name: "one side well-formed, the other not",
+			a:    Value{Kind: KindList, Known: true, Raw: []Value{String("x", SourceExplicit)}},
+			b:    Value{Kind: KindList, Known: true, Raw: []any{"x"}},
+		},
+		{
+			// Previously panicked: == on an uncomparable type.
+			name: "kind left at the zero value with a composite Raw",
+			a:    Value{Known: true, Raw: map[string]Value{"password": String("s", SourceProvider)}},
+			b:    Value{Known: true, Raw: map[string]Value{"password": String("s", SourceProvider)}},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Must not panic, and must not claim equality it cannot prove.
+			if tc.a.Equal(tc.b) {
+				t.Error("a value whose Raw does not match its Kind must never compare equal — " +
+					"the planner reads equality as 'no operation', so a false equal loses a real change")
+			}
+			if tc.b.Equal(tc.a) {
+				t.Error("Equal must be symmetric in failing closed")
+			}
+		})
+	}
+}
+
+// TestEqualStillComparesWellFormedValues guards the other direction: failing
+// closed must not make ordinary equal values compare unequal.
+func TestEqualStillComparesWellFormedValues(t *testing.T) {
+	if !String("eu-west-1", SourceExplicit).Equal(String("eu-west-1", SourceDefault)) {
+		t.Error("identical strings must be equal regardless of provenance")
+	}
+	if !Int(20, SourceExplicit).Equal(Int(20, SourceProvider)) {
+		t.Error("identical ints must be equal regardless of provenance")
+	}
+	list := func() Value {
+		return Value{Kind: KindList, Known: true, Raw: []Value{String("a", SourceExplicit), Int(1, SourceExplicit)}}
+	}
+	if !list().Equal(list()) {
+		t.Error("identical well-formed lists must be equal")
+	}
+	m := func() Value {
+		return Value{Kind: KindMap, Known: true, Raw: map[string]Value{"a": String("x", SourceExplicit)}}
+	}
+	if !m().Equal(m()) {
+		t.Error("identical well-formed maps must be equal")
+	}
+	if String("a", SourceExplicit).Equal(String("b", SourceExplicit)) {
+		t.Error("different strings must not be equal")
+	}
+}

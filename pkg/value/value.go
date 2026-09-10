@@ -107,6 +107,32 @@ func (v Value) WithOrigin(o Origin) Value {
 // An unknown value is never equal to anything, including another unknown. The
 // planner relies on this: an attribute that cannot be proven unchanged must be
 // reported as a change (spec §11).
+//
+// The same conservative rule governs malformed values, and for the same
+// reason. A Value whose Raw does not match its Kind cannot be PROVEN equal to
+// anything, so it is not. The earlier version discarded the type assertion's
+// ok — `a, _ := v.Raw.([]Value)` — which turned every malformed composite into
+// an empty one, and two malformed values with entirely different contents
+// compared EQUAL. Measured, not assumed:
+//
+//	KindList with wrong Raw types, different contents: Equal = true
+//	KindMap  with wrong Raw types, different contents: Equal = true
+//
+// Equal is the core of the diff. "Equal" there means the planner emits no
+// operation, so a real change to a real resource would silently never be
+// planned — acceptance invariant 2 failing in the direction that loses work
+// rather than the direction that does too much.
+//
+// The kind switch is likewise an ALLOWLIST rather than a `default` that
+// compares Raw directly. KindInvalid is the zero value of Kind, so a Value
+// whose Kind was never set reached `v.Raw == other.Raw`, and == on an
+// uncomparable type is a runtime panic, not a compile error:
+//
+//	PANIC: comparing uncomparable type map[string]value.Value
+//
+// Equal is called once per attribute per resource on every plan, so that
+// panic is reachable from any malformed value anywhere in configuration or
+// state.
 func (v Value) Equal(other Value) bool {
 	if !v.Known || !other.Known {
 		return false
@@ -116,8 +142,11 @@ func (v Value) Equal(other Value) bool {
 	}
 	switch v.Kind {
 	case KindList:
-		a, _ := v.Raw.([]Value)
-		b, _ := other.Raw.([]Value)
+		a, aok := v.Raw.([]Value)
+		b, bok := other.Raw.([]Value)
+		if !aok || !bok {
+			return false
+		}
 		if len(a) != len(b) {
 			return false
 		}
@@ -128,8 +157,11 @@ func (v Value) Equal(other Value) bool {
 		}
 		return true
 	case KindMap:
-		a, _ := v.Raw.(map[string]Value)
-		b, _ := other.Raw.(map[string]Value)
+		a, aok := v.Raw.(map[string]Value)
+		b, bok := other.Raw.(map[string]Value)
+		if !aok || !bok {
+			return false
+		}
 		if len(a) != len(b) {
 			return false
 		}
@@ -140,8 +172,12 @@ func (v Value) Equal(other Value) bool {
 			}
 		}
 		return true
-	default:
+	case KindString, KindInt, KindFloat, KindBool:
 		return v.Raw == other.Raw
+	default:
+		// KindInvalid, or a kind added later that nobody taught this method
+		// about. Never equal: see the doc comment.
+		return false
 	}
 }
 
