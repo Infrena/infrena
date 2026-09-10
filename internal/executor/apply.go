@@ -3,7 +3,6 @@ package executor
 import (
 	"context"
 	"fmt"
-	"sort"
 	"time"
 
 	"infra/internal/diag"
@@ -57,8 +56,7 @@ func Apply(ctx context.Context, p *planner.Plan, g *graph.Graph[planner.OpNode],
 
 	queue := w.Ready()
 	providerInFlight := map[string]int{}
-	appliedSet := map[string]address.Address{}
-	var skipped []string
+	tr := newTracker()
 	persistFailed := false
 
 	for w.Remaining() > 0 {
@@ -153,16 +151,7 @@ func Apply(ctx context.Context, p *planner.Plan, g *graph.Graph[planner.OpNode],
 		}
 
 		if res.err != nil {
-			result.Failed[res.node.ID()] = res.err
-			// EventSkipped is deliberately not emitted here. Task 10
-			// (internal/executor/isolation.go, not yet written) owns the
-			// skip cascade end to end — it replaces this inline
-			// Failed/Skipped bookkeeping with an extracted tracker
-			// (recordSuccess/recordFailure/result) wired into run.record,
-			// and emitting EventSkipped belongs with that change, not
-			// bolted on here first. This is a known, deliberate gap, not
-			// an oversight.
-			skipped = append(skipped, w.Skip(res.node.ID())...)
+			tr.recordFailure(w, res.node, res.err, &ds)
 			continue
 		}
 
@@ -182,20 +171,11 @@ func Apply(ctx context.Context, p *planner.Plan, g *graph.Graph[planner.OpNode],
 			})
 			persistFailed = true
 		}
-		appliedSet[res.node.Address.String()] = res.node.Address
-		queue = append(queue, w.Done(res.node.ID())...)
+		newly := tr.recordSuccess(w, res.node)
+		queue = append(queue, newly...)
 	}
 
-	applied := make([]address.Address, 0, len(appliedSet))
-	for _, a := range appliedSet {
-		applied = append(applied, a)
-	}
-	address.Sort(applied)
-	result.Applied = applied
-
-	sort.Strings(skipped)
-	result.Skipped = skipped
-	return result, ds
+	return tr.result(st), ds
 }
 
 // run holds the mutable bookkeeping one Apply call owns.

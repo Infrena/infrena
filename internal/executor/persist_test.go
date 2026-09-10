@@ -585,6 +585,17 @@ func TestRecordHardErrorsOnNilStateForEveryKindThatCanReachIt(t *testing.T) {
 // with no dependency relationship to it at all — never gets scheduled. See
 // the comment on record's default arm (apply.go) for why stopping the
 // whole run, not just failing this one operation, is the right call here.
+//
+// root's own accounting is deliberately NOT "same as a Put failure" here,
+// even though both routes are the same stopping gate: a Put I/O failure
+// still runs st.Set/st.Remove before the write fails, so state HAS an entry
+// for the address, merely not yet flushed to disk — Applied recording it is
+// accurate. A nil-state return never reaches st.Set at all (record's
+// default arm returns before it); state has no entry for root, so Applied
+// naming it anyway would make Result self-contradictory — a caller reading
+// result.State would find nothing at the address result.Applied claims
+// succeeded. tracker.result enforces this: Applied only carries a
+// non-removal address when Result.State actually has an entry for it.
 func TestApplyStopsSchedulingASiblingAfterANilStateReturn(t *testing.T) {
 	backend := newLockedBackend(t, "dev")
 	reg := registry.New()
@@ -623,7 +634,7 @@ func TestApplyStopsSchedulingASiblingAfterANilStateReturn(t *testing.T) {
 	if _, ok := st.Get(addr("sibling")); ok {
 		t.Error("sibling must not have been created — a nil-state return must stop scheduling new work, exactly like a Put I/O failure does")
 	}
-	if !reflect.DeepEqual(result.Applied, []address.Address{addr("root")}) {
-		t.Errorf("Applied = %v, want exactly [root] — root's provider call did succeed, same accounting as a Put failure", result.Applied)
+	if len(result.Applied) != 0 {
+		t.Errorf("Applied = %v, want empty — root's provider call succeeded, but nothing was ever recorded for it, so Applied must not claim state has an entry it does not", result.Applied)
 	}
 }

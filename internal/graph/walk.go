@@ -201,12 +201,20 @@ func (w *Walk[T]) Done(id string) []T {
 }
 
 // Skip marks id, and every node reachable from it — its dependents,
-// transitively — as skipped, and returns their IDs sorted. This is how "a
-// failure stops its branch, not the world" (spec §15) is implemented: a
-// dependent of a failed operation can never legitimately run, since at
-// least one of its own predecessors never completed, so Skip retires it
-// without ever dispatching it, rather than leaving it to wait forever with
-// Remaining never reaching zero.
+// transitively — as skipped, and returns those nodes sorted by ID. This is
+// how "a failure stops its branch, not the world" (spec §15) is
+// implemented: a dependent of a failed operation can never legitimately
+// run, since at least one of its own predecessors never completed, so Skip
+// retires it without ever dispatching it, rather than leaving it to wait
+// forever with Remaining never reaching zero.
+//
+// Returns nodes, not IDs: the caller (executor.tracker.recordFailure) needs
+// each skipped node's Address and Kind to report what was skipped and why,
+// and Walk already holds the node behind every ID in w.nodes — returning
+// just the ID would force the caller to rebuild an id→node map purely to
+// look up information the walker had the whole time. Result.Skipped is
+// still []string; the executor is where that narrowing happens, once, with
+// the node in hand — not here, where every caller would pay for it.
 //
 // id itself is never in the returned slice. The caller already knows id
 // failed — that is why Skip was called instead of Done — and reports it
@@ -232,11 +240,11 @@ func (w *Walk[T]) Done(id string) []T {
 // the returned slice double-counts it. That is about a node reached
 // TRANSITIVELY through the walk below, not about id itself — id itself is
 // covered by the panic above, before the walk ever starts.
-func (w *Walk[T]) Skip(id string) []string {
+func (w *Walk[T]) Skip(id string) []T {
 	w.mustKnow("Skip", id)
 	w.mustBeDispatched("Skip", id)
 
-	var skipped []string
+	var skippedIDs []string
 	seen := map[string]bool{id: true}
 	queue := []string{id}
 
@@ -252,7 +260,7 @@ func (w *Walk[T]) Skip(id string) []string {
 		}
 		w.status[cur] = statusSkipped
 		if cur != id {
-			skipped = append(skipped, cur)
+			skippedIDs = append(skippedIDs, cur)
 		}
 
 		for _, next := range w.sortedOut(cur) {
@@ -263,7 +271,11 @@ func (w *Walk[T]) Skip(id string) []string {
 		}
 	}
 
-	sort.Strings(skipped)
+	sort.Strings(skippedIDs)
+	skipped := make([]T, len(skippedIDs))
+	for i, sid := range skippedIDs {
+		skipped[i] = w.nodes[sid]
+	}
 	return skipped
 }
 

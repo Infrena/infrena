@@ -122,11 +122,11 @@ func TestSkipPropagatesTransitivelyAndSortsByID(t *testing.T) {
 	w.Ready() // dispatches zulu and other
 
 	got := w.Skip("zulu")
-	if len(got) != 2 || got[0] != "alpha" || got[1] != "mike" {
+	if len(got) != 2 || got[0].ID() != "alpha" || got[1].ID() != "mike" {
 		t.Fatalf("Skip(zulu) = %v, want [alpha mike] sorted", got)
 	}
-	for _, id := range got {
-		if id == "zulu" {
+	for _, n := range got {
+		if n.ID() == "zulu" {
 			t.Error("Skip must not include the failed node itself in its result")
 		}
 	}
@@ -147,7 +147,7 @@ func TestSkipOnASharedDependentIsNotDoubleCounted(t *testing.T) {
 	w.Ready() // dispatches a and b
 
 	first := w.Skip("a")
-	if len(first) != 1 || first[0] != "c" {
+	if len(first) != 1 || first[0].ID() != "c" {
 		t.Fatalf("Skip(a) = %v, want [c]", first)
 	}
 	afterFirst := w.Remaining()
