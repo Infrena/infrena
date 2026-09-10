@@ -7539,7 +7539,9 @@ func TestEnvironmentMismatchProducesNoOperations(t *testing.T) {
 			"database": {
 				Address: address.Address{Name: "database"},
 				Type:    "test.database",
-				Attrs:   nil,
+				// ResourceState's field is Attributes; ResolvedResource's is
+				// Attrs. They are different types and the names differ.
+				Attributes: nil,
 			},
 		},
 	}
@@ -7558,7 +7560,7 @@ func TestEnvironmentMismatchProducesNoOperations(t *testing.T) {
 }
 ```
 
-Note the state's resource carries a nil `Attrs`: the point is that the guard fires before anything reads it, so the test would panic rather than fail if the early return were removed carelessly — and a panic is a louder failure than a wrong count.
+Note the state's resource carries a nil `Attributes`. That is harmless — ranging a nil map in Go is legal and yields nothing, so it does not make the failure louder, and an earlier draft of this note wrongly claimed it would panic. What removing the guard actually produces was measured: a wrong operation count, destroying `database` from production state and creating `network` from dev configuration. That is the dangerous plan this guard exists to make impossible, and asserting `len(p.Operations) != 0` is what catches it.
 
 - [ ] **Step 5: Run the tests to verify they pass**
 
