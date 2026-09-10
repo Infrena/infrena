@@ -4502,6 +4502,7 @@ EOF
 
 **Files:**
 - Create: `internal/executor/isolation.go`
+- Modify: `internal/executor/apply.go` (wire the tracker into `run.record`; created by Task 8, also modified by Task 9 — do those first)
 - Test: `internal/executor/isolation_test.go`
 
 **Interfaces:**
@@ -4910,6 +4911,7 @@ EOF
 **Files:**
 - Create: `internal/cli/interrupt.go`
 - Create: `internal/executor/context.go`
+- Modify: `internal/executor/dispatch.go` (provider calls must run under `operationContext(ctx)`, not `ctx`; created by Task 6)
 - Test: `internal/cli/interrupt_test.go`
 - Test: `internal/executor/context_test.go`
 
