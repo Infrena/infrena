@@ -66,6 +66,16 @@ func (s ResourceScope) Variable(string) (value.Value, bool) { return value.Value
 // reproduce it, which is exactly what a not-yet-created dependency should
 // look like.
 func (s ResourceScope) Attribute(ref value.Reference) (value.Value, bool) {
+	// A reference names a resource, not an address, so it is keyed as a
+	// root-module address. That is correct for every configuration this
+	// codebase can currently produce — modules arrive in M5 (spec §8) and
+	// nothing compiles to a non-empty Address.Module yet — and it WILL be
+	// wrong the moment they do: a reference written inside a module must
+	// resolve against that module's instantiation, and this lookup would miss
+	// it and silently leave the reference deferred (or, worse, match a
+	// same-named resource at the root). Whatever carries a reference's own
+	// module path here is what M5 must add; value.Reference does not carry one
+	// today.
 	attrs, ok := s[(address.Address{Name: ref.Resource}).String()]
 	if !ok {
 		return value.Value{}, false

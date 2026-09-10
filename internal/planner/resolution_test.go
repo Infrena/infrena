@@ -1,6 +1,7 @@
 package planner
 
 import (
+	"strings"
 	"testing"
 
 	"infra/internal/expressions"
@@ -498,4 +499,190 @@ func TestResolutionOrderIncludesAddressesOnlyInState(t *testing.T) {
 			t.Fatalf("run %d: got %v, want %v (removals last, in address order)", i, got, want)
 		}
 	}
+}
+
+// TestOperationsAreEmittedInAddressOrder pins the SECOND ordering the
+// resolution pass introduced, and the one nothing else asserts.
+//
+// Compute now decides operations in dependency order and emits them in address
+// order. Only the deciding order was tested; emitting in resolution order
+// instead passed the entire suite, even though the plan artifact's
+// byte-stability and invariant 6 both rest on emission order, and even though
+// a reader who meets resolutionOrder first could reasonably take it for THE
+// order.
+//
+// The fixture is built so the two orders contradict each other: zeta must be
+// DECIDED first because alpha depends on it, and alpha must be EMITTED first
+// because it sorts first. A fixture whose dependency order happened to agree
+// with its alphabetical order would pass either way — which is exactly how two
+// earlier tests in this file passed against a broken scope.
+func TestOperationsAreEmittedInAddressOrder(t *testing.T) {
+	cfg := config(
+		configured("zeta", "test.network", map[string]value.Value{"cidr": str("10.0.0.0/16")}),
+		dependent("alpha", "test.database", map[string]value.Value{
+			"engine":  str("postgres"),
+			"network": deferred(t, "${zeta.id}"),
+		}, "zeta"),
+	)
+	// A resource only in state sorts between the two and is decided LAST of
+	// all — resolutionOrder puts removals after every configured resource —
+	// so it pins emission order against the removal tail as well.
+	st := stateOf(
+		recorded("zeta", "test.network", map[string]value.Value{
+			"cidr": str("10.0.0.0/16"),
+			"id":   str("net-1"),
+		}),
+		recorded("mu", "test.database", map[string]value.Value{"engine": str("postgres")}),
+	)
+
+	// Deciding order for this fixture is [zeta alpha mu]; emitted order must
+	// be alphabetical regardless.
+	wantDecided := []string{"zeta", "alpha", "mu"}
+	wantEmitted := []string{"alpha", "mu", "zeta"}
+
+	for i := 0; i < 50; i++ {
+		if got := names(resolutionOrder(cfg, st)); !equalStrings(got, wantDecided) {
+			t.Fatalf("run %d: resolution order = %v, want %v — this fixture only pins emission order while the two disagree",
+				i, got, wantDecided)
+		}
+
+		p, ds := Compute(cfg, st, present(st.Resources["zeta"], st.Resources["mu"]), planOpts(t))
+		if ds.HasErrors() {
+			t.Fatalf("run %d: unexpected errors:\n%s", i, rendered(t, ds))
+		}
+		var got []string
+		for _, op := range p.Operations {
+			got = append(got, op.Address.String())
+		}
+		if !equalStrings(got, wantEmitted) {
+			t.Fatalf("run %d: operations emitted as %v, want %v (sorted by canonical address, spec §12.1)",
+				i, got, wantEmitted)
+		}
+	}
+}
+
+// TestDiagnosticsAreEmittedInAddressOrder pins the same contract for what a
+// user reads. Decisions are made in dependency order, so a diagnostic raised
+// while deciding a dependency would otherwise be reported before one raised for
+// a resource that sorts ahead of it — and which order a plan reports its
+// problems in is part of invariant 6 too.
+//
+// Both resources name a type no provider defines, so each produces exactly one
+// diagnostic, and alpha depends on zeta so the two orders disagree.
+func TestDiagnosticsAreEmittedInAddressOrder(t *testing.T) {
+	cfg := config(
+		configured("zeta", "test.nosuchtype", map[string]value.Value{"cidr": str("10.0.0.0/16")}),
+		dependent("alpha", "test.nosuchtype", map[string]value.Value{"engine": str("postgres")}, "zeta"),
+	)
+
+	for i := 0; i < 50; i++ {
+		_, ds := Compute(cfg, nil, nil, planOpts(t))
+		if len(ds) != 2 {
+			t.Fatalf("run %d: got %d diagnostics, want 2:\n%s", i, len(ds), rendered(t, ds))
+		}
+		out := rendered(t, ds)
+		alpha := strings.Index(out, "alpha")
+		zeta := strings.Index(out, "zeta")
+		if alpha < 0 || zeta < 0 {
+			t.Fatalf("run %d: diagnostics do not name both resources:\n%s", i, out)
+		}
+		if alpha > zeta {
+			t.Fatalf("run %d: zeta's diagnostic is reported before alpha's; diagnostics follow address order, not resolution order:\n%s",
+				i, out)
+		}
+	}
+}
+
+// TestResolutionOrderSurvivesADependencyOutsideConfiguration pins the guard on
+// the edge-building loop.
+//
+// graph.Edge panics on an ID that was never added — deliberately, since a graph
+// in this system is always built from addresses its builder already validated
+// — so a DependsOn naming something absent from configuration must be skipped
+// rather than recorded. Without the skip this panics, and a panic here reaches
+// `apply`, which would abort mid-run still holding the environment's lock: the
+// worst available failure mode for the worst available moment.
+//
+// The compiler rejects such a dependency (internal/compiler/bind.go's
+// "depends_on names an undeclared resource"), so this is not reachable through
+// the real pipeline. It is reachable by any caller that hands Compute a config
+// it did not build with Compile, which Compute's own contract explicitly allows
+// — the same reasoning the environment-mismatch guard in Compute rests on.
+//
+// The panic is recovered on purpose. An unrecovered one tears down the test
+// binary and reports failures in packages this test has nothing to do with,
+// which is precisely the signal that makes a mutation result unreadable.
+func TestResolutionOrderSurvivesADependencyOutsideConfiguration(t *testing.T) {
+	cfg := config(
+		configured("network", "test.network", map[string]value.Value{"cidr": str("10.0.0.0/16")}),
+		dependent("database", "test.database", map[string]value.Value{
+			"engine": str("postgres"),
+		}, "network", "vanished"),
+	)
+
+	order, panicked := recovered(func() []address.Address { return resolutionOrder(cfg, nil) })
+	if panicked != nil {
+		t.Fatalf("resolutionOrder panicked on a dependency absent from configuration: %v", panicked)
+	}
+	if got, want := names(order), []string{"network", "database"}; !equalStrings(got, want) {
+		t.Errorf("resolution order = %v, want %v — the absent dependency must be skipped, not dropped along with the real one", got, want)
+	}
+
+	// And the whole plan still comes out, rather than the process ending.
+	plan, panicked := recovered(func() *Plan {
+		p, _ := Compute(cfg, nil, nil, planOpts(t))
+		return p
+	})
+	if panicked != nil {
+		t.Fatalf("Compute panicked on a dependency absent from configuration: %v", panicked)
+	}
+	if len(plan.Operations) != 2 {
+		t.Errorf("got %d operations, want 2", len(plan.Operations))
+	}
+}
+
+// TestResolutionOrderFallsBackWithoutLosingRemovals reaches the cycle branch.
+//
+// It is reachable for the same reason the guard above is: Compute is a pure
+// function of its arguments, and a hand-built ResolvedConfig — a test's, or a
+// future caller reading configuration back from somewhere other than Compile —
+// is not obliged to be acyclic. The branch must fall back to the order Compute
+// used before it ordered anything, which is planAddresses: every address in
+// configuration OR state. Falling back to configuration alone would silently
+// drop every removal, so a resource deleted from a configuration that also
+// happened to contain a cycle would never be destroyed — invariant 1 lost to a
+// fallback for an unrelated problem.
+func TestResolutionOrderFallsBackWithoutLosingRemovals(t *testing.T) {
+	cfg := config(
+		dependent("alpha", "test.database", map[string]value.Value{"engine": str("postgres")}, "zeta"),
+		dependent("zeta", "test.network", map[string]value.Value{"cidr": str("10.0.0.0/16")}, "alpha"),
+	)
+	st := stateOf(recorded("mu", "test.database", map[string]value.Value{"engine": str("postgres")}))
+
+	order, panicked := recovered(func() []address.Address { return resolutionOrder(cfg, st) })
+	if panicked != nil {
+		t.Fatalf("resolutionOrder panicked on a cyclic configuration: %v", panicked)
+	}
+	if got, want := names(order), []string{"alpha", "mu", "zeta"}; !equalStrings(got, want) {
+		t.Fatalf("resolution order = %v, want %v — the fallback is planAddresses order, which includes state-only removals",
+			got, want)
+	}
+
+	// The removal must actually reach the plan, which is the property the
+	// order above exists to protect.
+	p, ds := Compute(cfg, st, nil, planOpts(t))
+	if ds.HasErrors() {
+		t.Fatalf("unexpected errors:\n%s", rendered(t, ds))
+	}
+	if got := operation(t, p, "mu").Kind; got != OpForget && got != OpDestroy {
+		t.Errorf("mu: kind %v, want a removal — it is in state and not in configuration (invariant 1)", got)
+	}
+}
+
+// recovered runs fn and reports whatever it panicked with, so that a mutation
+// which reintroduces a panic fails the test that covers it instead of killing
+// the test binary and blaming unrelated packages.
+func recovered[T any](fn func() T) (out T, panicked any) {
+	defer func() { panicked = recover() }()
+	return fn(), nil
 }
