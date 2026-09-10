@@ -87,8 +87,21 @@ type ResourceState struct {
 	UpdatedAt    time.Time              `json:"updated_at,omitzero"`
 }
 
-// Clone deep-copies a resource state. Refresh and planning must never mutate
-// the state that was loaded from disk.
+// Clone copies a resource state deeply enough that a caller cannot mutate the
+// original through it: the struct, the Attributes map and the Dependencies
+// slice are all fresh. Refresh and planning must never mutate the state that
+// was loaded from disk, and this is what they use to avoid it.
+//
+// The one thing it does NOT deep-copy is the interior of a composite value. A
+// value.Value whose Raw holds a map[string]value.Value or a []value.Value
+// shares that container with the original, so a caller that reaches into
+// Attributes["x"].Raw and mutates it in place still writes through. No caller
+// does today, and value.Value has no Clone of its own to make it cheap; if one
+// ever needs to, that is the gap to close first.
+//
+// This comment used to say "deep-copies" flatly. It was read during M2 by an
+// implementer who concluded from it that no aliasing precaution was needed,
+// which was the opposite of what it was trying to say — hence the precision.
 func (s *ResourceState) Clone() *ResourceState {
 	if s == nil {
 		return nil
