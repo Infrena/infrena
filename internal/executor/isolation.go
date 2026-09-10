@@ -117,6 +117,15 @@ func (t *tracker) recordFailure(w *graph.Walk[planner.OpNode], node planner.OpNo
 	// entry in state either, is exactly the self-contradictory summary the
 	// Applied/State consistency rule exists to prevent. This delete is a
 	// no-op for every other failure shape, where no entry exists yet.
+	//
+	// Safe only because "at most one node per address, except a replace's
+	// two phases" is an ENFORCED invariant, not just true by convention:
+	// planner.BuildExecution (internal/planner/execution.go) rejects a plan
+	// with two operations at the same address before a graph — and this
+	// tracker — ever sees it. Review round 2 found that without that check,
+	// a hand-built or corrupted plan with two DIFFERENT-kind operations at
+	// one address could reach here and have this delete wipe a
+	// legitimately-applied, unrelated entry.
 	delete(t.applied, node.Address.String())
 	ds.Add(diag.Diagnostic{
 		Severity: diag.SeverityError,
@@ -126,35 +135,23 @@ func (t *tracker) recordFailure(w *graph.Walk[planner.OpNode], node planner.OpNo
 	})
 
 	// Both halves of this guard are defensive depth, not what currently
-	// makes it true — each is provably unreachable today, for two
-	// independent reasons documented separately below, and it stays anyway
-	// as cheap insurance against either upstream contract changing without
-	// a test able to catch it happening silently.
+	// makes it true, and both trace back to the same two facts documented
+	// once on Walk's own type doc (internal/graph/walk.go) rather than
+	// re-derived here: id == node.ID() can never hold because Skip's "id
+	// itself is never in the returned slice" excludes it before this loop
+	// ever runs (pinned by TestSkipPropagatesTransitivelyAndSortsByID); and
+	// t.skipped[id] can never already be true because Skip returns any
+	// given node at most once per Walk, ever (pinned by
+	// TestSkipOnASharedDependentIsNotDoubleCounted, internal/graph/
+	// walk_test.go). If either guarantee ever changes, its half of this
+	// guard becomes load-bearing, and there is no test today that could
+	// have caught it silently stopping being true, because there is
+	// nothing beneath it to break yet.
 	for _, n := range w.Skip(node.ID()) {
 		id := n.ID()
 		if id == node.ID() || t.skipped[id] {
 			continue
 		}
-		// id == node.ID(): Walk.Skip's own "if cur != id" already excludes
-		// the failed node itself from its returned slice (internal/graph/
-		// walk.go), so this loop is never even handed node's own id to
-		// begin with — pinned by TestSkipPropagatesTransitivelyAndSortsByID
-		// ("Skip must not include the failed node itself in its result").
-		//
-		// t.skipped[id]: not what currently prevents a double report for a
-		// node stranded by two independent failures (a diamond: c depends
-		// on both a and b, both fail). Walk.Skip itself already filters
-		// statusSkipped nodes before collecting, so a node it has already
-		// returned once is never returned by a later Skip() call on the
-		// same Walk — verified directly: Skip(a) on such a diamond returns
-		// [c], and the subsequent Skip(b) returns []. That makes this
-		// branch of the guard provably unreachable today: t.skipped[id] can
-		// never be true when this line runs.
-		//
-		// If either upstream guarantee ever changes, its half of this
-		// guard becomes load-bearing, and there is no test today that
-		// could have caught it silently stopping being true, because there
-		// is nothing beneath it to break yet.
 		t.skipped[id] = true
 		ds.Add(diag.Diagnostic{
 			Severity: diag.SeverityWarning,

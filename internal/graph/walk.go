@@ -49,6 +49,27 @@ func (s walkStatus) String() string {
 // out newly-ready work — never mutated from two goroutines at once; the
 // concurrency in "worker pool" lives entirely in what runs the operations a
 // Walk hands out, not in the Walk itself.
+//
+// Invariants a caller may rely on (Ready, Done and Skip's own doc comments
+// describe each method's behavior; this is the state machine underneath
+// all three, collected in one place because Done's and Skip's guards each
+// depend on parts of it, and three separate paraphrases would drift):
+//
+//   - Every node is, at any moment, exactly one of unstarted, dispatched,
+//     done, or skipped — never more than one, never none.
+//   - A node becomes dispatched only when every one of its OWN predecessors
+//     has reached done — never earlier, and never because of anything
+//     skipped elsewhere in the graph. A dependent of a failed (therefore
+//     skipped, never done) node can consequently never be dispatched, so
+//     it can never be in flight when Skip retires it — it is always still
+//     unstarted at that moment.
+//   - Skip decrements the Walk's total remaining count (left) for every
+//     node it retires, but never touches any individual node's own
+//     per-predecessor remaining count — that field exists only for Done's
+//     bookkeeping, and Skip resolves a node through status, not through it.
+//   - Skip returns any given node at most once, ever, for the lifetime of
+//     one Walk — regardless of how many separate failures reach it
+//     transitively (see Skip's own doc comment for how).
 type Walk[T Node] struct {
 	nodes     map[string]T
 	out       map[string]map[string]bool
@@ -188,6 +209,23 @@ func (w *Walk[T]) Done(id string) []T {
 
 	var ready []T
 	for _, next := range w.sortedOut(id) {
+		// This guard is defensive depth, provably unreachable in its effect
+		// today, not what currently keeps Done correct. The case it exists
+		// for is next already statusSkipped — one of next's OTHER
+		// predecessors failed and Skip already retired next — but per the
+		// invariants on Walk's own type doc, Skip decrements only the
+		// total left, never next's own remaining count. So even with this
+		// guard removed, the w.remaining[next]-- below can never drive a
+		// node with a skipped predecessor down to 0 through Done calls on
+		// its other predecessors alone — one predecessor having gone
+		// through Skip instead of Done permanently withholds one
+		// decrement, so remaining can reach at most in-degree − 1.
+		// Confirmed by mutation: removing this check leaves every test in
+		// the repository green, including
+		// TestDoneOnASiblingAfterSkipOnASharedDependentIsNotDoubleCounted
+		// (walk_test.go), which was written to probe exactly this
+		// interaction. It stays anyway as cheap insurance should Skip's own
+		// contract ever change to decrement remaining too.
 		if w.status[next] != statusUnstarted {
 			continue
 		}
@@ -241,22 +279,16 @@ func (w *Walk[T]) Done(id string) []T {
 // TRANSITIVELY through the walk below, not about id itself — id itself is
 // covered by the panic above, before the walk ever starts.
 //
-// A caller may rely on this as a standing guarantee, not just a detail of
-// this call: for the lifetime of one Walk, any given node is returned by at
-// most one Skip call, ever, no matter how many separate failures reach it
-// transitively. executor.tracker.recordFailure already depends on this —
-// it is what makes its own t.skipped[id] dedupe guard provably unreachable
-// today (internal/executor/isolation.go) — so if this filtering is ever
-// changed, that guard becomes load-bearing and needs new test coverage.
+// This is the "returned by at most one Skip call" guarantee on Walk's own
+// type doc, restated here at the call a caller actually reaches for it:
+// executor.tracker.recordFailure depends on it directly, and it is what
+// makes that function's own t.skipped[id] dedupe guard provably
+// unreachable today (internal/executor/isolation.go).
 //
-// The traversal below filters statusSkipped but not statusDone: a
-// statusDone node reached transitively would be re-marked statusSkipped and
-// appended to the result. That is unreachable today for the same reason a
-// dependent of a failed node can never be in flight (Ready only dispatches
-// a node once every predecessor is statusDone, and a failed predecessor
-// never reaches statusDone) — noted here only because the guarantee above
-// is now something callers are told to rely on, and this is the boundary of
-// what it currently costs nothing to keep true.
+// The traversal below filters statusSkipped but not statusDone, which is
+// safe only because of the dispatch invariant on Walk's type doc — a
+// statusDone node can never be reached transitively from a failed id, so
+// there is nothing here for that omission to affect today.
 func (w *Walk[T]) Skip(id string) []T {
 	w.mustKnow("Skip", id)
 	w.mustBeDispatched("Skip", id)

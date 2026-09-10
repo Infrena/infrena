@@ -1,6 +1,8 @@
 package planner
 
 import (
+	"fmt"
+
 	"infra/internal/graph"
 	"infra/pkg/address"
 )
@@ -66,6 +68,30 @@ func BuildExecution(p *Plan, deps func(address.Address) []address.Address) (*gra
 	g := graph.New[OpNode]()
 	if p == nil {
 		return g, nil
+	}
+
+	// A well-formed plan names each address at most once: planAddresses
+	// (planner.go) already dedups by address when a plan is built normally,
+	// so a replace's destroy and create phases share ONE Operation here,
+	// not two — the two-node split happens below, inside this function, not
+	// in the plan itself. That makes this codebase's own callers incapable
+	// of producing a duplicate today, which is exactly why it was easy to
+	// miss: a *Plan built by hand (as a test, or a future M6 caller reading
+	// one back from disk — a *Plan is no longer something this codebase
+	// constructed at that point, it is untrusted file content) can still
+	// violate it. executor.tracker.recordFailure (internal/executor/
+	// isolation.go) depends on "at most one node per address, except a
+	// replace's two phases" to safely delete a same-address Applied entry
+	// on failure — this check is what makes that dependency an enforced
+	// invariant instead of an assumption resting on a caller this package
+	// does not control.
+	seen := make(map[string]bool, len(p.Operations))
+	for _, op := range p.Operations {
+		key := op.Address.String()
+		if seen[key] {
+			return nil, fmt.Errorf("planner: BuildExecution: %s: a plan may contain at most one operation per address (a replace's destroy and create phases come from a single Operation, not two) — this plan has more than one", op.Address)
+		}
+		seen[key] = true
 	}
 
 	// Which phases exist for each address, keyed to the node itself rather

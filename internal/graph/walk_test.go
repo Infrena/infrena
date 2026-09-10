@@ -169,12 +169,25 @@ func TestSkipOnASharedDependentIsNotDoubleCounted(t *testing.T) {
 // and TestDoneCalledTwiceDoesNotDoubleDispatchASharedSuccessor
 // (Done-then-Done) leave uncovered: Skip-then-Done. c depends on both a and
 // b; a fails and is Skip-ed, retiring c along with it, while b is still
-// running. When b later finishes normally, Done(b) must not re-dispatch c —
-// it is already statusSkipped, not waiting on b as its last predecessor —
-// and Remaining must still reach 0 once b itself resolves. This is the
-// executor-review "PROBE B" scenario: a real dependency graph reaches this
-// exact sequence whenever a failed operation and a sibling still in flight
-// share a dependent.
+// running. This is the executor-review "PROBE B" scenario: a real
+// dependency graph reaches this exact sequence whenever a failed operation
+// and a sibling still in flight share a dependent.
+//
+// What this actually discriminates, corrected after review round 2 found
+// the original wording named the wrong mechanism: it is NOT Done(b) failing
+// to re-dispatch c. Mutation-verified directly: dropping Skip's status
+// marking for the transitively-reached node (its "w.status[cur] =
+// statusSkipped") leaves this test GREEN — Done's own "status[next] !=
+// statusUnstarted" guard still stops c from being handed back regardless
+// (see that guard's own comment, internal/graph/walk.go), and that
+// omission is instead caught by the pre-existing
+// TestSkipPropagatesTransitivelyAndSortsByID and
+// TestSkipOnASharedDependentIsNotDoubleCounted.
+//
+// What this test DOES catch, uniquely among the Skip-then-Done shape: Skip
+// decrementing the Walk's total left count only for the id it was called
+// with, not for c too. Mutation-verified: with that change, Remaining()
+// below is 1, not 0 — the assertion this test exists for.
 func TestDoneOnASiblingAfterSkipOnASharedDependentIsNotDoubleCounted(t *testing.T) {
 	g := build(t, []string{"a", "b", "c"}, [][2]string{{"a", "c"}, {"b", "c"}})
 	w, err := g.Walk()

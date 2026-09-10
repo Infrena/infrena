@@ -254,3 +254,29 @@ func TestCycleAmongOperationsIsAnError(t *testing.T) {
 		t.Error("a cycle among operations must be detectable before execution")
 	}
 }
+
+// TestBuildExecutionRejectsADuplicateAddress pins the invariant
+// executor.tracker.recordFailure depends on to safely collapse a replace's
+// two phases into one Applied entry: a plan may name each address at most
+// once (a replace's destroy and create phases come from ONE Operation, not
+// two). A normally-built plan can never violate this — planAddresses
+// (planner.go) already dedups by address — but planWith bypasses that, the
+// same way a hand-edited or stale saved plan read back from disk (M6) would.
+// Two different-kind operations sharing an address, as built here, is
+// exactly the shape that would otherwise let recordFailure's delete wipe a
+// legitimately-applied, unrelated entry.
+func TestBuildExecutionRejectsADuplicateAddress(t *testing.T) {
+	p := planWith(
+		Operation{Address: addr("dup"), Type: "test.network", Kind: OpCreate},
+		Operation{Address: addr("dup"), Type: "test.network", Kind: OpDestroy},
+	)
+	noDeps := func(address.Address) []address.Address { return nil }
+
+	_, err := BuildExecution(p, noDeps)
+	if err == nil {
+		t.Fatal("BuildExecution: want an error for a plan with two operations at the same address, got nil")
+	}
+	if !strings.Contains(err.Error(), "dup") {
+		t.Errorf("error %q does not name the offending address", err.Error())
+	}
+}
