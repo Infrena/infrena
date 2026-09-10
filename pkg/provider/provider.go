@@ -48,6 +48,23 @@ type Provider interface {
 
 	// Read returns the current state of a managed resource. A nil state with a
 	// nil error means the resource no longer exists.
+	//
+	// The returned ResourceState MUST carry forward every field the
+	// provider itself does not own — at minimum Dependencies, Lifecycle and
+	// CreatedAt — from current. Read reports what the remote system says
+	// about the attributes it manages; it is not the source of truth for
+	// bookkeeping infra attaches to a resource, and current is what already
+	// holds that bookkeeping correctly. `infra refresh` (spec §10) persists
+	// whatever Read returns verbatim via state.Set, so any field silently
+	// dropped here is not a stale read, it is a destructive write: losing
+	// Dependencies corrupts the next plan's destroy ordering (spec §14 —
+	// Dependencies is the only source of destroy-ordering edges once a
+	// resource leaves configuration), and losing Lifecycle makes a
+	// configured prevent_destroy or retain guard vanish with no error at
+	// all, which is the worst failure mode this product has. A provider
+	// that reads current's bookkeeping fields back unchanged onto its
+	// result satisfies this; providers/test's carryForward is the pattern
+	// to follow.
 	Read(ctx context.Context, current *resource.ResourceState) (*resource.ResourceState, error)
 	// Create creates a resource. On success it MUST return the created
 	// resource's state, never (nil, nil): the executor persists exactly

@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"infra/internal/refresh"
 	"infra/internal/state"
 	"infra/pkg/address"
 	"infra/pkg/resource"
@@ -338,5 +339,200 @@ resources: {}
 	}
 	if uerr := backend.Unlock(lockCtx, "dev"); uerr != nil {
 		t.Fatalf("unlocking after check: %v", uerr)
+	}
+}
+
+// TestApplyObservationsLeavesStateAloneOnAMissingObservation is round-2's
+// finding: `obs[addr.String()]` on a plain map, indexed with no ", ok",
+// returns Observation's zero value on a miss — Err == nil and State == nil,
+// the exact shape the o.State == nil branch reads as "the provider
+// affirmatively reports this gone". A missing observation is not an
+// affirmative report of anything; it is the absence of one, and must be
+// handled exactly as an unknown-reality read error is: state left
+// untouched.
+//
+// refresh.Refresh always returns one Observation per address in
+// st.Addresses() — the same list applyObservations ranges — so this
+// scenario cannot occur through the real newRefreshCommand call path. That
+// is exactly why it is tested directly against applyObservations with a
+// hand-built, deliberately incomplete Observations map, rather than
+// through the CLI command: there is no way to make refresh.Refresh itself
+// produce a partial map to drive an end-to-end test of this branch.
+func TestApplyObservationsLeavesStateAloneOnAMissingObservation(t *testing.T) {
+	st := state.New("myapp", "dev")
+	st.Set(&resource.ResourceState{
+		Address:    address.Address{Name: "network"},
+		Type:       "test.network",
+		ProviderID: "net-1",
+		Attributes: map[string]value.Value{
+			"cidr": value.String("10.20.0.0/16", value.SourceExplicit),
+		},
+	})
+
+	// Deliberately empty: no entry at all for "network".
+	obs := refresh.Observations{}
+
+	var out bytes.Buffer
+	wrote := applyObservations(st, obs, &out)
+
+	if wrote {
+		t.Error("applyObservations reported a write from a missing observation alone; want no write")
+	}
+	got, ok := st.Get(address.Address{Name: "network"})
+	if !ok {
+		t.Fatal("network was removed from state on a missing observation — a missing observation is not an affirmative report of anything")
+	}
+	if got.Attributes["cidr"].Raw != "10.20.0.0/16" {
+		t.Errorf("network's recorded cidr changed on a missing observation: got %v, want unchanged", got.Attributes["cidr"].Raw)
+	}
+	if !strings.Contains(out.String(), "network") {
+		t.Errorf("output does not mention the resource with the missing observation: %s", out.String())
+	}
+}
+
+// TestRefreshLockNamesItselfAsTheHolder proves
+// state.WithOperation(ctx, "refresh") is actually applied to the lock
+// refresh itself takes — not just that *a* lock is held.
+// TestRefreshLockConflictNamesTheHolder already covers the reverse case
+// (refresh correctly reporting someone ELSE's held lock); this test is the
+// one that would catch refresh's own operation label silently regressing
+// to "unknown" — the same untested-label finding Task 14 hit (spec §9.2,
+// §44: a contending user is owed the actual name of what is running).
+//
+// It reuses the fake cloud's LatencyMS + lock-file-polling technique from
+// TestRefreshInterruptedBySignalReleasesTheLock to get a reliable window
+// where refresh is known to be holding the lock, rather than racing a read
+// that may complete before a contending Lock call is even attempted.
+func TestRefreshLockNamesItselfAsTheHolder(t *testing.T) {
+	dir := projectDir(t, `
+project: myapp
+resources: {}
+`)
+	ctx := context.Background()
+	cloudPath := filepath.Join(dir, testprovider.DefaultCloudPath)
+	prov := testprovider.New(cloudPath)
+	rs, err := prov.Create(ctx, &resource.DesiredResource{
+		Address: address.Address{Name: "network"},
+		Type:    "test.network",
+		Attrs: map[string]value.Value{
+			"cidr": value.String("10.20.0.0/16", value.SourceExplicit),
+		},
+	})
+	if err != nil {
+		t.Fatalf("seeding the fake cloud: %v", err)
+	}
+	st := state.New("myapp", "dev")
+	st.Set(rs)
+	seedState(t, dir, "dev", st)
+
+	cloud, err := testprovider.LoadCloud(cloudPath)
+	if err != nil {
+		t.Fatalf("loading fake cloud: %v", err)
+	}
+	cloud.LatencyMS = 2000
+	if err := cloud.Save(cloudPath); err != nil {
+		t.Fatalf("saving fake cloud: %v", err)
+	}
+
+	opts := &GlobalOptions{Dir: dir, Parallelism: 4}
+	cmd := newRefreshCommand(opts)
+	cmd.SetArgs([]string{"dev"})
+	cmd.SetOut(new(bytes.Buffer))
+	cmd.SetErr(new(bytes.Buffer))
+
+	done := make(chan struct{})
+	go func() {
+		cmd.Execute()
+		close(done)
+	}()
+
+	lockPath := filepath.Join(dir, ".infra", "state", "dev.lock")
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if _, statErr := os.Stat(lockPath); statErr == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("refresh never took the lock (lock file never appeared)")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	backend := backendFor(dir)
+	contendCtx := state.WithOperation(context.Background(), "contender")
+	_, lockErr := backend.Lock(contendCtx, "dev")
+	if lockErr == nil {
+		backend.ForceUnlock("dev")
+		t.Fatal("Lock() = nil while refresh held the lock, want a conflict error")
+	}
+	if !strings.Contains(lockErr.Error(), `running "refresh"`) {
+		t.Errorf("lock conflict error does not name refresh as the holder's operation: %v", lockErr)
+	}
+
+	<-done // let the slow refresh finish before the temp dir is cleaned up
+}
+
+// TestRefreshWithNoDriftStillWritesAndBumpsSerial pins the decision from
+// this task's round-2 review: a refresh that observes no drift at all —
+// every resource still exists, unchanged — still calls Put, and Put's own
+// contract (internal/state's TestPutIncrementsSerial) advances Serial on
+// every write it makes, unconditionally. refresh's job is to record that a
+// read happened, not only to record when a read changed something — see
+// newRefreshCommand's doc comment for the fuller reasoning.
+//
+// Asserting the opposite (no write on no drift) would have been just as
+// easy to write and would have silently pinned a behaviour nobody actually
+// decided was correct — exactly the "documents a bug" trap the review
+// flagged. This test exists so a future change that makes refresh skip the
+// write on no drift fails loudly here, at the decision point, rather than
+// only surfacing downstream as a Plan.StateSerial that does not advance
+// the way some other part of the system expects.
+func TestRefreshWithNoDriftStillWritesAndBumpsSerial(t *testing.T) {
+	dir := projectDir(t, `
+project: myapp
+resources: {}
+`)
+	ctx := context.Background()
+	cloudPath := filepath.Join(dir, testprovider.DefaultCloudPath)
+	prov := testprovider.New(cloudPath)
+	rs, err := prov.Create(ctx, &resource.DesiredResource{
+		Address: address.Address{Name: "network"},
+		Type:    "test.network",
+		Attrs: map[string]value.Value{
+			"cidr": value.String("10.20.0.0/16", value.SourceExplicit),
+		},
+	})
+	if err != nil {
+		t.Fatalf("seeding the fake cloud: %v", err)
+	}
+	st := state.New("myapp", "dev")
+	st.Set(rs)
+	seedState(t, dir, "dev", st)
+
+	before, gerr := backendFor(dir).Get(ctx, "dev")
+	if gerr != nil {
+		t.Fatalf("reading state before refresh: %v", gerr)
+	}
+	beforeSerial := before.Serial
+
+	// The fake cloud is untouched from here: "network" still exists,
+	// unchanged, exactly as prov.Create left it — this is the no-drift
+	// case.
+
+	opts := &GlobalOptions{Dir: dir, Parallelism: 4}
+	cmd := newRefreshCommand(opts)
+	cmd.SetArgs([]string{"dev"})
+	cmd.SetOut(new(bytes.Buffer))
+	cmd.SetErr(new(bytes.Buffer))
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() = %v, want nil", err)
+	}
+
+	after, gerr := backendFor(dir).Get(ctx, "dev")
+	if gerr != nil {
+		t.Fatalf("reading state after refresh: %v", gerr)
+	}
+	if after.Serial != beforeSerial+1 {
+		t.Errorf("Serial = %d after a no-drift refresh, want %d — refresh writes on every successful read, not only when something changed", after.Serial, beforeSerial+1)
 	}
 }
