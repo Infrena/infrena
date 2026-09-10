@@ -87,15 +87,28 @@ func split(src string, origin value.Origin, ds *diag.Diagnostics) ([]*value.Expr
 	return parts, true
 }
 
+// skipEscape reports the index to continue scanning from when src[i] begins an
+// escape sequence inside a quoted literal, and whether it did.
+//
+// matchBrace and splitArgs both scan for delimiters while tracking quotes, and
+// both must agree about what is escaped. Sharing this is not tidiness: when two
+// scanners disagree, input is accepted by one and rejected by the other, which
+// is the class of bug the quote handling was added to fix in the first place.
+func skipEscape(src string, i int, quoted bool) (int, bool) {
+	if quoted && src[i] == '\\' && i+1 < len(src) {
+		return i + 1, true
+	}
+	return i, false
+}
+
 // matchBrace returns the index of the } closing the interpolation that starts
 // at from, accounting for nesting and quoted literals, or -1 if there is none.
 func matchBrace(src string, from int) int {
 	depth := 1
 	quoted := false
 	for i := from; i < len(src); i++ {
-		// Handle escapes in quoted strings
-		if quoted && src[i] == '\\' && i+1 < len(src) {
-			i++ // skip the escaped character
+		if next, skipped := skipEscape(src, i, quoted); skipped {
+			i = next
 			continue
 		}
 		// Toggle quote state
@@ -193,9 +206,8 @@ func splitArgs(src string) []string {
 	var out []string
 	depth, quoted, start := 0, false, 0
 	for i := 0; i < len(src); i++ {
-		// Handle escapes in quoted strings
-		if quoted && src[i] == '\\' && i+1 < len(src) {
-			i++ // skip the escaped character
+		if next, skipped := skipEscape(src, i, quoted); skipped {
+			i = next
 			continue
 		}
 		switch src[i] {
