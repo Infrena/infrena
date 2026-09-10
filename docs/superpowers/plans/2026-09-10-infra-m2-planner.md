@@ -2501,8 +2501,11 @@ func bindReferences(project *config.ProjectDecl, opts Options) (ResolvedConfig, 
 
 		edges := map[string]value.Origin{}
 
-		for name, attr := range decl.Attributes {
-			resolved.Attrs[name] = bindAttribute(decl, attr, scope, declared, edges, &ds)
+		// Sorted, because an edge's Origin is decided by which attribute is
+		// visited first and Go randomises map iteration. Without this the same
+		// configuration produces a different Origin between runs.
+		for _, name := range sortedAttributeNames(decl.Attributes) {
+			resolved.Attrs[name] = bindAttribute(decl, attr(decl, name), scope, declared, edges, &ds)
 		}
 
 		for _, target := range decl.DependsOn {
@@ -2524,7 +2527,7 @@ func bindReferences(project *config.ProjectDecl, opts Options) (ResolvedConfig, 
 				})
 				continue
 			}
-			edges[target] = decl.Origin
+			recordEdge(edges, target, decl.Origin)
 		}
 
 		resolved.DependsOn = sortedAddresses(edges)
@@ -2585,7 +2588,7 @@ func bindAttribute(
 				Origin:   attr.Origin,
 			})
 		default:
-			edges[ref.Resource] = attr.Origin
+			recordEdge(edges, ref.Resource, attr.Origin)
 		}
 	}
 
@@ -2610,6 +2613,33 @@ func variableScope(opts Options) map[string]value.Value {
 		vars["account"] = value.String(opts.Account, value.SourceEnvironment)
 	}
 	return vars
+}
+
+// recordEdge keeps the earliest origin for a dependency edge.
+//
+// Two attributes of one resource may reference the same target, and an
+// explicit depends_on may name a target an attribute already references. The
+// edge is the same either way, but the Origin a diagnostic points at should be
+// the first place the dependency was expressed — not whichever the map
+// happened to yield last.
+func recordEdge(edges map[string]value.Origin, target string, origin value.Origin) {
+	existing, ok := edges[target]
+	if !ok || originLess(origin, existing) {
+		edges[target] = origin
+	}
+}
+
+// originLess orders two origins within a file.
+//
+// It deliberately compares position only. M2 reads a single file, so File is
+// always equal; M4 introduces variables.yml and environments, and this must
+// gain a File comparison before an edge can span two files — otherwise the
+// "earliest" origin would be decided by line number across unrelated files.
+func originLess(a, b value.Origin) bool {
+	if a.Line != b.Line {
+		return a.Line < b.Line
+	}
+	return a.Column < b.Column
 }
 
 func sortedNames(set map[string]bool) []string {
