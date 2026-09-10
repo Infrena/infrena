@@ -199,3 +199,42 @@ func TestValidateGraphReportsEveryProblemAtOnce(t *testing.T) {
 		t.Errorf("got %d diagnostics, want at least 4 (one cycle, two missing requirements, one lifecycle contradiction): %+v", len(ds), ds)
 	}
 }
+
+// TestValidateGraphStillReportsACycleAfterAPartialFix uses a topology with two
+// distinct simple cycles that share no edge: a→b→d→a and a→c→d→e→a (a review
+// harness against the earlier all-cycles-enumerating detector found that it
+// reported only the first pair, through b, and silently never named c at all —
+// because d was already marked fully-explored by the time c's branch reached
+// it, so c's own back edge to a was never checked). validateGraph now promises
+// only ONE cycle, never "acyclic", so the only property that must hold is: a
+// live cycle is still reported after removing the edge the first reported
+// cycle depended on, exactly the situation a user hits when they "fix" what
+// they were told about and re-run.
+func TestValidateGraphStillReportsACycleAfterAPartialFix(t *testing.T) {
+	build := func() ResolvedConfig {
+		a := res("a", "test.network", map[string]value.Value{"cidr": value.String("10.0.0.0/16", value.SourceExplicit)})
+		b := res("b", "test.network", map[string]value.Value{"cidr": value.String("10.0.1.0/16", value.SourceExplicit)})
+		c := res("c", "test.network", map[string]value.Value{"cidr": value.String("10.0.2.0/16", value.SourceExplicit)})
+		d := res("d", "test.network", map[string]value.Value{"cidr": value.String("10.0.3.0/16", value.SourceExplicit)})
+		e := res("e", "test.network", map[string]value.Value{"cidr": value.String("10.0.4.0/16", value.SourceExplicit)})
+		a.DependsOn = []address.Address{{Name: "b"}, {Name: "c"}}
+		b.DependsOn = []address.Address{{Name: "d"}}
+		c.DependsOn = []address.Address{{Name: "d"}}
+		d.DependsOn = []address.Address{{Name: "a"}, {Name: "e"}}
+		e.DependsOn = []address.Address{{Name: "a"}}
+		return cfg(a, b, c, d, e)
+	}
+
+	graph := build()
+	if ds := validateGraph(&graph, testRegistry(t)); !ds.HasErrors() {
+		t.Fatal("this graph has a cycle; validateGraph must report it")
+	}
+
+	// Remove a -> b, the edge the first-found cycle (a→b→d→a) depends on.
+	// a→c→d→e→a is untouched and still live.
+	graph2 := build()
+	graph2.Resources["a"].DependsOn = []address.Address{{Name: "c"}}
+	if ds := validateGraph(&graph2, testRegistry(t)); !ds.HasErrors() {
+		t.Fatal("a→c→d→e→a is still a live cycle; validateGraph must not report the graph as acyclic")
+	}
+}

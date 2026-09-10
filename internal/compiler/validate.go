@@ -1,7 +1,6 @@
 package compiler
 
 import (
-	"sort"
 	"strconv"
 	"strings"
 
@@ -19,7 +18,7 @@ import (
 func validateGraph(cfg *ResolvedConfig, reg *registry.Registry) diag.Diagnostics {
 	var ds diag.Diagnostics
 
-	for _, cycle := range findCycles(cfg) {
+	if cycle := firstCycle(cfg); cycle != nil {
 		ds.Add(cycleDiagnostic(cfg, cycle))
 	}
 
@@ -44,20 +43,35 @@ const (
 	black
 )
 
-// findCycles walks the dependency graph and returns every distinct cycle,
-// each in order and closed (a → b → c → a), deduplicated and sorted for a
-// deterministic result. A cycle of one — a resource referring to itself — is
-// already rejected when stage 6 binds the reference; nothing here special-
-// cases that, though the same walk would still catch one if it ever reached
-// this stage some other way.
-func findCycles(cfg *ResolvedConfig) [][]address.Address {
+// firstCycle returns one dependency cycle, or nil when the graph is acyclic.
+//
+// It reports ONE cycle rather than attempting to enumerate them all. That is a
+// deliberate narrowing after the enumerate-everything version proved unsound: a
+// depth-first walk that skips already-finished nodes misses genuine cycles that
+// share a downstream node, so a user could fix every cycle it reported, re-run,
+// and be told the configuration is acyclic while one was still live. Being told
+// you are done when you are not is worse than being given one problem at a
+// time.
+//
+// Task 18 replaces this with graph.Cycle, which makes the same single-cycle
+// promise, so this is the contract that survives.
+//
+// A cycle of one — a resource referring to itself — is already rejected when
+// stage 6 binds the reference; nothing here special-cases that, though the
+// same walk would still catch one if it ever reached this stage some other
+// way.
+func firstCycle(cfg *ResolvedConfig) []address.Address {
 	colors := map[string]color{}
 	onStack := map[string]int{}
 	var stack []address.Address
-	var found [][]address.Address
+	var found []address.Address
 
-	var visit func(addr address.Address)
-	visit = func(addr address.Address) {
+	// visit returns true the moment it finds a back edge, unwinding the
+	// recursion immediately rather than continuing to search — the whole
+	// point of the narrower contract is to never claim to have looked
+	// everywhere.
+	var visit func(addr address.Address) bool
+	visit = func(addr address.Address) bool {
 		key := addr.String()
 		colors[key] = gray
 		onStack[key] = len(stack)
@@ -65,64 +79,44 @@ func findCycles(cfg *ResolvedConfig) [][]address.Address {
 
 		if r, ok := cfg.Get(addr); ok {
 			for _, dep := range r.DependsOn {
+				if _, ok := cfg.Get(dep); !ok {
+					// Not a real node in this graph; nothing to walk into.
+					continue
+				}
 				dk := dep.String()
 				switch colors[dk] {
 				case white:
-					visit(dep)
+					if visit(dep) {
+						return true
+					}
 				case gray:
 					// A back edge to a node still on the path: the cycle is
 					// everything from that node to here, closed by repeating it.
 					start := onStack[dk]
-					cycle := append([]address.Address{}, stack[start:]...)
-					cycle = append(cycle, dep)
-					found = append(found, cycle)
+					found = append([]address.Address{}, stack[start:]...)
+					found = append(found, dep)
+					return true
 				}
+				// black: already fully explored with no cycle found through
+				// it; skip rather than walking into it again.
 			}
 		}
 
 		stack = stack[:len(stack)-1]
 		delete(onStack, key)
 		colors[key] = black
+		return false
 	}
 
 	for _, addr := range cfg.Addresses() {
 		if colors[addr.String()] == white {
-			visit(addr)
-		}
-	}
-
-	return dedupeCycles(found)
-}
-
-// dedupeCycles collapses cycles discovered more than once — the same loop is
-// found again starting from any of its members — by rotating each to start
-// at its lexicographically smallest address, then removing repeats. The
-// result is sorted so the diagnostic list is stable across runs.
-func dedupeCycles(cycles [][]address.Address) [][]address.Address {
-	seen := map[string]bool{}
-	var out [][]address.Address
-
-	for _, c := range cycles {
-		body := c[:len(c)-1] // drop the closing repeat of the first element
-		minIdx := 0
-		for i, a := range body {
-			if a.String() < body[minIdx].String() {
-				minIdx = i
+			if visit(addr) {
+				return found
 			}
 		}
-		rotated := append(append([]address.Address{}, body[minIdx:]...), body[:minIdx]...)
-		rotated = append(rotated, rotated[0])
-
-		key := cycleKey(rotated)
-		if seen[key] {
-			continue
-		}
-		seen[key] = true
-		out = append(out, rotated)
 	}
 
-	sort.Slice(out, func(i, j int) bool { return cycleKey(out[i]) < cycleKey(out[j]) })
-	return out
+	return nil
 }
 
 // cycleKey renders a closed cycle as "a → b → c → a", used both as the
