@@ -354,6 +354,37 @@ func TestUnknownInsideACompositeIsAnUpdate(t *testing.T) {
 	}
 }
 
+// TestUnknownForceNewAttributeIsAReplace pins the most destructive
+// consequence of rule 1. Both tests above use non-ForceNew attributes, so
+// neither exercises the case that actually matters: a value that cannot be
+// proven unchanged always counts as a change, and when that value sits on a
+// ForceNew attribute the change is a replacement — a live resource destroyed
+// and recreated because the planner could not prove nothing changed.
+func TestUnknownForceNewAttributeIsAReplace(t *testing.T) {
+	// engine is ForceNew on test.database.
+	cfg := config(configured("db", "test.database", map[string]value.Value{
+		"engine": value.Unknown(value.KindString, value.SourceComputed),
+	}))
+	live := recorded("db", "test.database", map[string]value.Value{
+		"engine": provAttr(str("postgres")),
+	})
+
+	p, _ := Compute(cfg, stateOf(live), present(live), planOpts(t))
+	op := only(t, p)
+	if op.Kind != OpReplace {
+		t.Fatalf("Kind = %s, want replace — an unknown ForceNew attribute forces a replacement", op.Kind)
+	}
+	if len(op.Reasons) != 1 || op.Reasons[0].Attribute != "engine" {
+		t.Fatalf("Reasons = %+v, want one naming engine", op.Reasons)
+	}
+	if !op.Reasons[0].ForceNew {
+		t.Error("the reason must be marked ForceNew so the plan can say what forced the replacement")
+	}
+	if op.Reasons[0].Note != "known after apply" {
+		t.Errorf("Note = %q, want \"known after apply\"", op.Reasons[0].Note)
+	}
+}
+
 func TestComputedAttributesDoNotDriveADiff(t *testing.T) {
 	// Rule 2. id and endpoint are provider outputs, not desired state.
 	cfg := config(configured("db", "test.database", map[string]value.Value{
@@ -512,6 +543,55 @@ func TestReadErrorFailsPlanningRatherThanAssumingAbsence(t *testing.T) {
 	}
 }
 
+// TestReadErrorOnOneResourceDoesNotAbortPlanningForOthers is the other half
+// of TestReadErrorFailsPlanningRatherThanAssumingAbsence, which errors on
+// every resource in its fixture and so cannot distinguish "the failed
+// resource is skipped" from "any read error aborts the whole plan" — a
+// regression promoting a per-resource error to a whole-plan abort would pass
+// it just as well. Here db fails to read and net genuinely changed (cidr is
+// ForceNew), so net must still get its operation.
+func TestReadErrorOnOneResourceDoesNotAbortPlanningForOthers(t *testing.T) {
+	broken := recorded("db", "test.database", map[string]value.Value{
+		"engine": provAttr(str("postgres")),
+	})
+	healthy := recorded("net", "test.network", map[string]value.Value{
+		"cidr": provAttr(str("10.0.0.0/16")),
+	})
+	cfg := config(
+		configured("db", "test.database", map[string]value.Value{"engine": str("postgres")}),
+		configured("net", "test.network", map[string]value.Value{"cidr": str("10.1.0.0/16")}),
+	)
+
+	obs := merge(
+		refresh.Observations{"db": {Address: addr("db"), Err: errors.New("connection refused")}},
+		present(healthy),
+	)
+
+	p, ds := Compute(cfg, stateOf(broken, healthy), obs, planOpts(t))
+	if !ds.HasErrors() {
+		t.Fatal("db's read error must still be reported")
+	}
+
+	for _, op := range p.Operations {
+		if op.Address.String() == "db" {
+			t.Fatalf("db failed to read; it must get no operation, got %+v", op)
+		}
+	}
+
+	var netOp *Operation
+	for i := range p.Operations {
+		if p.Operations[i].Address.String() == "net" {
+			netOp = &p.Operations[i]
+		}
+	}
+	if netOp == nil {
+		t.Fatalf("net must still get an operation even though db failed to read: %+v", p.Operations)
+	}
+	if netOp.Kind != OpReplace {
+		t.Fatalf("Kind = %s, want replace — net genuinely changed (cidr is ForceNew) and must still be planned", netOp.Kind)
+	}
+}
+
 func TestMissingObservationFallsBackToRecordedState(t *testing.T) {
 	// Refresh not having covered an address is not evidence of absence.
 	cfg := config(configured("net", "test.network", map[string]value.Value{
@@ -567,6 +647,37 @@ func TestMissingSchemaIsAnErrorNotASilentUpdate(t *testing.T) {
 	}
 	if len(p.Operations) != 0 {
 		t.Errorf("no operation may be proposed for a type the planner cannot reason about: %+v", p.Operations)
+	}
+}
+
+// TestAttributeNotDefinedByTheSchemaIsAnErrorNotASilentUpdate is the same
+// defence one level down from TestMissingSchemaIsAnErrorNotASilentUpdate: an
+// unrecognised resource TYPE is already a hard error via Definition's own ok,
+// so an unrecognised ATTRIBUTE must not quietly fall through to the zero
+// schema.Attribute — that would report ForceNew: false unconditionally,
+// mislabelling a possible replacement as an in-place update. This should be
+// unreachable through the real pipeline (internal/compiler/schema.go rejects
+// it at compile time), but Compute does not get to assume its caller went
+// through Compile.
+func TestAttributeNotDefinedByTheSchemaIsAnErrorNotASilentUpdate(t *testing.T) {
+	cfg := config(configured("db", "test.database", map[string]value.Value{
+		"engine":     str("postgres"),
+		"not_a_real": str("mystery"),
+	}))
+	live := recorded("db", "test.database", map[string]value.Value{
+		"engine": provAttr(str("postgres")),
+	})
+
+	p, ds := Compute(cfg, stateOf(live), present(live), planOpts(t))
+	if !ds.HasErrors() {
+		t.Fatal("an attribute the schema does not define must be a plan-time error, not a silently mislabelled update")
+	}
+	if len(p.Operations) != 0 {
+		t.Errorf("no operation may be proposed when the planner cannot fully reason about a resource's attributes: %+v", p.Operations)
+	}
+	out := rendered(t, ds)
+	if !strings.Contains(out, "not_a_real") {
+		t.Errorf("the diagnostic must name the unrecognised attribute:\n%s", out)
 	}
 }
 
@@ -651,21 +762,56 @@ func TestPlanRecordsItsInputFingerprints(t *testing.T) {
 	}
 }
 
+// TestHasUnknownFailsClosedOnMalformedComposites is a white-box test of
+// hasUnknown directly: a composite Value whose Raw does not match its Kind
+// must read as unknown, the same conservative rule value.Equal applies to
+// malformed values and for the same reason — a value that cannot be PROVEN
+// fully known must not be treated as fully known. Discarding the type
+// assertion's ok is exactly the shape of bug that made value.Equal report two
+// malformed values as equal earlier in this milestone.
+func TestHasUnknownFailsClosedOnMalformedComposites(t *testing.T) {
+	cases := []struct {
+		name string
+		v    value.Value
+	}{
+		{"list with wrong Raw type", value.Value{Kind: value.KindList, Known: true, Raw: "not a []value.Value"}},
+		{"map with wrong Raw type", value.Value{Kind: value.KindMap, Known: true, Raw: "not a map[string]value.Value"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if !hasUnknown(tc.v) {
+				t.Error("a malformed composite must read as unknown, not as fully known")
+			}
+		})
+	}
+}
+
 // --- dependent counts, for the destructive-change warning ------------------
 
 func TestDestroyReportsDependentsFromState(t *testing.T) {
-	// The case the state-side lookup exists for: the dependent is not in
+	// The case the state-side lookup exists for: the dependents are not in
 	// configuration either, so a config-side implementation reports zero and
 	// the warning spec §20 requires silently disappears.
+	//
+	// Three dependents, inserted out of sorted order, not one: dependentsOf
+	// walks st.Resources directly — a plain Go map with randomised iteration
+	// order — so with fewer than three entries, or entries already visited in
+	// sorted order, this test could pass whether or not the implementation
+	// actually sorts. Three distinct names whose insertion order differs from
+	// their sorted order is what turns a deleted address.Sort call into a
+	// failing test instead of an assertion that cannot fail.
 	net := recorded("net", "test.network", map[string]value.Value{
 		"cidr": provAttr(str("10.0.0.0/16")),
 	})
-	db := recorded("db", "test.database", map[string]value.Value{
-		"engine": provAttr(str("postgres")),
-	})
-	db.Dependencies = []address.Address{addr("net")}
+	zebra := recorded("zebra-db", "test.database", map[string]value.Value{"engine": provAttr(str("postgres"))})
+	alpha := recorded("alpha-db", "test.database", map[string]value.Value{"engine": provAttr(str("postgres"))})
+	middle := recorded("middle-db", "test.database", map[string]value.Value{"engine": provAttr(str("postgres"))})
+	for _, db := range []*resource.ResourceState{zebra, alpha, middle} {
+		db.Dependencies = []address.Address{addr("net")}
+	}
 
-	p, ds := Compute(config(), stateOf(net, db), present(net, db), planOpts(t))
+	all := []*resource.ResourceState{net, zebra, alpha, middle}
+	p, ds := Compute(config(), stateOf(all...), present(all...), planOpts(t))
 	if ds.HasErrors() {
 		t.Fatalf("unexpected errors: %+v", ds)
 	}
@@ -682,8 +828,44 @@ func TestDestroyReportsDependentsFromState(t *testing.T) {
 	if destroyNet.Kind != OpDestroy {
 		t.Fatalf("Kind = %s, want destroy", destroyNet.Kind)
 	}
-	if len(destroyNet.Dependents) != 1 || destroyNet.Dependents[0].String() != "db" {
-		t.Errorf("Dependents = %v, want [db] — a destroy's edges live in state, not configuration", destroyNet.Dependents)
+	want := []string{"alpha-db", "middle-db", "zebra-db"}
+	if len(destroyNet.Dependents) != len(want) {
+		t.Fatalf("Dependents = %v, want %v — a destroy's edges live in state, not configuration", destroyNet.Dependents, want)
+	}
+	for i := range want {
+		if destroyNet.Dependents[i].String() != want[i] {
+			t.Fatalf("Dependents = %v, want %v — sorted, every map->slice boundary sorts", destroyNet.Dependents, want)
+		}
+	}
+}
+
+// TestDestroyBeforeReflectsObservedStateNotStaleRecordedState pins that a
+// removal's Before comes from what the provider actually reports, not from
+// the possibly-stale record in state — the same source the in-place diff
+// path already uses, and consistent with how "present" was decided in the
+// first place: it would be strange to trust the observation to decide IF the
+// resource still exists, then show the plan a different resource's attributes
+// than the ones that decision was based on.
+func TestDestroyBeforeReflectsObservedStateNotStaleRecordedState(t *testing.T) {
+	recordedState := recorded("net", "test.network", map[string]value.Value{
+		"cidr": provAttr(str("10.0.0.0/16")), // what state remembers
+	})
+	drifted := recorded("net", "test.network", map[string]value.Value{
+		"cidr": provAttr(str("10.9.0.0/16")), // what the provider reports now
+	})
+
+	p, ds := Compute(config(), stateOf(recordedState), present(drifted), planOpts(t))
+	if ds.HasErrors() {
+		t.Fatalf("unexpected errors: %+v", ds)
+	}
+	op := only(t, p)
+	if op.Kind != OpDestroy {
+		t.Fatalf("Kind = %s, want destroy", op.Kind)
+	}
+	got, ok := op.Before["cidr"].AsString()
+	if !ok || got != "10.9.0.0/16" {
+		t.Errorf("Before[cidr] = %+v, want the observed value 10.9.0.0/16 — Before must reflect what the "+
+			"provider actually reports, not the possibly-stale state record", op.Before["cidr"])
 	}
 }
 

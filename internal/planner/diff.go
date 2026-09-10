@@ -3,7 +3,10 @@ package planner
 import (
 	"fmt"
 	"sort"
+	"strconv"
 
+	"infra/internal/diag"
+	"infra/pkg/address"
 	"infra/pkg/schema"
 	"infra/pkg/value"
 )
@@ -14,9 +17,12 @@ import (
 // It walks the union of both maps so that an attribute deleted from
 // configuration still registers as a change, and consults the schema so that
 // computed attributes — which are outputs, not desired state — never do
-// (spec §11).
-func diffAttributes(def *schema.ResourceDefinition, desired, actual map[string]value.Value) []ChangeReason {
+// (spec §11). It also returns diagnostics: an attribute configuration sets
+// that the schema does not define at all is a plan-time error, not a
+// silently mislabelled update — see the comment at that branch.
+func diffAttributes(addr address.Address, def *schema.ResourceDefinition, desired, actual map[string]value.Value) ([]ChangeReason, diag.Diagnostics) {
 	var reasons []ChangeReason
+	var ds diag.Diagnostics
 
 	for _, name := range unionKeys(desired, actual) {
 		attr, defined := def.Attribute(name)
@@ -34,6 +40,32 @@ func diffAttributes(def *schema.ResourceDefinition, desired, actual map[string]v
 				Attribute: name,
 				ForceNew:  attr.ForceNew,
 				Note:      "removed from configuration",
+			})
+			continue
+		}
+
+		// Configuration sets an attribute the schema does not define at all.
+		// This path should be unreachable through the real pipeline —
+		// internal/compiler/schema.go rejects it at compile time — but
+		// Compute is a pure function of its four arguments, not of "the
+		// caller went through Compile", and the failure mode of guessing is
+		// the bad kind: with attr left at its zero value, ForceNew would
+		// silently read false, so a changed attribute that actually forces a
+		// replacement would be reported as an in-place Update instead. The
+		// planner already refuses to guess one level up, at the resource
+		// type: an unrecognised type is a hard error via Definition's own ok
+		// (see operationFor), not a silent skip. Treating an unrecognised
+		// attribute differently — quietly ignoring it — would be the same
+		// mistake one boundary further in, so this mirrors that diagnostic
+		// rather than a bare `continue`.
+		if !defined {
+			ds.Add(diag.Diagnostic{
+				Severity: diag.SeverityError,
+				Summary:  "attribute " + strconv.Quote(name) + " is not defined by this resource's schema",
+				Detail: "Configuration sets an attribute the provider's schema does not recognise. The planner " +
+					"cannot tell whether a change to it would force a replacement, so it cannot be diffed safely.",
+				Action:  "Remove " + strconv.Quote(name) + ", or check it for a typo against the resource type's schema.",
+				Related: []address.Address{addr},
 			})
 			continue
 		}
@@ -79,7 +111,7 @@ func diffAttributes(def *schema.ResourceDefinition, desired, actual map[string]v
 	}
 
 	sortReasons(reasons)
-	return reasons
+	return reasons, ds
 }
 
 // forcesReplacement reports whether any reason names a ForceNew attribute,
@@ -97,21 +129,35 @@ func forcesReplacement(reasons []ChangeReason) bool {
 // yet known.
 //
 // A map or list is Known even when one of its entries is not, so a top-level
-// check alone would miss exactly the case that matters.
+// check alone would miss exactly the case that matters. A composite whose Raw
+// does not match its Kind fails closed the same way value.Equal does, and for
+// the same reason: a malformed value cannot be PROVEN fully known, so it is
+// treated as unknown rather than as empty. Discarding the type assertion's ok
+// here — `items, _ := v.Raw.([]value.Value)` — is the exact defect that let
+// value.Equal report two malformed values as equal earlier in this milestone;
+// in the planner the same shape of bug would let an unprovable value slip
+// through as "nothing unknown" and be silently NoOp'd or Updated instead of
+// flagged as a change.
 func hasUnknown(v value.Value) bool {
 	if !v.Known {
 		return true
 	}
 	switch v.Kind {
 	case value.KindList:
-		items, _ := v.Raw.([]value.Value)
+		items, ok := v.Raw.([]value.Value)
+		if !ok {
+			return true
+		}
 		for _, item := range items {
 			if hasUnknown(item) {
 				return true
 			}
 		}
 	case value.KindMap:
-		entries, _ := v.Raw.(map[string]value.Value)
+		entries, ok := v.Raw.(map[string]value.Value)
+		if !ok {
+			return true
+		}
 		for _, entry := range entries {
 			if hasUnknown(entry) {
 				return true

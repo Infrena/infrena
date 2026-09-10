@@ -195,7 +195,7 @@ func operationFor(
 	}
 
 	if !inConfig {
-		op, removalDS := removalOperation(addr, rs, actual != nil)
+		op, removalDS := removalOperation(addr, rs, actual)
 		ds.Extend(removalDS)
 		return op, ds
 	}
@@ -231,7 +231,11 @@ func operationFor(
 		}, ds
 	}
 
-	reasons := diffAttributes(def, rc.Attrs, actual.Attributes)
+	reasons, diffDS := diffAttributes(addr, def, rc.Attrs, actual.Attributes)
+	ds.Extend(diffDS)
+	if ds.HasErrors() {
+		return nil, ds
+	}
 	kind := OpNoOp
 	switch {
 	case forcesReplacement(reasons):
@@ -256,22 +260,33 @@ func operationFor(
 // The lifecycle consulted is the one recorded in state, because the resource
 // is by definition no longer in configuration — which is why ResourceState
 // records it.
-func removalOperation(addr address.Address, rs *resource.ResourceState, present bool) (*Operation, diag.Diagnostics) {
+//
+// actual is what refresh observed (nil means the provider no longer reports
+// it, which is the Forget case below). Before is built from actual, not rs,
+// whenever actual is available: rs is the state record, which may be stale
+// the moment a resource has drifted, and the in-place diff path a few lines
+// up already treats the observation as the source of truth for the same
+// reason — Before must not show the plan a value the provider has already
+// moved past.
+func removalOperation(addr address.Address, rs *resource.ResourceState, actual *resource.ResourceState) (*Operation, diag.Diagnostics) {
 	var ds diag.Diagnostics
 	if rs == nil {
 		return nil, ds
 	}
-	before := copyAttrs(rs.Attributes)
 
-	if !present {
+	if actual == nil {
+		// Nothing was observed, so the historical record in state is all
+		// there is left to show.
 		return &Operation{
 			Address: addr,
 			Type:    rs.Type,
 			Kind:    OpForget,
-			Before:  before,
+			Before:  copyAttrs(rs.Attributes),
 			Reasons: []ChangeReason{{Note: "already absent from the provider; only the state entry remains"}},
 		}, ds
 	}
+
+	before := copyAttrs(actual.Attributes)
 
 	// retain is checked first. It destroys nothing, so it already satisfies
 	// what prevent_destroy protects: a resource carrying both is forgotten,
@@ -315,6 +330,17 @@ func removalOperation(addr address.Address, rs *resource.ResourceState, present 
 // surviving record; reading configuration there would report zero dependents
 // for exactly the operation spec §20 wants called out loudly. For every other
 // kind the resource is in configuration and DependsOn is the current truth.
+//
+// It walks cfg.Resources / st.Resources directly — plain Go maps, not the
+// pre-sorted .Addresses() helper — and sorts once at the end. Routing through
+// .Addresses() first (itself sorted) would make the final address.Sort here
+// provably redundant: filtering an already-sorted sequence preserves its
+// order regardless of whether this function sorts again, so no fixture could
+// ever turn a deleted sort into a failing test. Reading the maps directly
+// means Go's randomised map iteration is the only thing standing between this
+// slice and nondeterminism, which is what makes the sort below load-bearing
+// and testable — see TestDestroyReportsDependentsFromState and
+// TestConfiguredOperationsReportDependentsFromConfigSorted.
 func dependentsOf(target address.Address, kind OpKind, cfg compiler.ResolvedConfig, st *state.State) []address.Address {
 	var out []address.Address
 	name := target.String()
@@ -332,20 +358,18 @@ func dependentsOf(target address.Address, kind OpKind, cfg compiler.ResolvedConf
 		if st == nil {
 			return nil
 		}
-		for _, candidate := range st.Addresses() {
-			rs, ok := st.Get(candidate)
-			if ok && dependsOn(rs.Dependencies) {
-				out = append(out, candidate)
+		for _, rs := range st.Resources {
+			if dependsOn(rs.Dependencies) {
+				out = append(out, rs.Address)
 			}
 		}
 		address.Sort(out)
 		return out
 	}
 
-	for _, candidate := range cfg.Addresses() {
-		rc, ok := cfg.Get(candidate)
-		if ok && dependsOn(rc.DependsOn) {
-			out = append(out, candidate)
+	for _, rc := range cfg.Resources {
+		if dependsOn(rc.DependsOn) {
+			out = append(out, rc.Address)
 		}
 	}
 	address.Sort(out)
