@@ -6,22 +6,29 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Current state
 
-**M1 and M2 are merged to `main`** (tags `m1`, `m2`). `infra validate` and
-`infra plan <environment>` both work end to end against the fake provider — compile,
-refresh, diff, render. ~14,000 lines of Go across 18 packages.
+**M1, M2 and M3 are merged to `main`** (tags `m1`, `m2`, `m3`). The reconcile loop
+closes end to end against the fake provider: `validate` → `plan` → `apply` → re-plan
+clean → externally mutate → `refresh` → drift shown → remove from YAML → destroy
+proposed → `apply`. ~30,200 lines of Go across 18 packages.
 
 Present: the value model with per-leaf provenance and sensitivity, addressing, diagnostics,
 declarative resource schemas, the provider interface, a hand-editable file-backed fake
 provider, versioned state with atomic writes and `O_EXCL` locking, compiler stages 1-2 and
-6-8, a generic dependency graph, provider refresh, the planner, the plan renderer, and the
-execution graph M3's executor will consume.
+6-8, a generic dependency graph, provider refresh, the planner, the plan renderer, and —
+new in M3 — the executor (a worker pool bounded globally and per provider, per-operation
+state persistence, failure isolation, SIGINT handling, retries classified three ways) and
+the commands `apply`, `destroy` and `refresh`.
 
-Absent until M3-M7: `apply`, `destroy`, the `refresh` *command* (the engine exists),
-variables, environments, modules, reading a saved plan back, `explain`, `graph`, `discover`,
-`import`. Nothing half-implements one of those; `--var-file` errors rather than being
-silently ignored, which is the standard to hold.
+Acceptance invariants 1, 2, 4 and 5 each have a test that fails against the unfixed code.
+That phrasing is deliberate: invariant 4's test once passed 20/20 with its dependency edge
+deleted, and invariant 5's atomicity test caught a real TOCTOU only 2 times in 5. A test
+naming an invariant is not evidence it holds.
 
-`PLAN.md` remains the product spec. The Phase 1 design spec and the M1/M2 implementation
+Absent until M4-M7: variables, environments, modules, reading a saved plan back, `init`,
+`explain`, `graph`, `discover`, `import`. Nothing half-implements one of those;
+`--var-file` errors rather than being silently ignored, which is the standard to hold.
+
+`PLAN.md` remains the product spec. The Phase 1 design spec and the M1/M2/M3 implementation
 plans are under `docs/superpowers/`.
 
 `PLAN.md` is the authoritative spec. Read the relevant section before implementing a
