@@ -118,8 +118,9 @@ func checkConfiguredAttributes(attrs map[string]value.Value, def *schema.Resourc
 // applyDefaults fills absent optional attributes, marking each SourceDefault.
 // It never overwrites a value configuration supplied: an explicit value always
 // wins over an implicit one. A default resolver returning a datum the value
-// model cannot express is a provider bug and is reported rather than silently
-// filled in — see fromDefault.
+// model cannot express, or one that does not match its attribute's declared
+// kind, is a provider bug and is reported rather than silently filled in —
+// see checkedDefault.
 func applyDefaults(attrs map[string]value.Value, def *schema.ResourceDefinition, ctx schema.DefaultContext, origin value.Origin, ds *diag.Diagnostics) {
 	names := make([]string, 0, len(def.Attributes))
 	for name := range def.Attributes {
@@ -139,13 +140,14 @@ func applyDefaults(attrs map[string]value.Value, def *schema.ResourceDefinition,
 		if !ok {
 			continue
 		}
-		v, ok := fromDefault(raw, attr.Kind)
+		v, ok := checkedDefault(raw, attr.Kind)
 		if !ok {
 			ds.Add(diag.Diagnostic{
 				Severity: diag.SeverityError,
-				Summary:  def.Type + "." + name + " default resolver returned an unsupported value",
+				Summary:  def.Type + ": the default for " + strconv.Quote(name) + " is not a " + attr.Kind.String(),
 				Detail: fmt.Sprintf(
-					"The default resolver returned a %T, which the value model cannot represent as a %s. "+
+					"The default resolver returned a %T, which is not a %s. "+
+						"A provider default must produce the kind its attribute declares. "+
 						"This is a provider bug, not a configuration error.",
 					raw, attr.Kind,
 				),
@@ -186,6 +188,23 @@ func fromDefault(raw any, kind value.Kind) (value.Value, bool) {
 	default:
 		return value.Value{}, false
 	}
+}
+
+// checkedDefault converts a resolver's datum and confirms it produced the kind
+// the attribute declares.
+//
+// Matching a Go type is not the same as matching the declared kind: a resolver
+// for a float attribute that returns int64 builds a perfectly valid KindInt
+// value, which would then sail past the kind check that exists to catch
+// exactly this — because that check runs on configuration, before a default is
+// ever filled in, not on the default itself. The declared kind is the
+// contract; the Go type is only how it happens to arrive.
+func checkedDefault(raw any, kind value.Kind) (value.Value, bool) {
+	v, ok := fromDefault(raw, kind)
+	if !ok || v.Kind != kind {
+		return value.Value{}, false
+	}
+	return v, true
 }
 
 // checkRequired reports every required attribute configuration did not

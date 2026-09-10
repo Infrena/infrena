@@ -1,12 +1,15 @@
 package compiler
 
 import (
+	"context"
 	"strings"
 	"testing"
 
 	"infra/internal/registry"
 	"infra/pkg/address"
+	"infra/pkg/provider"
 	"infra/pkg/resource"
+	"infra/pkg/schema"
 	"infra/pkg/value"
 	testprovider "infra/providers/test"
 )
@@ -167,6 +170,69 @@ func TestSchemaDoesNotDeclassifyAnAlreadySensitiveValue(t *testing.T) {
 
 	if !cfg.Resources["r"].Attrs["engine"].Sensitive {
 		t.Error("schema binding must add sensitivity, never clear it — engine is not a sensitive attribute but this value arrived classified")
+	}
+}
+
+// wrongKindProvider is a fake provider whose one resource type declares a
+// float attribute but whose default resolver returns an int64 — the mistake
+// checkedDefault exists to catch: matching a Go type the switch recognises is
+// not the same as matching the declared Kind.
+type wrongKindProvider struct{}
+
+func (wrongKindProvider) Name() string { return "wrongkind" }
+
+func (wrongKindProvider) Definitions() []*schema.ResourceDefinition {
+	return []*schema.ResourceDefinition{{
+		Type: "bad.thing",
+		Attributes: map[string]schema.Attribute{
+			"ratio": {
+				Kind: value.KindFloat,
+				Default: func(schema.DefaultContext) (any, bool) {
+					return int64(1), true // wrong: declares KindFloat, returns an int64
+				},
+				Description: "A ratio that should be a float",
+			},
+		},
+	}}
+}
+
+func (wrongKindProvider) Read(context.Context, *resource.ResourceState) (*resource.ResourceState, error) {
+	return nil, nil
+}
+
+func (wrongKindProvider) Create(context.Context, *resource.DesiredResource) (*resource.ResourceState, error) {
+	return nil, nil
+}
+
+func (wrongKindProvider) Update(context.Context, *resource.ResourceState, *resource.DesiredResource) (*resource.ResourceState, error) {
+	return nil, nil
+}
+
+func (wrongKindProvider) Delete(context.Context, *resource.ResourceState) error { return nil }
+
+func (wrongKindProvider) Discover(context.Context, provider.DiscoverRequest) ([]provider.DiscoveredResource, error) {
+	return nil, provider.ErrNotImplemented
+}
+
+func (wrongKindProvider) Import(context.Context, string, string) (*resource.ResourceState, error) {
+	return nil, provider.ErrNotImplemented
+}
+
+func (wrongKindProvider) ClassifyError(error) provider.Retryability { return provider.NotSafeToRetry }
+
+func TestSchemaRejectsADefaultThatDoesNotMatchItsDeclaredKind(t *testing.T) {
+	reg := registry.New()
+	if err := reg.Register(wrongKindProvider{}); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	cfg := oneResource("bad.thing", map[string]value.Value{})
+
+	ds := bindSchemas(cfg, reg, Options{Environment: "dev"})
+	if !ds.HasErrors() {
+		t.Fatal("a default that does not match its attribute's declared kind must be an error")
+	}
+	if v, ok := cfg.Resources["r"].Attrs["ratio"]; ok {
+		t.Errorf("the wrong-kinded default must not be filled in, got %+v", v)
 	}
 }
 
