@@ -9122,18 +9122,24 @@ Claude-Session: https://claude.ai/code/session_015M5QdCFKa6booSVrhnAzTV"
 ## Task 18: Give the graph its purpose, and delete the second cycle detector
 
 **Files:**
-- Create: `internal/graph/build.go`, `internal/graph/build_test.go`
-- Modify: `internal/compiler/validate.go` (delete `findCycles`, use `graph.Cycle`), `internal/compiler/validate_test.go` (unchanged expectations; confirm)
+- Create: `internal/planner/execution.go`, `internal/planner/execution_test.go`
+- Modify: `internal/compiler/validate.go` (delete `firstCycle`, use `graph.Cycle`), `internal/compiler/validate_test.go` (one added characterisation test; existing expectations unchanged)
 
 **Interfaces:**
-- Consumes: `graph.New`, `(*Graph[T]).Add/Edge/Cycle/Layers/Roots` (Task 10); `planner.Plan`, `planner.Operation`, `planner.OpKind` constants (Tasks 12–13); `address.Address`.
-- Produces: `graph.OpNode{Address address.Address; Kind planner.OpKind; Phase graph.Phase}` with `ID() string`; `graph.Phase` with `PhaseDestroy` and `PhaseCreate`; `graph.BuildExecution(p *planner.Plan, deps func(address.Address) []address.Address) (*Graph[OpNode], error)`.
+- Consumes: `graph.New`, `(*graph.Graph[T]).Add/Edge/Cycle/Layers/Roots` (Task 10); `Plan`, `Operation`, `OpKind` constants (Tasks 12–13, same package); `address.Address`.
+- Produces: `planner.OpNode{Address address.Address; Kind OpKind; Phase Phase}` with `ID() string`; `planner.Phase` with `PhaseDestroy` and `PhaseCreate`; `planner.BuildExecution(p *Plan, deps func(address.Address) []address.Address) (*graph.Graph[OpNode], error)`.
 
 This task exists because the plan's self-review found two things wrong with it, and both are mine.
 
 **The graph had no consumer.** Task 10 builds a correct generic DAG, and nothing in M2 called it. Spec §19 assigns "graph" to M2, but spec §14's actual content — that nodes are *plan operations*, and that ordering differs by operation kind — was unimplemented. A graph package with no consumer is a package whose correctness nobody has tested against a real question.
 
 **And the codebase would have shipped two cycle detectors.** Task 8's `validateGraph` needs cycle detection and precedes Task 10, so it grew a private three-colour DFS (`findCycles`). Task 10 then built `Graph.Cycle()`. Same algorithm, two implementations, one codebase — the shape a review rightly calls out, and worse than ordinary duplication because a divergence between them means configuration that one accepts and the other rejects.
+
+**The execution graph lives in `internal/planner`, not `internal/graph`.** An earlier draft of this task put `BuildExecution`, `OpNode` and `Phase` in package `graph` — which would have made `internal/graph` import `internal/planner`, destroying the one property Task 10 was built for. Task 10's whole justification is that `graph` is a leaf: it depends on nothing in `infra`, which is what lets M3's executor and M7's `infra graph` reuse it without dragging the planner along. A graph package that imports the planner is not reusable by anything below the planner.
+
+So the dependency runs the only direction that keeps both packages honest: `planner` imports `graph`. `graph` stays generic over `Node`, knowing nothing about operations; `planner` owns the knowledge that nodes are operations and that destroy runs in reverse. M3's executor imports `planner` — which it must anyway, to read a `Plan`.
+
+One consequence to watch while writing the tests: `execution_test.go` is in package `planner` alongside Task 12's `plan_test.go`, so helpers do not get redeclared. `addr` is already declared there; reuse it rather than defining a second one, which will not compile.
 
 Spec §14 fixes the ordering rules, and conflating them causes apply-time failures:
 
@@ -9143,7 +9149,7 @@ Spec §14 fixes the ordering rules, and conflating them causes apply-time failur
 
 A replacement is therefore two nodes, not one, which is why `OpNode` carries a `Phase`. Phase 1 implements destroy-then-create only; create-before-destroy is Phase 5.
 
-The `deps` parameter is a function rather than a config reference because the two sides need different sources, exactly as spec §14 says: create-side edges come from configuration, and destroy-side edges come from the `Dependencies` recorded in state — a resource being destroyed may no longer be in configuration at all. `planner.Operation.Dependents` already carries the resolved answer, so the caller supplies a lookup over it rather than the graph reaching into either.
+The `deps` parameter is a function rather than a config reference because the two sides need different sources, exactly as spec §14 says: create-side edges come from configuration, and destroy-side edges come from the `Dependencies` recorded in state — a resource being destroyed may no longer be in configuration at all. `Operation.Dependents` already carries the resolved answer, so the caller supplies a lookup over it rather than the graph reaching into either.
 
 No executor consumes this in M2; M3's does. Building and testing it here means M3 inherits proven ordering rather than writing it under the pressure of also writing concurrency.
 
@@ -9152,17 +9158,18 @@ No executor consumes this in M2; M3's does. Building and testing it here means M
 Create `internal/graph/build_test.go`:
 
 ```go
-package graph
+package planner
 
 import (
 	"strings"
 	"testing"
 
-	"infra/internal/planner"
+	"infra/internal/graph"
 	"infra/pkg/address"
 )
 
-func addr(name string) address.Address { return address.Address{Name: name} }
+// addr is NOT redefined here: plan_test.go (Task 12) already declares it in
+// this package, and a second declaration will not compile.
 
 // depsFrom builds the lookup BuildExecution needs from a plain map.
 func depsFrom(m map[string][]string) func(address.Address) []address.Address {
@@ -9175,11 +9182,11 @@ func depsFrom(m map[string][]string) func(address.Address) []address.Address {
 	}
 }
 
-func planWith(ops ...planner.Operation) *planner.Plan {
-	return &planner.Plan{Version: planner.PlanVersion, Operations: ops}
+func planWith(ops ...Operation) *Plan {
+	return &Plan{Version: PlanVersion, Operations: ops}
 }
 
-func orderOf(t *testing.T, g *Graph[OpNode]) []string {
+func orderOf(t *testing.T, g *graph.Graph[OpNode]) []string {
 	t.Helper()
 	layers, err := g.Layers()
 	if err != nil {
@@ -9207,8 +9214,8 @@ func indexOf(t *testing.T, order []string, id string) int {
 
 func TestCreatesRunAfterWhatTheyDependOn(t *testing.T) {
 	p := planWith(
-		planner.Operation{Address: addr("network"), Type: "test.network", Kind: planner.OpCreate},
-		planner.Operation{Address: addr("database"), Type: "test.database", Kind: planner.OpCreate},
+		Operation{Address: addr("network"), Type: "test.network", Kind: OpCreate},
+		Operation{Address: addr("database"), Type: "test.database", Kind: OpCreate},
 	)
 	// network has one dependent: database.
 	g, err := BuildExecution(p, depsFrom(map[string][]string{"network": {"database"}}))
@@ -9224,8 +9231,8 @@ func TestCreatesRunAfterWhatTheyDependOn(t *testing.T) {
 
 func TestDestroysRunInReverseDependencyOrder(t *testing.T) {
 	p := planWith(
-		planner.Operation{Address: addr("network"), Type: "test.network", Kind: planner.OpDestroy},
-		planner.Operation{Address: addr("database"), Type: "test.database", Kind: planner.OpDestroy},
+		Operation{Address: addr("network"), Type: "test.network", Kind: OpDestroy},
+		Operation{Address: addr("database"), Type: "test.database", Kind: OpDestroy},
 	)
 	g, err := BuildExecution(p, depsFrom(map[string][]string{"network": {"database"}}))
 	if err != nil {
@@ -9241,7 +9248,7 @@ func TestDestroysRunInReverseDependencyOrder(t *testing.T) {
 
 func TestReplaceBecomesTwoNodesDestroyThenCreate(t *testing.T) {
 	p := planWith(
-		planner.Operation{Address: addr("database"), Type: "test.database", Kind: planner.OpReplace},
+		Operation{Address: addr("database"), Type: "test.database", Kind: OpReplace},
 	)
 	g, err := BuildExecution(p, depsFrom(nil))
 	if err != nil {
@@ -9261,8 +9268,8 @@ func TestReplaceOrdersDependentsAroundBothPhases(t *testing.T) {
 	// Replacing a network with an application on top: the app must be
 	// destroyed before the network's destroy, and created after its create.
 	p := planWith(
-		planner.Operation{Address: addr("network"), Type: "test.network", Kind: planner.OpReplace},
-		planner.Operation{Address: addr("app"), Type: "test.application", Kind: planner.OpReplace},
+		Operation{Address: addr("network"), Type: "test.network", Kind: OpReplace},
+		Operation{Address: addr("app"), Type: "test.application", Kind: OpReplace},
 	)
 	g, err := BuildExecution(p, depsFrom(map[string][]string{"network": {"app"}}))
 	if err != nil {
@@ -9280,8 +9287,8 @@ func TestReplaceOrdersDependentsAroundBothPhases(t *testing.T) {
 
 func TestNoOpsAreNotScheduled(t *testing.T) {
 	p := planWith(
-		planner.Operation{Address: addr("network"), Type: "test.network", Kind: planner.OpNoOp},
-		planner.Operation{Address: addr("database"), Type: "test.database", Kind: planner.OpCreate},
+		Operation{Address: addr("network"), Type: "test.network", Kind: OpNoOp},
+		Operation{Address: addr("database"), Type: "test.database", Kind: OpCreate},
 	)
 	g, err := BuildExecution(p, depsFrom(nil))
 	if err != nil {
@@ -9297,7 +9304,7 @@ func TestForgetIsScheduledWithoutAProviderCall(t *testing.T) {
 	// Forget still removes the resource from state, so it is ordered like a
 	// destroy even though no provider is called.
 	p := planWith(
-		planner.Operation{Address: addr("database"), Type: "test.database", Kind: planner.OpForget},
+		Operation{Address: addr("database"), Type: "test.database", Kind: OpForget},
 	)
 	g, err := BuildExecution(p, depsFrom(nil))
 	if err != nil {
@@ -9310,10 +9317,10 @@ func TestForgetIsScheduledWithoutAProviderCall(t *testing.T) {
 
 func TestOrderingIsDeterministic(t *testing.T) {
 	p := planWith(
-		planner.Operation{Address: addr("c"), Type: "test.network", Kind: planner.OpCreate},
-		planner.Operation{Address: addr("a"), Type: "test.network", Kind: planner.OpCreate},
-		planner.Operation{Address: addr("b"), Type: "test.network", Kind: planner.OpCreate},
-		planner.Operation{Address: addr("d"), Type: "test.network", Kind: planner.OpCreate},
+		Operation{Address: addr("c"), Type: "test.network", Kind: OpCreate},
+		Operation{Address: addr("a"), Type: "test.network", Kind: OpCreate},
+		Operation{Address: addr("b"), Type: "test.network", Kind: OpCreate},
+		Operation{Address: addr("d"), Type: "test.network", Kind: OpCreate},
 	)
 	deps := depsFrom(nil)
 
@@ -9336,8 +9343,8 @@ func TestOrderingIsDeterministic(t *testing.T) {
 
 func TestCycleAmongOperationsIsAnError(t *testing.T) {
 	p := planWith(
-		planner.Operation{Address: addr("a"), Type: "test.network", Kind: planner.OpCreate},
-		planner.Operation{Address: addr("b"), Type: "test.network", Kind: planner.OpCreate},
+		Operation{Address: addr("a"), Type: "test.network", Kind: OpCreate},
+		Operation{Address: addr("b"), Type: "test.network", Kind: OpCreate},
 	)
 	// a depends on b and b depends on a.
 	g, err := BuildExecution(p, depsFrom(map[string][]string{"a": {"b"}, "b": {"a"}}))
@@ -9360,10 +9367,10 @@ Expected: FAIL — `undefined: OpNode`, `undefined: BuildExecution`.
 Create `internal/graph/build.go`:
 
 ```go
-package graph
+package planner
 
 import (
-	"infra/internal/planner"
+	"infra/internal/graph"
 	"infra/pkg/address"
 )
 
@@ -9381,7 +9388,7 @@ const (
 // OpNode is one unit of executable work.
 type OpNode struct {
 	Address address.Address
-	Kind    planner.OpKind
+	Kind    OpKind
 	Phase   Phase
 }
 
@@ -9389,18 +9396,18 @@ type OpNode struct {
 // failure or a diagnostic.
 func (n OpNode) ID() string {
 	switch n.Kind {
-	case planner.OpReplace:
+	case OpReplace:
 		if n.Phase == PhaseDestroy {
 			return "destroy:" + n.Address.String()
 		}
 		return "create:" + n.Address.String()
-	case planner.OpCreate:
+	case OpCreate:
 		return "create:" + n.Address.String()
-	case planner.OpUpdate:
+	case OpUpdate:
 		return "update:" + n.Address.String()
-	case planner.OpDestroy:
+	case OpDestroy:
 		return "destroy:" + n.Address.String()
-	case planner.OpForget:
+	case OpForget:
 		return "forget:" + n.Address.String()
 	default:
 		return "noop:" + n.Address.String()
@@ -9422,10 +9429,10 @@ func (n OpNode) ID() string {
 // supplies it because the two sides draw from different places: create-side
 // edges come from configuration, destroy-side edges from the Dependencies
 // recorded in state, since a resource being destroyed may no longer appear in
-// configuration at all. planner.Operation.Dependents already holds the resolved
+// configuration at all. Operation.Dependents already holds the resolved
 // answer.
-func BuildExecution(p *planner.Plan, deps func(address.Address) []address.Address) (*Graph[OpNode], error) {
-	g := New[OpNode]()
+func BuildExecution(p *Plan, deps func(address.Address) []address.Address) (*graph.Graph[OpNode], error) {
+	g := graph.New[OpNode]()
 	if p == nil {
 		return g, nil
 	}
@@ -9445,14 +9452,14 @@ func BuildExecution(p *planner.Plan, deps func(address.Address) []address.Addres
 
 	for _, op := range p.Operations {
 		switch op.Kind {
-		case planner.OpNoOp:
+		case OpNoOp:
 			// Not work. Scheduling it would make every plan look busy and
 			// would put unchanged resources in the executor's path.
 			continue
-		case planner.OpReplace:
+		case OpReplace:
 			add(OpNode{Address: op.Address, Kind: op.Kind, Phase: PhaseDestroy})
 			add(OpNode{Address: op.Address, Kind: op.Kind, Phase: PhaseCreate})
-		case planner.OpDestroy, planner.OpForget:
+		case OpDestroy, OpForget:
 			add(OpNode{Address: op.Address, Kind: op.Kind, Phase: PhaseDestroy})
 		default: // OpCreate, OpUpdate
 			add(OpNode{Address: op.Address, Kind: op.Kind, Phase: PhaseCreate})
@@ -9460,7 +9467,7 @@ func BuildExecution(p *planner.Plan, deps func(address.Address) []address.Addres
 	}
 
 	for _, op := range p.Operations {
-		if op.Kind == planner.OpNoOp {
+		if op.Kind == OpNoOp {
 			continue
 		}
 		for _, dependent := range deps(op.Address) {
@@ -9473,7 +9480,7 @@ func BuildExecution(p *planner.Plan, deps func(address.Address) []address.Addres
 
 // addEdges wires one dependency relationship — dependent depends on target —
 // in both directions of work that exist.
-func addEdges(g *Graph[OpNode], has map[string]map[Phase]bool, target, dependent address.Address) {
+func addEdges(g *graph.Graph[OpNode], has map[string]map[Phase]bool, target, dependent address.Address) {
 	t, d := target.String(), dependent.String()
 
 	// Build side: the target is created before its dependent is.
@@ -9654,7 +9661,7 @@ Expected: all green.
 - [ ] **Step 8: Commit**
 
 ```bash
-git add internal/graph internal/compiler/validate.go
+git add internal/planner/execution.go internal/planner/execution_test.go internal/compiler/validate.go internal/compiler/validate_test.go
 git commit -m "feat: order plan operations by kind, and drop the duplicate cycle detector
 
 The graph package had no consumer: spec §14's actual content, that nodes are
