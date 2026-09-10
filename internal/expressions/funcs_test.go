@@ -150,3 +150,65 @@ func TestNamesIsSortedAndComplete(t *testing.T) {
 		}
 	}
 }
+
+// TestFunctionsDoNotClassifyValuesThatAreNotSensitive is the deliberate
+// inverse of TestSensitivityUnionsEveryArgumentPosition above, and it exists
+// because that test — and every other redaction test in this project —
+// asserts only that secrets are NOT shown. Nothing asserted that non-secrets
+// ARE, so sensitivity was pinned in one direction only.
+//
+// Measured before this test existed: forcing sensitiveAnywhere to return true
+// left the ENTIRE suite green, while the real binary rendered
+// `cidr: ${upper("10.0.0.0/16")}` as `cidr: <sensitive>` instead of
+// `cidr: "10.0.0.0/16"`. Over-classification is not a security bug — it is the
+// fail-safe direction — which is exactly why every instinct guarding this area
+// points away from it. Its cost is different in kind: every transformed value
+// in every plan prints <sensitive>, plans stop being readable, and the
+// product's headline feature quietly dies with a green suite.
+//
+// The two tests together are what discriminate: this one fails if
+// classification becomes too broad, its sibling fails if it becomes too
+// narrow. Either alone can be satisfied by a constant.
+func TestFunctionsDoNotClassifyValuesThatAreNotSensitive(t *testing.T) {
+	plain := str("plain")
+	list := value.List([]value.Value{plain, str("other")}, value.SourceExplicit)
+
+	cases := []struct {
+		name string
+		fn   string
+		args []value.Value
+	}{
+		{"replace: nothing sensitive", "replace", []value.Value{plain, plain, plain}},
+		{"join: nothing sensitive", "join", []value.Value{plain, list}},
+		{"lower: nothing sensitive", "lower", []value.Value{plain}},
+		{"upper: nothing sensitive", "upper", []value.Value{plain}},
+		{"trim: nothing sensitive", "trim", []value.Value{plain}},
+	}
+
+	for _, tc := range cases {
+		if got := call(t, tc.fn, tc.args...); got.Sensitive {
+			t.Errorf("%s: result was classified sensitive, but no argument was — "+
+				"over-classification renders every transformed value as <sensitive> "+
+				"and makes plans unreadable", tc.name)
+		}
+	}
+}
+
+// TestSensitivityIsPerLeafNotWholeCollection pins the boundary the two tests
+// above straddle: a list containing one sensitive element classifies, while a
+// list containing none does not. A single-element check cannot tell those
+// apart, and a constant satisfies either one alone.
+func TestSensitivityIsPerLeafNotWholeCollection(t *testing.T) {
+	plain := str("plain")
+	secret := str("hunter2").WithSensitive(true)
+
+	clean := value.List([]value.Value{plain, str("other")}, value.SourceExplicit)
+	if got := call(t, "join", str("-"), clean); got.Sensitive {
+		t.Error("a list with no sensitive element must not classify the joined result")
+	}
+
+	tainted := value.List([]value.Value{plain, secret}, value.SourceExplicit)
+	if got := call(t, "join", str("-"), tainted); !got.Sensitive {
+		t.Error("a list with one sensitive element must classify the joined result")
+	}
+}
