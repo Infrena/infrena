@@ -80,11 +80,11 @@ func writeState(t *testing.T, dir, environment string) {
 		"environment": environment,
 		"resources": map[string]any{
 			"database": map[string]any{
-				"Address":    map[string]any{"Name": "database"},
-				"Type":       "test.database",
-				"Provider":   "test",
-				"ProviderID": "db-1",
-				"Attributes": map[string]any{
+				"address":     map[string]any{"name": "database"},
+				"type":        "test.database",
+				"provider":    "test",
+				"provider_id": "db-1",
+				"attributes": map[string]any{
 					"engine":   map[string]any{"kind": "string", "known": true, "raw": "postgres", "source": "provider"},
 					"password": map[string]any{"kind": "string", "known": true, "raw": "hunter2", "source": "provider", "sensitive": true},
 				},

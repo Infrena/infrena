@@ -16,9 +16,13 @@ import (
 )
 
 // Lifecycle defines immutability constraints on a resource.
+//
+// The JSON tags are part of the state file's versioned on-disk contract: they
+// are named explicitly so that renaming a Go field stays an ordinary refactor
+// rather than a silent format change with no version bump.
 type Lifecycle struct {
-	PreventDestroy bool
-	Retain         bool
+	PreventDestroy bool `json:"prevent_destroy"`
+	Retain         bool `json:"retain"`
 }
 
 // ResolvedResource is a resource after the planner has resolved it.
@@ -67,16 +71,20 @@ func (r ResolvedResource) Desired() (DesiredResource, error) {
 
 // ResourceState is the recorded association between a logical resource and the
 // external object it manages. PLAN.md §3.4.
+//
+// The JSON tags are the state file's versioned on-disk contract; see Lifecycle.
+// omitzero rather than omitempty on the timestamps because encoding/json cannot
+// omit a zero struct any other way.
 type ResourceState struct {
-	Address      address.Address
-	Type         string
-	Provider     string
-	ProviderID   string
-	Attributes   map[string]value.Value
-	Dependencies []address.Address
-	Lifecycle    Lifecycle
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
+	Address      address.Address        `json:"address"`
+	Type         string                 `json:"type"`
+	Provider     string                 `json:"provider"`
+	ProviderID   string                 `json:"provider_id"`
+	Attributes   map[string]value.Value `json:"attributes"`
+	Dependencies []address.Address      `json:"dependencies,omitempty"`
+	Lifecycle    Lifecycle              `json:"lifecycle"`
+	CreatedAt    time.Time              `json:"created_at,omitzero"`
+	UpdatedAt    time.Time              `json:"updated_at,omitzero"`
 }
 
 // Clone deep-copies a resource state. Refresh and planning must never mutate

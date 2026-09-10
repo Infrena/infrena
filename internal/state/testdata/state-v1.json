@@ -1,0 +1,83 @@
+{
+  "version": 1,
+  "serial": 7,
+  "project": "myapp",
+  "environment": "dev",
+  "resources": {
+    "db": {
+      "address": {
+        "name": "db"
+      },
+      "type": "test.database",
+      "provider": "test",
+      "provider_id": "db-1",
+      "attributes": {
+        "endpoint": {
+          "kind": "string",
+          "known": false,
+          "source": "computed"
+        },
+        "engine": {
+          "kind": "string",
+          "known": true,
+          "raw": "postgres",
+          "source": "provider"
+        },
+        "password": {
+          "kind": "string",
+          "known": true,
+          "raw": "hunter2",
+          "source": "provider",
+          "sensitive": true
+        },
+        "size": {
+          "kind": "integer",
+          "known": true,
+          "raw": 9007199254740993,
+          "source": "provider"
+        },
+        "tags": {
+          "kind": "map",
+          "known": true,
+          "raw": {
+            "env": {
+              "kind": "string",
+              "known": true,
+              "raw": "dev",
+              "source": "provider"
+            }
+          },
+          "source": "provider"
+        }
+      },
+      "dependencies": [
+        {
+          "module": [
+            "net"
+          ],
+          "name": "vpc"
+        }
+      ],
+      "lifecycle": {
+        "prevent_destroy": true,
+        "retain": false
+      },
+      "created_at": "2026-01-02T03:04:05Z",
+      "updated_at": "2026-01-02T03:04:06Z"
+    },
+    "orphan": {
+      "address": {
+        "name": "orphan"
+      },
+      "type": "test.network",
+      "provider": "test",
+      "provider_id": "net-9",
+      "attributes": {},
+      "lifecycle": {
+        "prevent_destroy": false,
+        "retain": false
+      }
+    }
+  },
+  "updated_at": "2026-09-09T12:00:00Z"
+}

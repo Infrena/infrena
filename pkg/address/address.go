@@ -11,11 +11,18 @@ import (
 	"strings"
 )
 
+// Address is the canonical identity of a resource: its module path plus its
+// logical name.
+//
+// The JSON tags are part of the state file's versioned on-disk contract, so
+// that renaming a Go field stays an ordinary refactor rather than a silent
+// format change with no version bump.
 type Address struct {
-	Module []string // empty at the root
-	Name   string
+	Module []string `json:"module,omitempty"` // empty at the root
+	Name   string   `json:"name"`
 }
 
+// String renders the canonical dotted form, e.g. "module.net.database".
 func (a Address) String() string {
 	if len(a.Module) == 0 {
 		return a.Name
@@ -37,6 +44,7 @@ func (a Address) InModule(name string) Address {
 	return Address{Module: next, Name: a.Name}
 }
 
+// Parse reads an address back from its canonical dotted form.
 func Parse(s string) (Address, error) {
 	if s == "" {
 		return Address{}, fmt.Errorf("empty address")

@@ -16,18 +16,52 @@ type wireValue struct {
 	Origin    *Origin         `json:"origin,omitempty"`
 }
 
-func kindFromString(s string) (Kind, error) {
-	for _, k := range []Kind{KindString, KindInt, KindFloat, KindBool, KindList, KindMap} {
-		if k.String() == s {
+// kindWireNames is the frozen on-disk spelling of every Kind.
+//
+// It is deliberately separate from Kind.String(), which is a diagnostic string
+// and free to change. A state file is a versioned contract: renaming "integer"
+// to "int" to make one error message read better must not silently invalidate
+// every state file ever written, and only a table nothing else consults can
+// guarantee that. Entries here change only alongside a CurrentVersion bump and
+// a migration.
+var kindWireNames = map[Kind]string{
+	KindString: "string",
+	KindInt:    "integer",
+	KindFloat:  "float",
+	KindBool:   "boolean",
+	KindList:   "list",
+	KindMap:    "map",
+}
+
+// kindToWireName returns the persisted name for a Kind. KindInvalid has none:
+// refusing to write it turns an unrepresentable value into a failed save rather
+// than a state file that cannot be read back.
+func kindToWireName(k Kind) (string, error) {
+	name, ok := kindWireNames[k]
+	if !ok {
+		return "", fmt.Errorf("cannot encode value of kind %s", k)
+	}
+	return name, nil
+}
+
+// kindFromWireName resolves a persisted kind name back to its Kind.
+func kindFromWireName(s string) (Kind, error) {
+	for k, name := range kindWireNames {
+		if name == s {
 			return k, nil
 		}
 	}
 	return KindInvalid, fmt.Errorf("unknown value kind %q", s)
 }
 
+// MarshalJSON writes a Value in its on-disk form.
 func (v Value) MarshalJSON() ([]byte, error) {
+	kindName, err := kindToWireName(v.Kind)
+	if err != nil {
+		return nil, err
+	}
 	w := wireValue{
-		Kind:      v.Kind.String(),
+		Kind:      kindName,
 		Known:     v.Known,
 		Source:    v.Source,
 		Sensitive: v.Sensitive,
@@ -46,12 +80,13 @@ func (v Value) MarshalJSON() ([]byte, error) {
 	return json.Marshal(w)
 }
 
+// UnmarshalJSON reads a Value from its on-disk form.
 func (v *Value) UnmarshalJSON(data []byte) error {
 	var w wireValue
 	if err := json.Unmarshal(data, &w); err != nil {
 		return err
 	}
-	kind, err := kindFromString(w.Kind)
+	kind, err := kindFromWireName(w.Kind)
 	if err != nil {
 		return err
 	}
