@@ -103,6 +103,21 @@ func TestSensitivityUnionsEveryArgumentPosition(t *testing.T) {
 	}
 }
 
+func TestMalformedCompositeIsTreatedAsSensitive(t *testing.T) {
+	// A value whose Kind claims list but whose Raw is not one cannot be
+	// inspected. A security check that cannot verify safety must deny, not
+	// assume: over-redacting is recoverable, leaking is not.
+	malformed := value.Value{Kind: value.KindList, Known: true, Raw: "not a list", Source: value.SourceExplicit}
+	if !sensitiveAnywhere(malformed) {
+		t.Error("a malformed composite must be treated as sensitive — the check could not inspect it")
+	}
+
+	malformedMap := value.Value{Kind: value.KindMap, Known: true, Raw: 42, Source: value.SourceExplicit}
+	if !sensitiveAnywhere(malformedMap) {
+		t.Error("a malformed map must be treated as sensitive")
+	}
+}
+
 func TestWrongArityIsAnError(t *testing.T) {
 	fn, _, _ := Lookup("replace")
 	if _, err := fn([]value.Value{str("only-one")}); err == nil {
