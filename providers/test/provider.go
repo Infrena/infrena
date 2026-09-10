@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"infra/pkg/address"
@@ -32,6 +33,12 @@ type Provider struct {
 	cloudPath string
 	defs      []*schema.ResourceDefinition
 	byType    map[string]*schema.ResourceDefinition
+
+	// mu guards the whole load-mutate-save cycle. Every operation, Read
+	// included, rewrites the cloud file, so without it concurrent callers
+	// interleave and lose each other's writes. This is the in-process half
+	// only: the cross-process file lock belongs to M3.
+	mu sync.Mutex
 }
 
 // New returns a fake provider backed by the cloud file at cloudPath.
@@ -65,6 +72,7 @@ func (p *Provider) ClassifyError(err error) provider.Retryability {
 }
 
 // begin loads the cloud, applies latency, and checks for an injected failure.
+// The caller must hold p.mu.
 func (p *Provider) begin(ctx context.Context, op, addr string) (*Cloud, error) {
 	c, err := LoadCloud(p.cloudPath)
 	if err != nil {
@@ -97,6 +105,9 @@ func (p *Provider) begin(ctx context.Context, op, addr string) (*Cloud, error) {
 
 // Create creates a resource in the fake cloud and assigns it a provider ID.
 func (p *Provider) Create(ctx context.Context, d *resource.DesiredResource) (*resource.ResourceState, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
 	c, err := p.begin(ctx, "create", d.Address.String())
 	if err != nil {
 		return nil, err
@@ -127,6 +138,9 @@ func (p *Provider) Create(ctx context.Context, d *resource.DesiredResource) (*re
 // returns (nil, nil) when the resource no longer exists there, so drift
 // caused by a hand-edit or external deletion is observable.
 func (p *Provider) Read(ctx context.Context, current *resource.ResourceState) (*resource.ResourceState, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
 	c, err := p.begin(ctx, "read", current.Address.String())
 	if err != nil {
 		return nil, err
@@ -143,6 +157,9 @@ func (p *Provider) Read(ctx context.Context, current *resource.ResourceState) (*
 // Update applies desired attributes to an existing resource in the fake
 // cloud without changing its provider ID.
 func (p *Provider) Update(ctx context.Context, current *resource.ResourceState, d *resource.DesiredResource) (*resource.ResourceState, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
 	c, err := p.begin(ctx, "update", d.Address.String())
 	if err != nil {
 		return nil, err
@@ -188,6 +205,9 @@ func carryForward(next, current *resource.ResourceState) {
 
 // Delete removes a resource from the fake cloud.
 func (p *Provider) Delete(ctx context.Context, current *resource.ResourceState) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
 	c, err := p.begin(ctx, "delete", current.Address.String())
 	if err != nil {
 		return err

@@ -126,15 +126,47 @@ func LoadCloud(path string) (*Cloud, error) {
 }
 
 // Save writes the cloud file indented, because a human edits it.
+//
+// The write is atomic — temporary file in the same directory, then a rename —
+// mirroring internal/state/local.go's Put. A plain os.WriteFile truncates in
+// place, and the provider rewrites this file on every operation including Read,
+// so a concurrent reader would see a half-written file and report "unexpected
+// end of JSON input", which looks like a provider failure rather than a harness
+// bug. Spec §10's refresh reads every resource concurrently.
 func (c *Cloud) Save(path string) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("%s: %w", dir, err)
 	}
 	data, err := json.MarshalIndent(c, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, append(data, '\n'), 0o600)
+	data = append(data, '\n')
+
+	tmp, err := os.CreateTemp(dir, ".fake-cloud-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName) // no-op once the rename has succeeded
+
+	if err := tmp.Chmod(0o600); err != nil {
+		tmp.Close()
+		return err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, path)
 }
 
 // ShouldFail reports whether an injected failure applies to this operation.
