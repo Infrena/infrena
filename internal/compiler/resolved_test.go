@@ -201,3 +201,42 @@ resources:
 			"expression (%s); a saved plan would be accepted against configuration it was not computed from", a)
 	}
 }
+
+// TestConfigHashSeesAVariableFeedingADeferredCall is
+// TestConfigHashSeesAVariableFeedingADeferredExpression's sibling for a
+// built-in call rather than a bare concat. evaluateCall's non-default
+// deferral path deferred the whole SOURCE expression, so a resolved argument
+// sitting alongside an unresolved one stayed an OpVarRef in the hash — ref
+// NAME only — the same blindness Task 3 closed for OpConcat, left open here.
+func TestConfigHashSeesAVariableFeedingADeferredCall(t *testing.T) {
+	body := `
+project: myapp
+resources:
+  network:
+    type: test.network
+    cidr: 10.0.0.0/16
+  database:
+    type: test.database
+    engine: postgres
+    network: ${replace(network.id, "old", prefix)}
+`
+	hashWith := func(prefix string) string {
+		t.Helper()
+		cfg, ds := Compile(loadFiles(t, body), testRegistry(t), Options{
+			Vars: map[string]string{"prefix": prefix},
+		})
+		if ds.HasErrors() {
+			t.Fatalf("compile with prefix=%q: %+v", prefix, ds)
+		}
+		h, err := cfg.Hash()
+		if err != nil {
+			t.Fatalf("Hash: %v", err)
+		}
+		return h
+	}
+
+	if a, b := hashWith("acme"), hashWith("totally-different"); a == b {
+		t.Errorf("ConfigHash is identical for two different --var values feeding a deferred "+
+			"call (%s); a saved plan would be accepted against configuration it was not computed from", a)
+	}
+}

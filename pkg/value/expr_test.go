@@ -107,6 +107,37 @@ func TestStringRendersPasteableSource(t *testing.T) {
 	}
 }
 
+// TestStringRedactsASensitiveLiteral pins that a literal carrying a sensitive
+// value never renders its raw contents through String() or inner(). A
+// deferred expression can fold a resolved SENSITIVE value into an OpLiteral
+// (internal/expressions' residual does exactly this), and String() is not the
+// sanctioned redaction path — value.Format is — so it must defer to the same
+// Redacted marker rather than growing a second one.
+func TestStringRedactsASensitiveLiteral(t *testing.T) {
+	secret := &Expr{Op: OpLiteral, Literal: String("hunter2", SourceVariable).WithSensitive(true)}
+
+	// Top level, via String(): the literal sits directly in a concat, the
+	// same shape residual produces for a folded sensitive part.
+	concat := &Expr{Op: OpConcat, Args: []*Expr{
+		secret,
+		{Op: OpLiteral, Literal: String("-", SourceExplicit)},
+		{Op: OpResourceRef, Ref: Reference{Resource: "network", Attribute: "id"}},
+	}}
+	if got := concat.String(); strings.Contains(got, "hunter2") {
+		t.Errorf("String() = %q leaks the sensitive literal", got)
+	} else if !strings.Contains(got, Redacted) {
+		t.Errorf("String() = %q, want it to contain %q", got, Redacted)
+	}
+
+	// Nested inside a call, via inner(): a quoted-literal argument position.
+	call := &Expr{Op: OpCall, Function: "lower", Args: []*Expr{secret}}
+	if got := call.String(); strings.Contains(got, "hunter2") {
+		t.Errorf("String() = %q leaks the sensitive literal via inner()", got)
+	} else if !strings.Contains(got, Redacted) {
+		t.Errorf("String() = %q, want it to contain %q", got, Redacted)
+	}
+}
+
 func TestStringOnNilIsEmptyNotPanic(t *testing.T) {
 	var e *Expr
 	if got := e.String(); got != "" {

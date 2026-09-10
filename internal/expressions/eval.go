@@ -151,7 +151,15 @@ func evaluateCall(e *value.Expr, scope Scope, ds *diag.Diagnostics) value.Value 
 	// `default` is the one function that is meaningful with an unknown
 	// argument — supplying a fallback is its entire purpose.
 	if anyUnknown && e.Function != "default" {
-		return unknownFrom(e, value.KindString, sensitive)
+		// A call is all-or-nothing as a RESULT — it cannot run with an
+		// unknown argument — but its individual arguments can still be
+		// individually resolved or not, exactly like OpConcat's. Deferring
+		// the source expression instead of the residual left the same
+		// ConfigHash blindness Task 3 closed for concatenation open here: a
+		// resolved argument stayed an OpVarRef/OpResourceRef, so hashExpr
+		// could only see its ref NAME, never the value two --var runs
+		// actually differed by.
+		return unknownResidual(e, args, value.KindString, sensitive)
 	}
 
 	out, err := fn(args)
@@ -170,6 +178,17 @@ func evaluateCall(e *value.Expr, scope Scope, ds *diag.Diagnostics) value.Value 
 		// this call. An unknown must carry the expression that will
 		// reproduce it in full: re-evaluating just the fallback would skip
 		// the primary-vs-fallback logic entirely once the primary resolves.
+		//
+		// This is reached only when defaultFunc chose the fallback AND the
+		// fallback is itself unknown — which happens whether the primary was
+		// unknown outright, or known but blank (defaultFunc treats "" the
+		// same as unknown). Either way the primary's resolved contribution,
+		// when it has one, is always the same blank string: folding it into
+		// a literal would not let ConfigHash distinguish two configurations
+		// that a non-blank primary couldn't already distinguish by taking
+		// the fully-resolved path below instead. So this deferral, alone
+		// among evaluateCall's, keeps the whole source expression rather
+		// than a residual.
 		return unknownFrom(e, out.Kind, out.Sensitive || sensitive)
 	}
 	return out.WithSensitive(out.Sensitive || sensitive).WithOrigin(e.Origin)
@@ -197,18 +216,22 @@ func unknownFrom(e *value.Expr, kind value.Kind, sensitive bool) value.Value {
 // and arity — cannot distinguish two configurations that differ only in one of
 // them.
 //
-// Only OpConcat can be partially resolved. A call is all-or-nothing: its
-// arguments are evaluated and if any is unknown the call cannot run, so there
-// is no partial result to keep. A bare reference either resolved or did not.
-// Every other deferral therefore keeps its source expression, which is already
-// correct because nothing in it resolved.
+// OpConcat and OpCall are the two ops whose ARGUMENTS can be individually
+// resolved or not, so they are the two that fold. A call's RESULT is still
+// all-or-nothing — it cannot run with an unknown argument, so there is never
+// a partial value to keep — but folding here is not about computing a partial
+// result; it is about recording which of the call's inputs were already
+// known, the same as OpConcat's partial string. A bare reference either
+// resolved or did not, so it has nothing to fold. Every other deferral
+// therefore keeps its source expression, which is already correct because
+// nothing in it resolved.
 //
 // evaluated[i] is the result of evaluating e.Args[i]; the two slices are
 // parallel. The source expression is never modified: it belongs to the caller's
 // AST, is shared by every value that references it, and is what a diagnostic
 // renders.
 func residual(e *value.Expr, evaluated []value.Value) *value.Expr {
-	if e.Op != value.OpConcat || len(evaluated) != len(e.Args) {
+	if (e.Op != value.OpConcat && e.Op != value.OpCall) || len(evaluated) != len(e.Args) {
 		return e
 	}
 

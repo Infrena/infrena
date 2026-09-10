@@ -321,3 +321,87 @@ func TestFullyUnresolvedConcatKeepsItsShape(t *testing.T) {
 		t.Errorf("residual = %q, want the source shape back", s)
 	}
 }
+
+// TestFoldedSensitiveLiteralRedactsInStringRendering pins the fix for a leak
+// residual introduced: folding a resolved SENSITIVE value into an OpLiteral
+// inside a deferred expression made it reachable by Expr.String()/inner(),
+// neither of which checked Literal.Sensitive before this fix. String() is not
+// the sanctioned redaction path — value.Format is — so a second, unguarded
+// rendering path is exactly how a secret leaked in M2.
+//
+// Measured before this fix: got.Expr.String() == "hunter2-${network.id}".
+func TestFoldedSensitiveLiteralRedactsInStringRendering(t *testing.T) {
+	got, _ := evalSrc(t, "${secret}-${network.id}", foldScope())
+	if got.Expr == nil {
+		t.Fatal("expected a deferred expression")
+	}
+	rendered := got.Expr.String()
+	if strings.Contains(rendered, "hunter2") {
+		t.Errorf("String() = %q leaks the sensitive value", rendered)
+	}
+	if !strings.Contains(rendered, value.Redacted) {
+		t.Errorf("String() = %q, want it to contain %q", rendered, value.Redacted)
+	}
+}
+
+// TestDeferredCallFoldsResolvedArgs pins that evaluateCall's non-default
+// deferral folds its resolved arguments into literals too, the same as
+// evaluateConcat already does. Before this fix, a call with a mix of
+// resolved and unresolved arguments deferred the whole SOURCE expression, so
+// the resolved argument stayed an OpVarRef — ref NAME only, no value — which
+// is the exact ConfigHash blindness Task 3 exists to close, left open for
+// calls.
+func TestDeferredCallFoldsResolvedArgs(t *testing.T) {
+	got, ds := evalSrc(t, `${replace(network.id, "old", prefix)}`, foldScope())
+	if ds.HasErrors() {
+		t.Fatalf("unexpected diagnostics: %+v", ds)
+	}
+	if got.Known {
+		t.Fatal("network.id is unresolved, so the call result must be unknown")
+	}
+	if got.Expr == nil || len(got.Expr.Args) != 3 {
+		t.Fatalf("residual should keep all three call arguments, got %v", got.Expr)
+	}
+	if op := got.Expr.Args[0].Op; op != value.OpResourceRef {
+		t.Errorf("arg[0] op = %v, want OpResourceRef — network.id is genuinely unknown", op)
+	}
+	if op := got.Expr.Args[1].Op; op != value.OpLiteral {
+		t.Errorf("arg[1] op = %v, want OpLiteral — \"old\" was always a literal", op)
+	}
+	// prefix resolved at compile time, so it must fold to a literal carrying
+	// its VALUE, not survive as a reference ConfigHash can only see by name.
+	if op := got.Expr.Args[2].Op; op != value.OpLiteral {
+		t.Errorf("arg[2] op = %v, want OpLiteral — prefix resolved at compile time", op)
+	}
+	if s, _ := got.Expr.Args[2].Literal.AsString(); s != "acme" {
+		t.Errorf("arg[2] literal = %q, want %q", s, "acme")
+	}
+}
+
+// TestDefaultsUnknownFallbackDeferralStillCarriesTheWholeCall guards the one
+// call shape that must NOT fold: default()'s own unknown-out deferral (the
+// path TestDefaultWithUnknownFallbackCarriesTheWholeCallExpr already covers
+// for the fully-unknown case). This pins it also holds when the PRIMARY
+// resolved to a known, blank value — default() still routes to the fallback,
+// the fallback is still unknown, and folding a literal "" in would not let
+// ConfigHash distinguish anything a non-blank value couldn't already show by
+// taking the fully-resolved path instead. residual leaves this call's source
+// expression untouched.
+func TestDefaultsUnknownFallbackDeferralStillCarriesTheWholeCall(t *testing.T) {
+	scope := testScope{vars: map[string]value.Value{
+		"blank": value.String("", value.SourceVariable),
+	}}
+	got, ds := evalSrc(t, "${default(blank, network.id)}", scope)
+	if ds.HasErrors() {
+		t.Fatalf("unexpected diagnostics: %+v", ds)
+	}
+	if got.Known {
+		t.Fatal("the fallback is unresolved, so the result must be unknown")
+	}
+	if got.Expr == nil || got.Expr.Op != value.OpCall || got.Expr.Function != "default" {
+		t.Fatalf("Expr = %v, want the whole default(...) call", got.Expr)
+	}
+	if op := got.Expr.Args[0].Op; op != value.OpVarRef {
+		t.Errorf("arg[0] op = %v, want OpVarRef — the blank primary is not folded here", op)
+	}
+}

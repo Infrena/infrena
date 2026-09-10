@@ -92,6 +92,15 @@ func (e *Expr) String() string {
 	}
 	switch e.Op {
 	case OpLiteral:
+		// residual (internal/expressions) can fold a resolved SENSITIVE value
+		// into a literal inside an otherwise-deferred expression. Rendering it
+		// verbatim here would be a second redaction path alongside
+		// value.Format's, and a second path is exactly how a secret leaked in
+		// M2 — so this one defers to the same marker rather than growing its
+		// own.
+		if e.Literal.Sensitive {
+			return Redacted
+		}
 		if s, ok := e.Literal.AsString(); ok {
 			return s
 		}
@@ -117,6 +126,12 @@ func (e *Expr) inner() string {
 	}
 	switch e.Op {
 	case OpLiteral:
+		// Same redaction as String() above — a sensitive literal folded into a
+		// call argument must not render its value just because it is nested
+		// one level deeper.
+		if e.Literal.Sensitive {
+			return Redacted
+		}
 		if s, ok := e.Literal.AsString(); ok {
 			return strconv.Quote(s)
 		}
