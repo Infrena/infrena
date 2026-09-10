@@ -6,6 +6,7 @@ package diag
 import (
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 
 	"infra/pkg/address"
@@ -22,11 +23,30 @@ const (
 	SeverityWarning
 )
 
+// String names a severity for display and for the plan artifact's wire form.
+//
+// It is a switch with an explicit default rather than
+// `if s == SeverityWarning { return "Warning" }; return "Error"`. The if/else
+// reads the same for the two defined values but collapses EVERY other value
+// into "Error" — the most actionable string available — with nothing to say
+// the value was not recognised. SeverityError is the zero value, so an unset
+// Severity legitimately is an error and that case is correct; the problem is
+// a value that is neither constant reporting as a real severity rather than
+// as corruption.
+//
+// This is the same permissive-fallback shape that produced a secret leak in
+// formatValue and a false equality in value.Equal. An out-of-range severity
+// reaches the persisted plan artifact through planner's diagnosticWire, so
+// mislabelling it there is durable.
 func (s Severity) String() string {
-	if s == SeverityWarning {
+	switch s {
+	case SeverityError:
+		return "Error"
+	case SeverityWarning:
 		return "Warning"
+	default:
+		return "Severity(" + strconv.Itoa(int(s)) + ")"
 	}
-	return "Error"
 }
 
 // Diagnostic follows the shape PLAN.md §44 requires: what is wrong, where, what
