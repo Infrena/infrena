@@ -64,6 +64,10 @@ func Apply(ctx context.Context, p *planner.Plan, g *graph.Graph[planner.OpNode],
 		stopping := ctx.Err() != nil
 
 		var deferred []planner.OpNode
+		// launched counts how many nodes this pass actually started, as
+		// opposed to deferred — see the fix note on the diagnostic branch
+		// below for why this, not len(queue), is the right thing to check.
+		launched := 0
 		for _, node := range queue {
 			if stopping || r.inFlight >= opts.Parallelism {
 				deferred = append(deferred, node)
@@ -75,32 +79,60 @@ func Apply(ctx context.Context, p *planner.Plan, g *graph.Graph[planner.OpNode],
 				continue
 			}
 			r.launch(node, providerName)
-			providerInFlight[providerName]++
+			if providerName != "" {
+				// Symmetric with the decrement below, which only ever
+				// touches a non-empty name. OpForget's providerName is
+				// always "", and unconditionally incrementing
+				// providerInFlight[""] here while only ever conditionally
+				// decrementing it would grow that bucket without bound
+				// over a long run. It is harmless today only because the
+				// bounding check above also gates on providerName != "" and
+				// so never reads it — but a bucket that grows forever with
+				// nothing ever reading it correctly is exactly the kind of
+				// pre-existing bookkeeping garbage that turns a future,
+				// unrelated change into a hang instead of a clean bound
+				// violation.
+				providerInFlight[providerName]++
+			}
+			launched++
 		}
 		queue = deferred
 
-		if r.inFlight == 0 {
-			if stopping {
-				// Nothing running and nothing will be launched: whatever
-				// is left in queue, or still blocked deeper in the graph,
-				// is simply never attempted. It is deliberately absent
-				// from every Result field — Applied and Failed both
-				// require an attempt, and Skipped is specifically the set
-				// graph.Walk.Skip returns for a failed dependency, not
-				// "everything an early stop left behind."
-				break
-			}
-			if len(queue) == 0 {
-				// Every remaining node is blocked on something that will
-				// never complete. g.Walk() already rejected a cyclic
-				// graph above, so this guards a future bug in this
-				// loop's own bookkeeping, not a state reachable today.
-				ds.Add(diag.Diagnostic{
-					Severity: diag.SeverityError,
-					Summary:  fmt.Sprintf("executor: %d operation(s) remain but none are ready or running", w.Remaining()),
-				})
-				break
-			}
+		if stopping && r.inFlight == 0 {
+			// Nothing running and nothing will be launched: whatever is
+			// left in queue, or still blocked deeper in the graph, is
+			// simply never attempted. It is deliberately absent from every
+			// Result field — Applied and Failed both require an attempt,
+			// and Skipped is specifically the set graph.Walk.Skip returns
+			// for a failed dependency, not "everything an early stop left
+			// behind."
+			break
+		}
+		if !stopping && launched == 0 && r.inFlight == 0 {
+			// This pass started nothing, and nothing from an earlier pass
+			// is still running to ever complete and unblock anything else —
+			// so nothing will EVER make further progress, regardless of
+			// whether queue itself ended up empty. w.Remaining() > 0 here
+			// (the loop's own condition), so every node still outstanding
+			// is permanently stuck. g.Walk() already rejected a cyclic
+			// graph above, so this guards a future bug in this loop's own
+			// bookkeeping, not a state reachable today.
+			//
+			// Fix note: this used to check len(queue) == 0 instead of
+			// launched == 0. That is the wrong condition — it only catches
+			// the case where every deferred node happened to get launched
+			// (queue ending up empty), and silently falls through to the
+			// blocking receive below for the actual hang case: queue
+			// non-empty, nothing launched, nothing in flight. That receive
+			// then has no sender that will ever arrive, deadlocking
+			// mid-apply with the environment's lock still held, instead of
+			// reporting the bug — the exact failure mode this diagnostic
+			// exists to turn into a clean error.
+			ds.Add(diag.Diagnostic{
+				Severity: diag.SeverityError,
+				Summary:  fmt.Sprintf("executor: %d operation(s) remain but none are ready or running", w.Remaining()),
+			})
+			break
 		}
 
 		res := <-r.results
@@ -111,6 +143,14 @@ func Apply(ctx context.Context, p *planner.Plan, g *graph.Graph[planner.OpNode],
 
 		if res.err != nil {
 			result.Failed[res.node.ID()] = res.err
+			// EventSkipped is deliberately not emitted here. Task 10
+			// (internal/executor/isolation.go, not yet written) owns the
+			// skip cascade end to end — it replaces this inline
+			// Failed/Skipped bookkeeping with an extracted tracker
+			// (recordSuccess/recordFailure/result) wired into run.record,
+			// and emitting EventSkipped belongs with that change, not
+			// bolted on here first. This is a known, deliberate gap, not
+			// an oversight.
 			skipped = append(skipped, w.Skip(res.node.ID())...)
 			continue
 		}
@@ -174,6 +214,21 @@ func (r *run) providerNameFor(node planner.OpNode) string {
 
 // launch takes a snapshot of state and starts one worker goroutine for
 // node. Called only from the owner goroutine.
+//
+// Deliberately no recover() here or anywhere in execute's call chain. A
+// panic inside a provider call happens AFTER the call was already made — a
+// worker that recovered from it still would not know whether the
+// underlying infrastructure operation actually landed. Reporting the
+// operation as failed when, say, a Create panicked after the object was
+// actually created would orphan real infrastructure: nothing in state
+// would ever point at it, and a later apply would try to create it a
+// second time. Letting an unrecovered panic crash the whole process is
+// worse for availability — one bad worker takes down every other operation
+// in this run, including ones that would otherwise have finished cleanly —
+// but it is never silently wrong about what state should say. This is a
+// stated choice, verified in review, not an oversight: do not add a
+// recover() here as a tidy-up without also deciding what "failed" should
+// mean for an operation whose provider call may have already succeeded.
 func (r *run) launch(node planner.OpNode, providerName string) {
 	r.inFlight++
 	snapshot := r.snapshot()
@@ -235,12 +290,23 @@ func (r *run) execute(node planner.OpNode, snapshot map[string]*resource.Resourc
 		return nil, false, fmt.Errorf("%s: no operation in the plan for this node", node.Address)
 	}
 
+	// attempt tracks how many times a provider call was actually made — the
+	// fn passed to Attempt below increments it on every call, and OpForget
+	// (which never reaches Attempt at all) sets it to 1 directly. It stays
+	// 0 for every early return above a dispatch ever being attempted (no
+	// operation found, no provider registered, deferred values would not
+	// resolve), which is exactly the "never attempted" meaning types.go
+	// documents for Attempt == 0. The deferred emit below reads it only
+	// after every write to it has already happened, on this same worker
+	// goroutine, so no synchronisation is needed.
+	attempt := 0
+
 	defer func() {
 		if err != nil {
-			r.emit(Event{Kind: EventFailed, Address: node.Address, Op: op.Kind, Err: err, At: r.now()})
+			r.emit(Event{Kind: EventFailed, Address: node.Address, Op: op.Kind, Attempt: attempt, Err: err, At: r.now()})
 			return
 		}
-		r.emit(Event{Kind: EventSucceeded, Address: node.Address, Op: op.Kind, At: r.now()})
+		r.emit(Event{Kind: EventSucceeded, Address: node.Address, Op: op.Kind, Attempt: attempt, At: r.now()})
 	}()
 
 	current := snapshot[node.Address.String()]
@@ -282,9 +348,28 @@ func (r *run) execute(node planner.OpNode, snapshot map[string]*resource.Resourc
 	verb, hasVerb := verbFor(node)
 	if !hasVerb {
 		// OpForget: no provider call, so nothing to retry through Attempt.
+		// dispatch itself never calls the provider for OpForget either, but
+		// this is still the one "attempt" this operation ever makes.
+		attempt = 1
 		result, err = dispatch(r.ctx, prov, node, current, desired)
 	} else {
-		err = Attempt(r.ctx, verb, r.opts.Retry, prov.ClassifyError, func() error {
+		// A local copy of the retry policy, never r.opts.Retry itself:
+		// execute runs on a worker goroutine, and r.opts is shared,
+		// read-only state across every worker in this run — mutating its
+		// OnRetry field in place would race the instant two operations
+		// retry at the same time. policy is this call's own value, safe to
+		// modify freely; any OnRetry the caller supplied is preserved and
+		// still called, just after this run's own EventRetrying.
+		policy := r.opts.Retry
+		userOnRetry := policy.OnRetry
+		policy.OnRetry = func(a int, retryErr error, delay time.Duration) {
+			r.emit(Event{Kind: EventRetrying, Address: node.Address, Op: op.Kind, Attempt: a, Err: retryErr, At: r.now()})
+			if userOnRetry != nil {
+				userOnRetry(a, retryErr, delay)
+			}
+		}
+		err = Attempt(r.ctx, verb, policy, prov.ClassifyError, func() error {
+			attempt++
 			var derr error
 			result, derr = dispatch(r.ctx, prov, node, current, desired)
 			return derr

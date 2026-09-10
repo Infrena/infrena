@@ -15,6 +15,7 @@ import (
 	"infra/pkg/provider"
 	"infra/pkg/resource"
 	"infra/pkg/schema"
+	"infra/pkg/value"
 )
 
 func addr(name string) address.Address { return address.Address{Name: name} }
@@ -94,7 +95,18 @@ var _ provider.Provider = (*sequencedProvider)(nil)
 
 func TestApplyRunsDependenciesBeforeDependents(t *testing.T) {
 	backend := newLockedBackend(t, "dev")
-	prov := &sequencedProvider{resourceType: "test.thing", delays: map[string]time.Duration{}}
+	prov := &sequencedProvider{resourceType: "test.thing", delays: map[string]time.Duration{
+		// zeta is deliberately given a delay and alpha none. Without the
+		// dependency edge below, both would be roots free to run
+		// concurrently, and alpha — with no delay — would then finish
+		// FIRST, producing [alpha zeta], which contradicts the [zeta alpha]
+		// this test asserts. That contradiction is what makes the
+		// assertion actually prove the edge is enforced, rather than
+		// merely agreeing with whatever order two zero-delay roots happen
+		// to complete in. See the fix note below for why that distinction
+		// is load-bearing, not decorative.
+		"zeta": 40 * time.Millisecond,
+	}}
 	reg := registry.New()
 	if err := reg.Register(prov); err != nil {
 		t.Fatalf("Register: %v", err)
@@ -104,6 +116,21 @@ func TestApplyRunsDependenciesBeforeDependents(t *testing.T) {
 	// BEFORE "zeta" alphabetically, so an implementation dispatching in
 	// address order instead of dependency order would still (wrongly) pass
 	// a fixture that happened to agree with alphabetical order.
+	//
+	// Fix note: an earlier version of this fixture gave both addresses zero
+	// delay. With zero delay, deleting the dependency edge entirely (noDeps
+	// in place of depsFrom below) still left this test passing 20/20:
+	// Walk.Ready() returns ids sorted, so "create:alpha" is spawned before
+	// "create:zeta", and Go's scheduler (a freshly spawned goroutine's
+	// preferential "runnext" placement) reliably ran the SECOND one first —
+	// coincidentally producing exactly the [zeta alpha] this assertion
+	// demands, with no dependency enforcement involved at all. Giving zeta
+	// a real delay closes that gap: with the edge removed, alpha (no
+	// delay) now genuinely finishes first every time, so the assertion
+	// fires instead of passing by accident. Verified directly: temporarily
+	// replacing depsFrom(...) below with noDeps and running this test 5
+	// times produced "order = [alpha zeta], want [zeta alpha]" on every
+	// run; restored immediately after.
 	plan := planWith(
 		op(addr("zeta"), "test.thing", planner.OpCreate),
 		op(addr("alpha"), "test.thing", planner.OpCreate),
@@ -674,5 +701,368 @@ func TestApplyRetriesAccordingToPolicy(t *testing.T) {
 	prov.mu.Unlock()
 	if calls != 3 {
 		t.Errorf("Create called %d times, want 3 — two failures then a success, wired through opts.Retry", calls)
+	}
+}
+
+// lifecycleProvider succeeds at Create, Update and Delete, and records which
+// addresses each was called for. Every other Provider double in this file
+// stubs Update and Delete as provider.ErrNotImplemented (they exist only to
+// exercise Create), which is not enough for a test that needs a destroy or
+// a replace to actually complete end to end.
+type lifecycleProvider struct {
+	resourceType string
+
+	mu      sync.Mutex
+	created []string
+	deleted []string
+}
+
+func (p *lifecycleProvider) Name() string { return "lifecycle" }
+func (p *lifecycleProvider) Definitions() []*schema.ResourceDefinition {
+	return []*schema.ResourceDefinition{{Type: p.resourceType}}
+}
+func (p *lifecycleProvider) Create(ctx context.Context, d *resource.DesiredResource) (*resource.ResourceState, error) {
+	p.mu.Lock()
+	p.created = append(p.created, d.Address.String())
+	p.mu.Unlock()
+	return &resource.ResourceState{Address: d.Address, Type: d.Type, Provider: p.Name(), ProviderID: d.Address.String(), Attributes: d.Attrs}, nil
+}
+func (p *lifecycleProvider) Read(context.Context, *resource.ResourceState) (*resource.ResourceState, error) {
+	return nil, provider.ErrNotImplemented
+}
+func (p *lifecycleProvider) Update(context.Context, *resource.ResourceState, *resource.DesiredResource) (*resource.ResourceState, error) {
+	return nil, provider.ErrNotImplemented
+}
+func (p *lifecycleProvider) Delete(ctx context.Context, current *resource.ResourceState) error {
+	p.mu.Lock()
+	p.deleted = append(p.deleted, current.Address.String())
+	p.mu.Unlock()
+	return nil
+}
+func (p *lifecycleProvider) Discover(context.Context, provider.DiscoverRequest) ([]provider.DiscoveredResource, error) {
+	return nil, provider.ErrNotImplemented
+}
+func (p *lifecycleProvider) Import(context.Context, string, string) (*resource.ResourceState, error) {
+	return nil, provider.ErrNotImplemented
+}
+func (p *lifecycleProvider) ClassifyError(error) provider.Retryability {
+	return provider.NotSafeToRetry
+}
+
+var _ provider.Provider = (*lifecycleProvider)(nil)
+
+// TestApplyDestroyRemovesFromState covers invariant 1's other half: apply
+// destroys a resource, the provider succeeds, and state must no longer
+// list it. Every other test in this file only ever exercises
+// planner.OpCreate; before this test, OpDestroy never reached Apply
+// anywhere in the repository, so record's res.removed branch for a plain
+// destroy (as opposed to a replace's destroy phase) was entirely untested.
+func TestApplyDestroyRemovesFromState(t *testing.T) {
+	backend := newLockedBackend(t, "dev")
+	prov := &lifecycleProvider{resourceType: "test.thing"}
+	reg := registry.New()
+	if err := reg.Register(prov); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	a := addr("gone")
+	plan := planWith(op(a, "test.thing", planner.OpDestroy))
+	g, err := planner.BuildExecution(plan, noDeps)
+	if err != nil {
+		t.Fatalf("BuildExecution: %v", err)
+	}
+	st := state.New("proj", "dev")
+	st.Set(&resource.ResourceState{Address: a, Type: "test.thing", Provider: "lifecycle", ProviderID: "gone-1"})
+
+	result, ds := Apply(context.Background(), plan, g, st, Options{
+		Parallelism: 1, PerProvider: 1, Registry: reg, Backend: backend, Environment: "dev",
+	})
+	if ds.HasErrors() {
+		t.Fatalf("unexpected diagnostics: %+v", ds)
+	}
+	if len(result.Failed) != 0 {
+		t.Fatalf("Failed = %v", result.Failed)
+	}
+
+	prov.mu.Lock()
+	deleted := append([]string(nil), prov.deleted...)
+	prov.mu.Unlock()
+	if len(deleted) != 1 || deleted[0] != "gone" {
+		t.Fatalf("Delete calls = %v, want exactly [gone]", deleted)
+	}
+
+	if _, ok := st.Get(a); ok {
+		t.Error("state still holds the destroyed resource after Apply — invariant 1's other half: the provider succeeded, state must not still list it")
+	}
+}
+
+// TestApplyForgetNeverCallsProviderAndRemovesFromState covers OpForget,
+// which — like OpDestroy — never reached Apply in any test in the
+// repository before this one. poisonProvider (dispatch_test.go, Task 6)
+// fails the test immediately from inside Create/Update/Delete, so if a
+// regression ever routed a forget through any of those, this test would
+// catch it directly rather than by inference from an absence of calls.
+func TestApplyForgetNeverCallsProviderAndRemovesFromState(t *testing.T) {
+	backend := newLockedBackend(t, "dev")
+	reg := registry.New()
+	if err := reg.Register(poisonProvider{t: t, resourceType: "test.thing"}); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	a := addr("old")
+	plan := planWith(op(a, "test.thing", planner.OpForget))
+	g, err := planner.BuildExecution(plan, noDeps)
+	if err != nil {
+		t.Fatalf("BuildExecution: %v", err)
+	}
+	st := state.New("proj", "dev")
+	st.Set(&resource.ResourceState{Address: a, Type: "test.thing", Provider: "poison", ProviderID: "old-1"})
+
+	result, ds := Apply(context.Background(), plan, g, st, Options{
+		Parallelism: 1, PerProvider: 1, Registry: reg, Backend: backend, Environment: "dev",
+	})
+	if ds.HasErrors() {
+		t.Fatalf("unexpected diagnostics: %+v", ds)
+	}
+	if len(result.Failed) != 0 {
+		t.Fatalf("Failed = %v — a forget must never call the provider, so it must never fail either", result.Failed)
+	}
+
+	// poisonProvider.Create/Update/Delete each call t.Fatal if invoked, so
+	// reaching this line at all already proves the provider was never
+	// called for the forget. st.Get is the other half: retain's whole
+	// point (spec §11, invariant 1) is dropping a resource from management
+	// without touching the real infrastructure — state must lose it even
+	// though nothing was ever asked to delete anything.
+	if _, ok := st.Get(a); ok {
+		t.Error("state still holds the forgotten resource after Apply")
+	}
+}
+
+// TestApplyReplaceDestroysThenCreatesSharingOneOperation covers OpReplace,
+// the third operation kind that never reached Apply in any test before this
+// round: its two nodes ("destroy:swap" then "create:swap") share the SAME
+// *planner.Operation through r.ops, which is keyed by address, not by node
+// ID. This proves that sharing works correctly end to end — both phases
+// fire, in the right order, and state ends up holding the NEW object under
+// the same address the old one occupied, not the destroyed original and not
+// both.
+func TestApplyReplaceDestroysThenCreatesSharingOneOperation(t *testing.T) {
+	backend := newLockedBackend(t, "dev")
+	prov := &lifecycleProvider{resourceType: "test.thing"}
+	reg := registry.New()
+	if err := reg.Register(prov); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	a := addr("swap")
+	replaceOp := planner.Operation{
+		Address: a,
+		Type:    "test.thing",
+		Kind:    planner.OpReplace,
+		Before:  map[string]value.Value{"x": value.String("old", value.SourceExplicit)},
+		After:   map[string]value.Value{"x": value.String("new", value.SourceExplicit)},
+	}
+	plan := planWith(replaceOp)
+	g, err := planner.BuildExecution(plan, noDeps)
+	if err != nil {
+		t.Fatalf("BuildExecution: %v", err)
+	}
+	st := state.New("proj", "dev")
+	st.Set(&resource.ResourceState{Address: a, Type: "test.thing", Provider: "lifecycle", ProviderID: "swap-old"})
+
+	result, ds := Apply(context.Background(), plan, g, st, Options{
+		Parallelism: 2, PerProvider: 2, Registry: reg, Backend: backend, Environment: "dev",
+	})
+	if ds.HasErrors() {
+		t.Fatalf("unexpected diagnostics: %+v", ds)
+	}
+	if len(result.Failed) != 0 {
+		t.Fatalf("Failed = %v", result.Failed)
+	}
+
+	prov.mu.Lock()
+	deleted := append([]string(nil), prov.deleted...)
+	created := append([]string(nil), prov.created...)
+	prov.mu.Unlock()
+
+	if len(deleted) != 1 || deleted[0] != "swap" {
+		t.Fatalf("Delete calls = %v, want exactly [swap]", deleted)
+	}
+	if len(created) != 1 || created[0] != "swap" {
+		t.Fatalf("Create calls = %v, want exactly [swap] — both phases of the replace must fire, sharing one *planner.Operation through the address-keyed index", created)
+	}
+
+	got, ok := st.Get(a)
+	if !ok {
+		t.Fatal("state has no entry for swap after a replace — a replace must leave the address present, holding the freshly created object")
+	}
+	if got.ProviderID != "swap" {
+		t.Errorf("ProviderID = %q, want %q — final state must reflect the NEW object from the create phase, not the destroyed original", got.ProviderID, "swap")
+	}
+}
+
+// TestVerbForMapsEveryOpNodeShapeToTheRightVerb pins verbFor's (Kind, Phase)
+// -> Verb mapping directly, over all five shapes dispatch itself
+// recognizes. Before this test, nothing in the repository exercised
+// verbFor in isolation: TestApplyRetriesAccordingToPolicy only ever
+// retries under SafeToRetry, the one classification every verb retries
+// under regardless of which verb it is (see retryable's table in
+// retry.go), so it cannot distinguish a correct mapping from a broken one.
+// Concretely: changing verbFor's create arm to return VerbUpdate, true
+// still left every test in the package green, because a create classified
+// as an update becomes retryable on ConditionallyRetryable too — precisely
+// the case spec §15 forbids by name, since a retried create is how
+// duplicate infrastructure appears (see retry.go's own doc on retryable).
+// This test catches that mutation directly, without needing a provider or
+// a live Apply run at all.
+func TestVerbForMapsEveryOpNodeShapeToTheRightVerb(t *testing.T) {
+	cases := []struct {
+		name     string
+		kind     planner.OpKind
+		phase    planner.Phase
+		wantVerb Verb
+		wantOK   bool
+	}{
+		{"create", planner.OpCreate, planner.PhaseCreate, VerbCreate, true},
+		{"replace create phase", planner.OpReplace, planner.PhaseCreate, VerbCreate, true},
+		{"update", planner.OpUpdate, planner.PhaseCreate, VerbUpdate, true},
+		{"destroy", planner.OpDestroy, planner.PhaseDestroy, VerbDelete, true},
+		{"replace destroy phase", planner.OpReplace, planner.PhaseDestroy, VerbDelete, true},
+		{"forget", planner.OpForget, planner.PhaseDestroy, VerbInvalid, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			node := planner.OpNode{Address: addr("x"), Kind: tc.kind, Phase: tc.phase}
+			gotVerb, gotOK := verbFor(node)
+			if gotVerb != tc.wantVerb || gotOK != tc.wantOK {
+				t.Errorf("verbFor(Kind=%s, Phase=%d) = (%s, %v), want (%s, %v)", tc.kind, tc.phase, gotVerb, gotOK, tc.wantVerb, tc.wantOK)
+			}
+		})
+	}
+}
+
+// TestApplyEmitsRetryingAndCorrectAttemptCounts pins two fixes together:
+// that opts.Retry.OnRetry is wired to emit EventRetrying even when the
+// caller supplies no OnRetry of its own (proving Apply supplies its own
+// rather than only forwarding one the caller happened to set), and that
+// EventSucceeded carries the attempt that actually landed rather than the
+// zero value types.go documents as meaning "never attempted."
+func TestApplyEmitsRetryingAndCorrectAttemptCounts(t *testing.T) {
+	backend := newLockedBackend(t, "dev")
+	prov := &flakyProvider{resourceType: "test.thing", failures: 2}
+	reg := registry.New()
+	if err := reg.Register(prov); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	plan := planWith(op(addr("a"), "test.thing", planner.OpCreate))
+	g, err := planner.BuildExecution(plan, noDeps)
+	if err != nil {
+		t.Fatalf("BuildExecution: %v", err)
+	}
+	st := state.New("proj", "dev")
+
+	var mu sync.Mutex
+	var events []Event
+	result, ds := Apply(context.Background(), plan, g, st, Options{
+		Parallelism: 1, PerProvider: 1, Registry: reg, Backend: backend, Environment: "dev",
+		Retry: RetryPolicy{MaxAttempts: 3, Sleep: func(context.Context, time.Duration) error { return nil }},
+		OnEvent: func(e Event) {
+			mu.Lock()
+			events = append(events, e)
+			mu.Unlock()
+		},
+	})
+	if ds.HasErrors() {
+		t.Fatalf("unexpected diagnostics: %+v", ds)
+	}
+	if len(result.Failed) != 0 {
+		t.Fatalf("Failed = %v", result.Failed)
+	}
+
+	mu.Lock()
+	got := append([]Event(nil), events...)
+	mu.Unlock()
+
+	var retrying, succeeded []Event
+	for _, e := range got {
+		switch e.Kind {
+		case EventRetrying:
+			retrying = append(retrying, e)
+		case EventSucceeded:
+			succeeded = append(succeeded, e)
+		}
+	}
+
+	if len(retrying) != 2 {
+		t.Fatalf("EventRetrying count = %d, want 2 — two failures before the third attempt succeeded", len(retrying))
+	}
+	if retrying[0].Attempt != 1 || retrying[1].Attempt != 2 {
+		t.Errorf("EventRetrying attempts = [%d %d], want [1 2]", retrying[0].Attempt, retrying[1].Attempt)
+	}
+	for _, e := range retrying {
+		if e.Err == nil {
+			t.Errorf("EventRetrying at attempt %d carries no Err", e.Attempt)
+		}
+	}
+
+	if len(succeeded) != 1 {
+		t.Fatalf("EventSucceeded count = %d, want 1", len(succeeded))
+	}
+	if succeeded[0].Attempt != 3 {
+		t.Errorf("EventSucceeded.Attempt = %d, want 3 — the attempt that actually landed, not 0 (\"never attempted\" per types.go)", succeeded[0].Attempt)
+	}
+}
+
+// TestApplyEmitsFailedWithFinalAttemptCount covers the failure-exhaustion
+// half of the same fix: EventFailed must also carry the number of attempts
+// actually made, not the zero value.
+func TestApplyEmitsFailedWithFinalAttemptCount(t *testing.T) {
+	backend := newLockedBackend(t, "dev")
+	prov := &flakyProvider{resourceType: "test.thing", failures: 100}
+	reg := registry.New()
+	if err := reg.Register(prov); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	plan := planWith(op(addr("a"), "test.thing", planner.OpCreate))
+	g, err := planner.BuildExecution(plan, noDeps)
+	if err != nil {
+		t.Fatalf("BuildExecution: %v", err)
+	}
+	st := state.New("proj", "dev")
+
+	var mu sync.Mutex
+	var events []Event
+	result, _ := Apply(context.Background(), plan, g, st, Options{
+		Parallelism: 1, PerProvider: 1, Registry: reg, Backend: backend, Environment: "dev",
+		Retry: RetryPolicy{MaxAttempts: 2, Sleep: func(context.Context, time.Duration) error { return nil }},
+		OnEvent: func(e Event) {
+			mu.Lock()
+			events = append(events, e)
+			mu.Unlock()
+		},
+	})
+
+	if len(result.Failed) != 1 {
+		t.Fatalf("Failed = %v, want exactly one entry", result.Failed)
+	}
+
+	mu.Lock()
+	got := append([]Event(nil), events...)
+	mu.Unlock()
+
+	var failed *Event
+	for i := range got {
+		if got[i].Kind == EventFailed {
+			failed = &got[i]
+		}
+	}
+	if failed == nil {
+		t.Fatal("no EventFailed emitted")
+	}
+	if failed.Attempt != 2 {
+		t.Errorf("EventFailed.Attempt = %d, want 2 — the number of attempts actually made, not 0 (\"never attempted\" per types.go)", failed.Attempt)
 	}
 }

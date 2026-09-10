@@ -17,9 +17,15 @@ import (
 // Result is what one Apply run produced.
 type Result struct {
 	// Applied lists every address that was successfully created, updated or
-	// destroyed. It is a report of outcome, not a replayable schedule, so it
-	// carries no ordering guarantee beyond the order Apply happened to
-	// finish them in.
+	// destroyed, sorted by canonical address (pkg/address.Sort) — never in
+	// the order operations happened to finish in. Determinism (invariant 6,
+	// PLAN.md §47) requires this: two runs over the same plan, state and
+	// provider observations must produce an equivalent plan and, downstream
+	// of that, an equivalent Result, regardless of which worker's provider
+	// call happened to return first. Apply assembles this into a set keyed
+	// by address during the run — so a replace's two completions at one
+	// address collapse into a single entry — and sorts it exactly once, at
+	// the very end, never appending in completion order.
 	Applied []address.Address
 	// Failed maps the planner.OpNode.ID() of every operation that failed to
 	// the error it failed with. It is keyed by node ID rather than address
