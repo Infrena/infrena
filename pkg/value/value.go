@@ -43,10 +43,13 @@ func (o Origin) String() string {
 // map[string]Value. Composites hold Values recursively so provenance is
 // per-leaf. When Known is false, Raw is nil.
 type Value struct {
-	Kind      Kind
-	Known     bool
-	Raw       any
-	Source    ValueSource
+	Kind   Kind
+	Known  bool
+	Raw    any
+	Source ValueSource
+	// Scope records which precedence level supplied this value; Source
+	// records what kind of thing it is. See scope.go.
+	Scope     Scope
 	Sensitive bool
 	// Expr is the expression that will produce this value, set when Known is
 	// false because the value depends on a resource that does not exist yet.
@@ -103,6 +106,16 @@ func (v Value) WithOrigin(o Origin) Value {
 // Provenance, sensitivity and origin are deliberately excluded: they describe
 // how a value was arrived at, not what the desired state is, so they must never
 // cause a plan to show a change.
+//
+// THAT INCLUDES Scope, and this comment is the only thing saying so — the rule
+// holds today by construction (the comparisons below touch Known, Kind and Raw
+// and nothing else), which means a future field can be added to this method
+// with no signpost that it must not be. Two values that differ only in which
+// precedence level supplied them are THE SAME VALUE: a `--var replicas=20`
+// that matches what variables.yml already said must plan as no change.
+// Comparing Scope breaks acceptance invariant 2 (no-op plan) permanently and
+// silently, which is the phantom-diff shape M3 spent a Critical fixing.
+// Pinned by TestEqualIgnoresScopeForEveryPairOfScopes (scope_test.go).
 //
 // An unknown value is never equal to anything, including another unknown. The
 // planner relies on this: an attribute that cannot be proven unchanged must be
@@ -194,4 +207,14 @@ func (v Value) AsInt() (int64, bool) {
 func (v Value) AsBool() (bool, bool) {
 	b, ok := v.Raw.(bool)
 	return b, ok && v.Known
+}
+
+// AsFloat reads a float value. Like AsInt, it is a plain type assertion, so it
+// answers false for a KindInt value — that value's Raw is an int64, and YAML
+// tags `1` as !!int even where a float was declared. A caller doing arithmetic
+// across both numeric kinds must handle int64 itself rather than assume this
+// coerces.
+func (v Value) AsFloat() (float64, bool) {
+	f, ok := v.Raw.(float64)
+	return f, ok && v.Known
 }

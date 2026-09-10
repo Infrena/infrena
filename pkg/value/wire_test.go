@@ -43,7 +43,8 @@ func TestKindWireNamesAreFrozen(t *testing.T) {
 
 // TestKindWireNameIsIndependentOfString is the structural half of the same
 // guard: the persisted name must come from the frozen table, never from
-// Kind.String(), which is a diagnostic string and free to change.
+// Kind.String(), which is now the configuration language's spelling and
+// answers for KindInvalid where this table must refuse it.
 //
 // The two spellings agree today, so no round trip can tell them apart. What can
 // is that kindToWireName rejects a Kind absent from the table, whereas

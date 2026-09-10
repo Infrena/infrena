@@ -132,3 +132,59 @@ func Format(v Value, opts FormatOptions) string {
 		return Unrenderable
 	}
 }
+
+// Annotate renders one value and appends the provenance annotation a plan
+// shows beside it — today "[default]", and with M4's scopes
+// "[variable, from --var]".
+//
+// It lives here, beside Format, and delegates the rendering to Format
+// unchanged. The rendering must never be reimplemented: Format is the ONLY
+// redaction path in the tree, and the two measured leaks documented on it both
+// came from a second copy that had drifted. Annotate adds a SUFFIX to whatever
+// Format returned and touches Raw not at all, so a sensitive value is
+// "<sensitive> [variable, from --var]" — the annotation describes where a
+// value came from, which is not itself secret, and hiding it would remove the
+// only clue a user has for finding the secret they need to change.
+func Annotate(v Value, opts FormatOptions) string {
+	s := Format(v, opts)
+	if a := annotation(v); a != "" {
+		return s + " " + a
+	}
+	return s
+}
+
+// annotation returns the bracketed provenance suffix, or "" when there is
+// nothing worth saying.
+//
+// The suppression rules, and why each exists:
+//
+//   - An unknown value is not annotated. It has no origin yet — the expression
+//     that will produce it does — and "(known after apply) [explicit, from
+//     base config]" describes the attribute rather than the value.
+//
+//   - Ordinary explicit configuration is not annotated. Annotating it would
+//     put "[explicit, from base config]" on nearly every line of every plan,
+//     which buries the [default] and [variable] markers that actually carry
+//     information. PLAN.md §19 wants a plan a human reads.
+//
+//   - A value with no Scope recorded falls back to M2's behaviour exactly:
+//     "[default]" for a default and nothing otherwise. Every Value in the tree
+//     has ScopeUnset until stage 4 exists, so this function is output-identical
+//     to M3's renderAnnotated today. That is deliberate — a rendering change
+//     and a provenance change landing in the same commit would make it
+//     impossible to tell which one moved a golden test.
+func annotation(v Value) string {
+	if !v.Known {
+		return ""
+	}
+	if v.Source == SourceExplicit && (v.Scope == ScopeUnset || v.Scope == ScopeBaseConfig) {
+		return ""
+	}
+	if v.Scope == ScopeUnset {
+		if v.Source == SourceDefault {
+			return "[default]"
+		}
+		return ""
+	}
+	return "[" + string(v.Source) + ", from " + v.Scope.String() + "]"
+}
