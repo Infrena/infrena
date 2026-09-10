@@ -46,12 +46,15 @@ const (
 // firstCycle returns one dependency cycle, or nil when the graph is acyclic.
 //
 // It reports ONE cycle rather than attempting to enumerate them all. That is a
-// deliberate narrowing after the enumerate-everything version proved unsound: a
-// depth-first walk that skips already-finished nodes misses genuine cycles that
-// share a downstream node, so a user could fix every cycle it reported, re-run,
-// and be told the configuration is acyclic while one was still live. Being told
-// you are done when you are not is worse than being given one problem at a
-// time.
+// deliberate narrowing of an honest but incomplete predecessor.
+//
+// The enumerate-everything version was never wrong about EXISTENCE: a
+// depth-first walk finds a back edge if and only if a cycle exists, so it could
+// not call a cyclic configuration acyclic. What it could not do is enumerate.
+// It skips already-finished nodes, so distinct cycles sharing a downstream node
+// go unreported and a resource genuinely sitting on a cycle may never be named
+// — the report reads as the complete list and is not. Reporting one cycle
+// honestly beats reporting a subset while implying completeness.
 //
 // Task 18 replaces this with graph.Cycle, which makes the same single-cycle
 // promise, so this is the contract that survives.

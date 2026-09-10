@@ -210,6 +210,12 @@ func TestValidateGraphReportsEveryProblemAtOnce(t *testing.T) {
 // live cycle is still reported after removing the edge the first reported
 // cycle depended on, exactly the situation a user hits when they "fix" what
 // they were told about and re-run.
+//
+// Honest label: this passes against the pre-narrowing code too. DFS is sound
+// for existence — a back edge is found whenever a cycle exists — so no input
+// makes the old detector claim "acyclic" wrongly, and no test can be RED on
+// that claim. This is a characterisation test of the single-cycle contract,
+// not a regression test of a fixed false-negative.
 func TestValidateGraphStillReportsACycleAfterAPartialFix(t *testing.T) {
 	build := func() ResolvedConfig {
 		a := res("a", "test.network", map[string]value.Value{"cidr": value.String("10.0.0.0/16", value.SourceExplicit)})
