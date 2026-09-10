@@ -838,7 +838,15 @@ credentials of any kind.
 | M4 | Variables, typed variable schemas, environments, `extends`, stages 3 and 4 | `PLAN.md` §7 precedence chain; provenance gains four sources |
 | M5 | Modules, stage 5 | Full configuration surface |
 | M6 | Plan artifacts, fingerprinting, staleness refusal, production protections | `PLAN.md` §19, §20, §38 |
-| M7 | `explain`, `graph`, `state show`, full invariant suite, §48 MVP script green | Phase 1 complete |
+| M7 | `init`, `explain`, `graph`, `state show`, full invariant suite, §48 MVP script green | Phase 1 complete |
+
+`init` is assigned here because no earlier row claimed it, which was an omission
+rather than a decision: §16 lists it among Phase 1's commands and §9.3 requires it
+to disclose that state is stored in plaintext, but the table never said who builds
+it. M7 is where §48's MVP script — which opens with `init` — has to run green, so
+that is the last point at which its absence would be noticed. Nothing before M7
+needs it: M2 and M3 operate on a directory containing `infra.yml`, and their
+integration suites scaffold that directly.
 
 The plan type is serializable from M2 so determinism is golden-tested early; only the
 apply-from-file flow waits for M6.
