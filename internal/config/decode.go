@@ -17,6 +17,11 @@ func Decode(files []File) (*ProjectDecl, diag.Diagnostics) {
 	var ds diag.Diagnostics
 	out := &ProjectDecl{}
 
+	// Uniqueness is tracked across the whole decode rather than per file: spec
+	// §5.2 requires logical names be unique within a module, and M4 adds more
+	// files to the same root module.
+	seen := map[string]value.Origin{}
+
 	for _, f := range files {
 		doc := documentRoot(f.Root)
 		if doc == nil {
@@ -38,21 +43,21 @@ func Decode(files []File) (*ProjectDecl, diag.Diagnostics) {
 			continue
 		}
 		out.Origin = originOf(f.Path, doc)
-		decodeDocument(f.Path, doc, out, &ds)
+		decodeDocument(f.Path, doc, out, &ds, seen)
 	}
 
 	sort.Slice(out.Resources, func(i, j int) bool { return out.Resources[i].Name < out.Resources[j].Name })
 	return out, ds
 }
 
-func decodeDocument(path string, doc *yaml.Node, out *ProjectDecl, ds *diag.Diagnostics) {
+func decodeDocument(path string, doc *yaml.Node, out *ProjectDecl, ds *diag.Diagnostics, seen map[string]value.Origin) {
 	for i := 0; i+1 < len(doc.Content); i += 2 {
 		key, val := doc.Content[i], doc.Content[i+1]
 		switch key.Value {
 		case "project":
 			out.Project = val.Value
 		case "resources":
-			decodeResources(path, val, out, ds)
+			decodeResources(path, val, out, ds, seen)
 		default:
 			ds.Add(diag.Diagnostic{
 				Severity: diag.SeverityWarning,
@@ -64,7 +69,7 @@ func decodeDocument(path string, doc *yaml.Node, out *ProjectDecl, ds *diag.Diag
 	}
 }
 
-func decodeResources(path string, node *yaml.Node, out *ProjectDecl, ds *diag.Diagnostics) {
+func decodeResources(path string, node *yaml.Node, out *ProjectDecl, ds *diag.Diagnostics, seen map[string]value.Origin) {
 	if node.Kind != yaml.MappingNode {
 		ds.Add(diag.Diagnostic{
 			Severity: diag.SeverityError,
@@ -82,6 +87,22 @@ func decodeResources(path string, node *yaml.Node, out *ProjectDecl, ds *diag.Di
 			Origin:     originOf(path, nameNode),
 		}
 
+		// A duplicate name is silent resource loss, not a stylistic problem:
+		// M2 keys its resource map by address, so one definition simply
+		// disappears from the plan. Stage 2 is the only stage that still has
+		// the line numbers to say where the other one is.
+		if first, dup := seen[r.Name]; dup {
+			ds.Add(diag.Diagnostic{
+				Severity: diag.SeverityError,
+				Summary:  "resource " + strconv.Quote(r.Name) + " is defined more than once",
+				Detail:   "A logical name must be unique within a module. " + strconv.Quote(r.Name) + " is also defined at " + describeOrigin(first) + ".",
+				Action:   "Rename one of them, or merge the two definitions.",
+				Origin:   r.Origin,
+			})
+			continue
+		}
+		seen[r.Name] = r.Origin
+
 		if body.Kind != yaml.MappingNode {
 			ds.Add(diag.Diagnostic{
 				Severity: diag.SeverityError,
@@ -91,8 +112,26 @@ func decodeResources(path string, node *yaml.Node, out *ProjectDecl, ds *diag.Di
 			continue
 		}
 
+		// Keys are tracked separately from r.Attributes because `type`,
+		// `depends_on` and `lifecycle` are keys too, and repeating one of those
+		// silently loses a value just as an attribute does.
+		seenKeys := map[string]value.Origin{}
+
 		for j := 0; j+1 < len(body.Content); j += 2 {
 			key, val := body.Content[j], body.Content[j+1]
+			keyOrigin := originOf(path, key)
+			if first, dup := seenKeys[key.Value]; dup {
+				ds.Add(diag.Diagnostic{
+					Severity: diag.SeverityError,
+					Summary:  strconv.Quote(key.Value) + " is set more than once on resource " + strconv.Quote(r.Name),
+					Detail:   "The last assignment would silently win. " + strconv.Quote(key.Value) + " is also set at " + describeOrigin(first) + ".",
+					Action:   "Remove one of the two assignments.",
+					Origin:   keyOrigin,
+				})
+				continue
+			}
+			seenKeys[key.Value] = keyOrigin
+
 			switch key.Value {
 			case "type":
 				r.Type = val.Value
@@ -118,7 +157,7 @@ func decodeResources(path string, node *yaml.Node, out *ProjectDecl, ds *diag.Di
 					Name:           key.Value,
 					Value:          v,
 					HasExpressions: hasExpr,
-					Origin:         originOf(path, key),
+					Origin:         keyOrigin,
 				}
 			}
 		}
@@ -269,6 +308,15 @@ func documentRoot(n *yaml.Node) *yaml.Node {
 		return n.Content[0]
 	}
 	return n
+}
+
+// describeOrigin renders an origin for use inside a sentence, naming the file
+// only when it differs from the one the diagnostic already points at.
+func describeOrigin(o value.Origin) string {
+	if o.Line == 0 {
+		return o.File
+	}
+	return "line " + strconv.Itoa(o.Line) + " of " + o.File
 }
 
 func originOf(path string, n *yaml.Node) value.Origin {

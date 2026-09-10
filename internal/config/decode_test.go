@@ -1,11 +1,13 @@
 package config
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"infra/internal/diag"
 	"infra/pkg/value"
 )
 
@@ -285,4 +287,86 @@ func TestDecodeReportsMalformedYAML(t *testing.T) {
 	if _, err := Load(dir); err == nil {
 		t.Error("malformed YAML must be reported")
 	}
+}
+
+// TestDuplicateResourceNamesAreRejected covers silent resource loss.
+//
+// decodeResources walked the mapping pairs and appended unconditionally, so two
+// entries with the same key produced two ResourceDecls sharing a Name. Spec
+// §5.2 requires logical names be unique within a module, and M2's stage 7 keys
+// ResolvedConfig.Resources by Address.String(), so one would silently win and
+// an entire resource would vanish from the plan without a word. Stage 2 is the
+// only stage that still holds the line numbers for a diagnostic worth reading.
+func TestDuplicateResourceNamesAreRejected(t *testing.T) {
+	files := writeConfig(t, `
+project: myapp
+
+resources:
+  database:
+    type: test.database
+    engine: postgres
+
+  network:
+    type: test.network
+    cidr: 10.0.0.0/16
+
+  database:
+    type: test.database
+    engine: mysql
+`)
+	_, ds := Decode(files)
+	if !ds.HasErrors() {
+		t.Fatal("a duplicate resource name must be an error")
+	}
+
+	rendered := render(t, ds)
+	if !strings.Contains(rendered, "database") {
+		t.Errorf("diagnostic does not name the duplicated resource:\n%s", rendered)
+	}
+	// Both origins: the second definition is at line 13, the first at line 5.
+	if !strings.Contains(rendered, ":13:") {
+		t.Errorf("diagnostic does not point at the duplicate (line 13):\n%s", rendered)
+	}
+	if !strings.Contains(rendered, "line 5") {
+		t.Errorf("diagnostic does not name the first definition (line 5):\n%s", rendered)
+	}
+}
+
+// TestDuplicateAttributeKeysAreRejected covers the same defect one level down,
+// where the last assignment silently won.
+func TestDuplicateAttributeKeysAreRejected(t *testing.T) {
+	files := writeConfig(t, `
+project: myapp
+
+resources:
+  database:
+    type: test.database
+    engine: postgres
+    size: 10
+    engine: mysql
+`)
+	_, ds := Decode(files)
+	if !ds.HasErrors() {
+		t.Fatal("a duplicate attribute key must be an error")
+	}
+
+	rendered := render(t, ds)
+	if !strings.Contains(rendered, "engine") {
+		t.Errorf("diagnostic does not name the duplicated attribute:\n%s", rendered)
+	}
+	if !strings.Contains(rendered, ":9:") {
+		t.Errorf("diagnostic does not point at the duplicate (line 9):\n%s", rendered)
+	}
+	if !strings.Contains(rendered, "line 7") {
+		t.Errorf("diagnostic does not name the first assignment (line 7):\n%s", rendered)
+	}
+}
+
+// render produces the text a user would actually see, so a diagnostic test
+// covers the message as rendered rather than the struct fields.
+func render(t *testing.T, ds diag.Diagnostics) string {
+	t.Helper()
+	var buf bytes.Buffer
+	ds.Render(&buf)
+	return buf.String()
 }
