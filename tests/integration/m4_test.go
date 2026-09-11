@@ -461,3 +461,41 @@ resources:
 		})
 	}
 }
+
+// TestApplySuccessStillShowsAVarFileWarning is the addition the team lead
+// asked to fold in: Task 11's apply.go added an unconditional
+// ds.Render(cmd.ErrOrStderr()) so a --var-file warning is not silently
+// dropped on an otherwise-successful apply — unlike plan.go, apply has no
+// later diagnostics pass that would carry the warning through. That render
+// call was previously reachable by no test: deleting it broke nothing.
+//
+// The warning under test is internal/config/varfile.go's reserved
+// block-name check: a --var-file with a top-level key matching one of
+// infra.yml's own blocks ("resources", "project", "variables",
+// "environments") is almost certainly a mistake, but only a warning — a
+// variable may legitimately be named that — so apply must still succeed
+// (exit 2, changes proposed) while printing it.
+func TestApplySuccessStillShowsAVarFileWarning(t *testing.T) {
+	dir := project(t, `
+project: myapp
+resources:
+  net:
+    type: test.network
+    cidr: ${cidr}
+`)
+	// "resources" here names a VARIABLE inside the flat var-file mapping, not
+	// a configuration block — it triggers the warning precisely because a
+	// var-file cannot declare a configuration block at all. It is unused by
+	// the rest of the fixture, so it cannot itself affect whether apply
+	// succeeds.
+	writeIn(t, dir, "warn.yml", "cidr: 10.0.0.0/16\nresources: oops\n")
+
+	r := run(t, dir, "apply", "dev", "--auto-approve", "--var-file", "warn.yml")
+	if r.ExitCode != 2 {
+		t.Fatalf("apply exit = %d, want 2 (success with changes) — this test is about the success "+
+			"path, not the error path\n%s", r.ExitCode, r.combined())
+	}
+	// A fragment unique to this diagnostic: grepped against
+	// internal/config's other diagnostic strings, exactly one produces it.
+	requireContains(t, r.Stderr, `"resources" in warn.yml is a variable, not a configuration block`)
+}
