@@ -354,3 +354,48 @@ resources:
 			"it came from — `net1`, the resource name, not `net`, the loaded module's name")
 	}
 }
+
+// deepCycle builds MaxDepth distinct nested modules whose last one points back
+// at the first. At the moment expand considers re-entering m0 the path already
+// holds MaxDepth entries, so the cycle guard and the depth guard are BOTH
+// satisfied — which is the only shape in which the order of the two is
+// observable at all. chain() deliberately avoids this; this fixture seeks it.
+func deepCycle() map[string]string {
+	files := map[string]string{
+		"infra.yml": "project: demo\nmodules:\n  - ./m0\nresources:\n  top:\n    type: module.m0\n",
+	}
+	for i := 0; i < MaxDepth; i++ {
+		next := fmt.Sprintf("m%d", i+1)
+		if i+1 == MaxDepth {
+			next = "m0" // close the loop instead of terminating
+		}
+		files[fmt.Sprintf("m%d/module.yml", i)] = fmt.Sprintf(
+			"modules:\n  - ../%s\nresources:\n  step:\n    type: module.%s\n", next, next)
+	}
+	return files
+}
+
+// TestADeepCycleIsReportedAsACycleNotAsDepth pins the ORDER of the two guards,
+// which nothing else reaches.
+//
+// A simple a->b->a cycle repeats at depth 2, far below MaxDepth, so it is
+// reported as a cycle whichever guard runs first — which is why swapping them
+// leaves every other test in this package green. The order is observable only
+// when a cycle first repeats AT the bound, and then it decides whether the user
+// is told "you have a loop, here it is" or "your nesting is too deep". The
+// second sends someone looking for nesting they do not have.
+//
+// Swap the two blocks in expand and this fails; nothing else does.
+func TestADeepCycleIsReportedAsACycleNotAsDepth(t *testing.T) {
+	decl, dir := fixture(t, deepCycle())
+	_, ds := Expand(decl, variables.Scope{}, dir, paths{})
+	if !ds.HasErrors() {
+		t.Fatalf("a %d-deep cycle must be refused", MaxDepth)
+	}
+	if !hasFragment(ds, "forms a cycle") {
+		t.Errorf("a cycle at the depth bound was not reported as a cycle; got %+v", ds)
+	}
+	if hasFragment(ds, "deeper than") {
+		t.Errorf("a cycle was reported as excessive nesting, which sends the user looking for nesting they do not have; got %+v", ds)
+	}
+}

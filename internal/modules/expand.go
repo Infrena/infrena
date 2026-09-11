@@ -324,9 +324,19 @@ func (w *walker) instantiate(
 		return
 	}
 
-	// ORDER IS LOAD-BEARING: the cycle check runs first. A cycle is infinitely
-	// deep, so a depth check placed above it would report every cycle as
-	// excessive nesting and make the cycle diagnostic unreachable.
+	// ORDER IS LOAD-BEARING, but NOT for the reason it first appears. A cycle
+	// is caught at its first repeat, so a simple a->b->a loop trips this at
+	// depth 2 and is reported as a cycle whichever guard runs first. Swapping
+	// the two leaves almost every test here green.
+	//
+	// The order is observable only when a cycle first repeats AT the bound —
+	// a chain of MaxDepth distinct modules that closes back on itself, where
+	// both conditions hold at once. Then it decides whether the user is told
+	// "you have a loop, here it is" or "your nesting is too deep", and the
+	// second sends them looking for nesting they do not have.
+	// TestADeepCycleIsReportedAsACycleNotAsDepth is the only thing that pins
+	// this; an earlier comment here claimed every cycle was at stake, which is
+	// wrong and would have justified deleting that test as redundant.
 	if at := w.onPath(lm.Dir); at >= 0 {
 		w.ds.Add(w.cycleDiagnostic(at, r, lm))
 		return
