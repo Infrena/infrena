@@ -12724,7 +12724,11 @@ func targetFor(inst modules.Instance, reg *registry.Registry) refTarget {
 		switch {
 		case !known:
 			...  // unchanged: reference to undeclared resource
-		case ref.Target == inst.Address:
+		// Compared by canonical rendering, not by ==: address.Address holds
+		// Module []string, so a struct comparison is a COMPILE ERROR
+		// ("struct containing []string cannot be compared"). Both sides are
+		// already rendered elsewhere in this loop, so this costs nothing.
+		case ref.Target.String() == inst.Address.String():
 			...  // unchanged: refers to itself
 		case len(target.names) > 0 && ref.Attribute != "" && !target.has(ref.Attribute):
 			// Amendment 11. §44's four parts: what is wrong, on what, what
