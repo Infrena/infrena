@@ -34,6 +34,7 @@ func Render(p *Plan, opts RenderOptions) string {
 	lines = append(lines, fmt.Sprintf("Plan for project %q, environment %q:", p.Project, p.Environment))
 	lines = append(lines, "")
 
+	moves := moveCandidates(p)
 	any := false
 	for _, op := range p.Operations {
 		if op.Kind == OpNoOp {
@@ -44,7 +45,7 @@ func Render(p *Plan, opts RenderOptions) string {
 			any = true
 			continue
 		}
-		lines = append(lines, renderOperationLines(op, opts)...)
+		lines = append(lines, renderOperationLines(op, moves[op.Address.String()], opts)...)
 		lines = append(lines, "")
 		any = true
 	}
@@ -59,7 +60,11 @@ func Render(p *Plan, opts RenderOptions) string {
 
 // renderOperationLines renders one changed operation: its header line, plus
 // one line per attribute that differs.
-func renderOperationLines(op Operation, opts RenderOptions) []string {
+//
+// moveCandidates is the addresses this same plan creates for a resource of
+// the same type and logical name as op, at a different module path — see
+// moveCandidates. It is only ever non-empty for op.Kind == OpDestroy.
+func renderOperationLines(op Operation, moveCandidates []string, opts RenderOptions) []string {
 	header := "  " + renderMarker(op.Kind, opts.Color) + " " + op.Type + "." + op.Address.String()
 	if op.Kind == OpReplace {
 		if forced := renderForcedBy(op.Reasons); forced != "" {
@@ -70,6 +75,11 @@ func renderOperationLines(op Operation, opts RenderOptions) []string {
 
 	if op.Kind == OpDestroy || op.Kind == OpReplace {
 		if warning := renderDependentsWarning(op); warning != "" {
+			lines = append(lines, warning)
+		}
+	}
+	if op.Kind == OpDestroy {
+		if warning := renderMoveWarning(moveCandidates); warning != "" {
 			lines = append(lines, warning)
 		}
 	}
@@ -137,6 +147,60 @@ func renderDependentsWarning(op Operation) string {
 		noun = "resource"
 	}
 	return fmt.Sprintf("    ⚠ This resource has %d dependent %s.", n, noun)
+}
+
+// moveCandidates maps a destroy operation's address to the addresses this same
+// plan CREATES for a resource of the same type and the same logical name at a
+// different module path.
+//
+// Spec §7.2: after stage 5 an address embeds its module path, so moving a
+// resource between modules renames it, and a rename is a destroy plus a
+// create. `state mv` is deferred past Phase 1 (§5.2), which makes the plan the
+// only place this is visible before it happens.
+//
+// It is a heuristic and the rendered note says so. Nothing here can know
+// whether two resources sharing a type and a logical name are the same
+// resource; the note reports what the plan contains and what a rename does,
+// and leaves the judgement to the reader. The cost of a false positive is one
+// line of reading. The cost of a false negative is a database.
+//
+// Deterministic by construction: p.Operations is already sorted by address
+// (spec §12.1), so the candidate lists come out sorted without a sort here.
+// M3 measured eleven redundant sorts whose only job was undoing map iteration;
+// this is not the twelfth.
+func moveCandidates(p *Plan) map[string][]string {
+	var creates []Operation
+	for _, op := range p.Operations {
+		if op.Kind == OpCreate {
+			creates = append(creates, op)
+		}
+	}
+	if len(creates) == 0 {
+		return nil
+	}
+	out := map[string][]string{}
+	for _, op := range p.Operations {
+		if op.Kind != OpDestroy {
+			continue
+		}
+		for _, c := range creates {
+			if c.Type == op.Type && c.Address.Name == op.Address.Name &&
+				c.Address.String() != op.Address.String() {
+				out[op.Address.String()] = append(out[op.Address.String()], c.Address.String())
+			}
+		}
+	}
+	return out
+}
+
+// renderMoveWarning renders the note moveCandidates found, or "".
+func renderMoveWarning(candidates []string) string {
+	if len(candidates) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("    ⚠ Also created in this plan as %s. A resource's address includes its module "+
+		"path, so moving one between modules renames it — and a renamed resource is destroyed and "+
+		"recreated, not moved.", strings.Join(candidates, ", "))
 }
 
 // renderMarker returns an operation's symbol, optionally ANSI-colored.

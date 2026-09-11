@@ -643,3 +643,147 @@ func TestRenderIsDeterministicAcrossRepeatedCalls(t *testing.T) {
 		}
 	}
 }
+
+// TestRenderNotesAResourceThatMayHaveMovedBetweenModules is the second cost of
+// flattening (spec §7.2), rendered where a user meets it.
+//
+// Addresses embed the module path, so moving a resource from one module to
+// another renames it, and a rename is a destroy plus a create. The plan is the
+// last thing a person reads before agreeing to that, and a destroy of
+// `module.old.store` sitting next to a create of `module.new.store` with no
+// connection drawn between them is how someone loses a database.
+//
+// The note is phrased as a possibility, not a claim: nothing here can know
+// whether two resources sharing a type and a logical name are the same
+// resource.
+func TestRenderNotesAResourceThatMayHaveMovedBetweenModules(t *testing.T) {
+	p := &Plan{
+		Project:     "myapp",
+		Environment: "dev",
+		Operations: []Operation{
+			{
+				Address: address.Address{Module: []string{"new"}, Name: "store"},
+				Type:    "test.database",
+				Kind:    OpCreate,
+				After:   map[string]value.Value{"engine": value.String("postgres", value.SourceExplicit)},
+			},
+			{
+				Address: address.Address{Module: []string{"old"}, Name: "store"},
+				Type:    "test.database",
+				Kind:    OpDestroy,
+				Before:  map[string]value.Value{"engine": value.String("postgres", value.SourceExplicit)},
+			},
+		},
+	}
+
+	out := Render(p, RenderOptions{})
+	// Not "module.new.store" alone: the create operation's own header line
+	// ("+ test.database.module.new.store") also contains that substring, so a
+	// needle of just the address finds two lines rather than the one note.
+	// "destroyed and recreated" appears only in the note.
+	note := lineContainingInRender(t, out, "destroyed and recreated")
+	if !strings.Contains(note, "module.new.store") {
+		t.Errorf("the note %q does not name the address the resource is reappearing at:\n%s", note, out)
+	}
+	// On the destroy, not on the create: the create is not the dangerous half.
+	destroyAt := strings.Index(out, "- test.database.module.old.store")
+	if destroyAt < 0 || strings.Index(out, note) < destroyAt {
+		t.Errorf("the note is not attached to the destroy operation:\n%s", out)
+	}
+}
+
+func TestRenderDoesNotNoteUnrelatedDestroysAndCreates(t *testing.T) {
+	// Different logical names, so nothing was moved. A note here would appear
+	// on most plans that destroy anything, which is how a warning stops being
+	// read.
+	p := &Plan{
+		Project:     "myapp",
+		Environment: "dev",
+		Operations: []Operation{
+			{
+				Address: address.Address{Module: []string{"new"}, Name: "cache"},
+				Type:    "test.database",
+				Kind:    OpCreate,
+				After:   map[string]value.Value{"engine": value.String("postgres", value.SourceExplicit)},
+			},
+			{
+				Address: address.Address{Module: []string{"old"}, Name: "store"},
+				Type:    "test.database",
+				Kind:    OpDestroy,
+				Before:  map[string]value.Value{"engine": value.String("postgres", value.SourceExplicit)},
+			},
+		},
+	}
+	if out := Render(p, RenderOptions{}); strings.Contains(out, "destroyed and recreated") {
+		t.Errorf("two unrelated resources were reported as a move:\n%s", out)
+	}
+}
+
+// TestRenderDoesNotNoteADestroyWithNoMatchingCreate covers the two remaining
+// shapes that RESEMBLE a move without being one. A warning that fires on
+// ordinary destroys teaches people to skip it, and then it is not there for the
+// one destroy that matters — which is a worse outcome than not having the
+// warning at all.
+func TestRenderDoesNotNoteADestroyWithNoMatchingCreate(t *testing.T) {
+	destroy := Operation{
+		Address: address.Address{Module: []string{"old"}, Name: "store"},
+		Type:    "test.database",
+		Kind:    OpDestroy,
+		Before:  map[string]value.Value{"engine": value.String("postgres", value.SourceExplicit)},
+	}
+
+	for _, tc := range []struct {
+		name string
+		ops  []Operation
+	}{
+		{
+			// The ordinary case: a plain destroy, nothing created at all.
+			name: "nothing is created",
+			ops:  []Operation{destroy},
+		},
+		{
+			// Same logical name, same module move, DIFFERENT type. Two
+			// resources of different types are not one resource that moved,
+			// whatever they are called.
+			name: "the created resource is a different type",
+			ops: []Operation{
+				{
+					Address: address.Address{Module: []string{"new"}, Name: "store"},
+					Type:    "test.network",
+					Kind:    OpCreate,
+					After:   map[string]value.Value{"cidr": value.String("10.0.0.0/16", value.SourceExplicit)},
+				},
+				destroy,
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out := Render(&Plan{Project: "myapp", Environment: "dev", Operations: tc.ops}, RenderOptions{})
+			if strings.Contains(out, "destroyed and recreated") {
+				t.Errorf("the move note fired on a destroy that only resembles a move:\n%s", out)
+			}
+		})
+	}
+}
+
+// lineContainingInRender returns the single rendered line containing needle,
+// failing if there is not exactly one. The count is the point: a note that
+// appears twice is as wrong as one that never appears, and an assertion on
+// "contains" alone would pass for both.
+//
+// This duplicates tests/integration's lineContaining (Task 10.1) because a
+// test helper does not cross packages. If either grows a behaviour the other
+// lacks, that is a signal the assertion moved, not that they should be merged.
+func lineContainingInRender(t *testing.T, out, needle string) string {
+	t.Helper()
+	var found []string
+	for _, l := range strings.Split(out, "\n") {
+		if strings.Contains(l, needle) {
+			found = append(found, l)
+		}
+	}
+	if len(found) != 1 {
+		t.Fatalf("want exactly one line containing %q, found %d:\n%s", needle, len(found), out)
+	}
+	return found[0]
+}
