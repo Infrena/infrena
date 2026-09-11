@@ -350,6 +350,57 @@ func TestProjectOriginComesFromTheProjectFile(t *testing.T) {
 	}
 }
 
+// TestEnvironmentOverrideWithInterpolationIsRejected: environment overrides
+// are resolved before any expression scope exists, so an unresolved `${...}`
+// here must be REJECTED rather than becoming part of the plan as though it
+// were a literal. Same rule as a variable's `default:` and variables.yml's
+// values, exercised in the third place it can appear.
+func TestEnvironmentOverrideWithInterpolationIsRejected(t *testing.T) {
+	_, ds := decodeTree(t, map[string]string{
+		ProjectFileName:         projectWithNoResources,
+		"environments/prod.yml": "domain: ${var.other}\n",
+	})
+	requireErrorAbout(t, ds, "domain", "interpolation")
+}
+
+// TestBlockLevelKeysMustBeMappings pins the three "must be a mapping" guards
+// that sit above a single variable's or environment's own body: the
+// `variables:` block itself, the `environments:` block itself, and one
+// environment's body (as opposed to its `variables:` sub-block, which is
+// checked separately). Each of the three has a sibling test at a DIFFERENT
+// level — a variable's own body (TestVariableBodyMustBeAMapping), an
+// environment's nested `variables:` sub-block — but none at this level, so a
+// broken guard here would pass every other test in the suite.
+//
+// The "variables block" and "environments block" fixtures are two-element
+// sequences deliberately, not one: with `node.Kind != yaml.MappingNode`
+// disabled, decodeVariables'/decodeEnvironments' pair-walking loop still
+// reads the sequence two elements at a time and calls decodeVariable /
+// decodeEnvironmentBody on the second element as a body — which, for a
+// scalar body, raises ITS OWN "must be a mapping" diagnostic worded closely
+// enough (both mention "variable", "mapping", even "declaration" — that word
+// appears in decodeVariable's Detail too, describing what a bare value would
+// be ambiguous with) that a loosely chosen fragment passes against the
+// disabled guard as readily as against the real one. The phrases below —
+// "mapping of variable name to" and "mapping of environment name to" — were
+// checked against BOTH diagnostics' full text while developing this test and
+// appear only in the block-level message, never in the per-item fallback.
+func TestBlockLevelKeysMustBeMappings(t *testing.T) {
+	cases := []struct{ name, body, fragment string }{
+		{"variables block", "variables:\n  - a\n  - b\n", "mapping of variable name to"},
+		{"environments block", "environments:\n  - a\n  - b\n", "mapping of environment name to"},
+		{"one environment body", "environments:\n  prod: 5\n", "prod"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, ds := decodeTree(t, map[string]string{
+				ProjectFileName: projectWithNoResources + tc.body,
+			})
+			requireErrorAbout(t, ds, tc.fragment)
+		})
+	}
+}
+
 // TestVariablesFileWithAConfigurationBlockWarns: a `resources:` key in
 // variables.yml is almost certainly the wrong file. It is a WARNING, not an
 // error, because a variable may legitimately be called "project" and refusing

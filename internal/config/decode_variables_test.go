@@ -354,23 +354,57 @@ func TestQuotedBoundIsRejected(t *testing.T) {
 // TestImpossibleBoundsAreRejected: no value can satisfy min > max, and every
 // plan would fail with a range error naming the VALUE rather than the
 // declaration that is actually wrong.
+//
+// Both numeric types are exercised. boundGreater switches on Kind and calls
+// AsInt for one and AsFloat for the other — two independent code paths, not
+// one path coerced twice — so a fixture using only "integer" would leave a
+// broken float comparison silently accepting an impossible declaration.
 func TestImpossibleBoundsAreRejected(t *testing.T) {
-	_, ds := decodeTree(t, map[string]string{
-		ProjectFileName: projectWithNoResources +
-			"variables:\n  v:\n    type: integer\n    min: 100\n    max: 1\n",
-	})
-	requireErrorAbout(t, ds, "min", "max", "v")
+	for _, tc := range []struct{ spelling, min, max string }{
+		{"integer", "100", "1"},
+		{"float", "5.0", "1.0"},
+	} {
+		t.Run(tc.spelling, func(t *testing.T) {
+			_, ds := decodeTree(t, map[string]string{
+				ProjectFileName: projectWithNoResources +
+					"variables:\n  v:\n    type: " + tc.spelling + "\n    min: " + tc.min + "\n    max: " + tc.max + "\n",
+			})
+			requireErrorAbout(t, ds, "min", "max", "v")
+		})
+	}
 }
 
 // TestBoundsAtTheSameNumberAreAllowed is the boundary: min == max pins a
 // variable to one value, which is unusual but not wrong. A `>=` comparison
-// instead of `>` fails here.
+// instead of `>` fails here — on both numeric types, for the same reason
+// TestImpossibleBoundsAreRejected checks both.
 func TestBoundsAtTheSameNumberAreAllowed(t *testing.T) {
+	for _, tc := range []struct{ spelling, bound string }{
+		{"integer", "5"},
+		{"float", "1.5"},
+	} {
+		t.Run(tc.spelling, func(t *testing.T) {
+			_, ds := decodeTree(t, map[string]string{
+				ProjectFileName: projectWithNoResources +
+					"variables:\n  v:\n    type: " + tc.spelling + "\n    min: " + tc.bound + "\n    max: " + tc.bound + "\n",
+			})
+			requireNoErrors(t, ds)
+		})
+	}
+}
+
+// TestVariablesFileValueWithInterpolationIsRejected: variables.yml is
+// resolved before any expression scope exists (PLAN.md §8), so an unresolved
+// `${...}` there must be REJECTED, not stored as the variable's literal value
+// and carried into stage 4 as if it had been written that way on purpose.
+// The sibling check on infra.yml's `default:` is covered elsewhere; this is
+// the same rule in the other file that can declare a variable's value.
+func TestVariablesFileValueWithInterpolationIsRejected(t *testing.T) {
 	_, ds := decodeTree(t, map[string]string{
-		ProjectFileName: projectWithNoResources +
-			"variables:\n  v:\n    type: integer\n    min: 5\n    max: 5\n",
+		ProjectFileName:   projectWithNoResources,
+		VariablesFileName: "region: ${var.other}\n",
 	})
-	requireNoErrors(t, ds)
+	requireErrorAbout(t, ds, "region", "interpolation")
 }
 
 // TestDuplicateVariableNameIsRejected. yaml.v3's Node decoding does not
