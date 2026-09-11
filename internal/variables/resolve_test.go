@@ -226,6 +226,58 @@ func TestResolveValidatesAnEnvironmentOverrideToo(t *testing.T) {
 	}
 }
 
+func TestResolveDoesNotDoubleReportADefaultsOwnBoundViolation(t *testing.T) {
+	// Schemas validates a declared default once, at declaration time — its
+	// own doc comment says so: "checked against its own constraints here,
+	// once, rather than every time the default wins." checkAgainstSchemas
+	// used to re-validate the SAME winning value whenever that default won
+	// rung 1, reporting the identical diagnostic a second time. Counting
+	// matters here, not just presence: a test that only asked ds.HasErrors()
+	// could not see the duplicate.
+	decls := []config.VariableDecl{{
+		Name: "replicas", Type: value.KindInt,
+		Default: value.Int(500, value.SourceExplicit), HasDefault: true,
+		Max: value.Int(100, value.SourceExplicit), HasMax: true,
+		Origin: value.Origin{File: "variables.yml", Line: 2, Column: 3},
+	}}
+	_, ds := Resolve(decls, environments.Chain{}, nil, nil)
+	if len(ds) != 1 {
+		t.Fatalf("len(ds) = %d, want exactly 1 — the same violation reported twice is not two problems: %+v", len(ds), ds)
+	}
+	if ds[0].Summary != `variable "replicas" must be at most 100` {
+		t.Errorf("Summary = %q, want the bound-violation message naming the default's own value", ds[0].Summary)
+	}
+
+	// The genuinely-doubly-bad case: two DIFFERENT variables each with a bad
+	// default must still produce two diagnostics, one per variable — the fix
+	// must not suppress a second, distinct problem along with the duplicate.
+	two := []config.VariableDecl{
+		{
+			Name: "replicas", Type: value.KindInt,
+			Default: value.Int(500, value.SourceExplicit), HasDefault: true,
+			Max: value.Int(100, value.SourceExplicit), HasMax: true,
+			Origin: value.Origin{File: "variables.yml", Line: 2, Column: 3},
+		},
+		{
+			Name: "workers", Type: value.KindInt,
+			Default: value.Int(-1, value.SourceExplicit), HasDefault: true,
+			Min: value.Int(0, value.SourceExplicit), HasMin: true,
+			Origin: value.Origin{File: "variables.yml", Line: 5, Column: 3},
+		},
+	}
+	_, ds = Resolve(two, environments.Chain{}, nil, nil)
+	if len(ds) != 2 {
+		t.Fatalf("len(ds) = %d, want exactly 2 (one per bad variable, still no duplicates): %+v", len(ds), ds)
+	}
+	var sb strings.Builder
+	ds.Render(&sb)
+	for _, want := range []string{`"replicas" must be at most 100`, `"workers" must be at least 0`} {
+		if !strings.Contains(sb.String(), want) {
+			t.Errorf("missing %q in:\n%s", want, sb.String())
+		}
+	}
+}
+
 func TestResolveKeepsAnUndeclaredCLIVariable(t *testing.T) {
 	// Rung 6 branches on whether the name is declared: a declared name goes
 	// through Schema.ParseText, an undeclared one is stored as plain text at
@@ -245,6 +297,51 @@ func TestResolveKeepsAnUndeclaredCLIVariable(t *testing.T) {
 	}
 	if got.Scope != value.ScopeCLIOverride {
 		t.Errorf("Scope = %v, want ScopeCLIOverride", got.Scope)
+	}
+}
+
+func TestOverrideSetsAVariableOnAZeroValueScope(t *testing.T) {
+	// The nil-map branch: a bare `var s Scope` (or Scope{}) has a nil vars
+	// map, and Override must lazily allocate it rather than panic on the
+	// write. Task 7 is Override's only CALLER today, but Scope is exported
+	// and this codebase has already shipped one bug from treating "no caller
+	// yet" as "unreachable" (Task 4).
+	var s Scope
+	s.Override("environment", value.String("production", value.SourceExplicit))
+
+	got, ok := s.Variable("environment")
+	if !ok {
+		t.Fatal("environment must resolve after Override on a zero-value Scope")
+	}
+	if str, _ := got.AsString(); str != "production" {
+		t.Errorf("environment = %q, want production", str)
+	}
+}
+
+func TestOverrideReplacesAVariableOnAnAlreadyPopulatedScope(t *testing.T) {
+	// The non-nil branch: Override on a Scope Resolve already built must
+	// replace an existing entry (or add a new one) without disturbing the
+	// rest — it is not a second precedence ladder, it is authoritative.
+	decls := []config.VariableDecl{{
+		Name: "environment", Type: value.KindString,
+		Default: value.String("dev", value.SourceExplicit), HasDefault: true,
+	}}
+	scope, ds := Resolve(decls, environments.Chain{}, nil, nil)
+	if ds.HasErrors() {
+		t.Fatalf("fixture: %+v", ds)
+	}
+	before, _ := scope.Variable("environment")
+	if s, _ := before.AsString(); s != "dev" {
+		t.Fatalf("fixture: environment = %q, want dev before Override", s)
+	}
+
+	scope.Override("environment", value.String("production", value.SourceExplicit))
+	after, ok := scope.Variable("environment")
+	if !ok {
+		t.Fatal("environment must still resolve after Override")
+	}
+	if s, _ := after.AsString(); s != "production" {
+		t.Errorf("environment = %q, want production to have replaced the resolved dev", s)
 	}
 }
 

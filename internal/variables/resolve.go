@@ -76,10 +76,14 @@ func (s *Scope) Override(name string, v value.Value) {
 // scope a value reports IS the rung that supplied it, never a parallel opinion
 // about it that could drift.
 //
-// Every winning value is stamped here even when stage 2 already tagged it the
-// same way. Stage 4 is the one place that decides what provenance a winning
-// value carries; a Source that was set elsewhere and merely survived is a
-// Source nobody is responsible for.
+// Every winning value is stamped with its Source and Scope — either directly
+// in the loop below, or, for a declared rung-6 entry, inside Schema.ParseText
+// (which this function calls and whose result it stores unchanged; look
+// there, not here, for that one rung's stamp). Either way stage 4 is what
+// decides the provenance: even where stage 2 already tagged a value the same
+// way, it is re-stamped rather than trusted to have survived, because a
+// Source that was set elsewhere and merely survived is a Source nobody is
+// responsible for.
 //
 // ScopeProviderDefault is absent deliberately: provider defaults apply to
 // resource attributes in stage 7 and never to variables.
@@ -184,6 +188,13 @@ func sortedTextNames(m map[string]string) []string {
 // gets validated and stored. The order is load-bearing, not a style choice —
 // see Schema.Coerce's doc comment and TestResolveCoercesBeforeCheckingBounds.
 //
+// A winner whose Source is SourceDefault is judged NOWHERE here: Schemas
+// already validated it once, at declaration time, specifically so a bad
+// default is reported once rather than once per call where it happens to
+// win. Re-running Coerce and Validate on it would report the identical
+// diagnostic a second time, not a new one — see
+// TestResolveDoesNotDoubleReportADefaultsOwnBoundViolation.
+//
 // The meaning of "unset" depends on whether an environment was selected, and
 // this is the only place in the engine that distinguishes the two:
 //
@@ -223,6 +234,20 @@ func checkAgainstSchemas(schemas map[string]Schema, out *Scope, chain environmen
 		s := schemas[name]
 		v, set := out.vars[name]
 		if set {
+			// The declared default is validated exactly once, at declaration
+			// time (Schemas, beside where s.Default is stored — see that
+			// doc comment: "checked against its own constraints here, once,
+			// rather than every time the default wins"). SourceDefault is
+			// stamped ONLY by rung 1, nowhere else in this ladder, so it is
+			// a reliable signal that the winning value IS that same
+			// untouched default rather than something a later rung wrote
+			// over it. Falling through to Coerce+Validate below would judge
+			// it a second time and — since it is the same Value — produce
+			// the identical diagnostic twice for one mistake. See
+			// TestResolveDoesNotDoubleReportADefaultsOwnBoundViolation.
+			if v.Source == value.SourceDefault {
+				continue
+			}
 			// Coerce, then judge, and store the normalised value. The order is
 			// load-bearing: compareBounds reads both sides in the declared
 			// kind, so an uncoerced value is not merely mistyped — it is
