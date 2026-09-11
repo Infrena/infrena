@@ -98,6 +98,17 @@ The CLI surface to implement (§37): `init`, `validate`, `plan <env>`, `apply <e
 `discover`, `graph`, `explain <resource-type>`. Global options: `--var`, `--var-file`,
 `--output`, `--auto-approve`, `--parallelism`, `--verbose`.
 
+`--output` means two different things, deliberately. For `plan` it writes the plan
+ARTIFACT: one JSON document, sensitive values in cleartext, because M6 reads it back to
+apply it and needs the real values. For `validate`, `apply`, `refresh` and `destroy` it
+writes a REPORT: newline-delimited JSON — a `meta` line carrying a format version, then
+`event` or `observation` lines as work happens, `diagnostic` lines keeping §44's four
+parts separate, and a final `result` line, so a consumer tails the file and reads the
+outcome from the last line. Reports REDACT through `pkg/value.Format`, the single
+redaction path: a report is read by things that do not need the secret. Both are 0600.
+The `version` field exists so the wire format can change without breaking consumers;
+never omit it.
+
 ## Architecture
 
 Planned layout (§41):
