@@ -352,6 +352,89 @@ func TestBoundIsCoercedToTheDeclaredType(t *testing.T) {
 	}
 }
 
+// TestDefaultIsCoercedToTheDeclaredTypeRegardlessOfKeyOrder pins M4 contract
+// Amendment 4: a numeric `default:` coerces to its variable's declared type
+// exactly like `min`/`max` already do. YAML tags `default: 1` as !!int even
+// under `type: float`, so `type: float` with `default: 1` must store 1.0,
+// not an int64 masquerading under a float-typed field.
+//
+// Variable "b" writes `default:` BEFORE `type:` — the order that would defeat
+// an implementation that coerces inside decodeVariable's key-walking loop,
+// since `v.Type` is not yet known when that line is reached. "a" writes the
+// natural order and would pass even against that broken implementation; "b"
+// is the fixture that actually discriminates, which is why both must be
+// present and both must produce the same result.
+func TestDefaultIsCoercedToTheDeclaredTypeRegardlessOfKeyOrder(t *testing.T) {
+	p, ds := decodeTree(t, map[string]string{
+		ProjectFileName: projectWithNoResources + `
+variables:
+  a:
+    type: float
+    default: 1
+  b:
+    default: 1
+    type: float
+`,
+	})
+	requireNoErrors(t, ds)
+	for _, name := range []string{"a", "b"} {
+		v := findVariable(t, p, name)
+		if v.Default.Kind != value.KindFloat {
+			t.Errorf("%s: Default.Kind = %v, want KindFloat (Type=%v)", name, v.Default.Kind, v.Type)
+			continue
+		}
+		if got, ok := v.Default.AsFloat(); !ok || got != 1.0 {
+			t.Errorf("%s: Default = %#v, want Float(1.0)", name, v.Default)
+		}
+		if v.Default.Origin.Line == 0 {
+			t.Errorf("%s: Default has no Origin; coercion dropped it", name)
+		}
+	}
+}
+
+// TestDefaultThatCannotBeCoercedIsRejected is Amendment 4's refusing
+// direction on the same rule TestBoundThatCannotBeCoercedIsRejected pins for
+// `min`/`max`: `type: integer` with `default: 1.5` quietly becoming 1 would
+// let a plan start from a value the user never wrote, with nothing printed.
+func TestDefaultThatCannotBeCoercedIsRejected(t *testing.T) {
+	_, ds := decodeTree(t, map[string]string{
+		ProjectFileName: projectWithNoResources +
+			"variables:\n  v:\n    type: integer\n    default: 1.5\n",
+	})
+	requireErrorAbout(t, ds, "default", "v", "integer")
+}
+
+// TestDefaultThatOverflowsFloatIsRejected is Amendment 4's counterpart to
+// TestBoundThatOverflowsFloatIsRejected: an int64 above 2^53 does not survive
+// conversion to float64 and back, so it must be a diagnostic here too, for
+// the identical reason.
+func TestDefaultThatOverflowsFloatIsRejected(t *testing.T) {
+	_, ds := decodeTree(t, map[string]string{
+		ProjectFileName: projectWithNoResources +
+			"variables:\n  v:\n    type: float\n    default: 9007199254740993\n",
+	})
+	requireErrorAbout(t, ds, "default", "v", "float")
+}
+
+// TestUntypedDefaultIsNotCoerced pins Amendment 4's boundary: an untyped
+// declaration has no declared kind to coerce toward, so its default is
+// stored exactly as decoded. A coercion attempt here would have nothing to
+// coerce TO, and value.KindInt would be an arbitrary choice no more correct
+// than any other.
+func TestUntypedDefaultIsNotCoerced(t *testing.T) {
+	p, ds := decodeTree(t, map[string]string{
+		ProjectFileName: projectWithNoResources + "variables:\n  v:\n    default: 1\n",
+	})
+	requireNoErrors(t, ds)
+	v := findVariable(t, p, "v")
+	if v.Default.Kind != value.KindInt {
+		t.Errorf("Default.Kind = %v, want KindInt: an untyped variable's default must not be coerced", v.Default.Kind)
+	}
+	if got, ok := v.Default.AsInt(); !ok || got != 1 {
+		t.Errorf("Default = %#v, want Int(1)", v.Default)
+	}
+}
+
 // TestBoundThatCannotBeCoercedIsRejected pins that a lossy conversion is a
 // diagnostic, never a silent truncation. `type: integer` with `min: 1.5`
 // quietly becoming 1 would accept values below the stated minimum with nothing

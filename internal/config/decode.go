@@ -508,11 +508,13 @@ func decodeVariable(path, name string, body *yaml.Node, origin value.Origin, ds 
 		return v
 	}
 
-	// minNode and maxNode are held back and checked AFTER the whole mapping is
-	// walked. `type:` may appear textually after `min:`, and an implementation
-	// that checks each key as it goes would accept `min: 1` on a string
-	// whenever the file happened to be written in that order.
-	var minNode, maxNode *yaml.Node
+	// defaultNode, minNode and maxNode are held back and resolved AFTER the
+	// whole mapping is walked. `type:` may appear textually after any of
+	// them — YAML mappings carry no ordering guarantee — and an
+	// implementation that resolves each key as it walks would silently skip
+	// coercion (or accept `min: 1` on a string) whenever the file happened to
+	// declare `type:` last.
+	var defaultNode, minNode, maxNode *yaml.Node
 	// typeReported and defaultReported suppress the "must specify at least a
 	// type or a default" check below when the key WAS present but unusable.
 	// Telling a user their declaration is empty, one line under a diagnostic
@@ -557,19 +559,7 @@ func decodeVariable(path, name string, body *yaml.Node, origin value.Origin, ds 
 			}
 			v.Type = kind
 		case "default":
-			dv, hasExpr := decodeValue(path, "variable "+strconv.Quote(name)+"'s `default`", val, ds)
-			if hasExpr {
-				defaultReported = true
-				ds.Add(diag.Diagnostic{
-					Severity: diag.SeverityError,
-					Summary:  "variable " + strconv.Quote(name) + "'s default contains an interpolation",
-					Detail:   "Defaults are resolved before any expression scope exists, so `${...}` here has nothing to refer to. Accepting it would store the literal text " + strconv.Quote(val.Value) + " as the default.",
-					Action:   "Write a literal value, or set " + strconv.Quote(name) + " per environment instead.",
-					Origin:   originOf(path, val),
-				})
-				break
-			}
-			v.Default, v.HasDefault = dv, true
+			defaultNode = val
 		case "min":
 			minNode = val
 		case "max":
@@ -582,6 +572,18 @@ func decodeVariable(path, name string, body *yaml.Node, origin value.Origin, ds 
 				Action:   "Remove " + strconv.Quote(key.Value) + ".",
 				Origin:   keyOrigin,
 			})
+		}
+	}
+
+	if defaultNode != nil {
+		if dv, ok := decodeDefault(path, name, defaultNode, v.Type, ds); ok {
+			v.Default, v.HasDefault = dv, true
+		} else {
+			// decodeDefault already added its own diagnostic (interpolation,
+			// or a lossy numeric coercion) — suppress "must specify at least
+			// a `type` or a `default`" below the same way typeReported does,
+			// so the user sees one error about this declaration, not two.
+			defaultReported = true
 		}
 	}
 
@@ -710,6 +712,54 @@ func decodeBound(path, name, which string, node *yaml.Node, kind value.Kind, typ
 	return coerceBound(path, name, which, node, bv, kind, ds)
 }
 
+// coerceNumeric converts a numeric value to the given numeric kind, applying
+// the SAME exactness rule everywhere a declared numeric type meets a literal
+// of the other numeric kind: a variable's bounds (coerceBound) and, since
+// Amendment 4 of the M4 contract, its default (decodeDefault). Extracted
+// once rather than duplicated per caller, because a second copy of this
+// int<->float exactness logic is a defect class this project has already
+// paid for twice (M2's leaked plaintext secret; M3's eleven redundant
+// sorts).
+//
+// ok is false when the conversion would lose information: a fractional part
+// rounded away, or an int64 above 2^53 that does not survive the round trip
+// through float64 (float64 represents every integer up to 2^53 exactly; past
+// that, adjacent representable values are two apart, so some integers have
+// no exact float64 form). This function raises no diagnostic of its own —
+// callers word their own, because "min", "max" and "default" each read
+// differently in context, and PLAN.md §44 wants the message to say what was
+// expected in place, not through a shared, context-free string.
+//
+// bv must already be known numeric (KindInt or KindFloat) and kind must be
+// KindInt or KindFloat; callers establish both before calling. When bv is
+// already the declared kind, this is a no-op that still re-origins the
+// value, matching every other exit path.
+func coerceNumeric(kind value.Kind, bv value.Value, origin value.Origin) (value.Value, bool) {
+	switch {
+	case kind == value.KindInt && bv.Kind == value.KindFloat:
+		f, _ := bv.AsFloat()
+		n := int64(f)
+		// Exactness both ways: float64(n) == f rejects a fractional part, and
+		// it also rejects a float too large to survive the round trip.
+		if float64(n) != f {
+			return value.Value{}, false
+		}
+		return value.Int(n, value.SourceExplicit).WithOrigin(origin), true
+
+	case kind == value.KindFloat && bv.Kind == value.KindInt:
+		n, _ := bv.AsInt()
+		f := float64(n)
+		// An int64 above 2^53 does not survive this.
+		if int64(f) != n {
+			return value.Value{}, false
+		}
+		return value.Float(f, value.SourceExplicit).WithOrigin(origin), true
+	}
+
+	// Already the declared kind.
+	return bv, true
+}
+
 // coerceBound converts a decoded bound to the variable's DECLARED kind.
 //
 // This is why stage 2 is the right place: it is the only stage that knows both
@@ -724,46 +774,113 @@ func decodeBound(path, name, which string, node *yaml.Node, kind value.Kind, typ
 // printed, which is the silent-loss shape this engine refuses everywhere else.
 func coerceBound(path, name, which string, node *yaml.Node, bv value.Value, kind value.Kind, ds *diag.Diagnostics) (value.Value, bool) {
 	origin := originOf(path, node)
-
-	switch {
-	case kind == value.KindInt && bv.Kind == value.KindFloat:
-		f, _ := bv.AsFloat()
-		n := int64(f)
-		// Exactness both ways: float64(n) == f rejects a fractional part, and
-		// it also rejects a float too large to survive the round trip.
-		if float64(n) != f {
-			ds.Add(diag.Diagnostic{
-				Severity: diag.SeverityError,
-				Summary:  "`" + which + "` on variable " + strconv.Quote(name) + " is not a whole number",
-				Detail:   "Variable " + strconv.Quote(name) + " has type integer, so " + strconv.Quote(node.Value) + " cannot be its " + which + ". Rounding it would silently change the bound the user asked for.",
-				Action:   "Write a whole number, or declare `type: float`.",
-				Origin:   origin,
-			})
-			return value.Value{}, false
-		}
-		return value.Int(n, value.SourceExplicit).WithOrigin(origin), true
-
-	case kind == value.KindFloat && bv.Kind == value.KindInt:
-		n, _ := bv.AsInt()
-		f := float64(n)
-		// An int64 above 2^53 does not survive this. Vanishingly rare for a
-		// bound, and a diagnostic beats a bound that silently is not the one
-		// that was written.
-		if int64(f) != n {
-			ds.Add(diag.Diagnostic{
-				Severity: diag.SeverityError,
-				Summary:  "`" + which + "` on variable " + strconv.Quote(name) + " is too large to represent as a float",
-				Detail:   "Variable " + strconv.Quote(name) + " has type float, and " + strconv.Quote(node.Value) + " cannot be converted without changing its value.",
-				Action:   "Use a smaller bound, or declare `type: integer`.",
-				Origin:   origin,
-			})
-			return value.Value{}, false
-		}
-		return value.Float(f, value.SourceExplicit).WithOrigin(origin), true
+	coerced, ok := coerceNumeric(kind, bv, origin)
+	if ok {
+		return coerced, true
 	}
 
-	// Already the declared kind.
-	return bv, true
+	// coerceNumeric only fails on one of the two cross-kind conversions, so
+	// which one follows from `kind` alone: kind == KindInt means bv was the
+	// float being rounded; kind == KindFloat means bv was the int overflowing
+	// 2^53. Diagnostics kept word-for-word identical to before this function
+	// was split, so no existing test's assertion needed to change.
+	if kind == value.KindInt {
+		ds.Add(diag.Diagnostic{
+			Severity: diag.SeverityError,
+			Summary:  "`" + which + "` on variable " + strconv.Quote(name) + " is not a whole number",
+			Detail:   "Variable " + strconv.Quote(name) + " has type integer, so " + strconv.Quote(node.Value) + " cannot be its " + which + ". Rounding it would silently change the bound the user asked for.",
+			Action:   "Write a whole number, or declare `type: float`.",
+			Origin:   origin,
+		})
+	} else {
+		ds.Add(diag.Diagnostic{
+			Severity: diag.SeverityError,
+			Summary:  "`" + which + "` on variable " + strconv.Quote(name) + " is too large to represent as a float",
+			Detail:   "Variable " + strconv.Quote(name) + " has type float, and " + strconv.Quote(node.Value) + " cannot be converted without changing its value.",
+			Action:   "Use a smaller bound, or declare `type: integer`.",
+			Origin:   origin,
+		})
+	}
+	return value.Value{}, false
+}
+
+// decodeDefault decodes and, where both the declared type and the literal
+// are numeric, coerces a variable's `default:` value (M4 contract Amendment
+// 4: "A numeric literal coerces to the declared kind wherever it appears
+// ... This applies to a declared `default:` as it already does to
+// `min`/`max`"). Called AFTER decodeVariable's key-walking loop closes, for
+// the same reason minNode/maxNode are: `type:` may appear textually after
+// `default:`, and coercing inside the loop would silently skip it whenever
+// the file happened to be written that way.
+//
+// ok is false whenever a diagnostic was added — an interpolation, or a lossy
+// numeric conversion — and the caller must not set HasDefault in that case.
+func decodeDefault(path, name string, node *yaml.Node, kind value.Kind, ds *diag.Diagnostics) (value.Value, bool) {
+	dv, hasExpr := decodeValue(path, "variable "+strconv.Quote(name)+"'s `default`", node, ds)
+	if hasExpr {
+		ds.Add(diag.Diagnostic{
+			Severity: diag.SeverityError,
+			Summary:  "variable " + strconv.Quote(name) + "'s default contains an interpolation",
+			Detail:   "Defaults are resolved before any expression scope exists, so `${...}` here has nothing to refer to. Accepting it would store the literal text " + strconv.Quote(node.Value) + " as the default.",
+			Action:   "Write a literal value, or set " + strconv.Quote(name) + " per environment instead.",
+			Origin:   originOf(path, node),
+		})
+		return value.Value{}, false
+	}
+
+	// Coercion applies only when BOTH sides are numeric. An untyped variable
+	// has no declared kind to coerce toward — its default is stored exactly
+	// as written, per the amendment's ruling on that case — and a default
+	// under a non-numeric declared type, or a non-numeric literal under a
+	// numeric one, is a type MISMATCH for stage 4 to report
+	// (`v.Kind == decl.Type`, per Task 3's contract note for Task 4), not a
+	// numeric conversion for stage 2 to perform. `default:` has no
+	// counterpart to decodeBound's upfront "kind has no ordering" refusal,
+	// because unlike a bound, a default is valid on every type, typed or not.
+	//
+	// This guard is BEHAVIOURALLY REDUNDANT with coerceNumeric's own switch —
+	// verified by deleting it and re-running the suite, 0 failures — because
+	// coerceNumeric's two cases already require an exact kind match and fall
+	// through to an identical passthrough otherwise. It stays anyway: it says
+	// the rule in one place a reader of THIS function sees immediately,
+	// rather than requiring a trip into coerceNumeric to work out why a
+	// non-numeric default is never touched.
+	numericType := kind == value.KindInt || kind == value.KindFloat
+	numericLiteral := dv.Kind == value.KindInt || dv.Kind == value.KindFloat
+	if !numericType || !numericLiteral {
+		return dv, true
+	}
+
+	origin := originOf(path, node)
+	coerced, ok := coerceNumeric(kind, dv, origin)
+	if ok {
+		return coerced, true
+	}
+
+	// Diagnostics mirror coerceBound's wording for the same exactness rule,
+	// substituting "default" for "min"/"max" — PLAN.md §44's shape (name the
+	// variable, the declared type, the literal written, and what to write
+	// instead), kept in the two callers rather than a third shared string
+	// because "a `min` on variable X" and "variable X's default" read
+	// differently in a sentence.
+	if kind == value.KindInt {
+		ds.Add(diag.Diagnostic{
+			Severity: diag.SeverityError,
+			Summary:  "variable " + strconv.Quote(name) + "'s default is not a whole number",
+			Detail:   "Variable " + strconv.Quote(name) + " has type integer, so " + strconv.Quote(node.Value) + " cannot be its default. Rounding it would silently change the value the user wrote.",
+			Action:   "Write a whole number, or declare `type: float`.",
+			Origin:   origin,
+		})
+	} else {
+		ds.Add(diag.Diagnostic{
+			Severity: diag.SeverityError,
+			Summary:  "variable " + strconv.Quote(name) + "'s default is too large to represent as a float",
+			Detail:   "Variable " + strconv.Quote(name) + " has type float, and " + strconv.Quote(node.Value) + " cannot be converted without changing its value.",
+			Action:   "Use a smaller default, or declare `type: integer`.",
+			Origin:   origin,
+		})
+	}
+	return value.Value{}, false
 }
 
 // decodeVariableValues decodes variables.yml: a flat mapping of variable name
