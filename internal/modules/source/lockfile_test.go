@@ -290,3 +290,42 @@ func TestPinSkipsAPathSource(t *testing.T) {
 		t.Errorf("Pin = %+v", rec)
 	}
 }
+
+// TestWriteLockfileOverwritesAnExistingLockfile pins the os.Rename half of the
+// Rename-versus-Link distinction, which nothing else in this suite reaches.
+//
+// Every other write test calls WriteLockfile once, against a project that has
+// no lockfile yet — and os.Link succeeds when the target does not exist. So
+// swapping Rename for Link, which is the mistake this repository has made in
+// each direction once, leaves the whole suite green while making the SECOND
+// write of any project fail with a phantom "file exists" conflict. That is a
+// regression a user hits on their second plan, not their first.
+//
+// The second write also changes the set, so this fails if Rename is swapped for
+// Link (EEXIST) AND if the write is made additive rather than replacing.
+func TestWriteLockfileOverwritesAnExistingLockfile(t *testing.T) {
+	project := t.TempDir()
+
+	first := []Record{
+		{Source: "https://example.invalid/a", Ref: "v1", Commit: strings.Repeat("a", 40)},
+		{Source: "https://example.invalid/gone", Ref: "v9", Commit: strings.Repeat("9", 40)},
+	}
+	if ds := WriteLockfile(project, first); ds.HasErrors() {
+		t.Fatalf("first WriteLockfile: %+v", ds)
+	}
+
+	second := []Record{
+		{Source: "https://example.invalid/a", Ref: "v2", Commit: strings.Repeat("b", 40)},
+	}
+	if ds := WriteLockfile(project, second); ds.HasErrors() {
+		t.Fatalf("second WriteLockfile: %+v — a lockfile that cannot be rewritten is a lockfile that only works once", ds)
+	}
+
+	lf := readLockfile(t, project)
+	if len(lf.Modules) != 1 {
+		t.Fatalf("modules = %+v, want exactly the second set: writing the complete set IS the prune, so a source the configuration no longer names must be gone", lf.Modules)
+	}
+	if lf.Modules[0] != second[0] {
+		t.Errorf("entry = %+v, want %+v", lf.Modules[0], second[0])
+	}
+}
