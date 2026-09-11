@@ -97,10 +97,13 @@ func Schemas(decls []config.VariableDecl) (map[string]Schema, diag.Diagnostics) 
 // Values and not float64s.
 //
 // Both operands are known to share s.Kind by the time this is called: stage 2
-// coerced the bound to the declared type, and Validate has already compared
-// the value's Kind to the schema's. Returns -1, 0 or 1; a pair it cannot read
-// compares as 0, so a malformed value produces no bound complaint on top of
-// the malformed-value diagnostic its caller already emits.
+// coerced the bound to the declared type, Validate has already compared the
+// value's Kind to the schema's, and checkBounds — the only caller — checks
+// each bound against s.Kind before ever calling this. Returns -1, 0 or 1; a
+// pair it cannot read compares as 0, which callers must NOT treat as "no
+// violation" on its own — checkBounds reports a pair it cannot read via
+// malformedBound instead of calling this, precisely so 0 here never has to
+// mean "passed".
 func compareBounds(k value.Kind, a, b value.Value) int {
 	switch k {
 	case value.KindInt:
@@ -235,12 +238,30 @@ func (s Schema) Validate(v value.Value) diag.Diagnostics {
 // checkBounds reports a value outside its schema's inclusive range. Both
 // bounds are inclusive: `min: 1` permits 1. Comparison happens in the declared
 // kind (see compareBounds).
+//
+// Each bound is checked against s.Kind BEFORE it is compared against v. A
+// bound whose datum does not match s.Kind cannot be read by compareBounds,
+// and compareBounds answers "no violation" when it cannot read a pair — the
+// right behaviour for a value it already trusts, but the wrong one to reach
+// on an untrustworthy bound: it would silently accept a value that is
+// actually out of range. Configuration can never produce this — stage 2
+// coerces a declared bound to its variable's Type before this package ever
+// sees one — so reaching it means a Schema was built with a bound that does
+// not match its own Kind, and that is reported rather than silently passed.
 func checkBounds(s Schema, v value.Value, ds *diag.Diagnostics) {
-	if s.HasMin && compareBounds(s.Kind, v, s.Min) < 0 {
-		ds.Add(boundDiag(s, "at least", s.Min, v))
+	if s.HasMin {
+		if !numericDatumMatchesKind(s.Kind, s.Min) {
+			ds.Add(malformedBound(s, "min", s.Min))
+		} else if compareBounds(s.Kind, v, s.Min) < 0 {
+			ds.Add(boundDiag(s, "at least", s.Min, v))
+		}
 	}
-	if s.HasMax && compareBounds(s.Kind, v, s.Max) > 0 {
-		ds.Add(boundDiag(s, "at most", s.Max, v))
+	if s.HasMax {
+		if !numericDatumMatchesKind(s.Kind, s.Max) {
+			ds.Add(malformedBound(s, "max", s.Max))
+		} else if compareBounds(s.Kind, v, s.Max) > 0 {
+			ds.Add(boundDiag(s, "at most", s.Max, v))
+		}
 	}
 }
 
@@ -269,6 +290,25 @@ func malformed(s Schema, v value.Value) diag.Diagnostic {
 		Detail:   "It claims kind " + v.Kind.String() + " but its datum does not match. This is an internal error.",
 		Action:   "Report this, with the configuration that produced it.",
 		Origin:   originOr(v.Origin, s.Origin),
+	}
+}
+
+// malformedBound is malformed's sibling for the neighbouring inconsistency: a
+// schema whose declared bound does not match its own declared Kind, rather
+// than a value whose Raw does not match its Kind. Worded as the internal
+// error it is rather than as user error, because a user cannot produce this
+// through configuration — stage 2 coerces every declared bound to its
+// variable's Type before this package ever sees one. Reaching this means a
+// Schema was constructed by hand with an inconsistent bound, so the message
+// points at that rather than telling anyone to edit YAML.
+func malformedBound(s Schema, which string, bound value.Value) diag.Diagnostic {
+	return diag.Diagnostic{
+		Severity: diag.SeverityError,
+		Summary:  "variable " + strconv.Quote(s.Name) + "'s " + which + " bound does not match its declared kind",
+		Detail: "Declared as " + s.Kind.String() + " at " + s.Origin.String() +
+			", but its " + which + " bound is " + article(bound.Kind) + " " + bound.Kind.String() + ". This is an internal error.",
+		Action: "Report this, with the configuration that produced it.",
+		Origin: originOr(bound.Origin, s.Origin),
 	}
 }
 

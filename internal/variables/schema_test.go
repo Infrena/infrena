@@ -97,6 +97,37 @@ func TestSchemasStoresTheDeclaredDefaultUnstamped(t *testing.T) {
 	}
 }
 
+func TestSchemasReportsEveryBadDeclarationNotJustTheFirst(t *testing.T) {
+	// spec §7.4, and Schemas' own doc comment: "a declaration with a bad
+	// bound keeps its type and loses the bound rather than stopping the
+	// walk, so a second bad declaration is still reported." That claim was
+	// unpinned — every other bad-declaration test in this file calls Schemas
+	// with exactly one bad declaration, so nothing distinguishes "collect
+	// every problem" from "stop at the first". Two declarations here, in two
+	// DIFFERENT failure modes, so the test cannot pass by reporting the same
+	// problem twice: one default has the wrong kind, the other is out of its
+	// own bounds.
+	wrongKind := decl("wrongkind", value.KindInt)
+	wrongKind.Default, wrongKind.HasDefault = value.String("nope", value.SourceExplicit), true
+
+	outOfBounds := withDefault(
+		numDecl("toolarge", value.KindInt, value.Int(1, value.SourceExplicit), value.Int(100, value.SourceExplicit), true, true),
+		value.Int(500, value.SourceExplicit))
+
+	_, ds := Schemas([]config.VariableDecl{wrongKind, outOfBounds})
+	if !ds.HasErrors() {
+		t.Fatal("both declarations are individually bad and must both be reported")
+	}
+	var sb strings.Builder
+	ds.Render(&sb)
+	out := sb.String()
+	for _, want := range []string{`"wrongkind"`, `"toolarge"`} {
+		if !strings.Contains(out, want) {
+			t.Errorf("both bad declarations must be reported, not just the first; %q is missing:\n%s", want, out)
+		}
+	}
+}
+
 func numDecl(name string, kind value.Kind, min, max value.Value, hasMin, hasMax bool) config.VariableDecl {
 	d := decl(name, kind)
 	d.Min, d.HasMin = min, hasMin
@@ -404,6 +435,34 @@ func TestValidateRejectsANumericValueWhoseDatumDoesNotMatchItsClaimedKind(t *tes
 	ds.Render(&sb)
 	if !strings.Contains(sb.String(), "malformed") {
 		t.Errorf("want the internal-error diagnostic, got:\n%s", sb.String())
+	}
+}
+
+func TestValidateFailsClosedWhenABoundDoesNotMatchItsDeclaredKind(t *testing.T) {
+	// The reviewer's exact repro. Schema is an exported struct with exported
+	// fields, so anything can build one without going through Schemas() — the
+	// tests in this file do exactly that. Before this fix, a KindInt schema
+	// whose Min was hand-built as a KindFloat value made compareBounds unable
+	// to read the bound, and it answered "no violation" for a pair it
+	// couldn't compare — silently ACCEPTING a value that was actually below
+	// the minimum. A validator that says "no problems" when it could not
+	// perform the comparison is worse than one that errors: the caller has
+	// no way to tell "checked and fine" from "could not check". This must
+	// now fail closed: report a diagnostic instead of passing silently.
+	s := Schema{Name: "replicas", Kind: value.KindInt, Origin: value.Origin{File: "variables.yml", Line: 3, Column: 5},
+		Min: value.Float(1.5, value.SourceExplicit), HasMin: true}
+
+	ds := s.Validate(value.Int(0, value.SourceVariable))
+	if !ds.HasErrors() {
+		t.Fatal("a bound that does not match its schema's declared kind must be reported, not silently treated as satisfied")
+	}
+	var sb strings.Builder
+	ds.Render(&sb)
+	out := sb.String()
+	for _, want := range []string{"replicas", "min"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the diagnostic must name the variable and which bound is inconsistent; %q is missing:\n%s", want, out)
+		}
 	}
 }
 
