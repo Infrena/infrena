@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Current state
 
-**M1, M2 and M3 are merged to `main`** (tags `m1`, `m2`, `m3`); **M4 is complete on `m4-variables`**. The reconcile loop
+**M1-M4 are merged to `main`** (tags `m1`-`m4`); **M5 (modules) is in authoring on `m5-modules`**. The reconcile loop
 closes end to end against the fake provider: `validate` → `plan` → `apply` → re-plan
 clean → externally mutate → `refresh` → drift shown → remove from YAML → destroy
 proposed → `apply`. ~39,581 lines of Go across 21 packages.
@@ -32,12 +32,45 @@ round-trip through the plan artifact; that is proved through the binary, not ass
 `validate`, `plan` and `apply` resolve variables identically; `destroy` and `refresh`
 refuse the flags rather than accept and ignore them.
 
+M5 in progress: modules. `PLAN.md` §11 was rewritten on 2026-09-11 and the module model
+is NOT what an earlier reading of it would suggest. Loading a module and instantiating it
+are two separate steps:
+
+```yaml
+modules:                  # a LIST of sources. No inputs. Loading only makes a
+  - ./modules/networking  # module available under a name.
+  - https://github.com/acme/infra-app-stack:v1.2.0   # remote sources need :tag-or-hash
+  - name: app_stack_v2                                # the mapping form exists only
+    source: https://github.com/other/infra-app-stack:v2.0.0   # to override a name
+
+resources:
+  prod:
+    type: module.app_stack   # instantiation is a RESOURCE whose type names a module
+    replicas: 3              # its attributes are the module's inputs
+```
+
+Three consequences worth knowing before touching module code:
+
+- **A module input is an ordinary `AttributeDecl`**, bound by stage 6's existing
+  `bindAttribute`. Do not write scope/provenance handling for module inputs — a literal
+  lands on `ScopeBaseConfig` and a `${count}` from `--var` keeps `ScopeCLIOverride` by
+  the same path as every other attribute. `ScopeModuleDefault` is filled by the module's
+  own declared `default:` and by nothing else.
+- **`module.` is a reserved type prefix.** `internal/registry.Register` refuses a
+  provider definition that claims it. That guard stops a colliding provider at startup;
+  it is NOT reachable from user config, because stage 5 expands every instance away
+  before stage 7 calls `Definition`.
+- **Never fold module inputs by substituting and re-serializing.** That route calls
+  `value.Expr.String()`, which returns `value.Redacted` — so a sensitive input would be
+  applied as the literal string `<sensitive>`. Stage 5 records a per-instance scope
+  instead (`modules.Expansion`); stage 6 resolves names against it.
+
 Acceptance invariants 1, 2, 4 and 5 each have a test that fails against the unfixed code.
 That phrasing is deliberate: invariant 4's test once passed 20/20 with its dependency edge
 deleted, and invariant 5's atomicity test caught a real TOCTOU only 2 times in 5. A test
 naming an invariant is not evidence it holds.
 
-Absent until M5-M7: modules, reading a saved plan back, `init`, `explain`, `graph`,
+Absent until M6-M7: reading a saved plan back, `init`, `explain`, `graph`,
 `discover`, `import`. Nothing half-implements one of those.
 
 The standard that kept `--var-file` erroring rather than being silently ignored still
