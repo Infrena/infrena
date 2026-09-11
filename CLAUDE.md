@@ -6,123 +6,37 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Current state
 
-**M1-M4 are merged to `main`** (tags `m1`-`m4`); **M5 (modules) is complete on
-`m5-modules`**. The reconcile loop closes end to end against the fake provider,
-including through a module: `validate` → `plan` → `apply` → re-plan clean →
-externally mutate → `refresh` → drift shown → remove from YAML → destroy proposed →
-`apply`. ~52,235 lines of Go across 24 packages.
+**PHASE 1 IS COMPLETE.** M1-M6 are merged to `main` (tags `m1`-`m6`). Every one of `PLAN.md`
+§49's nineteen components exists, the last being the module system (M5) and the Phase-1 CLI
+surface (M6).
+
+The MVP workflow §48 describes runs end to end against the fake provider, as far as Phase 1
+reaches: `init` → `validate` → `plan` → `apply` → re-plan clean → externally mutate → `refresh`
+→ drift shown → remove from YAML → destroy proposed → `apply`, plus `graph` and `explain`. The
+three commands §48 ends on — `discover`, `import`, `export` — are **Phase 2** (§50), and
+`providers/test` returns `ErrNotImplemented` for `Discover` and `Import` saying so.
 
 Present: the value model with per-leaf provenance and sensitivity, addressing, diagnostics,
-declarative resource schemas, the provider interface, a hand-editable file-backed fake
-provider, versioned state with atomic writes and `O_EXCL` locking, compiler stages 1-2 and
-6-8, a generic dependency graph, provider refresh, the planner, the plan renderer, and —
-new in M3 — the executor (a worker pool bounded globally and per provider, per-operation
-state persistence, failure isolation, SIGINT handling, retries classified three ways) and
-the commands `apply`, `destroy` and `refresh`.
+declarative resource schemas, the provider interface, a hand-editable file-backed fake provider,
+versioned state with atomic writes and `O_EXCL` locking, all eight compiler stages, a generic
+dependency graph, provider refresh, the planner, the plan renderer, the executor, lifecycle
+protection, and the commands `init`, `validate`, `plan`, `apply`, `destroy`, `refresh`, `state`,
+`graph` and `explain`.
 
-New in M4: compiler stages 3 and 4, so PLAN.md §7's precedence chain is real end to end —
-provider defaults → base configuration (`variables.yml`) → environment inheritance
-(`extends`) → the selected environment → `--var-file` → `--var`, each rung winning in that
-order. Typed variable schemas (`type`, `default`, `min`, `max`) validate the value that WINS
-its rung — not every value supplied, so a bad entry in `variables.yml` that every environment
-overrides is not reported today. A numeric literal is coerced to its declared kind wherever it
-appears — exactly, or it is rejected. `Value` gained `Scope` (which rung supplied it) and `SuppliedBy` (which
-input, at the CLI rung), so a plan names its own provenance: `size: 7 [variable, from
-conf/prod-sizes.yml]`. Both fields are excluded from `Equal` and `ConfigHash` and both
-round-trip through the plan artifact; that is proved through the binary, not asserted.
-`validate`, `plan` and `apply` resolve variables identically; `destroy` and `refresh`
-refuse the flags rather than accept and ignore them.
+**New in M5 — modules.** Loading and instantiating are SEPARATE: `modules:` is a list of sources
+carrying no inputs, and a resource of type `module.<name>` instantiates one. Modules nest, take
+typed inputs with defaults, publish outputs, and may be fetched from a pinned git remote.
+Compiler stage 5 expands them away entirely, so the planner, graph, state and executor never
+learn modules exist. Addresses embed the module path (`module.prod.db`), which means moving a
+resource between modules is a destroy plus a create — there is no `state mv`.
 
-M5: modules, and compiler stage 5. `PLAN.md` §11 was rewritten on 2026-09-11 and the
-module model is NOT what an earlier reading of it would suggest. Loading a module and
-instantiating it are two separate steps:
+**New in M6 — the Phase-1 CLI surface.** `init` scaffolds a project that validates immediately
+and refuses to overwrite; `graph` renders the dependency tree from the same compile `plan` does;
+`explain` renders a resource type from the registry, so documentation cannot drift from the
+schemas it describes.
 
-```yaml
-modules:                  # a LIST of sources. No inputs. Loading only makes a
-  - ./modules/networking  # module available under a name.
-  - https://github.com/acme/infra-app-stack:v1.2.0   # remote sources need :tag-or-hash
-  - name: app_stack_v2                                # the mapping form exists only
-    source: https://github.com/other/infra-app-stack:v2.0.0   # to override a name
-
-resources:
-  prod:
-    type: module.app_stack   # instantiation is a RESOURCE whose type names a module
-    replicas: 3              # its attributes are the module's inputs
-```
-
-Three consequences worth knowing before touching module code:
-
-- **A module input is an ordinary `AttributeDecl`**, bound by stage 6's existing
-  `bindAttribute`. Do not write scope/provenance handling for module inputs — a literal
-  lands on `ScopeBaseConfig` and a `${count}` from `--var` keeps `ScopeCLIOverride` by
-  the same path as every other attribute. `ScopeModuleDefault` is filled by the module's
-  own declared `default:` and by nothing else.
-- **`module.` is a reserved type prefix.** `internal/registry.Register` refuses a
-  provider definition that claims it. That guard stops a colliding provider at startup;
-  it is NOT reachable from user config, because stage 5 expands every instance away
-  before stage 7 calls `Definition`.
-- **Never fold module inputs by substituting and re-serializing.** That route calls
-  `value.Expr.String()`, which returns `value.Redacted` — so a sensitive input would be
-  applied as the literal string `<sensitive>`. Stage 5 records a per-instance scope
-  instead (`modules.Expansion`); stage 6 resolves names against it.
-
-Modules nest, bounded at depth 32 (a cycle and excessive depth are reported as distinct
-diagnostics), and `ScopeModuleDefault` — the rung `PLAN.md` §7's precedence chain
-declares and M4 left unpopulated — is now filled by a module's own declared `default:`,
-closing that chain end to end. A module exposes `outputs:`, addressed by the caller as
-`${call.output}`; the value may be unknown (it can read a computed provider attribute)
-and reading an output the module does not declare is reported at `validate`, naming what
-it does declare. After stage 5, addresses are module-qualified at every level
-(`module.platform.module.storage.store`) and nothing downstream — the planner, the
-executor, the state package — knows a module exists.
-
-Task 10's integration suite found two gaps, both since fixed and both worth knowing the
-shape of:
-
-1. **A module call's own attribute that references an outer-scope resource recorded no
-   dependency edge.** `network: ${net.id}` passed into a module call — the pattern
-   nearly every module fixture in `PLAN.md` uses — evaluated to a value inside
-   `internal/modules/inputs.go`'s `evaluateCall`, but nothing recorded a graph edge from
-   the module's expanded resources to `net`; the same class hit the reverse direction
-   too, where `Qualify` folds a resolved module OUTPUT reference into a literal before
-   `bindAttribute`'s reference walk runs, so an edge to that output was lost the same
-   way. Both fixed by recording edges before the fold. The failure mode is worth
-   remembering because it is the worst available shape: `plan` showed a clean, correct
-   plan and `apply` failed on it (`"network is still unknown after its dependencies
-   were applied"`) — package-level tests could not see it because nothing at that level
-   ran a real apply across a module boundary.
-2. **`modules.lock` reading, comparing and writing was unwired.**
-   `internal/modules/source`'s `Lockfile.Check`, `LoadLockfile` and `WriteLockfile`
-   existed and were unit-tested, but nothing in `internal/cli` or `internal/compiler`
-   called any of them. Now: the comparison is a pure read, wired into `Compile` so
-   `validate` can report a moved tag without writing anything; the write is gated on a
-   new `compiler.Options.RecordLocks`, set only by `apply` (the command already
-   permitted to change the project directory), and happens once, with the complete
-   resolved set, after a walk succeeds — never per-resolution, which is the shape
-   `ae1e309` already fixed once for the file's atomicity.
-
-Acceptance invariants 1, 2, 4 and 5 each have a test that fails against the unfixed code.
-That phrasing is deliberate: invariant 4's test once passed 20/20 with its dependency edge
-deleted, invariant 5's atomicity test caught a real TOCTOU only 2 times in 5, and gap 1
-above is invariant 2 failing for exactly this reason — caught only once the integration
-suite exercised a real apply across a module boundary, not a plan.
-
-Absent until M6-M7: reading a saved plan back, `init`, `explain`, `graph`,
-`discover`, `import`. Nothing half-implements one of those.
-
-The standard that kept `--var-file` erroring rather than being silently ignored still
-holds, and M4 showed why it is worth stating as a rule about TASK BOUNDARIES and not only
-about flags: one task removed the flag from the unsupported list for every command while
-wiring only `plan`, and for four tasks `apply --var-file` accepted the file and applied the
-default instead. Remove a guard and add the capability it guards in the same change, per
-command. Neither task's tests could see that window, because each covered its own command.
-
-`PLAN.md` remains the product spec. The Phase 1 design spec and the M1-M4 implementation
-plans are under `docs/superpowers/`.
-
-`PLAN.md` is the authoritative spec. Read the relevant section before implementing a
-feature; the sections below summarise the architecture but do not replace it. Section
-numbers referenced here match `PLAN.md` headings.
+**Absent until Phase 2+:** `discover`, `import`, `export`, reading a saved plan back, remote
+state, AWS. Nothing half-implements one of those.
 
 ## Name
 
