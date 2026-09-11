@@ -5439,7 +5439,7 @@ loop.
 - create `internal/variables/resolve.go`
 - create `internal/variables/resolve_test.go`
 - modify `internal/variables/schema.go` (add `Schema.Coerce`, beside `Validate`)
-- modify `pkg/value/value.go` (add `Coerce`, `withDatum`)
+- modify `pkg/value/value.go` (add the unknown branch to the existing `Coerce`)
 - modify `pkg/value/value_test.go`
 
 ## Interfaces
@@ -6291,64 +6291,45 @@ func TestResolveCoercionKeepsProvenanceAndSensitivity(t *testing.T) {
 }
 ```
 
-Add a `pkg/value` test for the conversion itself, in `pkg/value/value_test.go`:
+`value.Coerce` ALREADY EXISTS (`pkg/value/value.go`, shipped with Task 3). Its
+exactness rules and its provenance preservation are done and pinned —
+`TestCoerceIsExactOrRefuses` and `TestCoercePreservesEveryOtherField` are in
+`pkg/value/value_test.go`, and the second fails on all five of `Source`, `Scope`,
+`Sensitive`, `Origin` and `Expr` if the function is rewritten to rebuild the value.
+Do not add either. The one thing missing is the unknown case, so add exactly this to
+`pkg/value/value_test.go`:
 
 ```go
-func TestCoerceIsExactOrRefuses(t *testing.T) {
-    const tooBig = int64(1)<<53 + 1
-    for _, tc := range []struct {
-        name string
-        in   Value
-        to   Kind
-        ok   bool
-        want any
-    }{
-        {"int to float", Int(1, SourceExplicit), KindFloat, true, float64(1)},
-        {"float to int", Float(2, SourceExplicit), KindInt, true, int64(2)},
-        {"same kind", Int(1, SourceExplicit), KindInt, true, int64(1)},
-        {"fractional float to int", Float(1.5, SourceExplicit), KindInt, false, nil},
-        {"int too large for float", Int(tooBig, SourceExplicit), KindFloat, false, nil},
-        {"string to int", String("1", SourceExplicit), KindInt, false, nil},
-    } {
-        got, ok := Coerce(tc.in, tc.to)
-        if ok != tc.ok {
-            t.Errorf("%s: ok = %v, want %v", tc.name, ok, tc.ok)
-            continue
-        }
-        if !tc.ok {
-            continue
-        }
-        if got.Kind != tc.to || got.Raw != tc.want {
-            t.Errorf("%s: got %v/%v, want %v/%v", tc.name, got.Kind, got.Raw, tc.to, tc.want)
-        }
-    }
-}
-
-func TestCoercePreservesEverythingButTheDatum(t *testing.T) {
-    in := Int(1, SourceEnvironment).
-        WithScope(ScopeEnvironmentVar).
-        WithSensitive(true).
-        WithOrigin(Origin{File: "environments/production.yml", Line: 4, Column: 3})
-
-    got, ok := Coerce(in, KindFloat)
-    if !ok {
-        t.Fatal("1 converts to a float exactly")
-    }
-    if got.Source != in.Source || got.Scope != in.Scope || got.Sensitive != in.Sensitive || got.Origin != in.Origin {
-        t.Errorf("Coerce changed more than the datum:\n got %+v\nwant %+v with Kind/Raw replaced", got, in)
-    }
-}
-
 func TestCoerceRetypesAnUnknown(t *testing.T) {
     // An unknown carries a Kind as a CLAIM about what it will become, with no
-    // datum to lose, so retyping one is exact by definition. Task 6 builds
-    // unknowns for variables no rung set; one left claiming KindInt under
-    // `type: float` would fail stage 7's kind check at plan time.
+    // datum to lose, so retyping one is exact by definition. The shipped
+    // Coerce falls through to AsInt/AsFloat, which report ok=false for a value
+    // with no datum, so it currently answers "cannot convert exactly" to a
+    // conversion that cannot lose anything.
     got, ok := Coerce(Unknown(KindInt, SourceVariable), KindFloat)
-    if !ok || got.Kind != KindFloat || got.Known {
-        t.Errorf("Coerce(unknown int, float) = %+v, %v; want an unknown float", got, ok)
+    if !ok {
+        t.Fatal("an unknown has no datum to lose; retyping it is exact")
+    }
+    if got.Kind != KindFloat {
+        t.Errorf("Kind = %v, want KindFloat", got.Kind)
+    }
+    if got.Known {
+        t.Error("it must stay unknown: Coerce changes a value's type, never whether it is known")
+    }
+    if got.Raw != nil {
+        t.Errorf("Raw = %v, want nil — an unknown holds no datum (see Value's doc comment)", got.Raw)
     }
 }
+
+func TestCoerceLeavesAnUnknownOfANonNumericKindAlone(t *testing.T) {
+    // The other direction. Retyping is exact only because there is no datum;
+    // it is not a licence to reinterpret an unknown string as a number, which
+    // would be a type error whether or not the datum had arrived yet.
+    if _, ok := Coerce(Unknown(KindString, SourceVariable), KindInt); ok {
+        t.Error("an unknown string is still the wrong kind for an integer; the caller reports that, not Coerce")
+    }
+}
+
 ```
 
 ### 6.9 Run it, see it fail
@@ -6358,12 +6339,20 @@ export PATH="$HOME/.local/share/mise/shims:$PATH"
 go test -count=1 ./internal/variables/ ./pkg/value/
 ```
 
-Expect a build failure first — `undefined: Coerce`, `s.Coerce undefined` — then, once
-those exist as stubs, `TestResolveCoercesAYamlIntegerToADeclaredFloat` failing on the
-kind and `TestResolveCoercesBeforeCheckingBounds` failing with **no diagnostic at
-all**. Note that second one: it is the case that produces silence rather than an
-error, and it is why the ordering is written into the plan rather than left to
-judgement.
+Two different failures, and they are worth reading separately.
+
+`./pkg/value/` COMPILES — `Coerce` already exists — and
+`TestCoerceRetypesAnUnknown` fails at its first assertion, `an unknown has no datum to
+lose; retyping it is exact`. `TestCoerceLeavesAnUnknownOfANonNumericKindAlone` passes
+already; it is there to fail if the fix in 6.10 over-reaches into reinterpreting
+unknowns of any kind.
+
+`./internal/variables/` fails to build — `s.Coerce undefined` — because `Schema.Coerce`
+is genuinely new. Once it exists as a stub returning its argument unchanged,
+`TestResolveCoercesAYamlIntegerToADeclaredFloat` fails on the kind, and
+`TestResolveCoercesBeforeCheckingBounds` fails with **no diagnostic at all**. Note that
+second one: it is the case that produces silence rather than an error, and it is why
+the ordering is written into the plan rather than left to judgement.
 
 ### 6.10 Minimal code: one conversion rule, one diagnostic wrapper
 
@@ -6371,78 +6360,98 @@ judgement.
 the value model — it mentions only `Kind` and `Value` — and it must never differ
 between the places that apply it: stage 2 coerces bounds and defaults, stage 4 coerces
 supplied values, and a precision bug in one IS a precision bug in the other. That is
-the coupling test, so the arithmetic gets ONE implementation, in `pkg/value`. The
+the coupling test, so the arithmetic has ONE implementation, in `pkg/value` — already
+built, by Task 3, and consumed here rather than repeated. The
 diagnostic is not coupled — each stage has its own origin and its own wording — so
 that part stays local.
 
-Add to `pkg/value/value.go`:
+Add to `pkg/value/value.go` — **by editing the existing `Coerce`, not by writing a
+new one.** Task 3 shipped it (`grep -n "func Coerce" pkg/value/value.go`), and what is
+there today is correct apart from one missing case. This is what you are modifying:
 
 ```go
-// Coerce returns v as kind k, reporting ok=false when the conversion would not
-// be exact.
-//
-// YAML tags `1` as !!int whatever the declaration around it says, so a value
-// written where a float is declared arrives as an integer and the user had no
-// other spelling available. Converting it is normalisation. Converting 1.5 to
-// an integer is not — it changes what was written — so that is refused and the
-// caller reports it.
-//
-// Only the numeric pair converts. A string is never coerced to a number: that
-// is a type error, and the callers that care have a better message for it than
-// this function could.
-//
-// Everything except Kind and Raw is carried across untouched, including
-// Sensitive and Origin. That is by construction rather than by copying a list
-// of fields — see withDatum — because a rebuilt value that silently drops
-// Sensitive prints a secret in clear, and one that drops Scope makes a plan
-// name the wrong precedence level.
 func Coerce(v Value, k Kind) (Value, bool) {
-    if v.Kind == k {
-        return v, true
-    }
-    if !v.Known {
-        // An unknown's Kind is a claim about what it will become, with no
-        // datum to lose, so retyping one is exact by definition.
-        return v.withDatum(k, nil), true
-    }
-    switch {
-    case v.Kind == KindInt && k == KindFloat:
-        n, ok := v.AsInt()
-        if !ok {
-            return v, false
-        }
-        f := float64(n)
-        // Above 2^53 the conversion rounds, so the stored value would not be
-        // the one written.
-        if int64(f) != n {
-            return v, false
-        }
-        return v.withDatum(KindFloat, f), true
-    case v.Kind == KindFloat && k == KindInt:
-        f, ok := v.AsFloat()
-        if !ok {
-            return v, false
-        }
-        n := int64(f)
-        // Rejects a fractional part, and NaN and the infinities with it: none
-        // of them survives the round trip.
-        if float64(n) != f {
-            return v, false
-        }
-        return v.withDatum(KindInt, n), true
-    }
-    return v, false
-}
-
-// withDatum returns v with a new Kind and Raw, keeping every field that
-// describes where the value came from and how it must be handled. The value
-// receiver is what makes that automatic: a future field added to Value is
-// carried by default rather than forgotten.
-func (v Value) withDatum(k Kind, raw any) Value {
-    v.Kind, v.Raw = k, raw
-    return v
-}
+	if v.Kind == k {
+		return v, true
+	}
+	switch {
+	case k == KindInt && v.Kind == KindFloat:
+		f, ok := v.AsFloat()
+		...
 ```
+
+Insert the unknown case immediately after the `v.Kind == k` short-circuit and before
+the `switch`:
+
+```go
+	if !v.Known {
+		// An unknown's Kind is a CLAIM about what it will become; there is no
+		// datum to round, so retyping one is exact by definition. Without this,
+		// the numeric arms below reach AsInt/AsFloat, which report ok=false for
+		// a value holding nothing, and Coerce answers "cannot convert exactly"
+		// about a conversion that cannot lose anything. Schema.Coerce then
+		// renders that as "the value supplied by ... is (unknown), which cannot
+		// be converted to float without changing it" — a complaint about a
+		// value that has not arrived yet.
+		//
+		// Reached only when the kinds differ, because the check above has
+		// already returned for the equal case. Raw is set to nil explicitly
+		// rather than left alone: Value's contract is that Raw is nil when
+		// Known is false, and an unknown that kept a stale datum of the OLD
+		// kind would be a value whose Raw contradicts its Kind — the exact
+		// shape Equal and Format each shipped a bug over.
+		v.Kind, v.Raw = k, nil
+		return v, true
+	}
+```
+
+**Keep the shipped style: assign `v.Kind, v.Raw` directly on the by-value receiver.**
+An earlier draft of this task introduced a `withDatum` helper for it, on the reasoning
+that a field added to `Value` later would be carried automatically rather than
+forgotten. That reasoning is sound and it is also already satisfied — direct
+assignment to two fields of a by-value copy has exactly the same property, which is
+why `TestCoercePreservesEveryOtherField` passes today. The helper would have bought a
+name, not a guarantee, and refactoring working, pinned code to buy a name is not a
+trade this milestone makes. There is no `withDatum`; do not add one.
+
+Nothing else in `Coerce` changes. In particular do not touch the two numeric arms or
+the final `return v, false`: their exactness rules are pinned by
+`TestCoerceIsExactOrRefuses`, and provenance preservation by
+`TestCoercePreservesEveryOtherField`.
+
+**Is this branch reachable from stage 4? Not in M4 — it is defensive here, and live
+in M5.** Stated rather than left to be rediscovered, because this milestone has spent
+several rounds separating "reachable but untested" from "unreachable by construction",
+and the two call for different things.
+
+Every unknown stage 4 can hold today already carries the schema's own kind, so
+`Coerce` returns at the `v.Kind == k` short-circuit and never reaches the new branch:
+
+  - Stage 2 rejects an interpolation in `variables.yml`, in an environment override,
+    and in a `default:` (`grep -n "contains an interpolation" internal/config/decode.go`
+    — three sites), so no unknown enters from YAML at all.
+  - `Schema.ParseText` builds its failure value as `value.Unknown(s.Kind, ...)`, which
+    is by construction the kind the schema declares.
+  - `checkAgainstSchemas`' own unset branch builds `value.Unknown(s.Kind, ...)` and
+    `continue`s without coercing.
+
+What makes it live is **M5**. Rung 3 (`ScopeModuleDefault`) is the slot this ladder
+deliberately leaves empty, and a module output is evaluated in the caller's scope and
+may be unknown because it depends on a resource that does not exist yet (spec §7.2).
+An unknown `KindInt` module output feeding a `type: float` variable is exactly the
+shape, and it arrives with no test in M4 able to construct it.
+
+So: the test for this branch is the `pkg/value` unit test in 6.8, and it belongs at
+that level anyway. The claim being fixed is about `Coerce`'s own contract — it gives a
+wrong answer to the question it asks — not about what stage 4 produces. A test driving
+it through `Resolve` would be the better test if one could be written; none can, and
+writing one that appears to would be worse than this note.
+
+The fix is also what makes `Coerce` consistent with its sibling: `Schema.Validate`
+already handles an unknown explicitly, checking its kind and then returning without
+touching the datum. Unknowns flow through this engine and are handled; they are not
+rejected. `Coerce` was the one place that did not follow that rule, and the
+inconsistency is invisible until M5 wires the rung that exposes it.
 
 Add to `internal/variables/schema.go`, beside `Validate` so a reader meets
 normalisation and judgement together:
@@ -6481,10 +6490,21 @@ func (s Schema) Coerce(v value.Value) (value.Value, diag.Diagnostics) {
     return out, ds
 }
 
+// isNumericKind reports whether k is one of the two numeric kinds.
+//
+// Not to be confused with its neighbour numericDatumMatchesKind, which asks a
+// different question — whether a Value's DATUM really is of the kind it claims
+// — and is what Validate uses to catch a malformed value. This one looks only
+// at a Kind and never at a datum, which is why it is safe to call on an
+// unknown.
 func isNumericKind(k value.Kind) bool {
     return k == value.KindInt || k == value.KindFloat
 }
 ```
+
+`article`, `show` and `originOr` are already in `schema.go` (Task 4) — use them rather
+than writing local equivalents; `grep -n "^func " internal/variables/schema.go` shows
+what the file already provides.
 
 Then, in `checkAgainstSchemas` (`internal/variables/resolve.go`), coerce the winning
 value before judging it and store what came back:
