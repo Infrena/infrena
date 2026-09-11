@@ -47,13 +47,32 @@ import (
 // Stages 3 (environments.Resolve) and 4 (variables.Resolve) are two more such
 // exceptions, and for the same reason as Decode: neither builds a
 // ResolvedConfig, so a failure there has nothing partial to hand forward
-// either. Stage 3 failing means the environment chain itself could not be
-// established — extending an unknown environment or a cycle in `extends` — so
-// stage 4 is not run at all: resolving variables against a broken chain would
-// report every environment-scoped variable as unset, burying the one
-// diagnostic that explains why. Stage 4 failing means one or more declared
-// variables could not be resolved to a value; stage 6 would otherwise report
-// `undefined variable` again at every use site, the same problem told worse.
+// either.
+//
+// Stage 3 failing means the environment chain itself could not be
+// established — extending an unknown environment or a cycle in `extends`.
+// Stage 4 still RUNS in that case (a failed Chain carries Selected: false,
+// and stage 4 already treats an unselected chain the same way it treats
+// `infra validate` having no environment argument at all: an unset
+// environment-scoped variable becomes an unknown rather than an error, so a
+// broken chain by itself adds no further diagnostics). What the halt
+// actually guards is stage 4's CHAIN-INDEPENDENT checking — a malformed
+// variable declaration (variables.Schemas) or a malformed --var (ParseText)
+// — which runs unconditionally and would otherwise be reported ALONGSIDE
+// the chain failure. That is a deliberate stage-boundary policy choice, in
+// the same spirit as Decode's own halt and in tension with §7.4's
+// "diagnostics collect, don't fail fast": a user who has both a cycle in
+// `extends` and a malformed variable default fixes the cycle, re-runs, and
+// only then learns about the default. Two independent problems reported one
+// stage-boundary at a time, rather than both at once, is judged the lesser
+// confusion here because a diagnostic ABOUT a chain that never resolved
+// (the malformed default's context is "resolving environment X", and X's
+// own chain is broken) risks reading as caused by the very failure that
+// already explains itself.
+//
+// Stage 4 failing outright means one or more declared variables could not be
+// resolved to a value; stage 6 would otherwise report `undefined variable`
+// again at every use site, the same problem told worse.
 func Compile(files []config.File, reg *registry.Registry, opts Options) (ResolvedConfig, diag.Diagnostics) {
 	var ds diag.Diagnostics
 
@@ -66,9 +85,13 @@ func Compile(files []config.File, reg *registry.Registry, opts Options) (Resolve
 	chain, envDiags := environments.Resolve(project.Environments, opts.Environment)
 	ds.Extend(envDiags)
 	if envDiags.HasErrors() {
-		// A failed chain makes stage 4 report every environment-scoped
-		// variable as unset, which buries the one diagnostic that explains
-		// the failure.
+		// A broken chain does not by itself make stage 4 noisier — an
+		// unselected Chain already resolves an unset environment-scoped
+		// variable to an unknown rather than an error (see Compile's doc
+		// comment). What this halt actually suppresses is stage 4's
+		// chain-independent checking (a malformed variable declaration or
+		// a malformed --var), which would otherwise be reported alongside
+		// a diagnostic already explaining why the chain itself failed.
 		return ResolvedConfig{}, ds
 	}
 

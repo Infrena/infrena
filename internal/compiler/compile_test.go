@@ -192,6 +192,25 @@ resources:
 	}
 }
 
+// TestCompileLeavesAccountUndefinedWhenNoneWasSupplied is Region's twin.
+// seedProcessVariables guards `account` with the identical `if opts.Account
+// != ""` shape it guards `region` with, and nothing else in the suite
+// exercises that specific guard — Region's own test does not, by
+// construction, say anything about Account.
+func TestCompileLeavesAccountUndefinedWhenNoneWasSupplied(t *testing.T) {
+	files := loadFiles(t, `
+project: myapp
+resources:
+  network:
+    type: test.network
+    cidr: ${account}
+`)
+	_, ds := Compile(files, testRegistry(t), Options{Environment: "dev"})
+	if !ds.HasErrors() {
+		t.Fatal("${account} with no account supplied must be reported as undefined, not resolved to an empty string")
+	}
+}
+
 func TestCompileWillNotLetAVarFlagRedefineTheEnvironment(t *testing.T) {
 	files := loadFiles(t, `
 project: myapp
@@ -209,6 +228,34 @@ resources:
 	}
 	if got, _ := cfg.Resources["network"].Attrs["cidr"].AsString(); got != "production" {
 		t.Errorf("cidr = %q, want production — a plan whose resource names said staging while it planned production would be lying about what it was changing", got)
+	}
+}
+
+// TestCompileAllowsEnvironmentDeclaredAsAVariable is a regression test.
+// "environment" is unconditionally seeded by seedProcessVariables, which
+// runs strictly AFTER variables.Resolve returns — so before this fix,
+// declaring "environment" under `variables:` made Resolve's own unset check
+// see nothing had supplied it yet and report `variable "environment" is not
+// set`, even though it always would, three lines later. A project has no
+// reason to know that its own environment/region/account is process-
+// reserved rather than an ordinary identifier it may want typed.
+func TestCompileAllowsEnvironmentDeclaredAsAVariable(t *testing.T) {
+	files := loadFiles(t, `
+project: myapp
+variables:
+  environment:
+    type: string
+resources:
+  network:
+    type: test.network
+    cidr: ${environment}
+`)
+	cfg, ds := Compile(files, testRegistry(t), Options{Environment: "production"})
+	if ds.HasErrors() {
+		t.Fatalf("unexpected diagnostics: %+v", ds)
+	}
+	if got, _ := cfg.Resources["network"].Attrs["cidr"].AsString(); got != "production" {
+		t.Errorf("cidr = %q, want production — the process-supplied environment must still win even when the project also declares \"environment\" as its own variable", got)
 	}
 }
 
@@ -267,8 +314,14 @@ resources:
 }
 
 func TestCompileStopsAfterEnvironmentErrors(t *testing.T) {
-	// Stage 4 with a failed chain would report every environment-scoped
-	// variable as unset — noise piled on the one real error.
+	// A failed chain does NOT by itself make stage 4 report every
+	// environment-scoped variable as unset: a Chain that failed to resolve
+	// carries Selected: false, and stage 4 already treats an unselected
+	// chain as "nothing to check" (see Compile's doc comment) — `domain`
+	// here resolves to an unknown, not an error. This fixture pins that
+	// specifically: it has one declared variable and no default, the exact
+	// shape that WOULD add a second diagnostic if stage 4's unset check
+	// misfired here.
 	files := loadFiles(t, `
 project: myapp
 variables:
@@ -287,6 +340,40 @@ resources:
 	_, ds := Compile(files, testRegistry(t), Options{Environment: "a"})
 	if len(ds) != 1 {
 		t.Fatalf("want exactly the cycle diagnostic, got %d:\n%+v", len(ds), ds)
+	}
+}
+
+// TestCompileStopsAfterEnvironmentErrorsSuppressesChainIndependentVariableErrors
+// is what the halt after stage 3 actually guards, proven by a fixture the
+// sibling test above cannot exercise. A malformed variable DECLARATION
+// (variables.Schemas validating `default: not-a-number` against `type:
+// integer`) is chain-independent — Schemas runs before the chain is ever
+// consulted — so it fires whether or not the chain resolves. Without the
+// halt, this fixture's cycle diagnostic and the bad-default diagnostic both
+// reach the caller; with it, only the cycle does, because a report about a
+// declaration failure "while resolving environment a" is judged less useful
+// than letting the user fix the chain first and re-run (see Compile's doc
+// comment on the tension with §7.4).
+func TestCompileStopsAfterEnvironmentErrorsSuppressesChainIndependentVariableErrors(t *testing.T) {
+	files := loadFiles(t, `
+project: myapp
+variables:
+  port:
+    type: integer
+    default: not-a-number
+environments:
+  a:
+    extends: b
+  b:
+    extends: a
+resources:
+  network:
+    type: test.network
+    cidr: 10.0.0.0/16
+`)
+	_, ds := Compile(files, testRegistry(t), Options{Environment: "a"})
+	if len(ds) != 1 {
+		t.Fatalf("want exactly the cycle diagnostic — the halt after stage 3 exists to suppress stage 4's chain-independent declaration errors until the chain itself is fixed, got %d:\n%+v", len(ds), ds)
 	}
 }
 

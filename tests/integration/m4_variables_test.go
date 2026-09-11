@@ -60,12 +60,16 @@ resources:
 	}
 	requireContains(t, res.combined(), "20")
 
-	// --var beats all of them.
+	// --var beats all of them. Asserted as "size: 10" rather than bare "10":
+	// the fixture also sets cidr: 10.0.0.0/16, which renders verbatim on
+	// every one of these plans regardless of what replicas resolves to, so a
+	// bare "10" is satisfied by that unrelated line and would not catch
+	// --var being silently dropped.
 	res = run(t, dir, "plan", "production", "--var", "replicas=10")
 	if res.ExitCode != 2 {
 		t.Fatalf("plan failed:\n%s", res.combined())
 	}
-	requireContains(t, res.combined(), "10")
+	requireContains(t, res.combined(), "size: 10")
 
 	// And a value outside the declared range is refused before anything runs.
 	res = run(t, dir, "plan", "production", "--var", "replicas=500")

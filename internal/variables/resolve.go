@@ -271,6 +271,32 @@ func checkAgainstSchemas(schemas map[string]Schema, out *Scope, chain environmen
 			continue
 		}
 
+		if processReservedNames[name] {
+			// A project may legally declare one of the process's own
+			// reserved names as its own typed variable — "environment",
+			// "region" and "account" are ordinary identifiers, and a
+			// project might reasonably want them type-checked. But
+			// whether one of these three is ultimately supplied is
+			// decided strictly AFTER Resolve returns, by
+			// compiler.seedProcessVariables (via Scope.Override) — for
+			// "environment" unconditionally, and for "region"/"account"
+			// whenever the corresponding Option is non-empty. Reporting
+			// "is not set" here would report a fact that becomes false
+			// moments later in the only caller, and its suggested fix
+			// ("pass --var environment=...") would itself be silently
+			// overridden by that same Override — recommending an action
+			// that cannot work (spec §44 requires the message and the
+			// action to both be true).
+			//
+			// Left absent rather than filled with a placeholder, exactly
+			// like the !chain.Selected branch above: if a reserved name
+			// genuinely never ends up supplied (region/account with no
+			// Option set), stage 6 reports "undefined variable" at the
+			// use site — the same honest answer an undeclared reserved
+			// name already gets today.
+			continue
+		}
+
 		ds.Add(diag.Diagnostic{
 			Severity: diag.SeverityError,
 			Summary:  "variable " + strconv.Quote(name) + " is not set",
@@ -287,4 +313,16 @@ func checkAgainstSchemas(schemas map[string]Schema, out *Scope, chain environmen
 		// spec §7.4 collects rather than choosing between them.
 	}
 	return ds
+}
+
+// processReservedNames are the three variable names the process invocation
+// itself supplies rather than any configuration file — see
+// compiler.seedProcessVariables, the only caller of Scope.Override, and its
+// doc comment for exactly which of the three are unconditional. Declaring one
+// of these names under `variables:` must not make checkAgainstSchemas treat
+// an as-yet-unsupplied value as an error; see the call site above.
+var processReservedNames = map[string]bool{
+	"environment": true,
+	"region":      true,
+	"account":     true,
 }
