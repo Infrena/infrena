@@ -45,20 +45,9 @@ func newPlanCommand(opts *GlobalOptions) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			environment := args[0]
 
-			vars, err := parseVars(opts.Vars)
-			if err != nil {
-				return err
-			}
-
-			fileVars, fds := loadVarFiles(opts.Dir, opts.VarFiles)
-			// Rendered unconditionally, THEN checked, the same order
-			// validate.go and the plan-diagnostics render below both use — a
-			// --var-file can produce a warning with no error (the reserved
-			// block-name check in DecodeVariableFile), and gating the render
-			// on HasErrors would silently drop it on an otherwise-successful
-			// plan.
-			fds.Render(cmd.ErrOrStderr())
-			if fds.HasErrors() {
+			copts, cds := compilerOptions(opts, environment)
+			if cds.HasErrors() {
+				cds.Render(cmd.ErrOrStderr())
 				return errors.New("configuration is not valid")
 			}
 
@@ -68,11 +57,8 @@ func newPlanCommand(opts *GlobalOptions) *cobra.Command {
 			}
 
 			reg := buildRegistry(opts.Dir)
-			cfg, ds := compiler.Compile(files, reg, compiler.Options{
-				Environment: environment,
-				Vars:        vars,
-				FileVars:    fileVars,
-			})
+			cfg, ds := compiler.Compile(files, reg, copts)
+			ds.Extend(cds)
 			if ds.HasErrors() {
 				ds.Render(cmd.ErrOrStderr())
 				return errors.New("configuration is not valid")

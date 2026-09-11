@@ -50,6 +50,10 @@ func newRefreshCommand(opts *GlobalOptions) *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := rejectVariableFlags(opts, "refresh"); err != nil {
+				return err
+			}
+
 			environment := args[0]
 
 			reg := buildRegistry(opts.Dir)

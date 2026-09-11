@@ -25,9 +25,17 @@ import (
 // cfg argument came from compiling YAML or was built by hand, so it is
 // reused unchanged, and destroy never calls config.Load or compiler.Compile
 // at all: the project name comes from state.State.Project, not infra.yml.
-// This also means --var/--var-file are simply inapplicable here — there is
-// no configuration for a variable to interpolate into — not a broken
-// promise the way an unwired flag would be.
+// destroy also refuses --var and --var-file outright (rejectVariableFlags),
+// rather than accepting and silently ignoring them. There is no
+// configuration for either flag to interpolate into — see above — but
+// accepting them anyway would be exactly the advertised-and-ignored shape
+// checkUnsupportedFlags exists to prevent for an unwired flag, and that
+// reasoning does not change just because the flag works on other commands.
+// An earlier version of this comment argued the opposite ("simply
+// inapplicable ... not a broken promise"); it was wrong. A flag that cannot
+// affect the outcome and is accepted anyway is ignored, by definition, and
+// the failure a user hits is the same one either way: they believe --var did
+// something here, and it did not.
 func newDestroyCommand(opts *GlobalOptions) *cobra.Command {
 	return &cobra.Command{
 		Use:           "destroy <environment>",
@@ -36,6 +44,10 @@ func newDestroyCommand(opts *GlobalOptions) *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := rejectVariableFlags(opts, "destroy"); err != nil {
+				return err
+			}
+
 			environment := args[0]
 
 			reg := buildRegistry(opts.Dir)

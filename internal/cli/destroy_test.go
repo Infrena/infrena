@@ -799,3 +799,58 @@ resources:
 		t.Errorf("the destroy plan does not warn that network has a dependent — state's Dependencies did not reach the planner:\n%s", out)
 	}
 }
+
+// TestDestroyRejectsVarFlag pins rejectVariableFlags at the command level:
+// destroy compiles no configuration (see newDestroyCommand's doc comment), so
+// a variable has nothing to interpolate into and the flag must be refused,
+// not silently accepted and ignored.
+func TestDestroyRejectsVarFlag(t *testing.T) {
+	dir := projectDir(t, `
+project: myapp
+resources: {}
+`)
+	opts := &GlobalOptions{Dir: dir, Parallelism: 4, Vars: []string{"cidr=10.0.0.0/16"}}
+	cmd := newDestroyCommand(opts)
+	cmd.SetArgs([]string{"dev"})
+	cmd.SetIn(strings.NewReader(""))
+	var stdout, stderr bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stderr)
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("destroy --var must be refused, not silently accepted")
+	}
+	if !strings.Contains(err.Error(), "does not take --var") {
+		t.Errorf("error = %q, want it to explain --var is refused", err.Error())
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, ".infra", "state", "dev.lock")); !os.IsNotExist(statErr) {
+		t.Error("a refused destroy must not have taken the environment lock — the command must return before doing anything")
+	}
+}
+
+// TestDestroyRejectsVarFileFlag is TestDestroyRejectsVarFlag's --var-file
+// counterpart: rejectVariableFlags refuses on EITHER flag being set, and a
+// test asserting only --var would not catch a version of the guard that
+// checked len(opts.Vars) alone.
+func TestDestroyRejectsVarFileFlag(t *testing.T) {
+	dir := projectDir(t, `
+project: myapp
+resources: {}
+`)
+	opts := &GlobalOptions{Dir: dir, Parallelism: 4, VarFiles: []string{"vars.yml"}}
+	cmd := newDestroyCommand(opts)
+	cmd.SetArgs([]string{"dev"})
+	cmd.SetIn(strings.NewReader(""))
+	var stdout, stderr bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stderr)
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("destroy --var-file must be refused, not silently accepted")
+	}
+	if !strings.Contains(err.Error(), "does not take --var") {
+		t.Errorf("error = %q, want it to explain --var-file is refused", err.Error())
+	}
+}

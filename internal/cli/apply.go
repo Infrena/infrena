@@ -48,9 +48,10 @@ func newApplyCommand(opts *GlobalOptions) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			environment := args[0]
 
-			vars, err := parseVars(opts.Vars)
-			if err != nil {
-				return err
+			copts, cds := compilerOptions(opts, environment)
+			if cds.HasErrors() {
+				cds.Render(cmd.ErrOrStderr())
+				return errors.New("configuration is not valid")
 			}
 
 			files, err := config.Load(opts.Dir)
@@ -59,12 +60,16 @@ func newApplyCommand(opts *GlobalOptions) *cobra.Command {
 			}
 
 			reg := buildRegistry(opts.Dir)
-			cfg, cds := compiler.Compile(files, reg, compiler.Options{
-				Environment: environment,
-				Vars:        vars,
-			})
-			if cds.HasErrors() {
-				cds.Render(cmd.ErrOrStderr())
+			cfg, ds := compiler.Compile(files, reg, copts)
+			ds.Extend(cds)
+			// Rendered unconditionally, THEN checked: unlike plan.go, apply
+			// has no later diagnostics pass that would otherwise carry a
+			// --var-file warning (the reserved block-name check in
+			// DecodeVariableFile) through to the user. Gating this render on
+			// HasErrors would silently drop it on an otherwise-successful
+			// apply.
+			ds.Render(cmd.ErrOrStderr())
+			if ds.HasErrors() {
 				return errors.New("configuration is not valid")
 			}
 
