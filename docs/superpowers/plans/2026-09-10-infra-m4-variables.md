@@ -1154,7 +1154,7 @@ All green. `gofmt -l .` must print nothing.
 #### 1.13 — Commit
 
 ```bash
-git add -A && git commit -m "$(cat <<'EOF'
+git add <this task's files> && git commit -- "$(cat <<'EOF'
 value: add Scope, the precedence level a value came from
 
 Source records what kind of thing a value is; Scope records which of
@@ -1830,7 +1830,7 @@ reordering the struct.
 #### 2.5 — Commit
 
 ```bash
-git add -A && git commit -m "$(cat <<'EOF'
+git add <this task's files> && git commit -- "$(cat <<'EOF'
 config: stage 1 loads variables.yml and environments/*.yml
 
 Spec §7 makes stage 1 responsible for all three shapes; only infra.yml
@@ -3842,7 +3842,7 @@ grep -rn "unrecognised top-level key" --include=*_test.go .
 #### 3.9 — Commit
 
 ```bash
-git add -A && git commit -m "$(cat <<'EOF'
+git add <this task's files> && git commit -- "$(cat <<'EOF'
 config: stage 2 decodes variables and environments
 
 PLAN.md §9's typed variable declarations (type/default/min/max) and §6-§7's
@@ -8093,7 +8093,8 @@ func TestVarFileReportsAMissingFileRatherThanIgnoringIt(t *testing.T) {
 export PATH="$HOME/.local/share/mise/shims:$PATH"
 gofmt -l . && go vet ./... && go test -count=1 ./...
 git diff --stat go.mod go.sum   # must print nothing
-git commit -am "M4 Task 8: wire --var-file at the CLI-override precedence level"
+git add <the files this task's Files table lists>
+git commit -m "M4 Task 8: wire --var-file at the CLI-override precedence level" -- <the same files>
 ```
 
 ---
@@ -8431,7 +8432,8 @@ fixture with scoped values rather than writing a second determinism test
 export PATH="$HOME/.local/share/mise/shims:$PATH"
 gofmt -l . && go vet ./... && go test -count=1 ./...
 grep -rn "scopeLabel" internal/   # prints nothing: one label table, in pkg/value
-git commit -am "M4 Task 9: render which precedence level supplied each value"
+git add internal/planner/render.go internal/planner/render_test.go internal/planner/testdata/scopes.golden
+git commit -m "M4 Task 9: render which precedence level supplied each value" -- internal/planner/render.go internal/planner/render_test.go internal/planner/testdata/scopes.golden
 ```
 ---
 
@@ -8809,7 +8811,8 @@ Revert.
 export PATH="$HOME/.local/share/mise/shims:$PATH"
 go test -count=1 ./tests/integration/
 gofmt -l . && go vet ./... && go test -count=1 ./...
-git commit -am "M4 Task 10: prove the three Scope invariants through the binary"
+git add tests/integration/m4_invariants_test.go
+git commit -m "M4 Task 10: prove the three Scope invariants through the binary" -- tests/integration/m4_invariants_test.go
 ```
 
 ---
@@ -9347,7 +9350,8 @@ func TestDestroyAndRefreshRefuseVariableFlags(t *testing.T) {
 ```bash
 export PATH="$HOME/.local/share/mise/shims:$PATH"
 gofmt -l . && go vet ./... && go test -count=1 ./...
-git commit -am "M4 Task 11: one variable resolution for validate/plan/apply; destroy and refresh refuse variable flags"
+git add internal/cli/varopts.go internal/cli/validate.go internal/cli/validate_test.go internal/cli/plan.go internal/cli/apply.go internal/cli/destroy.go internal/cli/refresh.go internal/cli/destroy_test.go internal/cli/refresh_test.go tests/integration/m4_test.go
+git commit -m "M4 Task 11: one variable resolution for validate/plan/apply; destroy and refresh refuse variable flags" -- internal/cli/varopts.go internal/cli/validate.go internal/cli/validate_test.go internal/cli/plan.go internal/cli/apply.go internal/cli/destroy.go internal/cli/refresh.go internal/cli/destroy_test.go internal/cli/refresh_test.go tests/integration/m4_test.go
 ```
 
 ---
@@ -9720,7 +9724,8 @@ read back, `explain`, `graph`, `discover` and `import` listed as absent.
 **12.7 — Commit.**
 
 ```bash
-git commit -am "M4 Task 12: integration suite for the precedence chain and provenance"
+git add tests/integration/m4_test.go CLAUDE.md
+git commit -m "M4 Task 12: integration suite for the precedence chain and provenance" -- tests/integration/m4_test.go CLAUDE.md
 ```
 
 ### Definition of Done
