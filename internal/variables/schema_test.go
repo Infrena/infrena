@@ -258,6 +258,35 @@ func TestValidateRejectsTheWrongKind(t *testing.T) {
 	}
 }
 
+// TestValidateKindMismatchNamesTheVarFileNotDashDashVar pins Validate's
+// kind-mismatch diagnostic to value.ScopeLabel — the second of MAJOR 1's
+// three sites, and the one the M4 re-review found still unpinned:
+// TestValidateRejectsTheWrongKind above only ever supplies a value with no
+// SuppliedBy set, so it can only observe the "--var" FALLBACK and cannot
+// tell "ScopeLabel, falling back correctly" apart from "v.Scope.String()
+// hardcoded" — reverting this site's ScopeLabel call broke nothing in the
+// suite before this test existed. This one supplies SuppliedBy exactly as
+// config.DecodeVariableFile stamps a --var-file entry, so only a real
+// ScopeLabel call can produce the right text.
+func TestValidateKindMismatchNamesTheVarFileNotDashDashVar(t *testing.T) {
+	s := intSchema(t, 1, 100)
+	v := value.String("nope", value.SourceVariable).
+		WithScope(value.ScopeCLIOverride).WithSuppliedBy("conf/vars.yml")
+
+	got := renderOne(t, s.Validate(v))
+	// "supplied by conf/vars.yml is a string." is unique to this template:
+	// Coerce's and boundDiag's Details both continue past the value with
+	// more text ("which cannot be converted...", ". The bound is..."), so
+	// this exact fragment cannot be satisfied by either of the other two
+	// sites firing instead — see schema_test.go's TestCoerceDiagnosticNamesTheVarFileNotDashDashVar.
+	if !strings.Contains(got, "supplied by conf/vars.yml is a string.") {
+		t.Errorf("Validate's kind-mismatch diagnostic must name the --var-file path that actually supplied the value:\n%s", got)
+	}
+	if strings.Contains(got, "supplied by --var ") {
+		t.Errorf("must not blame --var for a --var-file value:\n%s", got)
+	}
+}
+
 func TestValidateAcceptsTheRightKind(t *testing.T) {
 	if ds := intSchema(t, 1, 100).Validate(value.Int(4, value.SourceVariable)); ds.HasErrors() {
 		t.Fatalf("a valid integer must produce no diagnostics: %+v", ds)
@@ -517,6 +546,35 @@ func TestCoerceLeavesAnUntypedDeclarationUnconstrained(t *testing.T) {
 	}
 	if out.Kind != value.KindInt {
 		t.Errorf("Kind = %v, want KindInt unchanged — nothing declares a target kind to coerce to", out.Kind)
+	}
+}
+
+// TestCoerceDiagnosticNamesTheVarFileNotDashDashVar pins Coerce's
+// lossy-conversion diagnostic to value.ScopeLabel — the first of MAJOR 1's
+// three sites, and (with TestValidateKindMismatchNamesTheVarFileNotDashDashVar)
+// the second the M4 re-review found unpinned: TestVarFileBoundViolationNamesTheFileNotDashDashVar
+// in resolve_test.go only exercises boundDiag, so reverting ONLY this site's
+// ScopeLabel call broke nothing in the suite before this test existed.
+func TestCoerceDiagnosticNamesTheVarFileNotDashDashVar(t *testing.T) {
+	s := intSchema(t, 1, 100)
+	// A --var-file entry, exactly as config.DecodeVariableFile stamps one:
+	// ScopeCLIOverride, SuppliedBy the path as typed. 1.5 cannot become an
+	// integer without changing it, so Coerce reports it rather than
+	// silently rounding.
+	v := value.Float(1.5, value.SourceVariable).
+		WithScope(value.ScopeCLIOverride).WithSuppliedBy("conf/big.yml")
+
+	_, ds := s.Coerce(v)
+	got := renderOne(t, ds)
+	// "supplied by conf/big.yml is 1.5, which cannot be converted" is
+	// unique to this template — "which cannot be converted" appears
+	// nowhere else in this package (grepped), so this fragment cannot be
+	// satisfied by Validate's or boundDiag's Detail firing instead.
+	if !strings.Contains(got, "supplied by conf/big.yml is 1.5, which cannot be converted") {
+		t.Errorf("Coerce's diagnostic must name the --var-file path that actually supplied the value:\n%s", got)
+	}
+	if strings.Contains(got, "supplied by --var ") {
+		t.Errorf("must not blame --var for a --var-file value:\n%s", got)
 	}
 }
 
