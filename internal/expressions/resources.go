@@ -23,7 +23,7 @@ import (
 //
 // Variable always reports unavailable, deliberately. A well-formed unknown
 // reaching either phase can never depend on an OpVarRef: every variable name
-// the compiler's compileScope can resolve — everything stage 4
+// the compiler can resolve at compile time — everything stage 4
 // (internal/variables) resolved, plus "environment" unconditionally and
 // --var-supplied region/account when present (internal/compiler/compile.go,
 // seedProcessVariables) — evaluates successfully in the very first,

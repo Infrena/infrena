@@ -4,6 +4,8 @@ import (
 	"github.com/infrata/infrata/internal/config"
 	"github.com/infrata/infrata/internal/diag"
 	"github.com/infrata/infrata/internal/environments"
+	"github.com/infrata/infrata/internal/modules"
+	"github.com/infrata/infrata/internal/modules/source"
 	"github.com/infrata/infrata/internal/registry"
 	"github.com/infrata/infrata/internal/variables"
 	"github.com/infrata/infrata/pkg/value"
@@ -105,7 +107,23 @@ func Compile(files []config.File, reg *registry.Registry, opts Options) (Resolve
 		return ResolvedConfig{}, ds
 	}
 
-	cfg, bindDiags := bindReferences(project, scope, opts)
+	expansion, moduleDiags := modules.Expand(project, scope, opts.Dir, source.NewCache(opts.Dir))
+	ds.Extend(moduleDiags)
+	if moduleDiags.HasErrors() {
+		// This halt suppresses ALL of stage 6, including diagnostics with
+		// nothing to do with modules: a root resource referring to a
+		// nonexistent root resource is reported only on the next run. That is
+		// deliberate and is the same trade stages 3 and 4 make. After a failed
+		// expansion the resource set stage 6 would walk is not the user's
+		// configuration — every reference into the module that failed to expand
+		// reports "no such resource", one diagnostic per reference, noise
+		// proportional to the size of the module rather than to the size of the
+		// mistake. TestCompileStopsAfterModuleErrors pins the suppression so it
+		// stays a decision rather than an accident.
+		return ResolvedConfig{}, ds
+	}
+
+	cfg, bindDiags := bindReferences(expansion, opts, reg)
 	ds.Extend(bindDiags)
 	if bindDiags.HasErrors() {
 		return cfg, ds

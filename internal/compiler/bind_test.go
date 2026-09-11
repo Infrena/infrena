@@ -7,7 +7,10 @@ import (
 	"testing"
 
 	"github.com/infrata/infrata/internal/config"
+	"github.com/infrata/infrata/internal/diag"
 	"github.com/infrata/infrata/internal/environments"
+	"github.com/infrata/infrata/internal/modules"
+	"github.com/infrata/infrata/internal/modules/source"
 	"github.com/infrata/infrata/internal/variables"
 	"github.com/infrata/infrata/pkg/address"
 	"github.com/infrata/infrata/pkg/value"
@@ -55,7 +58,7 @@ resources:
     type: test.network
     cidr: 10.0.0.0/16
 `)
-	cfg, ds := bindReferences(p, scopeFor(t, Options{Environment: "dev"}), Options{Environment: "dev"})
+	cfg, ds := bindReferences(rootOnly(t, p, Options{Environment: "dev"}), Options{Environment: "dev"}, testRegistry(t))
 	if ds.HasErrors() {
 		t.Fatalf("unexpected diagnostics: %+v", ds)
 	}
@@ -80,7 +83,7 @@ resources:
     engine: postgres
     network: ${network.id}
 `)
-	cfg, ds := bindReferences(p, scopeFor(t, Options{Environment: "dev"}), Options{Environment: "dev"})
+	cfg, ds := bindReferences(rootOnly(t, p, Options{Environment: "dev"}), Options{Environment: "dev"}, testRegistry(t))
 	if ds.HasErrors() {
 		t.Fatalf("unexpected diagnostics: %+v", ds)
 	}
@@ -109,7 +112,7 @@ resources:
     engine: postgres
     depends_on: [network]
 `)
-	cfg, _ := bindReferences(p, scopeFor(t, Options{Environment: "dev"}), Options{Environment: "dev"})
+	cfg, _ := bindReferences(rootOnly(t, p, Options{Environment: "dev"}), Options{Environment: "dev"}, testRegistry(t))
 	db := cfg.Resources["database"]
 	if len(db.DependsOn) != 1 || db.DependsOn[0].Name != "network" {
 		t.Errorf("DependsOn = %v", db.DependsOn)
@@ -130,7 +133,7 @@ resources:
     network: ${network.id}
     depends_on: [network]
 `)
-	cfg, _ := bindReferences(p, scopeFor(t, Options{Environment: "dev"}), Options{Environment: "dev"})
+	cfg, _ := bindReferences(rootOnly(t, p, Options{Environment: "dev"}), Options{Environment: "dev"}, testRegistry(t))
 	if got := cfg.Resources["database"].DependsOn; len(got) != 1 {
 		t.Errorf("DependsOn = %v, want one edge", got)
 	}
@@ -145,7 +148,7 @@ resources:
     engine: postgres
     network: ${nonexistent.id}
 `)
-	_, ds := bindReferences(p, scopeFor(t, Options{Environment: "dev"}), Options{Environment: "dev"})
+	_, ds := bindReferences(rootOnly(t, p, Options{Environment: "dev"}), Options{Environment: "dev"}, testRegistry(t))
 	if !ds.HasErrors() {
 		t.Fatal("a reference to a resource nobody declared can never become knowable and must be an error")
 	}
@@ -165,7 +168,7 @@ resources:
     engine: postgres
     depends_on: [nonexistent]
 `)
-	if _, ds := bindReferences(p, scopeFor(t, Options{Environment: "dev"}), Options{Environment: "dev"}); !ds.HasErrors() {
+	if _, ds := bindReferences(rootOnly(t, p, Options{Environment: "dev"}), Options{Environment: "dev"}, testRegistry(t)); !ds.HasErrors() {
 		t.Error("depends_on naming an undeclared resource must be an error")
 	}
 }
@@ -178,7 +181,7 @@ resources:
     type: test.database
     engine: ${database.engine}
 `)
-	if _, ds := bindReferences(p, scopeFor(t, Options{Environment: "dev"}), Options{Environment: "dev"}); !ds.HasErrors() {
+	if _, ds := bindReferences(rootOnly(t, p, Options{Environment: "dev"}), Options{Environment: "dev"}, testRegistry(t)); !ds.HasErrors() {
 		t.Error("a resource referring to itself is a cycle of one and must be rejected")
 	}
 }
@@ -193,7 +196,7 @@ resources:
     lifecycle:
       prevent_destroy: true
 `)
-	cfg, _ := bindReferences(p, scopeFor(t, Options{Environment: "dev"}), Options{Environment: "dev"})
+	cfg, _ := bindReferences(rootOnly(t, p, Options{Environment: "dev"}), Options{Environment: "dev"}, testRegistry(t))
 	db := cfg.Resources["database"]
 	if !db.Lifecycle.PreventDestroy {
 		t.Error("lifecycle must survive binding")
@@ -212,7 +215,7 @@ resources:
     cidr: ${cidr_block}
 `)
 	opts := Options{Environment: "dev", Vars: map[string]string{"cidr_block": "10.9.0.0/16"}}
-	cfg, ds := bindReferences(p, scopeFor(t, opts), opts)
+	cfg, ds := bindReferences(rootOnly(t, p, opts), opts, testRegistry(t))
 	if ds.HasErrors() {
 		t.Fatalf("unexpected diagnostics: %+v", ds)
 	}
@@ -232,7 +235,7 @@ resources:
     type: test.network
     cidr: ${missing_two.id}
 `)
-	_, ds := bindReferences(p, scopeFor(t, Options{Environment: "dev"}), Options{Environment: "dev"})
+	_, ds := bindReferences(rootOnly(t, p, Options{Environment: "dev"}), Options{Environment: "dev"}, testRegistry(t))
 	if len(ds) < 2 {
 		t.Errorf("got %d diagnostics, want at least 2 — one bad reference must not mask the next", len(ds))
 	}
@@ -254,7 +257,7 @@ resources:
 		Environment: "dev",
 		Vars:        map[string]string{"secret_value": "hunter2"},
 	}
-	cfg, ds := bindReferences(p, scopeFor(t, opts), opts)
+	cfg, ds := bindReferences(rootOnly(t, p, opts), opts, testRegistry(t))
 	if ds.HasErrors() {
 		t.Fatalf("unexpected diagnostics: %+v", ds)
 	}
@@ -286,7 +289,7 @@ resources:
     engine: postgres
     network: ${db.id}
 `)
-	cfg, ds := bindReferences(p, scopeFor(t, Options{Environment: "dev"}), Options{Environment: "dev"})
+	cfg, ds := bindReferences(rootOnly(t, p, Options{Environment: "dev"}), Options{Environment: "dev"}, testRegistry(t))
 	if ds.HasErrors() {
 		t.Fatalf("a reference to a different resource whose name is a prefix of the referrer's own name must not be rejected: %+v", ds)
 	}
@@ -316,7 +319,7 @@ resources:
     tags:
       - "${network.id}"
 `)
-	_, ds := bindReferences(p, scopeFor(t, Options{Environment: "dev"}), Options{Environment: "dev"})
+	_, ds := bindReferences(rootOnly(t, p, Options{Environment: "dev"}), Options{Environment: "dev"}, testRegistry(t))
 	if !ds.HasErrors() {
 		t.Fatal("an expression nested inside a list is not supported and must be reported, not silently dropped or passed through unparsed")
 	}
@@ -391,4 +394,28 @@ resources:
 			}
 		}
 	}
+}
+
+// rootOnly wraps a project as stage 5 would when it contains no modules: every
+// resource an instance at the root, each sharing the root scope.
+//
+// It exists so the tests written before M5 keep testing what they were written
+// to test. A configuration with no `modules:` block is exactly this, and
+// Expand produces it — going through Expand here instead would make every one
+// of these unit tests an integration test of stage 5.
+func rootOnly(t *testing.T, p *config.ProjectDecl, opts Options) *modules.Expansion {
+	t.Helper()
+	exp, ds := modules.Expand(p, scopeFor(t, opts), t.TempDir(), noRemotes{})
+	if ds.HasErrors() {
+		t.Fatalf("rootOnly: expanding a module-free project must not fail: %+v", ds)
+	}
+	return exp
+}
+
+// noRemotes is a Resolver that must never be called. Every fixture in this file
+// is module-free, so a call means the test grew a module without meaning to.
+type noRemotes struct{}
+
+func (noRemotes) Resolve(s source.Source, _ string) (source.Resolution, diag.Diagnostics) {
+	panic("compiler bind tests are module-free; nothing should resolve a source: " + s.String())
 }

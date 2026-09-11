@@ -33,7 +33,11 @@ func compilerOptions(opts *GlobalOptions, environment string) (compiler.Options,
 	fileVars, fds := loadVarFiles(opts.Dir, opts.VarFiles)
 	ds.Extend(fds)
 
-	return compiler.Options{Environment: environment, Vars: vars, FileVars: fileVars}, ds
+	// Dir travels with the options because stage 5 resolves a module's relative
+	// `source:` against the project directory. Passing anything but opts.Dir
+	// here makes --chdir silently wrong for modules and right for everything
+	// else, which is the worst combination to debug.
+	return compiler.Options{Dir: opts.Dir, Environment: environment, Vars: vars, FileVars: fileVars}, ds
 }
 
 // rejectVariableFlags refuses --var and --var-file for the commands that never

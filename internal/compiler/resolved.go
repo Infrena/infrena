@@ -24,6 +24,13 @@ type ResolvedConfig struct {
 
 // Options carries what compilation needs beyond the files themselves.
 type Options struct {
+	// Dir is the project directory. Stage 5 resolves a module's relative
+	// `source:` against it, so passing anything but the value --chdir
+	// produced makes modules silently wrong while everything else stays
+	// right. It travels in Options rather than as a parameter because
+	// compilerOptions is the single place the CLI builds this.
+	Dir string
+
 	Environment string
 	Region      string
 	Account     string

@@ -8,57 +8,40 @@ import (
 	"github.com/infrata/infrata/internal/config"
 	"github.com/infrata/infrata/internal/diag"
 	"github.com/infrata/infrata/internal/expressions"
-	"github.com/infrata/infrata/internal/variables"
+	"github.com/infrata/infrata/internal/modules"
+	"github.com/infrata/infrata/internal/registry"
 	"github.com/infrata/infrata/pkg/address"
 	"github.com/infrata/infrata/pkg/resource"
 	"github.com/infrata/infrata/pkg/value"
 )
 
-// compileScope resolves variables at compile time but reports every resource
-// attribute as unavailable. That is what turns a reference into an unknown
-// carrying its expression, and simultaneously what makes the dependency edge
-// discoverable. The apply-time scope in M3 resolves attributes too.
-//
-// The variables come from stage 4 (internal/variables) and are not rebuilt
-// here. This package used to construct its own flat variable map; there is now
-// exactly one implementation of the precedence chain, so what a plan claims
-// about a value's origin cannot drift away from the rule that produced it
-// (spec §7.1).
-type compileScope struct {
-	vars variables.Scope
-}
-
-// Variable resolves a compile-time variable by name.
-func (s compileScope) Variable(name string) (value.Value, bool) {
-	return s.vars.Variable(name)
-}
-
-// Attribute always reports unavailable: at compile time no resource has been
-// created yet, so every reference to one becomes an unknown.
-func (s compileScope) Attribute(value.Reference) (value.Value, bool) { return value.Value{}, false }
-
-// bindReferences is compiler stage 6. It parses and evaluates every attribute,
-// records the dependency edges references imply, and rejects references that
-// can never become knowable.
-func bindReferences(project *config.ProjectDecl, vars variables.Scope, opts Options) (ResolvedConfig, diag.Diagnostics) {
+func bindReferences(exp *modules.Expansion, opts Options, reg *registry.Registry) (ResolvedConfig, diag.Diagnostics) {
 	var ds diag.Diagnostics
 
 	out := ResolvedConfig{
-		Project:     project.Project,
+		// The ROOT project name, carried on the Expansion. A module never has
+		// its own, and every resource inside one needs the root's for its
+		// provider defaults to resolve.
+		Project:     exp.Project,
 		Environment: opts.Environment,
-		Resources:   make(map[string]*resource.ResolvedResource, len(project.Resources)),
+		Resources:   make(map[string]*resource.ResolvedResource, len(exp.Instances)),
 	}
 
-	declared := make(map[string]bool, len(project.Resources))
-	for _, r := range project.Resources {
-		declared[r.Name] = true
+	// Keyed by CANONICAL ADDRESS, not bare name: two modules may each declare a
+	// `db`, and keying on the name would resolve both to one resource — a
+	// silently wrong plan rather than an error. The value carries what a
+	// reference to this target can be checked against.
+	declared := make(map[string]refTarget, len(exp.Instances))
+	for _, inst := range exp.Instances {
+		declared[inst.Address.String()] = targetFor(inst, reg)
 	}
 
-	scope := compileScope{vars: vars}
+	for _, inst := range exp.Instances {
+		decl := inst.Decl
+		self := inst.Address.String()
 
-	for _, decl := range project.Resources {
 		resolved := &resource.ResolvedResource{
-			Address:   address.Address{Name: decl.Name},
+			Address:   inst.Address,
 			Type:      decl.Type,
 			Attrs:     make(map[string]value.Value, len(decl.Attributes)),
 			Lifecycle: resource.Lifecycle{PreventDestroy: decl.Lifecycle.PreventDestroy, Retain: decl.Lifecycle.Retain},
@@ -73,21 +56,33 @@ func bindReferences(project *config.ProjectDecl, vars variables.Scope, opts Opti
 		// change from run to run of the same configuration.
 		for _, name := range sortedAttributeNames(decl.Attributes) {
 			attr := decl.Attributes[name]
-			resolved.Attrs[name] = bindAttribute(decl, attr, scope, declared, edges, &ds)
+			resolved.Attrs[name] = bindAttribute(inst, attr, declared, edges, &ds)
 		}
 
 		for _, target := range decl.DependsOn {
-			if !declared[target] {
+			// A bare name in depends_on names a resource at the SAME level:
+			// `db` written inside `module.net` is `module.net.db`. Stage 5 left
+			// these bare deliberately, because only this stage knows the level.
+			// A name that resolved to a module call was already fanned out by
+			// stage 5 into ExtraDeps, one edge per resource the call produced —
+			// nothing is addressed `prod` any more. The bare name is still here
+			// because stage 5 does not rewrite DependsOn, so skipping it is how
+			// this loop avoids reporting a call the user can see in their file.
+			if _, isCall := inst.Scope.OutputNames(target); isCall {
+				continue
+			}
+			key := address.Address{Module: inst.Address.Module, Name: target}.String()
+			if _, ok := declared[key]; !ok {
 				ds.Add(diag.Diagnostic{
 					Severity: diag.SeverityError,
 					Summary:  "depends_on names an undeclared resource " + strconv.Quote(target),
-					Detail:   "Known resources:\n  " + strings.Join(sortedNames(declared), "\n  "),
+					Detail:   "Known resources:\n  " + strings.Join(sortedTargets(declared), "\n  "),
 					Action:   "Correct the name, or declare " + strconv.Quote(target) + ".",
 					Origin:   decl.Origin,
 				})
 				continue
 			}
-			if target == decl.Name {
+			if key == self {
 				ds.Add(diag.Diagnostic{
 					Severity: diag.SeverityError,
 					Summary:  "resource " + strconv.Quote(decl.Name) + " depends on itself",
@@ -95,23 +90,71 @@ func bindReferences(project *config.ProjectDecl, vars variables.Scope, opts Opti
 				})
 				continue
 			}
-			recordEdge(edges, target, decl.Origin)
+			recordEdge(edges, key, decl.Origin)
+		}
+
+		// Edges whose bare name expanded away: a sibling named a module call,
+		// or a call's own depends_on was inherited by what it produced. They
+		// arrive already qualified, which is why they are a separate slice —
+		// one holding both kinds would make every consumer ask which it had.
+		for _, a := range inst.ExtraDeps {
+			recordEdge(edges, a.String(), decl.Origin)
 		}
 
 		resolved.DependsOn = sortedAddresses(edges)
-		out.Resources[resolved.Address.String()] = resolved
+		out.Resources[self] = resolved
 	}
 
 	return out, ds
 }
 
+// refTarget is what a reference can be checked against: the target's type, and
+// the attribute names it offers.
+//
+// Every entry describes a PROVIDER RESOURCE. A module call is expanded away
+// before this runs and can never appear in `declared` — which is exactly why a
+// reference naming one needs the second source of truth in bindAttribute.
+type refTarget struct {
+	typeName string
+	// names is empty for a type no provider registered. The check then skips,
+	// so an unknown resource type produces stage 7's single "unknown resource
+	// type" diagnostic rather than one "no such attribute" per reference to it.
+	names []string
+}
+
+func (t refTarget) has(name string) bool {
+	for _, n := range t.names {
+		if n == name {
+			return true
+		}
+	}
+	return false
+}
+
+func targetFor(inst modules.Instance, reg *registry.Registry) refTarget {
+	def, ok := reg.Definition(inst.Decl.Type)
+	if !ok {
+		return refTarget{typeName: inst.Decl.Type}
+	}
+	return refTarget{typeName: def.Type, names: attributeNames(def)}
+}
+
+// sortedTargets lists the declared addresses for a diagnostic, sorted.
+func sortedTargets(set map[string]refTarget) []string {
+	out := make([]string, 0, len(set))
+	for name := range set {
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out
+}
+
 // bindAttribute resolves one attribute, recording any edges its references
 // imply.
 func bindAttribute(
-	decl *config.ResourceDecl,
+	inst modules.Instance,
 	attr config.AttributeDecl,
-	scope compileScope,
-	declared map[string]bool,
+	declared map[string]refTarget,
 	edges map[string]value.Origin,
 	ds *diag.Diagnostics,
 ) value.Value {
@@ -143,34 +186,74 @@ func bindAttribute(
 		return value.Unknown(attr.Value.Kind, value.SourceComputed).WithOrigin(attr.Origin)
 	}
 
+	// Qualify BEFORE walking the references. A reference written inside a
+	// module is SCOPE-RELATIVE until this point — `${db.id}` means "the db in
+	// this module" — and Qualify is what makes it absolute, using the scope
+	// stage 5 recorded for this instantiation.
+	//
+	// Qualify also FOLDS a resolved module output into a literal carrying its
+	// value. That is why a VALID output reference never reaches the loop below
+	// and an INVALID one does: the fold removes exactly the cases that need no
+	// checking.
+	e = inst.Scope.Qualify(e)
+
+	self := inst.Address.String()
 	for _, ref := range e.References() {
-		// The canonical address string, not the bare name: after stage 5 a
-		// reference may carry a module path, and `declared` is keyed by the
-		// same rendering.
+		// The canonical address, not the bare name: two modules may each
+		// declare a `db`, and `declared` is keyed by the same rendering.
 		target := ref.Target.String()
+		t, known := declared[target]
 		switch {
-		case !declared[target]:
+		case !known:
+			// A module call is expanded away and is never in `declared`, so a
+			// reference to one lands here. Reporting it as an undeclared
+			// resource would name a call the user can plainly see in their own
+			// file; the scope knows better.
+			if outs, isCall := inst.Scope.OutputNames(ref.Target.Name); isCall {
+				ds.Add(diag.Diagnostic{
+					Severity: diag.SeverityError,
+					Summary:  "module call " + strconv.Quote(ref.Target.Name) + " has no output " + strconv.Quote(ref.Attribute),
+					Detail: "${" + ref.String() + "} reads an output the module does not publish.\nOutputs it declares:\n  " +
+						strings.Join(outs, "\n  "),
+					Action: "Reference one of those, or add " + strconv.Quote(ref.Attribute) + " to the module's `outputs:`.",
+					Origin: attr.Origin,
+				})
+				break
+			}
 			ds.Add(diag.Diagnostic{
 				Severity: diag.SeverityError,
-				Summary:  "reference to undeclared resource " + strconv.Quote(target),
-				Detail: "${" + ref.String() + "} names a resource that does not exist.\nKnown resources:\n  " +
-					strings.Join(sortedNames(declared), "\n  "),
+				Summary:  "reference to undeclared resource or module " + strconv.Quote(target),
+				Detail: "${" + ref.String() + "} names no resource and no module call that exists.\nKnown here:\n  " +
+					strings.Join(inst.Scope.Names(), "\n  "),
 				Action: "Correct the reference, or declare " + strconv.Quote(target) + ".",
 				Origin: attr.Origin,
 			})
-		case target == decl.Name:
+		case target == self:
 			ds.Add(diag.Diagnostic{
 				Severity: diag.SeverityError,
-				Summary:  "resource " + strconv.Quote(decl.Name) + " refers to itself",
+				Summary:  "resource " + strconv.Quote(inst.Decl.Name) + " refers to itself",
 				Detail:   "${" + ref.String() + "} cannot be resolved: its own value would be required to compute it.",
 				Origin:   attr.Origin,
+			})
+		case len(t.names) > 0 && !t.has(ref.Attribute):
+			// The attribute axis. Nothing checked this before M5: a typo here
+			// passed `validate`, produced a clean plan, and failed halfway
+			// through `apply` after real infrastructure existed, with a message
+			// naming the symptom rather than the cause.
+			ds.Add(diag.Diagnostic{
+				Severity: diag.SeverityError,
+				Summary:  t.typeName + " has no attribute " + strconv.Quote(ref.Attribute),
+				Detail: "${" + ref.String() + "} reads an attribute that does not exist.\nAttributes of " +
+					t.typeName + ":\n  " + strings.Join(t.names, "\n  "),
+				Action: "Correct the attribute name.",
+				Origin: attr.Origin,
 			})
 		default:
 			recordEdge(edges, target, attr.Origin)
 		}
 	}
 
-	v, evalDiags := expressions.Evaluate(e, scope)
+	v, evalDiags := expressions.Evaluate(e, inst.Scope)
 	ds.Extend(evalDiags)
 	return v
 }
@@ -215,22 +298,6 @@ func sortedAttributeNames(attrs map[string]config.AttributeDecl) []string {
 	return out
 }
 
-// sortedNames returns a name set's members in sorted order, for diagnostics
-// that list known resources.
-//
-// Redundancy note (measured): removing this sort fails nothing. It orders a
-// list printed INSIDE one diagnostic's text, and no fixture has enough
-// candidate names for an unsorted order to differ from a sorted one. Same
-// ruling as sortedAttributeNames above.
-func sortedNames(set map[string]bool) []string {
-	out := make([]string, 0, len(set))
-	for name := range set {
-		out = append(out, name)
-	}
-	sort.Strings(out)
-	return out
-}
-
 // sortedAddresses returns an edge set as addresses, sorted canonically.
 //
 // LOAD-BEARING, unlike the two sorts above, and pinned:
@@ -242,7 +309,14 @@ func sortedNames(set map[string]bool) []string {
 func sortedAddresses(edges map[string]value.Origin) []address.Address {
 	out := make([]address.Address, 0, len(edges))
 	for name := range edges {
-		out = append(out, address.Address{Name: name})
+		// The key is a canonical address, so parse it back rather than
+		// wrapping it as a bare Name: `module.net.db` must come out with its
+		// module path intact, not as a root resource whose name has dots in it.
+		a, err := address.Parse(name)
+		if err != nil {
+			a = address.Address{Name: name}
+		}
+		out = append(out, a)
 	}
 	address.Sort(out)
 	return out
