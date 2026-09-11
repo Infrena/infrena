@@ -87,10 +87,16 @@ func Render(r Result, opts RenderOptions) string {
 }
 
 // renderAppliedLines renders one applied resource and the attributes the
-// provider returned for it, redacting through value.Format exactly as
-// planner.Render's renderAnnotated does, through value.Annotate — the same,
-// and only, redaction path (see value.Format's own comment for the two leaks
-// that made that rule).
+// provider returned for it, redacting through renderValue below, which calls
+// value.Format directly — value.Format is the engine's only redaction path
+// (see its own comment for the two leaks that made that rule), so the
+// redaction here is exactly as safe as planner.Render's. But apply output
+// carries no provenance annotation: renderValue does not go through
+// value.Annotate the way planner.Render's renderAnnotated does, so a line
+// here reads "size: 7", never "size: 7 [variable, from --var]" (M4 final
+// review, MINOR 4 — this comment used to claim the opposite; only the
+// comment was wrong, the redaction was always correct). Whether apply output
+// SHOULD carry annotations is an open question, not settled by this fix.
 // A resource can be Applied with nothing in st when it was destroyed or
 // forgotten: State.Get's comma-ok reports that plainly rather than this
 // treating a missing entry as a bug.

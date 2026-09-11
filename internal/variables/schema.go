@@ -161,6 +161,17 @@ func show(v value.Value) string {
 	return value.Format(v, value.FormatOptions{Unknown: "(unknown)"})
 }
 
+// Every diagnostic below that names "the value supplied by" a scope goes
+// through value.ScopeLabel, never v.Scope.String() directly (M4 final review,
+// MAJOR 1). v.Scope.String() at ScopeCLIOverride is always "--var" — the
+// generic scope label — even when the value actually arrived through
+// --var-file, so building the sentence from it told every --var-file user
+// their own diagnostic was about a flag they never typed. ScopeLabel is the
+// same rule the plan renderer already applies (Amendment 6, contract.md): it
+// prefers v.SuppliedBy, which names the actual input, and falls back to the
+// scope label only when SuppliedBy is unset. One rule, read from one place,
+// rather than a second copy that can drift from the renderer's.
+
 // originOr prefers the more specific of two origins. A bound decoded from YAML
 // carries its own line; a synthesised one does not, and the declaration's
 // origin is then the closest true answer.
@@ -201,7 +212,7 @@ func (s Schema) Coerce(v value.Value) (value.Value, diag.Diagnostics) {
 		ds.Add(diag.Diagnostic{
 			Severity: diag.SeverityError,
 			Summary:  "variable " + strconv.Quote(s.Name) + " cannot be stored as " + article(s.Kind) + " " + s.Kind.String(),
-			Detail: "The value supplied by " + v.Scope.String() + " is " + show(v) +
+			Detail: "The value supplied by " + value.ScopeLabel(v) + " is " + show(v) +
 				", which cannot be converted to " + s.Kind.String() + " without changing it. " +
 				strconv.Quote(s.Name) + " is declared at " + s.Origin.String() + ".",
 			Action: "Write a value that is exactly representable as " + article(s.Kind) + " " + s.Kind.String() + ", or change the declared type.",
@@ -252,7 +263,7 @@ func (s Schema) Validate(v value.Value) diag.Diagnostics {
 			Severity: diag.SeverityError,
 			Summary:  "variable " + strconv.Quote(s.Name) + " must be " + article(s.Kind) + " " + s.Kind.String(),
 			Detail: "Declared as " + s.Kind.String() + " at " + s.Origin.String() +
-				". The value supplied by " + v.Scope.String() + " is " + article(v.Kind) + " " + v.Kind.String() + ".",
+				". The value supplied by " + value.ScopeLabel(v) + " is " + article(v.Kind) + " " + v.Kind.String() + ".",
 			Action: "Supply " + article(s.Kind) + " " + s.Kind.String() + " value, or change the declared type.",
 			Origin: originOr(v.Origin, s.Origin),
 		})
@@ -317,7 +328,7 @@ func boundDiag(s Schema, relation string, bound value.Value, v value.Value) diag
 	return diag.Diagnostic{
 		Severity: diag.SeverityError,
 		Summary:  "variable " + strconv.Quote(s.Name) + " must be " + relation + " " + limit,
-		Detail: "The value supplied by " + v.Scope.String() + " is " + show(v) + ". The bound is declared at " +
+		Detail: "The value supplied by " + value.ScopeLabel(v) + " is " + show(v) + ". The bound is declared at " +
 			originOr(bound.Origin, s.Origin).String() + ".",
 		Action: "Choose a value " + relation + " " + limit + ".",
 		Origin: originOr(v.Origin, s.Origin),
@@ -399,10 +410,26 @@ func (s Schema) ParseText(text string, origin value.Origin) (value.Value, diag.D
 		return stamp(value.String(text, value.SourceVariable)), ds
 	case value.KindInt:
 		n, err := strconv.ParseInt(text, 10, 64)
-		if err != nil {
-			return bad("Expected a whole number.")
+		if err == nil {
+			return stamp(value.Int(n, value.SourceVariable)), ds
 		}
-		return stamp(value.Int(n, value.SourceVariable)), ds
+		// A numeric literal coerces to the declared kind wherever it
+		// appears, exactly or not at all (Amendment 4, contract.md) — and
+		// the amendment says so explicitly of a SUPPLIED value including
+		// --var, not only a declared default or a --var-file entry. Before
+		// this fix, "--var size=42.0" against `type: integer` was rejected
+		// while a --var-file entry of `size: 42.0` was silently coerced
+		// (M4 final review, MINOR 1): the identical literal, judged two
+		// different ways depending only on which input carried the text.
+		// value.Coerce is the one implementation of "exact or not at all" —
+		// reused here rather than re-deriving the float64 round-trip check
+		// a second time.
+		if f, ferr := strconv.ParseFloat(text, 64); ferr == nil {
+			if coerced, ok := value.Coerce(value.Float(f, value.SourceVariable), value.KindInt); ok {
+				return stamp(coerced), ds
+			}
+		}
+		return bad("Expected a whole number.")
 	case value.KindFloat:
 		f, err := strconv.ParseFloat(text, 64)
 		if err != nil {

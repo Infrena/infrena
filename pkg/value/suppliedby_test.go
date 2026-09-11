@@ -150,9 +150,9 @@ func TestAnnotatePrefersSuppliedByOnlyAtCLIOverride(t *testing.T) {
 			want: `"10.0.0.0/16" [variable, from base config]`,
 		},
 		{
-			name: "environment variable with SuppliedBy set is still labelled by scope",
+			name: "environment config with SuppliedBy set is still labelled by scope",
 			in:   String("large", SourceEnvironment).WithScope(ScopeEnvironmentVar).WithSuppliedBy("vars.yml"),
-			want: `"large" [environment, from environment variable]`,
+			want: `"large" [environment, from environment config]`,
 		},
 	}
 	for _, tc := range cases {

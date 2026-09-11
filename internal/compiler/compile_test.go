@@ -211,6 +211,13 @@ resources:
 	}
 }
 
+// TestCompileWillNotLetAVarFlagRedefineTheEnvironment used to assert that
+// `--var environment=staging` was silently discarded and "production" won
+// with NO diagnostic. That was M4 final review's MAJOR 3: the flag vanished
+// with no error, and rendered as `[environment, from --var]` — read by a
+// user as confirmation the flag WAS honoured. seedProcessVariables staying
+// authoritative was and remains correct; silence about a discarded flag was
+// not. Updated 2026-09-11 to assert the refusal instead of the silence.
 func TestCompileWillNotLetAVarFlagRedefineTheEnvironment(t *testing.T) {
 	files := loadFiles(t, `
 project: myapp
@@ -219,15 +226,19 @@ resources:
     type: test.network
     cidr: ${environment}
 `)
-	cfg, ds := Compile(files, testRegistry(t), Options{
+	_, ds := Compile(files, testRegistry(t), Options{
 		Environment: "production",
 		Vars:        map[string]string{"environment": "staging"},
 	})
-	if ds.HasErrors() {
-		t.Fatalf("unexpected diagnostics: %+v", ds)
+	if !ds.HasErrors() {
+		t.Fatal("--var environment=staging must be refused, not silently discarded — " +
+			"the environment argument decides which state file is written, and a flag " +
+			"that cannot change that must say so rather than vanish")
 	}
-	if got, _ := cfg.Resources["network"].Attrs["cidr"].AsString(); got != "production" {
-		t.Errorf("cidr = %q, want production — a plan whose resource names said staging while it planned production would be lying about what it was changing", got)
+	var sb strings.Builder
+	ds.Render(&sb)
+	if !strings.Contains(sb.String(), "environment") {
+		t.Errorf("the diagnostic must name \"environment\" as the refused variable:\n%s", sb.String())
 	}
 }
 
@@ -256,6 +267,36 @@ resources:
 	}
 	if got, _ := cfg.Resources["network"].Attrs["cidr"].AsString(); got != "production" {
 		t.Errorf("cidr = %q, want production — the process-supplied environment must still win even when the project also declares \"environment\" as its own variable", got)
+	}
+}
+
+// TestSeededEnvironmentDoesNotCreditDashDashVar reproduces M4 final review's
+// MAJOR 2: seedProcessVariables stamped ScopeCLIOverride but never
+// SuppliedBy, so value.ScopeLabel (and, before this fix wave, the bare
+// Scope.String() the renderer used directly) fell back to the scope's
+// generic label — which is "--var" — and a BARE `infra plan dev`, with no
+// flags whatsoever, rendered `cidr: "dev" [environment, from --var]`.
+// seedProcessVariables' own doc comment argues at length that a --var cannot
+// set "environment"; the plan asserted the opposite of the code's own
+// contract.
+func TestSeededEnvironmentDoesNotCreditDashDashVar(t *testing.T) {
+	files := loadFiles(t, `
+project: myapp
+resources:
+  network:
+    type: test.network
+    cidr: ${environment}
+`)
+	cfg, ds := Compile(files, testRegistry(t), Options{Environment: "dev"})
+	if ds.HasErrors() {
+		t.Fatalf("unexpected diagnostics: %+v", ds)
+	}
+	got := cfg.Resources["network"].Attrs["cidr"]
+	if got.SuppliedBy == "--var" {
+		t.Error("a bare `infra plan dev` with no --var must not credit --var for the seeded environment")
+	}
+	if annotated := value.Annotate(got, value.FormatOptions{Unknown: "(unknown)", QuoteStrings: true}); strings.Contains(annotated, "from --var") {
+		t.Errorf("the rendered annotation must not name --var when none was passed: %s", annotated)
 	}
 }
 

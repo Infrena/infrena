@@ -51,6 +51,12 @@ const (
 // ScopeCLIOverride renders as "--var" rather than "CLI override" because that
 // is what the user typed, and PLAN.md §44 requires an error to name something
 // the user can act on.
+//
+// ScopeEnvironmentVar renders as "environment config" rather than
+// "environment variable" (Minor 3, M4 final review): in CLI output "environment
+// variable" reads as an OS environment variable to essentially every reader,
+// not as "the selected environment's own configuration". Renamed 2026-09-11;
+// moves every golden and test assertion that spelled the old label.
 func (s Scope) String() string {
 	switch s {
 	case ScopeUnset:
@@ -64,7 +70,7 @@ func (s Scope) String() string {
 	case ScopeEnvironmentInherit:
 		return "environment inheritance"
 	case ScopeEnvironmentVar:
-		return "environment variable"
+		return "environment config"
 	case ScopeCLIOverride:
 		return "--var"
 	default:

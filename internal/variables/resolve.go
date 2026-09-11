@@ -169,6 +169,12 @@ func Resolve(decls []config.VariableDecl, chain environments.Chain,
 		if files[name].Scope != value.ScopeCLIOverride {
 			continue
 		}
+		// A --var-file entry naming one of the three process-reserved names
+		// is refused rather than applied — see reservedNameDiag.
+		if processReservedNames[name] {
+			ds.Add(reservedNameDiag(name, "--var-file", files[name].Origin))
+			continue
+		}
 		out.vars[name] = files[name].
 			WithSource(value.SourceVariable).
 			WithScope(value.ScopeCLIOverride)
@@ -177,6 +183,12 @@ func Resolve(decls []config.VariableDecl, chain environments.Chain,
 	// Rung 6: --var.
 	for _, name := range sortedTextNames(cliVars) {
 		origin := value.Origin{File: "--var"}
+		// A --var naming one of the three process-reserved names is refused
+		// rather than applied — see reservedNameDiag.
+		if processReservedNames[name] {
+			ds.Add(reservedNameDiag(name, "--var", origin))
+			continue
+		}
 		if s, declared := schemas[name]; declared {
 			v, parseDiags := s.ParseText(cliVars[name], origin)
 			ds.Extend(parseDiags)
@@ -370,4 +382,47 @@ var processReservedNames = map[string]bool{
 	"environment": true,
 	"region":      true,
 	"account":     true,
+}
+
+// reservedNameDiag refuses a --var or --var-file entry naming one of the
+// three process-reserved names (M4 final review, MAJOR 3).
+//
+// Before this, Resolve applied the entry like any other variable and
+// compiler.seedProcessVariables silently overwrote it moments later with no
+// diagnostic of any kind — `infra plan dev --var environment=production`
+// planned `dev` and, worse, rendered `[environment, from --var]`, which reads
+// as confirmation the flag WAS honoured. That is the accept-and-ignore
+// failure this project refuses everywhere else: destroy and refresh already
+// REFUSE --var/--var-file outright for the parallel reason that neither
+// command interpolates a variable into anything (varopts.go's
+// rejectVariableFlags). This is that same refusal, narrowed to the three
+// names it actually applies to — --var otherwise works normally for
+// validate/plan/apply.
+//
+// Declaring one of these names under `variables:` is unaffected and stays
+// legal (see checkAgainstSchemas' processReservedNames branch): this only
+// refuses the FLAG overriding it, never the declaration. A value set through
+// variables.yml or an environment layer still resolves normally; only the
+// ScopeCLIOverride rungs are refused, because the environment argument
+// decides which state file this run writes, and letting a flag override it
+// would let a plan name one environment while writing another's.
+func reservedNameDiag(name, flag string, origin value.Origin) diag.Diagnostic {
+	return diag.Diagnostic{
+		Severity: diag.SeverityError,
+		Summary:  flag + " cannot set " + strconv.Quote(name),
+		Detail: strconv.Quote(name) + " is one of the three names the process invocation supplies " +
+			"itself, not configuration: it is the environment being planned or applied, or comes " +
+			"from the invocation's own region/account, never from a variable. Supplying it through " +
+			flag + " would be silently discarded in favour of the process's own value.",
+		Action: reservedNameAction(name, flag),
+		Origin: origin,
+	}
+}
+
+// reservedNameAction names what to do instead, one sentence, per PLAN.md §44.
+func reservedNameAction(name, flag string) string {
+	if name == "environment" {
+		return "Pass the environment as infra's own argument instead, e.g. `infra plan <environment>`, and remove it from " + flag + "."
+	}
+	return "Remove " + strconv.Quote(name) + " from " + flag + "; it cannot be set this way."
 }

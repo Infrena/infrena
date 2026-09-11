@@ -213,9 +213,24 @@ func annotation(v Value) string {
 	if v.Source == "" {
 		return ""
 	}
-	location := v.Scope.String()
+	return "[" + string(v.Source) + ", from " + ScopeLabel(v) + "]"
+}
+
+// ScopeLabel names the input that supplied v — for a plan annotation and for
+// a diagnostic alike, which is why this is exported rather than staying
+// private to annotation() below.
+//
+// At ScopeCLIOverride it prefers v.SuppliedBy over Scope.String() when
+// SuppliedBy is set — Amendment 6's rule (see Value.SuppliedBy's doc
+// comment): "--var" is not specific enough to tell a --var-file value from an
+// actual --var, and internal/variables/schema.go's diagnostics need the same
+// answer annotation() already gives, not a second opinion that could drift
+// from it (M4 final review, MAJOR 1: three diagnostics built this label by
+// hand with v.Scope.String() alone and always said "--var", even for a
+// --var-file). Every other scope is exactly Scope.String().
+func ScopeLabel(v Value) string {
 	if v.Scope == ScopeCLIOverride && v.SuppliedBy != "" {
-		location = v.SuppliedBy
+		return v.SuppliedBy
 	}
-	return "[" + string(v.Source) + ", from " + location + "]"
+	return v.Scope.String()
 }

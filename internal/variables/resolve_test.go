@@ -284,16 +284,21 @@ func TestResolveKeepsAnUndeclaredCLIVariable(t *testing.T) {
 	// ScopeCLIOverride. Every other --var test in this file supplies a
 	// declared name, so this is the only test that reaches the undeclared
 	// half of that branch.
-	scope, ds := Resolve(nil, environments.Chain{}, nil, map[string]string{"region": "us-east-1"})
+	//
+	// "az", not "region": "region" is one of the three process-reserved
+	// names (see reservedNameDiag) and --var refuses it outright since the
+	// M4 final-review fix wave — a genuinely undeclared, non-reserved name
+	// is what this test means to exercise.
+	scope, ds := Resolve(nil, environments.Chain{}, nil, map[string]string{"az": "us-east-1"})
 	if ds.HasErrors() {
 		t.Fatalf("an undeclared --var is not an error: %+v", ds)
 	}
-	got, ok := scope.Variable("region")
+	got, ok := scope.Variable("az")
 	if !ok {
-		t.Fatal("region must resolve")
+		t.Fatal("az must resolve")
 	}
 	if s, _ := got.AsString(); s != "us-east-1" {
-		t.Errorf("region = %q, want us-east-1: --var carries text, and no type is guessed for an undeclared name", s)
+		t.Errorf("az = %q, want us-east-1: --var carries text, and no type is guessed for an undeclared name", s)
 	}
 	if got.Scope != value.ScopeCLIOverride {
 		t.Errorf("Scope = %v, want ScopeCLIOverride", got.Scope)
@@ -561,21 +566,25 @@ func TestFileEntryAtCLIScopeOutranksEnvironmentConfiguration(t *testing.T) {
 	// implementation that assigns one scope to the whole map cannot express
 	// this, and --var-file would be silently ignored for every name the
 	// environment also sets.
-	chain := chainWith(t, "production", map[string]string{"region": "us-east-1"}) // ScopeEnvironmentVar
+	//
+	// "az", not "region": "region" is process-reserved (reservedNameDiag)
+	// and a --var-file naming it is refused since the M4 final-review fix
+	// wave; this test means to exercise an ordinary name's precedence.
+	chain := chainWith(t, "production", map[string]string{"az": "us-east-1"}) // ScopeEnvironmentVar
 	files := map[string]value.Value{
-		"region": value.String("eu-west-1", value.SourceVariable).WithScope(value.ScopeCLIOverride),
+		"az": value.String("eu-west-1", value.SourceVariable).WithScope(value.ScopeCLIOverride),
 	}
 
 	scope, ds := Resolve(nil, chain, files, nil)
 	if ds.HasErrors() {
 		t.Fatalf("unexpected diagnostics: %v", ds)
 	}
-	got, ok := scope.Variable("region")
+	got, ok := scope.Variable("az")
 	if !ok {
-		t.Fatal("region is not in scope")
+		t.Fatal("az is not in scope")
 	}
 	if s, _ := got.AsString(); s != "eu-west-1" {
-		t.Errorf("region = %q, want eu-west-1 — a --var-file outranks environment configuration", s)
+		t.Errorf("az = %q, want eu-west-1 — a --var-file outranks environment configuration", s)
 	}
 	if got.Scope != value.ScopeCLIOverride {
 		t.Errorf("Scope = %v, want ScopeCLIOverride — the winning level must be recorded", got.Scope)
@@ -604,12 +613,93 @@ func TestCLIVarOutranksAFileEntryAtTheSameScope(t *testing.T) {
 	// PLAN.md §8: "CLI values override variable files." Both sit at
 	// ScopeCLIOverride, so the tie is broken by application order, not by
 	// comparing Scope.
+	//
+	// "az", not "region": see TestFileEntryAtCLIScopeOutranksEnvironmentConfiguration.
 	files := map[string]value.Value{
-		"region": value.String("eu-west-1", value.SourceVariable).WithScope(value.ScopeCLIOverride),
+		"az": value.String("eu-west-1", value.SourceVariable).WithScope(value.ScopeCLIOverride),
 	}
-	scope, _ := Resolve(nil, emptyChain(t), files, map[string]string{"region": "ap-south-1"})
-	got, _ := scope.Variable("region")
+	scope, _ := Resolve(nil, emptyChain(t), files, map[string]string{"az": "ap-south-1"})
+	got, _ := scope.Variable("az")
 	if s, _ := got.AsString(); s != "ap-south-1" {
-		t.Errorf("region = %q, want ap-south-1", s)
+		t.Errorf("az = %q, want ap-south-1", s)
+	}
+}
+
+// TestVarFileBoundViolationNamesTheFileNotDashDashVar reproduces M4 final
+// review's MAJOR 1, at the level the bug actually lived: Resolve, not
+// Schema.Validate in isolation. `size` is declared `max: 500`; the violating
+// value arrives exactly as config.DecodeVariableFile stamps a --var-file
+// entry — ScopeCLIOverride, SuppliedBy the path as typed — never as a bare
+// --var. Before the fix, boundDiag built its "supplied by" clause from
+// v.Scope.String() alone, which is "--var" for EVERY ScopeCLIOverride value
+// regardless of which flag actually supplied it, so this diagnostic named a
+// flag the user never passed.
+func TestVarFileBoundViolationNamesTheFileNotDashDashVar(t *testing.T) {
+	decls := []config.VariableDecl{{
+		Name: "size", Type: value.KindInt,
+		Max: value.Int(500, value.SourceExplicit), HasMax: true,
+		Origin: value.Origin{File: "infra.yml", Line: 7, Column: 10},
+	}}
+	chain := chainWith(t, "prod", nil)
+	files := map[string]value.Value{
+		"size": value.Int(9999, value.SourceVariable).
+			WithScope(value.ScopeCLIOverride).
+			WithOrigin(value.Origin{File: "conf/big.yml", Line: 1, Column: 1}).
+			WithSuppliedBy("conf/big.yml"),
+	}
+
+	_, ds := Resolve(decls, chain, files, nil)
+	if !ds.HasErrors() {
+		t.Fatal("size=9999 violates max:500 and must be reported")
+	}
+	var sb strings.Builder
+	ds.Render(&sb)
+	out := sb.String()
+	if !strings.Contains(out, "supplied by conf/big.yml") {
+		t.Errorf("the diagnostic must name the --var-file path that actually supplied the value:\n%s", out)
+	}
+	if strings.Contains(out, "supplied by --var ") {
+		t.Errorf("the diagnostic must not blame --var for a --var-file value:\n%s", out)
+	}
+}
+
+// TestResolveRefusesDashDashVarNamingEnvironment reproduces M4 final review's
+// MAJOR 3: before this fix, a --var naming one of the process-reserved names
+// was silently applied here and then silently overwritten moments later by
+// compiler.seedProcessVariables (its only caller), with no diagnostic either
+// way — `infra plan dev --var environment=production` planned "dev" and said
+// nothing about the flag it ignored. Resolve must refuse the flag outright,
+// the same way destroy and refresh already refuse --var/--var-file entirely
+// (internal/cli/varopts.go's rejectVariableFlags) for the parallel reason
+// that the flag cannot change the outcome.
+func TestResolveRefusesDashDashVarNamingEnvironment(t *testing.T) {
+	chain := chainWith(t, "dev", nil)
+	scope, ds := Resolve(nil, chain, nil, map[string]string{"environment": "production"})
+	if !ds.HasErrors() {
+		t.Fatal("--var environment=... must be refused, not silently applied")
+	}
+	// It must not have been applied even transiently — the only writer of
+	// "environment" is meant to be compiler.seedProcessVariables, later.
+	if v, ok := scope.Variable("environment"); ok {
+		t.Errorf("environment must not be set by Resolve itself, got %+v", v)
+	}
+}
+
+// TestResolveRefusesVarFileNamingReservedNames is
+// TestResolveRefusesDashDashVarNamingEnvironment's --var-file twin, and
+// covers region/account too — nothing else in this file exercises a
+// --var-file entry naming any of the three reserved names.
+func TestResolveRefusesVarFileNamingReservedNames(t *testing.T) {
+	for _, name := range []string{"environment", "region", "account"} {
+		files := map[string]value.Value{
+			name: value.String("nope", value.SourceVariable).
+				WithScope(value.ScopeCLIOverride).
+				WithOrigin(value.Origin{File: "conf/vars.yml", Line: 1, Column: 1}).
+				WithSuppliedBy("conf/vars.yml"),
+		}
+		_, ds := Resolve(nil, chainWith(t, "dev", nil), files, nil)
+		if !ds.HasErrors() {
+			t.Errorf("--var-file setting %q must be refused, not silently applied", name)
+		}
 	}
 }

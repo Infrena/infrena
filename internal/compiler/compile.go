@@ -157,17 +157,28 @@ func fileVars(project *config.ProjectDecl, opts Options) map[string]value.Value 
 // because the command line is where they enter the process. Source and Scope
 // are orthogonal: one says what kind of thing a value is, the other says
 // which precedence level supplied it.
+//
+// Each one is also stamped with SuppliedBy (M4 final review, MAJOR 2). Left
+// unset, value.ScopeLabel falls back to Scope.String() — "--var" — so a bare
+// `infra plan dev` with no flags at all rendered `cidr: "dev" [environment,
+// from --var]`, crediting a flag the user did not type, and this function's
+// own doc comment above argues at length that a --var CANNOT set
+// "environment". The plan asserted the opposite of the code's contract.
+// SuppliedBy is free text at this rung (see its doc comment), so it says what
+// actually supplied the value: the environment argument to the command
+// itself, not a flag. Region and account get the parallel, honest answer —
+// they are read from the invocation's own Options, not from any flag either.
 func seedProcessVariables(scope *variables.Scope, opts Options) {
 	origin := value.Origin{File: "<command line>"}
-	set := func(name, text string) {
+	set := func(name, text, suppliedBy string) {
 		scope.Override(name, value.String(text, value.SourceEnvironment).
-			WithScope(value.ScopeCLIOverride).WithOrigin(origin))
+			WithScope(value.ScopeCLIOverride).WithOrigin(origin).WithSuppliedBy(suppliedBy))
 	}
-	set("environment", opts.Environment)
+	set("environment", opts.Environment, "the environment argument")
 	if opts.Region != "" {
-		set("region", opts.Region)
+		set("region", opts.Region, "the invocation's region")
 	}
 	if opts.Account != "" {
-		set("account", opts.Account)
+		set("account", opts.Account, "the invocation's account")
 	}
 }

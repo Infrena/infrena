@@ -374,7 +374,7 @@ func TestRenderAnnotatesEveryScope(t *testing.T) {
 			// higher layer. Unreachable in M4, reachable in M5.
 			name: "explicit won by a higher layer IS annotated",
 			v:    value.String("web", value.SourceExplicit).WithScope(value.ScopeEnvironmentVar),
-			want: `"web" [explicit, from environment variable]`,
+			want: `"web" [explicit, from environment config]`,
 		},
 		{
 			name: "provider default",
@@ -399,7 +399,7 @@ func TestRenderAnnotatesEveryScope(t *testing.T) {
 		{
 			name: "environment variables",
 			v:    value.String("large", value.SourceEnvironment).WithScope(value.ScopeEnvironmentVar),
-			want: `"large" [environment, from environment variable]`,
+			want: `"large" [environment, from environment config]`,
 		},
 		{
 			name: "cli override — the shape the user fixed",

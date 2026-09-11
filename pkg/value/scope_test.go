@@ -368,7 +368,7 @@ func TestAnnotateNamesTheScopeWhenThereIsOne(t *testing.T) {
 	}{
 		{Int(20, SourceVariable).WithScope(ScopeCLIOverride), "20 [variable, from --var]"},
 		{Int(2, SourceDefault).WithScope(ScopeProviderDefault), "2 [default, from provider default]"},
-		{Int(10, SourceEnvironment).WithScope(ScopeEnvironmentVar), "10 [environment, from environment variable]"},
+		{Int(10, SourceEnvironment).WithScope(ScopeEnvironmentVar), "10 [environment, from environment config]"},
 		{Int(1, SourceEnvironment).WithScope(ScopeEnvironmentInherit), "1 [environment, from environment inheritance]"},
 	}
 	for _, tc := range cases {

@@ -576,6 +576,34 @@ func TestParseTextConvertsToTheDeclaredKind(t *testing.T) {
 	}
 }
 
+// TestParseTextCoercesAnExactFloatLiteralToInt reproduces M4 final review's
+// MINOR 1: "--var size=42.0" against `type: integer` was rejected while a
+// --var-file entry of `size: 42.0` was silently coerced — Amendment 4
+// (contract.md) says a numeric literal coerces to the declared kind wherever
+// it appears, exactly or not at all, and names a SUPPLIED value including
+// --var explicitly, not only a declared default or --var-file. "42.0" is an
+// exact int conversion and must now be accepted the same way.
+func TestParseTextCoercesAnExactFloatLiteralToInt(t *testing.T) {
+	got, ds := schemaFor(t, value.KindInt).ParseText("42.0", value.Origin{File: "--var"})
+	if ds.HasErrors() {
+		t.Fatalf("42.0 is an exact integer and must be accepted: %+v", ds)
+	}
+	if got.Kind != value.KindInt || got.Raw != int64(42) {
+		t.Errorf("ParseText(%q) = %v/%v, want KindInt/42", "42.0", got.Kind, got.Raw)
+	}
+}
+
+// TestParseTextStillRejectsALossyFloatLiteralForInt is the sibling check:
+// coercion must stay "exact or not at all" — a fractional part is still a
+// genuine error, not silently rounded away. TestParseTextRejectsTextThatIsNotTheDeclaredKind
+// already pins "2.5" via the table above; this one is the same claim, named
+// for the specific fix so a regression here fails with an obvious title.
+func TestParseTextStillRejectsALossyFloatLiteralForInt(t *testing.T) {
+	if _, ds := schemaFor(t, value.KindInt).ParseText("42.5", value.Origin{File: "--var"}); !ds.HasErrors() {
+		t.Error("42.5 cannot become an integer without changing it and must stay rejected")
+	}
+}
+
 // TestParseTextStampsSuppliedByFromOrigin pins that ParseText's SuppliedBy
 // stamp reuses origin.File exactly, rather than hardcoding the literal
 // "--var". Its one caller (resolve.go's rung 6) always builds origin from

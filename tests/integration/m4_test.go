@@ -234,7 +234,7 @@ resources:
 	for _, tc := range []struct{ resource, want, scopeClause string }{
 		{"a", `"base"`, "from base config"},
 		{"b", `"inherited"`, "from environment inheritance"},
-		{"c", `"env"`, "from environment variable"},
+		{"c", `"env"`, "from environment config"},
 		// d is supplied by --var-file, not --var: Amendment 6
 		// (pkg/value/format.go's annotation) stamps SuppliedBy with the file
 		// path exactly as typed on the command line — "--var" is reserved for
