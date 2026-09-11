@@ -103,6 +103,27 @@ func TestLoadVarFilesPropagatesDecodeVariableFileDiagnostics(t *testing.T) {
 	}
 }
 
+// TestLoadVarFilesDecodeDiagnosticsNameThePathAsTyped guards the File passed
+// to config.DecodeVariableFile (via config.ParseVariableFile): it must carry
+// the path AS THE USER TYPED IT (here, "vars.yml"), not the --chdir-joined
+// path loadVarFiles actually opened (dir + "/vars.yml"). A diagnostic that
+// originates INSIDE DecodeVariableFile — this one, the interpolation
+// check — builds its own Origin/Detail from File.Path, so passing the joined
+// path through by mistake would leak the test's own temporary directory into
+// a message meant to show the user what they wrote.
+func TestLoadVarFilesDecodeDiagnosticsNameThePathAsTyped(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "vars.yml", "name: ${project_name}-web\n")
+	_, ds := loadVarFiles(dir, []string{"vars.yml"})
+	text := renderToString(ds)
+	if !strings.Contains(text, "vars.yml") {
+		t.Fatalf("expected the diagnostic to name vars.yml:\n%s", text)
+	}
+	if strings.Contains(text, dir) {
+		t.Errorf("the diagnostic leaked the joined/temporary path instead of the typed one:\n%s", text)
+	}
+}
+
 // TestPlanCompilesWithAVarFile proves internal/cli/plan.go's wiring: that
 // opts.VarFiles is loaded and threaded into compiler.Options.FileVars, not
 // just that loadVarFiles itself works in isolation. The assertion names the

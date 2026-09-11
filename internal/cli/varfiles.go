@@ -5,8 +5,6 @@ import (
 	"path/filepath"
 	"strconv"
 
-	"gopkg.in/yaml.v3"
-
 	"infra/internal/config"
 	"infra/internal/diag"
 	"infra/pkg/value"
@@ -48,8 +46,12 @@ func loadVarFiles(dir string, paths []string) (map[string]value.Value, diag.Diag
 			})
 			continue
 		}
-		var root yaml.Node
-		if err := yaml.Unmarshal(data, &root); err != nil {
+		// Path as WRITTEN on the command line, not the joined path: it is what
+		// the user typed, and it keeps diagnostics free of the temporary
+		// directory an integration test happens to run in. ParseVariableFile
+		// stores it verbatim, unresolved, for exactly that reason.
+		f, err := config.ParseVariableFile(p, data)
+		if err != nil {
 			ds.Add(diag.Diagnostic{
 				Severity: diag.SeverityError,
 				Summary:  "cannot parse variable file " + strconv.Quote(p),
@@ -59,10 +61,7 @@ func loadVarFiles(dir string, paths []string) (map[string]value.Value, diag.Diag
 			})
 			continue
 		}
-		// Path as WRITTEN on the command line, not the joined path: it is what
-		// the user typed, and it keeps diagnostics free of the temporary
-		// directory an integration test happens to run in.
-		vals, fds := config.DecodeVariableFile(config.File{Path: p, Root: &root}, value.ScopeCLIOverride)
+		vals, fds := config.DecodeVariableFile(f, value.ScopeCLIOverride)
 		ds.Extend(fds)
 		for name, v := range vals {
 			out[name] = v

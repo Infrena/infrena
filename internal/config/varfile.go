@@ -9,6 +9,38 @@ import (
 	"infra/pkg/value"
 )
 
+// ParseVariableFile parses raw bytes into the File shape DecodeVariableFile
+// expects, for a variable file named directly by path — a --var-file, read by
+// internal/cli's loadVarFiles — rather than one Load discovers by walking a
+// project directory.
+//
+// It exists so internal/cli never constructs a yaml.Node itself. Stage 2
+// (this package) is the only stage permitted to touch yaml.Node, and that
+// rule is enforced by nothing more structural than
+// `grep -rn "yaml\." internal/ pkg/ cmd/ | grep -v "^internal/config/"`
+// returning nothing — a check worth keeping meaningful, because the day it
+// returns one legitimate hit is the day a second one stops looking unusual.
+//
+// It deliberately does NOT read the file itself. Turning a path into bytes is
+// internal/cli's own concern — resolving a --var-file against --chdir vs. an
+// absolute path touches no yaml.Node — and internal/cli keeps its own
+// read-failure and parse-failure diagnostics, worded for the --var-file flag
+// it knows about, which config.File deliberately does not (see
+// DecodeVariableFile's doc comment: this package stays provider- and
+// flag-agnostic).
+//
+// path is stored on the returned File verbatim — never resolved or
+// re-joined — so a caller that wants a diagnostic naming the path AS THE USER
+// TYPED IT, rather than a --chdir-joined path, passes that spelling here
+// rather than the path it actually opened.
+func ParseVariableFile(path string, data []byte) (File, error) {
+	var root yaml.Node
+	if err := yaml.Unmarshal(data, &root); err != nil {
+		return File{}, err
+	}
+	return File{Path: path, Kind: FileVariables, Root: &root}, nil
+}
+
 // DecodeVariableFile converts one variable file into named values.
 //
 // The shape is PLAN.md §8's variables.yml: a single YAML mapping of variable

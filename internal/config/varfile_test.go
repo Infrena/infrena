@@ -19,6 +19,57 @@ func fileFrom(t *testing.T, path, body string) File {
 	return File{Path: path, Root: &root}
 }
 
+// TestParseVariableFileReturnsAFileDecodeVariableFileAccepts pins the seam
+// internal/cli's loadVarFiles depends on: ParseVariableFile is the only place
+// outside this package a --var-file's bytes become a yaml.Node, and its
+// output must be exactly what DecodeVariableFile expects — Path set verbatim
+// to what was passed, Kind FileVariables, Root walkable.
+func TestParseVariableFileReturnsAFileDecodeVariableFileAccepts(t *testing.T) {
+	f, err := ParseVariableFile("vars.yml", []byte("region: us-east-1\n"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if f.Path != "vars.yml" {
+		t.Errorf("Path = %q, want the path passed in verbatim", f.Path)
+	}
+	if f.Kind != FileVariables {
+		t.Errorf("Kind = %v, want FileVariables", f.Kind)
+	}
+	got, ds := DecodeVariableFile(f, value.ScopeCLIOverride)
+	if ds.HasErrors() {
+		t.Fatalf("unexpected diagnostics: %v", ds)
+	}
+	if s, _ := got["region"].AsString(); s != "us-east-1" {
+		t.Errorf("region = %#v", got["region"])
+	}
+}
+
+// TestParseVariableFileStoresThePathVerbatim guards the "as written, not
+// resolved" contract specifically: a caller that passes a --chdir-relative
+// display path, distinct from whatever absolute path it actually opened to
+// get these bytes, must get that same display path back on File — not a
+// resolved or re-derived one — so a diagnostic built from the result names
+// what the user typed.
+func TestParseVariableFileStoresThePathVerbatim(t *testing.T) {
+	f, err := ParseVariableFile("../shared/vars.yml", []byte("a: 1\n"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if f.Path != "../shared/vars.yml" {
+		t.Errorf("Path = %q, want the exact string passed in", f.Path)
+	}
+}
+
+// TestParseVariableFileReportsAYAMLSyntaxError is the failure half: malformed
+// bytes must return an error rather than a File with a nil or partial Root
+// that DecodeVariableFile would then have to guard against.
+func TestParseVariableFileReportsAYAMLSyntaxError(t *testing.T) {
+	_, err := ParseVariableFile("vars.yml", []byte("a: [1, 2\n"))
+	if err == nil {
+		t.Fatal("malformed YAML must be reported, not silently produce an empty or partial File")
+	}
+}
+
 func TestDecodeVariableFileStampsSourceAndScopeOnEveryLeaf(t *testing.T) {
 	f := fileFrom(t, "variables.yml", `
 project_name: myapp
