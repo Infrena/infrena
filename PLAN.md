@@ -499,6 +499,11 @@ is loaded automatically under its directory name, with no `modules:` entry. An
 explicit entry naming the same module wins over the discovered one, per §7's rule
 that explicit configuration beats an implicit default.
 
+Discovery populates the ROOT level only. Inside a module, only that module's own
+`modules:` entries are in scope — a module never resolves a name against directories
+that happen to lie around the project consuming it, because a module that did would
+work in one project and fail in the next.
+
 ## 11.2 Instantiating
 
 A loaded module is called by a resource whose type is `module.<name>`:
@@ -525,6 +530,11 @@ resources:
 The `module.` prefix is what distinguishes a module call from a provider resource
 type, so the two namespaces can never collide and a reader never has to consult
 `modules:` to know which one a type names.
+
+**A module exposes its outputs, not its resources.** `${prod.endpoint}` reads an
+output. There is no spelling that reaches inside: `${module.prod.database.id}` is
+refused, and the `module.` segment belongs to addresses — what `state show` and the
+plan print — never to a reference a user writes.
 
 Everything a resource can do, a module call can do: its attributes are the module's
 inputs and carry provenance and sensitivity like any other attribute, `depends_on`
