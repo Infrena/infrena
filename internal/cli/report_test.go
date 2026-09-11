@@ -302,6 +302,123 @@ resources:
 	}
 }
 
+// TestDestroyOutputWritesEventsAndResult is destroy's counterpart to
+// TestApplyOutputWritesEventsAndResult: destroy shares finishApply,
+// applyResultFrom and the executor.OnEvent wiring with apply (report.go's
+// finishApply doc comment says so explicitly), so this checks that sharing
+// actually reaches destroy's own command — an address destroyed reports
+// op:"destroy", not "create", and command:"destroy" in the meta line, not
+// "apply".
+func TestDestroyOutputWritesEventsAndResult(t *testing.T) {
+	dir := seedOneNetwork(t, "dev")
+
+	outPath := filepath.Join(t.TempDir(), "out.ndjson")
+	opts := &GlobalOptions{Dir: dir, Parallelism: 4, Output: outPath}
+	cmd := newDestroyCommand(opts)
+	cmd.SetArgs([]string{"dev"})
+	cmd.SetIn(strings.NewReader("dev\n"))
+	cmd.SetOut(new(bytes.Buffer))
+	cmd.SetErr(new(bytes.Buffer))
+
+	if err := cmd.Execute(); !errors.Is(err, errChanges) {
+		t.Fatalf("Execute() = %v, want errChanges", err)
+	}
+
+	lines := readNDJSON(t, outPath)
+	if lines[0]["type"] != "meta" || lines[0]["command"] != "destroy" {
+		t.Fatalf("first line = %v, want meta for destroy", lines[0])
+	}
+
+	events := linesOfType(lines, "event")
+	if len(events) == 0 {
+		t.Fatal("no event lines were written")
+	}
+	var sawStarted, sawSucceeded bool
+	for _, e := range events {
+		if e["address"] != "network" {
+			t.Errorf("event for unexpected address: %v", e)
+		}
+		if e["op"] != "destroy" {
+			t.Errorf("event.op = %v, want \"destroy\"", e["op"])
+		}
+		switch e["event"] {
+		case "started":
+			sawStarted = true
+		case "succeeded":
+			sawSucceeded = true
+		}
+	}
+	if !sawStarted || !sawSucceeded {
+		t.Errorf("missing started/succeeded events: %v", events)
+	}
+
+	result := lines[len(lines)-1]
+	if _, hasError := result["error"]; hasError {
+		t.Errorf("result.error = %v, want absent — errChanges is success, not failure", result["error"])
+	}
+	applied, _ := result["applied"].([]any)
+	if len(applied) != 1 || applied[0] != "network" {
+		t.Errorf("result.applied = %v, want [\"network\"] — destroy's removal still reports as Applied, matching executor.Result", result["applied"])
+	}
+}
+
+// TestDestroyOutputReportsFailedEventAndResult is destroy's counterpart to
+// TestApplyOutputReportsFailedEventAndResult.
+func TestDestroyOutputReportsFailedEventAndResult(t *testing.T) {
+	dir := seedOneNetwork(t, "dev")
+
+	cloudPath := filepath.Join(dir, testprovider.DefaultCloudPath)
+	cloud, err := testprovider.LoadCloud(cloudPath)
+	if err != nil {
+		t.Fatalf("loading fake cloud: %v", err)
+	}
+	cloud.Failures = append(cloud.Failures, testprovider.FailureRule{
+		Op: "delete", Address: "network", Nth: 1, Message: "injected failure",
+	})
+	if err := cloud.Save(cloudPath); err != nil {
+		t.Fatalf("saving fake cloud with a failure rule: %v", err)
+	}
+
+	outPath := filepath.Join(t.TempDir(), "out.ndjson")
+	opts := &GlobalOptions{Dir: dir, Parallelism: 4, Output: outPath}
+	cmd := newDestroyCommand(opts)
+	cmd.SetArgs([]string{"dev"})
+	cmd.SetIn(strings.NewReader("dev\n"))
+	cmd.SetOut(new(bytes.Buffer))
+	cmd.SetErr(new(bytes.Buffer))
+
+	execErr := cmd.Execute()
+	if execErr == nil || errors.Is(execErr, errChanges) {
+		t.Fatalf("Execute() = %v, want a plain error", execErr)
+	}
+
+	lines := readNDJSON(t, outPath)
+	count := 0
+	for _, e := range linesOfType(lines, "event") {
+		if e["event"] != "failed" {
+			continue
+		}
+		count++
+		errStr, _ := e["error"].(string)
+		if errStr == "" {
+			t.Errorf("failed event has no error text: %v", e)
+		}
+	}
+	if count != 1 {
+		t.Fatalf("got %d failed events, want 1", count)
+	}
+
+	result := lines[len(lines)-1]
+	destroyErrStr, _ := result["error"].(string)
+	if destroyErrStr == "" {
+		t.Error("result.error is absent for a failed destroy")
+	}
+	destroyFailed, _ := result["failed"].(map[string]any)
+	if len(destroyFailed) != 1 {
+		t.Errorf("result.failed = %v, want exactly one entry", result["failed"])
+	}
+}
+
 // TestRefreshOutputRedactsSensitiveDrift is this task's core redaction
 // test: it plants a sensitive attribute, drifts it outside infra, and
 // checks BOTH that the raw --output bytes never contain either cleartext
@@ -391,6 +508,67 @@ resources: {}
 	drifted, _ := result["drifted"].([]any)
 	if len(drifted) != 1 || drifted[0] != "database" {
 		t.Errorf("result.drifted = %v, want [\"database\"]", result["drifted"])
+	}
+}
+
+// TestRefreshOutputCountsUnchangedRatherThanListingThem pins the team-lead
+// ruling that RefreshResult.Unchanged is a COUNT, not a list of addresses —
+// the observation stream already named every one of them as it ran. Two
+// resources are seeded identically to the fake cloud (no drift) and one is
+// drifted, so a version of buildRefreshResult that still appended addresses
+// to a []string here would produce a JSON array, which this test's type
+// assertion to float64 would fail against directly — not merely "the count
+// is wrong", but "the wire shape itself regressed to a list".
+func TestRefreshOutputCountsUnchangedRatherThanListingThem(t *testing.T) {
+	dir := projectDir(t, `
+project: myapp
+resources: {}
+`)
+	ctx := context.Background()
+	cloudPath := filepath.Join(dir, testprovider.DefaultCloudPath)
+	prov := testprovider.New(cloudPath)
+
+	st := state.New("myapp", "dev")
+	for _, name := range []string{"a", "b"} {
+		rs, err := prov.Create(ctx, &resource.DesiredResource{
+			Address: address.Address{Name: name},
+			Type:    "test.network",
+			Attrs: map[string]value.Value{
+				"cidr": value.String("10.20.0.0/16", value.SourceExplicit),
+			},
+		})
+		if err != nil {
+			t.Fatalf("seeding the fake cloud: %v", err)
+		}
+		st.Set(rs)
+	}
+	seedState(t, dir, "dev", st)
+
+	outPath := filepath.Join(t.TempDir(), "out.ndjson")
+	opts := &GlobalOptions{Dir: dir, Parallelism: 4, Output: outPath}
+	cmd := newRefreshCommand(opts)
+	cmd.SetArgs([]string{"dev"})
+	cmd.SetOut(new(bytes.Buffer))
+	cmd.SetErr(new(bytes.Buffer))
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() = %v, want nil", err)
+	}
+
+	lines := readNDJSON(t, outPath)
+	result := lines[len(lines)-1]
+	if result["type"] != "result" {
+		t.Fatalf("last line = %v, want the result line", result)
+	}
+	if _, isList := result["unchanged"].([]any); isList {
+		t.Fatalf("result.unchanged = %v, is a list — want a bare count", result["unchanged"])
+	}
+	count, ok := result["unchanged"].(float64)
+	if !ok || count != 2 {
+		t.Errorf("result.unchanged = %v, want the number 2", result["unchanged"])
+	}
+	if _, hasDrifted := result["drifted"]; hasDrifted {
+		t.Errorf("result.drifted = %v, want absent — nothing drifted", result["drifted"])
 	}
 }
 

@@ -10,6 +10,7 @@ import (
 	"github.com/infrata/infrata/internal/compiler"
 	"github.com/infrata/infrata/internal/executor"
 	"github.com/infrata/infrata/internal/planner"
+	"github.com/infrata/infrata/pkg/report"
 )
 
 // newDestroyCommand builds `infra destroy <environment>`: plan the removal
@@ -50,12 +51,18 @@ func newDestroyCommand(opts *GlobalOptions) *cobra.Command {
 
 			environment := args[0]
 
+			rw, closeReport, err := openReport(opts, "destroy", environment, cmd.ErrOrStderr())
+			if err != nil {
+				return err
+			}
+			defer closeReport()
+
 			reg := buildRegistry(opts.Dir)
 			backend := backendFor(opts.Dir)
 
 			st0, err := backend.Get(cmd.Context(), environment)
 			if err != nil {
-				return err
+				return finishApply(cmd.ErrOrStderr(), rw, report.ApplyResult{}, err)
 			}
 			// An empty desired configuration: every resource recorded in
 			// state falls into planner.Compute's "in state, not in
@@ -63,27 +70,24 @@ func newDestroyCommand(opts *GlobalOptions) *cobra.Command {
 			// (spec §11) — see this command's doc comment above.
 			emptyCfg := compiler.ResolvedConfig{Project: st0.Project, Environment: environment}
 
-			// Unlocked preview — identical in spirit to `infra plan`. nil:
-			// destroy does not yet write pkg/report's NDJSON output (only
-			// validate, apply and refresh do so far) — see computePlan's
-			// rw parameter, which every caller that has no report.Writer
-			// passes as nil.
-			p, _, err := computePlan(cmd.Context(), cmd, backend, reg, emptyCfg, environment, opts, nil)
+			// Unlocked preview — identical in spirit to `infra plan`.
+			p, _, err := computePlan(cmd.Context(), cmd, backend, reg, emptyCfg, environment, opts, rw)
 			if err != nil {
-				return err
+				return finishApply(cmd.ErrOrStderr(), rw, report.ApplyResult{}, err)
 			}
 
 			fmt.Fprint(cmd.OutOrStdout(), planner.Render(p, planner.RenderOptions{Verbose: opts.Verbose}))
 
 			if !p.HasChanges() {
-				return nil
+				return finishApply(cmd.ErrOrStderr(), rw, report.ApplyResult{}, nil)
 			}
 
 			if !opts.AutoApprove {
 				prompt := fmt.Sprintf("\nDestroying environment %q will delete every resource infra "+
 					"manages there. This cannot be undone.\nType the environment name to confirm: ", environment)
 				if !confirm(cmd, prompt, environment) {
-					return fmt.Errorf("destroy cancelled: you must type %q to confirm", environment)
+					return finishApply(cmd.ErrOrStderr(), rw, report.ApplyResult{},
+						fmt.Errorf("destroy cancelled: you must type %q to confirm", environment))
 				}
 			}
 
@@ -93,31 +97,42 @@ func newDestroyCommand(opts *GlobalOptions) *cobra.Command {
 				// Re-plan inside the lock — apply's doc comment explains why:
 				// destroy must never execute against state or provider
 				// reality gathered before the lock was held.
-				p2, st, err := computePlan(ctx, cmd, backend, reg, emptyCfg, environment, opts, nil)
+				p2, st, err := computePlan(ctx, cmd, backend, reg, emptyCfg, environment, opts, rw)
 				if err != nil {
-					return err
+					return finishApply(cmd.ErrOrStderr(), rw, report.ApplyResult{}, err)
 				}
 				if !p2.HasChanges() {
 					fmt.Fprintln(cmd.OutOrStdout(), "\nNothing remained to destroy once the environment lock was acquired.")
-					return nil
+					return finishApply(cmd.ErrOrStderr(), rw, report.ApplyResult{}, nil)
 				}
 
 				g, err := planner.BuildExecution(p2, dependentsOf(p2))
 				if err != nil {
-					return fmt.Errorf("building execution graph: %w", err)
+					return finishApply(cmd.ErrOrStderr(), rw, report.ApplyResult{},
+						fmt.Errorf("building execution graph: %w", err))
 				}
 
-				res, execDiags := executor.Apply(ctx, p2, g, st, executorOptions(opts, reg, backend, environment))
-				execDiags.Render(cmd.ErrOrStderr())
+				execOpts := executorOptions(opts, reg, backend, environment)
+				if rw != nil {
+					execOpts.OnEvent = func(e executor.Event) {
+						// Best-effort and silent on failure — see apply.go's
+						// identical wiring for why.
+						_ = rw.WriteEvent(toReportEvent(e))
+					}
+				}
+
+				res, execDiags := executor.Apply(ctx, p2, g, st, execOpts)
+				renderDiagnostics(cmd.ErrOrStderr(), rw, execDiags)
 
 				// executor.Render (Task 12) is THE result renderer — see
 				// apply.go's note on why this command does not write its own.
 				fmt.Fprint(cmd.OutOrStdout(), executor.Render(res, executor.RenderOptions{Verbose: opts.Verbose}))
 
+				result := applyResultFrom(res)
 				if execDiags.HasErrors() || len(res.Failed) > 0 {
-					return errors.New("destroy completed with failures")
+					return finishApply(cmd.ErrOrStderr(), rw, result, errors.New("destroy completed with failures"))
 				}
-				return errChanges
+				return finishApply(cmd.ErrOrStderr(), rw, result, errChanges)
 			})
 		},
 	}

@@ -35,8 +35,15 @@ const Version = 1
 // sensitive value never reaches a report as anything but "<sensitive>".
 // Every caller in this tree that puts a value.Value into a report.* type
 // must go through this rather than reading v.Raw directly.
+//
+// value.ReportFormatOptions, not a package-local copy — see its doc comment
+// for why a report of what already happened (this package's whole job)
+// takes different Unknown text than a plan's promise about the future
+// (value.PlanFormatOptions), while sharing the same quoting as both: this is
+// a diff-like listing (an observation's before/after), the same shape a
+// plan's Before/After is.
 func Format(v value.Value) string {
-	return value.Format(v, value.FormatOptions{Unknown: "(unknown)", QuoteStrings: true})
+	return value.Format(v, value.ReportFormatOptions)
 }
 
 // Writer serializes NDJSON lines to an underlying io.Writer, one line per
@@ -174,8 +181,22 @@ func (w *Writer) WriteDiagnostic(d Diagnostic) error {
 	return w.writeLine(d)
 }
 
-// ApplyResult is apply's (and destroy's, if it is ever wired to this
-// package) final line: what was applied, forgotten, failed and skipped.
+// ApplyResult is apply's — and destroy's, which shares this shape since it
+// runs the same executor.Apply and produces the same executor.Result —
+// final line: what was applied, forgotten, failed and skipped.
+//
+// The rule every field here was checked against: list what changed (or
+// needs attention), count what did not. Applied, Forgotten and Skipped stay
+// LISTS rather than counts even though a consumer already saw one "event"
+// line per operation during the run, same as RefreshResult's Drifted and
+// Removed — see that type's doc comment for why a duplicate-of-the-stream
+// list still earns its place in the final line. Skipped in particular is
+// NOT this result's equivalent of RefreshResult.Unchanged, despite both
+// being the "nothing happened here" case at first glance: an unchanged
+// resource was actively confirmed correct, while a skipped one has an
+// UNAPPLIED change still pending because a dependency failed — exactly the
+// kind of thing a consumer needs to name, not merely count, to know what
+// still needs remediation.
 //
 // Failed is keyed by planner.OpNode.ID() ("<verb>:<address>"), the same key
 // executor.Result.Failed uses, for the same reason: a Replace is two nodes
@@ -203,13 +224,27 @@ func (w *Writer) WriteApplyResult(r ApplyResult) error {
 }
 
 // RefreshResult is refresh's final line: which addresses drifted, which were
-// found removed, which were read successfully with no change, and which
+// found removed, how many were read successfully with no change, and which
 // could not be read at all.
+//
+// Unchanged is a COUNT, not a list, and every other field here is a list —
+// this is the one field that fails the "list what changed, count what did
+// not" rule if it stays a list. The stream already carried one
+// "observation" line per resource as refresh ran (including every unchanged
+// one), so a consumer that wants to know WHICH resources were confirmed
+// correct already saw that in the stream; repeating every address again
+// here only duplicates data already delivered, and on a large environment
+// where most resources are unchanged it is the one field that could make
+// this line's size scale with the environment rather than with what
+// actually needs attention. Drifted, Removed and Errors stay lists despite
+// the same stream duplication argument technically applying to them too,
+// because unlike Unchanged they are exactly what a consumer acts on —
+// naming them is the final line's whole job.
 type RefreshResult struct {
 	Type      string   `json:"type"`
 	Drifted   []string `json:"drifted,omitempty"`
 	Removed   []string `json:"removed,omitempty"`
-	Unchanged []string `json:"unchanged,omitempty"`
+	Unchanged int      `json:"unchanged,omitempty"`
 	Errors    []string `json:"errors,omitempty"`
 	// Error is set only when refresh itself could not run at all (e.g. the
 	// lock could not be taken) — never merely because some resources failed

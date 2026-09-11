@@ -136,16 +136,19 @@ func toReportEvent(e executor.Event) report.Event {
 	return ev
 }
 
-// finishApply writes apply's final "result" line (when rw is non-nil) and
-// returns err unchanged, so every RunE return site can read
+// finishApply writes an apply-shaped command's final "result" line (when rw
+// is non-nil) and returns err unchanged, so every RunE return site can read
 // `return finishApply(cmd, rw, result, err)` instead of duplicating the
-// nil-check and error-string extraction at each one.
+// nil-check and error-string extraction at each one. Shared by apply and
+// destroy — both run through executor.Apply and produce an
+// executor.Result, so both produce a report.ApplyResult (see
+// applyResultFrom).
 //
 // err is folded into result.Error UNLESS it is errChanges: a successful
-// apply that found and applied changes returns errChanges purely to drive
-// the process exit code (spec §16, exit 2), and reporting that as a failure
-// in the persisted artifact would tell a frontend the run failed when it did
-// exactly what it was asked to.
+// apply (or destroy) that found and applied changes returns errChanges
+// purely to drive the process exit code (spec §16, exit 2), and reporting
+// that as a failure in the persisted artifact would tell a frontend the run
+// failed when it did exactly what it was asked to.
 func finishApply(errOut io.Writer, rw *report.Writer, result report.ApplyResult, err error) error {
 	if rw == nil {
 		return err
@@ -293,9 +296,12 @@ func unionAttributeNames(maps ...map[string]value.Value) []string {
 }
 
 // buildRefreshResult aggregates every observation into the four buckets
-// refresh's final "result" line reports, in sorted address order. Called
-// after refresh.Refresh returns but BEFORE applyObservations mutates st —
-// see classifyObservation's doc comment for why that order matters.
+// refresh's final "result" line reports: three in sorted address order
+// (Drifted, Removed, Errors) and Unchanged as a bare count — see
+// report.RefreshResult's doc comment for why that one field is a count and
+// the other three are not. Called after refresh.Refresh returns but BEFORE
+// applyObservations mutates st — see classifyObservation's doc comment for
+// why that order matters.
 func buildRefreshResult(st *state.State, obs refresh.Observations) report.RefreshResult {
 	var result report.RefreshResult
 	addrs := make([]string, 0, len(obs))
@@ -312,7 +318,7 @@ func buildRefreshResult(st *state.State, obs refresh.Observations) report.Refres
 		case "removed":
 			result.Removed = append(result.Removed, line.Address)
 		case "unchanged":
-			result.Unchanged = append(result.Unchanged, line.Address)
+			result.Unchanged++
 		case "error":
 			result.Errors = append(result.Errors, line.Address)
 		}
