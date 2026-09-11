@@ -168,24 +168,37 @@ func TestDeclaredNamesPreservesDeclOrderNotSorted(t *testing.T) {
 		env("alpha", "missing"),
 		env("mike", ""),
 	}
-	_, ds := Resolve(decls, "alpha")
-	if !ds.HasErrors() {
-		t.Fatal("`alpha` extends undeclared `missing` and must be reported")
-	}
-	if len(ds) != 1 {
-		t.Fatalf("want exactly one diagnostic, got %d: %+v", len(ds), ds)
-	}
-	// Read Detail directly rather than the rendered string: the Summary line
-	// already contains "alpha" (the environment under test), so scanning the
-	// full render for substring order would find that occurrence first and
-	// the assertion would not test what it claims to.
-	detail := ds[0].Detail
-	zi, ai, mi := strings.Index(detail, "zulu"), strings.Index(detail, "alpha"), strings.Index(detail, "mike")
-	if zi < 0 || ai < 0 || mi < 0 {
-		t.Fatalf("Detail must list all three declared environments, got:\n%s", detail)
-	}
-	if !(zi < ai && ai < mi) {
-		t.Fatalf("Detail must list environments in decl order (zulu, alpha, mike), got:\n%s", detail)
+
+	// Looped rather than called once: Go randomises a map's range START
+	// OFFSET on every execution of the range statement, not once per
+	// process, and for a 3-key map that yields only 3 distinct rotations,
+	// skewed roughly 3:1 toward the rotation that happens to match insertion
+	// order (measured: ~76% of individual range statements land on it). A
+	// single call against a map-based declaredNames would therefore pass
+	// about three times out of four BY LUCK, not because it preserves
+	// order. 30 independent calls inside one process drop the chance of a
+	// map-based implementation slipping through to well under 0.1%.
+	for i := 0; i < 30; i++ {
+		_, ds := Resolve(decls, "alpha")
+		if !ds.HasErrors() {
+			t.Fatalf("iteration %d: `alpha` extends undeclared `missing` and must be reported", i)
+		}
+		if len(ds) != 1 {
+			t.Fatalf("iteration %d: want exactly one diagnostic, got %d: %+v", i, len(ds), ds)
+		}
+		// Read Detail directly rather than the rendered string: the Summary
+		// line already contains "alpha" (the environment under test), so
+		// scanning the full render for substring order would find that
+		// occurrence first and the assertion would not test what it claims
+		// to. Do not "simplify" this into a check over ds.Render's output.
+		detail := ds[0].Detail
+		zi, ai, mi := strings.Index(detail, "zulu"), strings.Index(detail, "alpha"), strings.Index(detail, "mike")
+		if zi < 0 || ai < 0 || mi < 0 {
+			t.Fatalf("iteration %d: Detail must list all three declared environments, got:\n%s", i, detail)
+		}
+		if !(zi < ai && ai < mi) {
+			t.Fatalf("iteration %d: Detail must list environments in decl order (zulu, alpha, mike), got:\n%s", i, detail)
+		}
 	}
 }
 
