@@ -11,8 +11,8 @@ import (
 )
 
 // planTimeScope reproduces the compiler's compile-time scope: it resolves
-// "environment" the way every real compile does (internal/compiler/bind.go,
-// variableScope), and reports every resource attribute as unavailable —
+// "environment" the way every real compile does (internal/compiler/compile.go,
+// seedProcessVariables), and reports every resource attribute as unavailable —
 // which is what turns a reference into a deferred unknown carrying its
 // expression (spec §6). Building fixtures through the real parser and
 // evaluator, rather than a hand-built *value.Expr, is what proves

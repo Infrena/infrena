@@ -8,6 +8,7 @@ import (
 	"infra/internal/config"
 	"infra/internal/diag"
 	"infra/internal/expressions"
+	"infra/internal/variables"
 	"infra/pkg/address"
 	"infra/pkg/resource"
 	"infra/pkg/value"
@@ -17,14 +18,19 @@ import (
 // attribute as unavailable. That is what turns a reference into an unknown
 // carrying its expression, and simultaneously what makes the dependency edge
 // discoverable. The apply-time scope in M3 resolves attributes too.
+//
+// The variables come from stage 4 (internal/variables) and are not rebuilt
+// here. This package used to construct its own flat variable map; there is now
+// exactly one implementation of the precedence chain, so what a plan claims
+// about a value's origin cannot drift away from the rule that produced it
+// (spec §7.1).
 type compileScope struct {
-	vars map[string]value.Value
+	vars variables.Scope
 }
 
 // Variable resolves a compile-time variable by name.
 func (s compileScope) Variable(name string) (value.Value, bool) {
-	v, ok := s.vars[name]
-	return v, ok
+	return s.vars.Variable(name)
 }
 
 // Attribute always reports unavailable: at compile time no resource has been
@@ -34,7 +40,7 @@ func (s compileScope) Attribute(value.Reference) (value.Value, bool) { return va
 // bindReferences is compiler stage 6. It parses and evaluates every attribute,
 // records the dependency edges references imply, and rejects references that
 // can never become knowable.
-func bindReferences(project *config.ProjectDecl, opts Options) (ResolvedConfig, diag.Diagnostics) {
+func bindReferences(project *config.ProjectDecl, vars variables.Scope, opts Options) (ResolvedConfig, diag.Diagnostics) {
 	var ds diag.Diagnostics
 
 	out := ResolvedConfig{
@@ -48,7 +54,7 @@ func bindReferences(project *config.ProjectDecl, opts Options) (ResolvedConfig, 
 		declared[r.Name] = true
 	}
 
-	scope := compileScope{vars: variableScope(opts)}
+	scope := compileScope{vars: vars}
 
 	for _, decl := range project.Resources {
 		resolved := &resource.ResolvedResource{
@@ -184,24 +190,6 @@ func originLess(a, b value.Origin) bool {
 		return a.Line < b.Line
 	}
 	return a.Column < b.Column
-}
-
-// variableScope builds the compile-time variable scope. In M2 that is only
-// --var; variables.yml and environment variables arrive in M4.
-func variableScope(opts Options) map[string]value.Value {
-	vars := make(map[string]value.Value, len(opts.Vars)+3)
-	for k, v := range opts.Vars {
-		vars[k] = value.String(v, value.SourceVariable)
-	}
-	// Always available, so configuration can name its own environment.
-	vars["environment"] = value.String(opts.Environment, value.SourceEnvironment)
-	if opts.Region != "" {
-		vars["region"] = value.String(opts.Region, value.SourceEnvironment)
-	}
-	if opts.Account != "" {
-		vars["account"] = value.String(opts.Account, value.SourceEnvironment)
-	}
-	return vars
 }
 
 // sortedAttributeNames returns an attribute map's keys in sorted order, so

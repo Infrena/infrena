@@ -7,9 +7,28 @@ import (
 	"testing"
 
 	"infra/internal/config"
+	"infra/internal/environments"
+	"infra/internal/variables"
 	"infra/pkg/address"
 	"infra/pkg/value"
 )
+
+// scopeFor builds the variable scope bindReferences now requires, through the
+// real resolvers rather than a hand-made map — a test that constructs its own
+// scope stops testing the thing that produces one.
+func scopeFor(t *testing.T, opts Options) variables.Scope {
+	t.Helper()
+	chain, ds := environments.Resolve(nil, opts.Environment)
+	if ds.HasErrors() {
+		t.Fatalf("fixture chain: %+v", ds)
+	}
+	scope, ds := variables.Resolve(nil, chain, nil, opts.Vars)
+	if ds.HasErrors() {
+		t.Fatalf("fixture scope: %+v", ds)
+	}
+	seedProcessVariables(&scope, opts)
+	return scope
+}
 
 func decl(t *testing.T, body string) *config.ProjectDecl {
 	t.Helper()
@@ -36,7 +55,7 @@ resources:
     type: test.network
     cidr: 10.0.0.0/16
 `)
-	cfg, ds := bindReferences(p, Options{Environment: "dev"})
+	cfg, ds := bindReferences(p, scopeFor(t, Options{Environment: "dev"}), Options{Environment: "dev"})
 	if ds.HasErrors() {
 		t.Fatalf("unexpected diagnostics: %+v", ds)
 	}
@@ -61,7 +80,7 @@ resources:
     engine: postgres
     network: ${network.id}
 `)
-	cfg, ds := bindReferences(p, Options{Environment: "dev"})
+	cfg, ds := bindReferences(p, scopeFor(t, Options{Environment: "dev"}), Options{Environment: "dev"})
 	if ds.HasErrors() {
 		t.Fatalf("unexpected diagnostics: %+v", ds)
 	}
@@ -90,7 +109,7 @@ resources:
     engine: postgres
     depends_on: [network]
 `)
-	cfg, _ := bindReferences(p, Options{Environment: "dev"})
+	cfg, _ := bindReferences(p, scopeFor(t, Options{Environment: "dev"}), Options{Environment: "dev"})
 	db := cfg.Resources["database"]
 	if len(db.DependsOn) != 1 || db.DependsOn[0].Name != "network" {
 		t.Errorf("DependsOn = %v", db.DependsOn)
@@ -111,7 +130,7 @@ resources:
     network: ${network.id}
     depends_on: [network]
 `)
-	cfg, _ := bindReferences(p, Options{Environment: "dev"})
+	cfg, _ := bindReferences(p, scopeFor(t, Options{Environment: "dev"}), Options{Environment: "dev"})
 	if got := cfg.Resources["database"].DependsOn; len(got) != 1 {
 		t.Errorf("DependsOn = %v, want one edge", got)
 	}
@@ -126,7 +145,7 @@ resources:
     engine: postgres
     network: ${nonexistent.id}
 `)
-	_, ds := bindReferences(p, Options{Environment: "dev"})
+	_, ds := bindReferences(p, scopeFor(t, Options{Environment: "dev"}), Options{Environment: "dev"})
 	if !ds.HasErrors() {
 		t.Fatal("a reference to a resource nobody declared can never become knowable and must be an error")
 	}
@@ -146,7 +165,7 @@ resources:
     engine: postgres
     depends_on: [nonexistent]
 `)
-	if _, ds := bindReferences(p, Options{Environment: "dev"}); !ds.HasErrors() {
+	if _, ds := bindReferences(p, scopeFor(t, Options{Environment: "dev"}), Options{Environment: "dev"}); !ds.HasErrors() {
 		t.Error("depends_on naming an undeclared resource must be an error")
 	}
 }
@@ -159,7 +178,7 @@ resources:
     type: test.database
     engine: ${database.engine}
 `)
-	if _, ds := bindReferences(p, Options{Environment: "dev"}); !ds.HasErrors() {
+	if _, ds := bindReferences(p, scopeFor(t, Options{Environment: "dev"}), Options{Environment: "dev"}); !ds.HasErrors() {
 		t.Error("a resource referring to itself is a cycle of one and must be rejected")
 	}
 }
@@ -174,7 +193,7 @@ resources:
     lifecycle:
       prevent_destroy: true
 `)
-	cfg, _ := bindReferences(p, Options{Environment: "dev"})
+	cfg, _ := bindReferences(p, scopeFor(t, Options{Environment: "dev"}), Options{Environment: "dev"})
 	db := cfg.Resources["database"]
 	if !db.Lifecycle.PreventDestroy {
 		t.Error("lifecycle must survive binding")
@@ -192,7 +211,8 @@ resources:
     type: test.network
     cidr: ${cidr_block}
 `)
-	cfg, ds := bindReferences(p, Options{Environment: "dev", Vars: map[string]string{"cidr_block": "10.9.0.0/16"}})
+	opts := Options{Environment: "dev", Vars: map[string]string{"cidr_block": "10.9.0.0/16"}}
+	cfg, ds := bindReferences(p, scopeFor(t, opts), opts)
 	if ds.HasErrors() {
 		t.Fatalf("unexpected diagnostics: %+v", ds)
 	}
@@ -212,7 +232,7 @@ resources:
     type: test.network
     cidr: ${missing_two.id}
 `)
-	_, ds := bindReferences(p, Options{Environment: "dev"})
+	_, ds := bindReferences(p, scopeFor(t, Options{Environment: "dev"}), Options{Environment: "dev"})
 	if len(ds) < 2 {
 		t.Errorf("got %d diagnostics, want at least 2 — one bad reference must not mask the next", len(ds))
 	}
@@ -230,10 +250,11 @@ resources:
     engine: postgres
     password: ${secret_value}-${network.id}
 `)
-	cfg, ds := bindReferences(p, Options{
+	opts := Options{
 		Environment: "dev",
 		Vars:        map[string]string{"secret_value": "hunter2"},
-	})
+	}
+	cfg, ds := bindReferences(p, scopeFor(t, opts), opts)
 	if ds.HasErrors() {
 		t.Fatalf("unexpected diagnostics: %+v", ds)
 	}
@@ -265,7 +286,7 @@ resources:
     engine: postgres
     network: ${db.id}
 `)
-	cfg, ds := bindReferences(p, Options{Environment: "dev"})
+	cfg, ds := bindReferences(p, scopeFor(t, Options{Environment: "dev"}), Options{Environment: "dev"})
 	if ds.HasErrors() {
 		t.Fatalf("a reference to a different resource whose name is a prefix of the referrer's own name must not be rejected: %+v", ds)
 	}
@@ -295,7 +316,7 @@ resources:
     tags:
       - "${network.id}"
 `)
-	_, ds := bindReferences(p, Options{Environment: "dev"})
+	_, ds := bindReferences(p, scopeFor(t, Options{Environment: "dev"}), Options{Environment: "dev"})
 	if !ds.HasErrors() {
 		t.Fatal("an expression nested inside a list is not supported and must be reported, not silently dropped or passed through unparsed")
 	}

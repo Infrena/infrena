@@ -14,9 +14,9 @@ import (
 // value that won the precedence chain (PLAN.md §7, spec §7.1).
 //
 // It is the ONLY variable scope in the engine. internal/compiler used to build
-// a second one (variableScope, deleted in task 7); two implementations of one
-// concept is the defect that leaked a plaintext secret in M2, because a fix
-// applied to one copy left the other one wrong.
+// a second, equivalent one of its own (deleted by task 7); two implementations
+// of one concept is the defect that leaked a plaintext secret in M2, because a
+// fix applied to one copy left the other one wrong.
 type Scope struct {
 	vars map[string]value.Value
 }

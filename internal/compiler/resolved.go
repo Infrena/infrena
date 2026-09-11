@@ -27,7 +27,8 @@ type Options struct {
 	Environment string
 	Region      string
 	Account     string
-	Vars        map[string]string // from --var; the variable system proper is M4
+	Vars        map[string]string      // from --var
+	FileVars    map[string]value.Value // from --var-file
 }
 
 // Get returns one resolved resource.

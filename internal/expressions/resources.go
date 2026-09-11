@@ -24,9 +24,11 @@ import (
 //
 // Variable always reports unavailable, deliberately. A well-formed unknown
 // reaching either phase can never depend on an OpVarRef: every variable name
-// the compiler's compileScope can resolve — "environment" unconditionally,
-// plus --var/region/account (internal/compiler/bind.go, variableScope) —
-// evaluates successfully in the very first, compile-time pass, and residual()
+// the compiler's compileScope can resolve — everything stage 4
+// (internal/variables) resolved, plus "environment" unconditionally and
+// --var-supplied region/account when present (internal/compiler/compile.go,
+// seedProcessVariables) — evaluates successfully in the very first,
+// compile-time pass, and residual()
 // folds any argument whose OWN sub-evaluation succeeded into an OpLiteral
 // before the expression is ever stored as a deferred value. A variable that
 // does NOT resolve at compile time is a hard compile error (bindAttribute adds

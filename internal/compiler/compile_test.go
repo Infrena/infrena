@@ -193,6 +193,84 @@ resources:
 	}
 }
 
+func TestCompileResolvesVariablesThroughTheEnvironmentChain(t *testing.T) {
+	files := loadFiles(t, `
+project: myapp
+variables:
+  replicas:
+    type: integer
+    default: 50
+    min: 1
+    max: 100
+environments:
+  base:
+    replicas: 30
+  production:
+    extends: base
+    replicas: 20
+resources:
+  network:
+    type: test.network
+    cidr: 10.0.0.0/16
+  database:
+    type: test.database
+    engine: postgres
+    network: ${network.id}
+    size: ${replicas}
+`)
+	cfg, ds := Compile(files, testRegistry(t), Options{Environment: "production"})
+	if ds.HasErrors() {
+		t.Fatalf("unexpected diagnostics: %+v", ds)
+	}
+	size := cfg.Resources["database"].Attrs["size"]
+	if n, _ := size.AsInt(); n != 20 {
+		t.Errorf("size = %d, want 20 — production's own value beats the one it inherits and the declared default", n)
+	}
+	if size.Scope != value.ScopeEnvironmentVar {
+		t.Errorf("Scope = %v, want ScopeEnvironmentVar", size.Scope)
+	}
+}
+
+func TestCompileReportsAnUnknownEnvironment(t *testing.T) {
+	files := loadFiles(t, `
+project: myapp
+environments:
+  production: {}
+resources:
+  network:
+    type: test.network
+    cidr: 10.0.0.0/16
+`)
+	_, ds := Compile(files, testRegistry(t), Options{Environment: "prod"})
+	if !ds.HasErrors() {
+		t.Fatal("`infra plan prod` against a project declaring only `production` must be reported by stage 3")
+	}
+}
+
+func TestCompileStopsAfterEnvironmentErrors(t *testing.T) {
+	// Stage 4 with a failed chain would report every environment-scoped
+	// variable as unset — noise piled on the one real error.
+	files := loadFiles(t, `
+project: myapp
+variables:
+  domain:
+    type: string
+environments:
+  a:
+    extends: b
+  b:
+    extends: a
+resources:
+  network:
+    type: test.network
+    cidr: ${domain}
+`)
+	_, ds := Compile(files, testRegistry(t), Options{Environment: "a"})
+	if len(ds) != 1 {
+		t.Fatalf("want exactly the cycle diagnostic, got %d:\n%+v", len(ds), ds)
+	}
+}
+
 func TestCompileReportsStage8Diagnostics(t *testing.T) {
 	files := loadFiles(t, `
 project: myapp

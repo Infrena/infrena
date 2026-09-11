@@ -45,8 +45,8 @@ func newValidateCommand(opts *GlobalOptions) *cobra.Command {
 //
 // vars carries --var through to the compiler. It used to be omitted, on the
 // belief that nothing consumed Options.Vars yet and that the variable system
-// was M4 work. That was wrong: internal/compiler's variableScope has always
-// turned Options.Vars into ${name} values. The consequence was measurable and
+// was M4 work. That was wrong: internal/compiler has always turned
+// Options.Vars into ${name} values. The consequence was measurable and
 // user-facing — `infra validate --var cidr=10.0.0.0/16` reported
 //
 //	Error: undefined variable "cidr"
