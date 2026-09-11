@@ -458,36 +458,89 @@ Expressions should remain intentionally constrained.
 
 # 11. Modules
 
-Modules are reusable infrastructure components.
+Modules are reusable infrastructure components. Using one is two steps, and the
+separation is deliberate: **loading** makes a module available under a name, and
+**instantiating** calls it like a resource.
 
-Example:
+## 11.1 Loading
+
+`modules:` is a LIST of sources. It carries no inputs — loading a module says only
+where it comes from and what to call it.
 
 ```yaml
 modules:
+  - ./modules/networking
+  - https://github.com/acme/infra-app-stack:v1.2.0
+  - git@github.com:acme/infra-database:9f3c1ab
 
-  network:
-    source: ./modules/networking
-
-  database:
-    source: ./modules/database
-
-  application:
-    source: ./modules/application
-
-    inputs:
-      database_url: ${database.connection_string}
+  - name: app_stack_v2
+    source: https://github.com/other/infra-app-stack:v2.0.0
 ```
 
-Modules should support:
+Each entry is either a **scalar** — the source, with the name derived from it — or a
+**mapping** of `name` and `source`. The two forms mean the same thing; the mapping
+exists so a name can be overridden, which is the only way to load two different
+modules that would otherwise derive the same name.
 
-* Inputs
-* Defaults
-* Resources
-* Outputs
-* Dependencies
-* Versioning eventually
+A derived name is the last path segment with any `.git` suffix and version suffix
+removed, normalised to a valid identifier: `./modules/networking` → `networking`,
+`https://github.com/acme/infra-app-stack:v1.2.0` → `infra_app_stack`.
 
-Example module:
+Two entries deriving the same name is an ERROR naming both origins and suggesting
+`name:` on one of them. It is never resolved by order.
+
+**Sources** are a filesystem path (absolute, or relative to the file that declares
+it), or a git remote — `https://`, `git@`, or `ssh://` — with a **required**
+`:tag-or-hash` suffix. An unpinned remote is an error: an unpinned module means the
+same configuration plans differently on different days, which breaks invariant 6.
+
+**Discovery.** Any directory beneath the project root that contains a `module.yml`
+is loaded automatically under its directory name, with no `modules:` entry. An
+explicit entry naming the same module wins over the discovered one, per §7's rule
+that explicit configuration beats an implicit default.
+
+## 11.2 Instantiating
+
+A loaded module is called by a resource whose type is `module.<name>`:
+
+```yaml
+resources:
+
+  prod:
+    type: module.app_stack
+    application_name: storefront
+    image: acme/web:1.4
+    replicas: 3
+
+  staging:
+    type: module.app_stack_v2
+    application_name: storefront
+    image: acme/web:edge
+
+  cdn:
+    type: fake_cdn
+    origin: ${prod.endpoint}
+```
+
+The `module.` prefix is what distinguishes a module call from a provider resource
+type, so the two namespaces can never collide and a reader never has to consult
+`modules:` to know which one a type names.
+
+Everything a resource can do, a module call can do: its attributes are the module's
+inputs and carry provenance and sensitivity like any other attribute, `depends_on`
+and `lifecycle` apply, and its outputs are read as `${prod.endpoint}` — the same
+spelling as a provider resource's attributes. A module may be instantiated any number
+of times; each instantiation is independent.
+
+Resources inside an instance are addressed by prefixing the instance name, and
+modules nest: `prod.database`, `prod.network.vpc`.
+
+## 11.3 The module file
+
+A module is a directory containing `module.yml`. It declares `inputs:`, `resources:`,
+`outputs:` and may itself declare `modules:`. It may NOT declare `project:`,
+`environments:` or `variables:` — a module does not own environments, and the values
+it sees are its inputs plus the ambient `environment`, `region` and `account`.
 
 ```yaml
 inputs:
@@ -501,16 +554,27 @@ inputs:
   replicas:
     type: integer
     default: 1
-```
 
-Outputs:
+resources:
 
-```yaml
+  service:
+    type: fake_service
+    name: ${application_name}
+    image: ${image}
+    count: ${replicas}
+
 outputs:
 
   endpoint:
-    value: service.endpoint
+    value: ${service.endpoint}
 ```
+
+`inputs:` is spelled exactly as §9's `variables:` — the same `type`, `default` and
+bounds. An input with no `default` that the caller does not supply is an error. A
+name inside a module resolves to that module's own input, never to a project variable
+of the same name.
+
+Modules support inputs, defaults, resources, outputs, nested modules and dependencies.
 
 ---
 
