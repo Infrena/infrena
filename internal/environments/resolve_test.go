@@ -26,12 +26,26 @@ func env(name, extends string, overrides ...config.OverrideDecl) config.Environm
 	}
 }
 
-func TestResolveOrdersAncestorsFirst(t *testing.T) {
-	decls := []config.EnvironmentDecl{
-		env("base", "", override("replicas", 30)),
-		env("middle", "base", override("replicas", 20)),
+// fourLayerChain returns a four-deep extends chain — root <- base <- middle
+// <- leaf — declared in an order that agrees with neither the resolved
+// order (root, base, middle, leaf) nor its reverse (leaf, middle, base,
+// root). A fixture whose declaration order already matched the expected
+// output, or that only went three layers deep, could pass an ordering
+// assertion without any real ordering logic behind it: three layers leaves
+// room for an off-by-one that only shows up at the fourth, and a fixture
+// that already reads "ancestors first" in source order can't distinguish a
+// resolver that walks Extends from one that just echoes decls back.
+func fourLayerChain() []config.EnvironmentDecl {
+	return []config.EnvironmentDecl{
 		env("leaf", "middle", override("replicas", 10)),
+		env("root", "", override("replicas", 40)),
+		env("middle", "base", override("replicas", 20)),
+		env("base", "root", override("replicas", 30)),
 	}
+}
+
+func TestResolveOrdersAncestorsFirst(t *testing.T) {
+	decls := fourLayerChain()
 
 	chain, ds := Resolve(decls, "leaf")
 	if ds.HasErrors() {
@@ -45,27 +59,36 @@ func TestResolveOrdersAncestorsFirst(t *testing.T) {
 	for _, l := range chain.Layers {
 		got = append(got, l.Name)
 	}
-	want := []string{"base", "middle", "leaf"}
+	want := []string{"root", "base", "middle", "leaf"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("layers = %v, want %v (ancestors first, so a single forward loop applies precedence)", got, want)
 	}
 }
 
 func TestResolveMarksInheritedLayersDifferentlyFromTheSelectedOne(t *testing.T) {
-	decls := []config.EnvironmentDecl{
-		env("base", "", override("replicas", 30)),
-		env("middle", "base", override("replicas", 20)),
-		env("leaf", "middle", override("replicas", 10)),
-	}
+	decls := fourLayerChain()
 	chain, _ := Resolve(decls, "leaf")
 
+	// want pairs each position with the NAME that must be there, not just a
+	// scope value at that index. A scope-only check passes for any Chain of
+	// the right length regardless of whose layers they are — including one
+	// built by a resolver that ignores Extends and echoes decls back — and
+	// passes vacuously (no iterations at all) if Resolve wrongly returns an
+	// empty Chain. Checking length and name first closes both holes.
+	want := []string{"root", "base", "middle", "leaf"}
+	if len(chain.Layers) != len(want) {
+		t.Fatalf("chain.Layers = %+v, want %d layers matching %v", chain.Layers, len(want), want)
+	}
 	for i, l := range chain.Layers {
-		want := value.ScopeEnvironmentInherit
-		if i == len(chain.Layers)-1 {
-			want = value.ScopeEnvironmentVar
+		if l.Name != want[i] {
+			t.Fatalf("layer %d = %q, want %q (ancestors first)", i, l.Name, want[i])
 		}
-		if l.Scope != want {
-			t.Errorf("layer %q scope = %v, want %v (PLAN.md §7 separates environment inheritance from environment variables; the named environment is the latter)", l.Name, l.Scope, want)
+		wantScope := value.ScopeEnvironmentInherit
+		if i == len(chain.Layers)-1 {
+			wantScope = value.ScopeEnvironmentVar
+		}
+		if l.Scope != wantScope {
+			t.Errorf("layer %q scope = %v, want %v (PLAN.md §7 separates environment inheritance from environment variables; the named environment is the latter)", l.Name, l.Scope, wantScope)
 		}
 	}
 }
