@@ -4032,6 +4032,12 @@ func (s Schema) ParseText(text string, origin value.Origin) (value.Value, diag.D
     what `Validate` is for. Routing it through `Validate` means a user's `default:`
     and their `--var` are judged by the same code and can never disagree about an
     edge case — an inclusive bound, or how an unknown compares.
+    Contract Amendment 4 extends that from judgement to NORMALISATION, and this
+    principle is what made the gap visible: a numeric literal is coerced to the
+    declared kind on both sides — stage 2 for a `default:`, stage 4 for a supplied
+    value (Task 6) — so `type: float` with `default: 1` and `--var ratio=1` are
+    normalised alike and then judged alike. Coercing one side only is what this
+    principle forbids, and is exactly what was about to ship.
 
     **§44 is satisfied without moving it, so do not go looking for a way to plumb an
     origin down from stage 2.** `Schema.Default` is a `value.Value`, and a `Value`
@@ -5432,6 +5438,9 @@ loop.
 
 - create `internal/variables/resolve.go`
 - create `internal/variables/resolve_test.go`
+- modify `internal/variables/schema.go` (add `Schema.Coerce`, beside `Validate`)
+- modify `pkg/value/value.go` (add `Coerce`, `withDatum`)
+- modify `pkg/value/value_test.go`
 
 ## Interfaces
 
@@ -5521,6 +5530,44 @@ re-stamps it to the same thing. That is deliberate, not redundant: stage 4 is th
 place that decides what provenance a winning value carries, and a value whose `Source`
 was set somewhere else and merely survived is a value nobody is responsible for.
 
+## Coercion: a numeric literal takes the declared kind
+
+Contract Amendment 4 (owner's ruling, 2026-09-10). **A numeric literal coerces to the
+declared kind wherever it appears. Exact conversions only; lossy ones stay rejected.**
+
+YAML tags `1` as `!!int` whatever the surrounding declaration says, so a user who
+writes `type: float` with a value of `1` has not made a mistake — they have written
+the only spelling YAML gives them. Stage 2 already coerces a declared `min`/`max` and
+(as of Task 3) a declared `default:` for that reason. Stage 4 must do the same for a
+SUPPLIED value, or `variables.yml` saying `ratio: 1` against `type: float` fails on
+the line that looks most obviously correct.
+
+**Which rungs this affects, and why `--var` is not one of them.** A `--var` for a
+declared variable already arrives with the right kind: `Schema.ParseText` (Task 4)
+parses the text against `s.Kind`, so `--var ratio=1` is `ParseFloat`'d into `1.0` at
+the moment it is read. What needs coercing is everything that came through YAML —
+`variables.yml`, `--var-file`, and environment overrides, which are rungs 2, 4 and 5.
+One rule, two mechanisms, because text and YAML arrive differently typed; the test in
+6.8 covers a YAML rung for exactly that reason.
+
+**This is normalisation, not judgement.** Task 4 fixes that a `default:` and a `--var`
+can never be judged differently, and routes both through the same `Validate`. Coercion
+does not weaken that — it strengthens it: both arrive normalised, and then both are
+judged by the same `Validate`. Coercing one and not the other is what breaks it, which
+is precisely the bug this amendment exists to fix.
+
+**It does not weaken the type system.** A `string` supplied where `integer` is
+declared is still an error, and `Coerce` must not report it — `Validate` owns kind
+mismatches and has the better message for them. Coercion touches only the numeric
+pair, and only where the conversion is exact.
+
+**Ordering: coerce, then bound-check. Always, and never the reverse.** This is not a
+tidiness point. `compareBounds` (Task 4) reads both sides in the declared kind, so an
+uncoerced `KindInt` value compared against a `KindFloat` bound reads as unreadable and
+compares as 0 — no complaint. An uncoerced value is therefore not merely mistyped, it
+is **silently unbounded**: `min: 2.0` with a supplied `1` would pass. Step 6.8 pins
+that case specifically, because it is the one where getting the order wrong produces
+no error at all rather than a wrong one.
 ## The unset-variable ruling, and why it depends on `chain.Selected`
 
 A declared variable with no default and no supplied value:
@@ -5542,11 +5589,20 @@ This is precisely `PLAN.md` §9's "Validation must happen during `infra validate
 before planning" being two different checks at two different times: `validate` checks
 shape, `plan <env>` additionally checks presence.
 
-Stage 2 guarantees the `Kind` this needs: a declaration with neither a `type` nor a
-`default` is a decode-time error, so every schema reaching here either has a real
-`Kind` to build an unknown from, or has a default — in which case rung 1 always sets
-it and the unset branch is never reached. Nothing is dropped anywhere along the way
-to produce that property; it is bought by an error at the line the user wrote.
+**Where the `Kind` comes from, and what that assumption rests on.** Every schema
+reaching stage 4 either has a real `Kind` to build an unknown from, or has a default —
+in which case rung 1 always set it and the unset branch is never reached. Nothing is
+dropped anywhere to produce that property; it is bought by a decode-time error at the
+line the user wrote: Task 3's "variable X must specify at least a `type` or a
+`default`".
+
+But it is a property of what REACHES stage 4, not of declarations in general. Task 3
+SUPPRESSES that error when another diagnostic on the same declaration already names
+the root cause, so empty declarations carrying no empty-declaration error do exist;
+they are kept out of stage 4 only because `Compile` halts at the stage boundary when
+`HasErrors()` is true. If decode errors ever stop being fatal, this branch builds an
+unknown of `KindInvalid` and hands an indeterminate value downstream — so if you
+change the halting, change this.
 
 The error fires whether or not any configuration references the variable. Making it
 depend on use would mean `infra validate`'s output changed when an unrelated file
@@ -6046,11 +6102,20 @@ Expect `undefined: checkAgainstSchemas` — a build failure across the package.
 // before planning" being two checks at two times: validate checks shape,
 // plan additionally checks presence.
 //
-// Stage 2 guarantees the Kind this needs: a declaration with neither a type
-// nor a default is a decode-time error, so an entry reaching the unset branch
-// always has a real Kind to build an unknown from. An untyped declaration is
-// legal but necessarily has a default, so rung 1 set it and it never reaches
-// here.
+// ASSUMPTION, and what it rests on: an entry reaching the unset branch always
+// has a real Kind to build an unknown from. An untyped declaration is legal,
+// but one that reaches stage 4 has a default, so rung 1 set it and it never
+// arrives here.
+//
+// That holds for every ProjectDecl that reaches stage 4 — not for declarations
+// in general. Stage 2 suppresses its empty-declaration error when another
+// diagnostic on the same line already names the root cause, so empty
+// declarations without that error do exist; they are kept out because Compile
+// halts at the stage boundary when HasErrors() is true. The assumption is
+// therefore on the HALTING, not on decode. Make decode errors non-fatal, or
+// run stage 4 before that boundary check, and this builds
+// value.Unknown(KindInvalid, ...) and hands an indeterminate value to the rest
+// of the pipeline.
 func checkAgainstSchemas(schemas map[string]Schema, out *Scope, chain environments.Chain) diag.Diagnostics {
     var ds diag.Diagnostics
 
@@ -6058,7 +6123,14 @@ func checkAgainstSchemas(schemas map[string]Schema, out *Scope, chain environmen
         s := schemas[name]
         v, set := out.vars[name]
         if set {
-            ds.Extend(s.Validate(v))
+            // Coerce, then judge, and store the normalised value (6.10).
+            coerced, coerceDiags := s.Coerce(v)
+            if coerceDiags.HasErrors() {
+                ds.Extend(coerceDiags)
+                continue
+            }
+            out.vars[name] = coerced
+            ds.Extend(s.Validate(coerced))
             continue
         }
 
@@ -6095,7 +6167,367 @@ and stamping it explicitly would suggest a rung had been consulted.
 go test -count=1 ./internal/variables/
 ```
 
-### 6.8 Prove the ladder test can fail
+### 6.8 Failing test: a YAML integer is accepted where a float is declared
+
+Every case below comes in through `files` (variables.yml) or an environment override,
+not through `--var`, because `ParseText` already normalises `--var` — see the coercion
+section above.
+
+Add to `internal/variables/resolve_test.go`:
+
+```go
+func floatSchemaDecls(min, max float64) []config.VariableDecl {
+    return []config.VariableDecl{{
+        Name: "ratio", Type: value.KindFloat,
+        Min: value.Float(min, value.SourceExplicit), HasMin: true,
+        Max: value.Float(max, value.SourceExplicit), HasMax: true,
+        Origin: value.Origin{File: "variables.yml", Line: 2, Column: 3},
+    }}
+}
+
+func TestResolveCoercesAYamlIntegerToADeclaredFloat(t *testing.T) {
+    // YAML tags `ratio: 1` as !!int whatever `type: float` says. The user has
+    // written the only spelling available to them.
+    chain, _ := environments.Resolve([]config.EnvironmentDecl{{Name: "dev"}}, "dev")
+    scope, ds := Resolve(floatSchemaDecls(0.5, 10), chain,
+        map[string]value.Value{"ratio": value.Int(1, value.SourceVariable)}, nil)
+    if ds.HasErrors() {
+        t.Fatalf("`ratio: 1` under `type: float` must be accepted: %+v", ds)
+    }
+    got, _ := scope.Variable("ratio")
+    if got.Kind != value.KindFloat {
+        t.Errorf("Kind = %v, want KindFloat — the stored value must be the declared kind, or stage 7's kind check rejects it later", got.Kind)
+    }
+    if f, ok := got.AsFloat(); !ok || f != 1 {
+        t.Errorf("value = %#v, want 1.0", got)
+    }
+}
+
+func TestResolveCoercesBeforeCheckingBounds(t *testing.T) {
+    // THE case that makes ordering load-bearing. compareBounds reads both
+    // sides in the declared kind, so an uncoerced KindInt value against a
+    // KindFloat bound is unreadable and compares as 0 — no complaint. Bound
+    // first, coerce second, and the value is not mistyped, it is SILENTLY
+    // UNBOUNDED. This test fails with no diagnostic at all before the change,
+    // which is the failure mode worth pinning.
+    chain, _ := environments.Resolve([]config.EnvironmentDecl{{Name: "dev"}}, "dev")
+    _, ds := Resolve(floatSchemaDecls(2, 10), chain,
+        map[string]value.Value{"ratio": value.Int(1, value.SourceVariable)}, nil)
+    if !ds.HasErrors() {
+        t.Fatal("1 is below `min: 2` and must be reported; an uncoerced value skips the bound check entirely rather than failing it")
+    }
+}
+
+func TestResolveRejectsALossyCoercion(t *testing.T) {
+    intDecls := []config.VariableDecl{{
+        Name: "replicas", Type: value.KindInt,
+        Origin: value.Origin{File: "variables.yml", Line: 2, Column: 3},
+    }}
+    chain, _ := environments.Resolve([]config.EnvironmentDecl{{Name: "dev"}}, "dev")
+
+    // 1.5 cannot become an integer without changing what the user wrote.
+    _, ds := Resolve(intDecls, chain,
+        map[string]value.Value{"replicas": value.Float(1.5, value.SourceVariable)}, nil)
+    if !ds.HasErrors() {
+        t.Error("`replicas: 1.5` under `type: integer` must stay an error — rounding would silently change the value")
+    }
+
+    // And an integer too large to survive a float64 keeps its error too.
+    const tooBig = int64(1)<<53 + 1
+    _, ds = Resolve(floatSchemaDecls(0, 1e18), chain,
+        map[string]value.Value{"ratio": value.Int(tooBig, value.SourceVariable)}, nil)
+    if !ds.HasErrors() {
+        t.Errorf("%d cannot be stored as a float64 without changing it, so it must be reported rather than coerced", tooBig)
+    }
+}
+
+func TestResolveLeavesANonNumericMismatchToValidate(t *testing.T) {
+    // Coercion must not swallow a type error. A string where a float is
+    // declared is not a lossy conversion, it is the wrong kind, and Validate
+    // owns that message.
+    chain, _ := environments.Resolve([]config.EnvironmentDecl{{Name: "dev"}}, "dev")
+    _, ds := Resolve(floatSchemaDecls(0, 10), chain,
+        map[string]value.Value{"ratio": value.String("half", value.SourceVariable)}, nil)
+    if !ds.HasErrors() {
+        t.Fatal("a string supplied for a float variable is still an error")
+    }
+    var sb strings.Builder
+    ds.Render(&sb)
+    if !strings.Contains(sb.String(), "must be a float") {
+        t.Errorf("the message must be Validate's kind-mismatch one, not a coercion failure:\n%s", sb.String())
+    }
+}
+
+func TestResolveCoercionKeepsProvenanceAndSensitivity(t *testing.T) {
+    // M3 lost a Critical to an engine that recorded what a provider returned
+    // and dropped what it knew. A rebuilt value that loses Scope would make a
+    // plan name the wrong rung; one that loses Sensitive prints a secret.
+    chain, _ := environments.Resolve([]config.EnvironmentDecl{
+        {Name: "production", Overrides: []config.OverrideDecl{{
+            Name: "ratio",
+            Value: value.Int(1, value.SourceEnvironment).
+                WithSensitive(true).
+                WithOrigin(value.Origin{File: "environments/production.yml", Line: 4, Column: 3}),
+        }}},
+    }, "production")
+
+    scope, ds := Resolve(floatSchemaDecls(0, 10), chain, nil, nil)
+    if ds.HasErrors() {
+        t.Fatalf("unexpected diagnostics: %+v", ds)
+    }
+    got, _ := scope.Variable("ratio")
+    if got.Kind != value.KindFloat {
+        t.Fatalf("Kind = %v, want KindFloat", got.Kind)
+    }
+    if got.Source != value.SourceEnvironment || got.Scope != value.ScopeEnvironmentVar {
+        t.Errorf("Source/Scope = %v/%v, want SourceEnvironment/ScopeEnvironmentVar — coercion changes the datum's type, never where it came from", got.Source, got.Scope)
+    }
+    if !got.Sensitive {
+        t.Error("a coerced value must stay sensitive: rebuilding it through a constructor and forgetting this is how a secret reaches a plan in clear")
+    }
+    if got.Origin.Line != 4 {
+        t.Errorf("Origin = %+v, want environments/production.yml:4:3 — a diagnostic about this value must still point at the line the user wrote", got.Origin)
+    }
+}
+```
+
+Add a `pkg/value` test for the conversion itself, in `pkg/value/value_test.go`:
+
+```go
+func TestCoerceIsExactOrRefuses(t *testing.T) {
+    const tooBig = int64(1)<<53 + 1
+    for _, tc := range []struct {
+        name string
+        in   Value
+        to   Kind
+        ok   bool
+        want any
+    }{
+        {"int to float", Int(1, SourceExplicit), KindFloat, true, float64(1)},
+        {"float to int", Float(2, SourceExplicit), KindInt, true, int64(2)},
+        {"same kind", Int(1, SourceExplicit), KindInt, true, int64(1)},
+        {"fractional float to int", Float(1.5, SourceExplicit), KindInt, false, nil},
+        {"int too large for float", Int(tooBig, SourceExplicit), KindFloat, false, nil},
+        {"string to int", String("1", SourceExplicit), KindInt, false, nil},
+    } {
+        got, ok := Coerce(tc.in, tc.to)
+        if ok != tc.ok {
+            t.Errorf("%s: ok = %v, want %v", tc.name, ok, tc.ok)
+            continue
+        }
+        if !tc.ok {
+            continue
+        }
+        if got.Kind != tc.to || got.Raw != tc.want {
+            t.Errorf("%s: got %v/%v, want %v/%v", tc.name, got.Kind, got.Raw, tc.to, tc.want)
+        }
+    }
+}
+
+func TestCoercePreservesEverythingButTheDatum(t *testing.T) {
+    in := Int(1, SourceEnvironment).
+        WithScope(ScopeEnvironmentVar).
+        WithSensitive(true).
+        WithOrigin(Origin{File: "environments/production.yml", Line: 4, Column: 3})
+
+    got, ok := Coerce(in, KindFloat)
+    if !ok {
+        t.Fatal("1 converts to a float exactly")
+    }
+    if got.Source != in.Source || got.Scope != in.Scope || got.Sensitive != in.Sensitive || got.Origin != in.Origin {
+        t.Errorf("Coerce changed more than the datum:\n got %+v\nwant %+v with Kind/Raw replaced", got, in)
+    }
+}
+
+func TestCoerceRetypesAnUnknown(t *testing.T) {
+    // An unknown carries a Kind as a CLAIM about what it will become, with no
+    // datum to lose, so retyping one is exact by definition. Task 6 builds
+    // unknowns for variables no rung set; one left claiming KindInt under
+    // `type: float` would fail stage 7's kind check at plan time.
+    got, ok := Coerce(Unknown(KindInt, SourceVariable), KindFloat)
+    if !ok || got.Kind != KindFloat || got.Known {
+        t.Errorf("Coerce(unknown int, float) = %+v, %v; want an unknown float", got, ok)
+    }
+}
+```
+
+### 6.9 Run it, see it fail
+
+```bash
+export PATH="$HOME/.local/share/mise/shims:$PATH"
+go test -count=1 ./internal/variables/ ./pkg/value/
+```
+
+Expect a build failure first — `undefined: Coerce`, `s.Coerce undefined` — then, once
+those exist as stubs, `TestResolveCoercesAYamlIntegerToADeclaredFloat` failing on the
+kind and `TestResolveCoercesBeforeCheckingBounds` failing with **no diagnostic at
+all**. Note that second one: it is the case that produces silence rather than an
+error, and it is why the ordering is written into the plan rather than left to
+judgement.
+
+### 6.10 Minimal code: one conversion rule, one diagnostic wrapper
+
+**Where this lives, and why it is split in two.** The exactness rule is a property of
+the value model — it mentions only `Kind` and `Value` — and it must never differ
+between the places that apply it: stage 2 coerces bounds and defaults, stage 4 coerces
+supplied values, and a precision bug in one IS a precision bug in the other. That is
+the coupling test, so the arithmetic gets ONE implementation, in `pkg/value`. The
+diagnostic is not coupled — each stage has its own origin and its own wording — so
+that part stays local.
+
+Add to `pkg/value/value.go`:
+
+```go
+// Coerce returns v as kind k, reporting ok=false when the conversion would not
+// be exact.
+//
+// YAML tags `1` as !!int whatever the declaration around it says, so a value
+// written where a float is declared arrives as an integer and the user had no
+// other spelling available. Converting it is normalisation. Converting 1.5 to
+// an integer is not — it changes what was written — so that is refused and the
+// caller reports it.
+//
+// Only the numeric pair converts. A string is never coerced to a number: that
+// is a type error, and the callers that care have a better message for it than
+// this function could.
+//
+// Everything except Kind and Raw is carried across untouched, including
+// Sensitive and Origin. That is by construction rather than by copying a list
+// of fields — see withDatum — because a rebuilt value that silently drops
+// Sensitive prints a secret in clear, and one that drops Scope makes a plan
+// name the wrong precedence level.
+func Coerce(v Value, k Kind) (Value, bool) {
+    if v.Kind == k {
+        return v, true
+    }
+    if !v.Known {
+        // An unknown's Kind is a claim about what it will become, with no
+        // datum to lose, so retyping one is exact by definition.
+        return v.withDatum(k, nil), true
+    }
+    switch {
+    case v.Kind == KindInt && k == KindFloat:
+        n, ok := v.AsInt()
+        if !ok {
+            return v, false
+        }
+        f := float64(n)
+        // Above 2^53 the conversion rounds, so the stored value would not be
+        // the one written.
+        if int64(f) != n {
+            return v, false
+        }
+        return v.withDatum(KindFloat, f), true
+    case v.Kind == KindFloat && k == KindInt:
+        f, ok := v.AsFloat()
+        if !ok {
+            return v, false
+        }
+        n := int64(f)
+        // Rejects a fractional part, and NaN and the infinities with it: none
+        // of them survives the round trip.
+        if float64(n) != f {
+            return v, false
+        }
+        return v.withDatum(KindInt, n), true
+    }
+    return v, false
+}
+
+// withDatum returns v with a new Kind and Raw, keeping every field that
+// describes where the value came from and how it must be handled. The value
+// receiver is what makes that automatic: a future field added to Value is
+// carried by default rather than forgotten.
+func (v Value) withDatum(k Kind, raw any) Value {
+    v.Kind, v.Raw = k, raw
+    return v
+}
+```
+
+Add to `internal/variables/schema.go`, beside `Validate` so a reader meets
+normalisation and judgement together:
+
+```go
+// Coerce normalises v to s's declared kind before it is judged.
+//
+// It reports ONLY a lossy numeric conversion. A kind mismatch that is not a
+// numeric pair — a string where a float is declared — is passed through
+// untouched for Validate to report, because Validate's message names the
+// declared type and the supplying scope and this one could not.
+//
+// An untyped schema coerces nothing: it has declared no kind to normalise to.
+func (s Schema) Coerce(v value.Value) (value.Value, diag.Diagnostics) {
+    var ds diag.Diagnostics
+    if s.Kind == value.KindInvalid || v.Kind == s.Kind {
+        return v, ds
+    }
+    if !isNumericKind(s.Kind) || !isNumericKind(v.Kind) {
+        return v, ds
+    }
+
+    out, ok := value.Coerce(v, s.Kind)
+    if !ok {
+        ds.Add(diag.Diagnostic{
+            Severity: diag.SeverityError,
+            Summary:  "variable " + strconv.Quote(s.Name) + " cannot be stored as " + article(s.Kind) + " " + s.Kind.String(),
+            Detail: "The value supplied by " + v.Scope.String() + " is " + show(v) +
+                ", which cannot be converted to " + s.Kind.String() + " without changing it. " +
+                strconv.Quote(s.Name) + " is declared at " + s.Origin.String() + ".",
+            Action: "Write a value that is exactly representable as " + article(s.Kind) + " " + s.Kind.String() + ", or change the declared type.",
+            Origin: originOr(v.Origin, s.Origin),
+        })
+        return v, ds
+    }
+    return out, ds
+}
+
+func isNumericKind(k value.Kind) bool {
+    return k == value.KindInt || k == value.KindFloat
+}
+```
+
+Then, in `checkAgainstSchemas` (`internal/variables/resolve.go`), coerce the winning
+value before judging it and store what came back:
+
+```go
+        v, set := out.vars[name]
+        if set {
+            // Coerce, then judge, and store the normalised value. The order is
+            // load-bearing: compareBounds reads both sides in the declared
+            // kind, so an uncoerced value is not merely mistyped — it is
+            // silently unbounded, because a bound it cannot read compares as
+            // no complaint.
+            coerced, coerceDiags := s.Coerce(v)
+            if coerceDiags.HasErrors() {
+                // Reported once, by the function that knows why it was lossy.
+                // Validate would add a kind mismatch on top, describing the
+                // same mistake less well.
+                ds.Extend(coerceDiags)
+                continue
+            }
+            out.vars[name] = coerced
+            ds.Extend(s.Validate(coerced))
+            continue
+        }
+```
+
+and extend that function's doc comment with a line saying it normalises before it
+judges, so the two are not separated by a reader skimming for the validation.
+
+### 6.11 Run it, see it pass
+
+```bash
+go test -count=1 ./internal/variables/ ./pkg/value/ && go vet ./... && gofmt -l .
+```
+
+Then prove the ordering test can fail, the same way 6.12 proves the ladder can:
+temporarily move the `s.Coerce` call to AFTER `s.Validate` and re-run.
+`TestResolveCoercesBeforeCheckingBounds` must fail. Restore it. A test that passes
+under both orderings is not testing the ordering.
+
+Commit: `M4 task 6: coerce supplied values to their declared kind`.
+
+### 6.12 Prove the ladder test can fail
 
 Do not skip this. A precedence test that only ever checks the top of the chain cannot
 tell a correct implementation from one that always returns the last entry it saw.
@@ -6114,7 +6546,7 @@ the environment rung to walk `chain.Layers` in reverse: the `environment wins`
 subtest must fail with `replicas = 30, want 20`. Restore it. If any sabotage passes,
 the fixture is not discriminating and must be fixed before you go on.
 
-### 6.9 Commit
+### 6.13 Commit
 
 ```bash
 go test -count=1 ./... && go vet ./... && gofmt -l .
