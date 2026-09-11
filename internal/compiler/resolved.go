@@ -31,6 +31,15 @@ type Options struct {
 	// compilerOptions is the single place the CLI builds this.
 	Dir string
 
+	// RecordLocks permits writing modules.lock after a successful expansion.
+	//
+	// The caller decides, not this package: `validate` answers a question and
+	// must not mutate the thing it is answering about (Amendment 18b), while
+	// `apply` is already permitted to change the project directory. A command
+	// that only reads leaves it false and still gets the COMPARISON, which is a
+	// pure read — that separation is what lets validate report a moved tag.
+	RecordLocks bool
+
 	Environment string
 	Region      string
 	Account     string

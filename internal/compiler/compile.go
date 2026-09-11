@@ -146,6 +146,24 @@ func Compile(files []config.File, reg *registry.Registry, opts Options) (Resolve
 		return ResolvedConfig{}, ds
 	}
 
+	if opts.RecordLocks {
+		// The COMPLETE set, in one call, after the walk succeeded. Writing per
+		// resolution would leave a file recording half a walk as though it were
+		// whole, which is the shape ae1e309 fixed once already. Writing the
+		// whole set IS the prune: a source the configuration no longer names is
+		// simply absent from what is written.
+		recs := make([]source.Record, 0, len(expansion.Resolutions))
+		for _, r := range expansion.Resolutions {
+			if rec, ok := source.Pin(r.Source, r.Resolution); ok {
+				recs = append(recs, rec)
+			}
+		}
+		ds.Extend(source.WriteLockfile(opts.Dir, recs))
+		if ds.HasErrors() {
+			return ResolvedConfig{}, ds
+		}
+	}
+
 	cfg, bindDiags := bindReferences(expansion, opts, reg)
 	ds.Extend(bindDiags)
 	if bindDiags.HasErrors() {

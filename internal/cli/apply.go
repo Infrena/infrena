@@ -67,6 +67,9 @@ func newApplyCommand(opts *GlobalOptions) *cobra.Command {
 			}
 
 			reg := buildRegistry(opts.Dir)
+			// apply is permitted to change the project directory, so it is
+			// where a pin first gets recorded. validate and plan only compare.
+			copts.RecordLocks = true
 			cfg, ds := compiler.Compile(files, reg, copts)
 			ds.Extend(cds)
 			// Rendered unconditionally, THEN checked: unlike plan.go, apply
