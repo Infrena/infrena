@@ -374,8 +374,14 @@ func malformedBound(s Schema, which string, bound value.Value) diag.Diagnostic {
 // accepted spellings are Go's and documented rather than invented here.
 func (s Schema) ParseText(text string, origin value.Origin) (value.Value, diag.Diagnostics) {
 	var ds diag.Diagnostics
+	// SuppliedBy (Amendment 6, contract.md) reuses origin.File rather than a
+	// second literal "--var": ParseText's one caller (resolve.go's rung 6)
+	// always passes origin built from that exact string, and Origin does not
+	// itself survive to the renderer (internal/expressions/eval.go re-origins
+	// every ${var} reference), which is why SuppliedBy needs its own stamp
+	// here rather than trusting Origin to carry it through.
 	stamp := func(v value.Value) value.Value {
-		return v.WithScope(value.ScopeCLIOverride).WithOrigin(origin)
+		return v.WithScope(value.ScopeCLIOverride).WithOrigin(origin).WithSuppliedBy(origin.File)
 	}
 	bad := func(expected string) (value.Value, diag.Diagnostics) {
 		ds.Add(diag.Diagnostic{

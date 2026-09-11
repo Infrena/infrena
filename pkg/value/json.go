@@ -8,13 +8,14 @@ import (
 // wireValue is the on-disk shape of a Value. Kind is written explicitly so that
 // integers do not come back as float64 and composites keep per-leaf provenance.
 type wireValue struct {
-	Kind      string          `json:"kind"`
-	Known     bool            `json:"known"`
-	Raw       json.RawMessage `json:"raw,omitempty"`
-	Source    ValueSource     `json:"source"`
-	Scope     string          `json:"scope,omitempty"`
-	Sensitive bool            `json:"sensitive,omitempty"`
-	Origin    *Origin         `json:"origin,omitempty"`
+	Kind       string          `json:"kind"`
+	Known      bool            `json:"known"`
+	Raw        json.RawMessage `json:"raw,omitempty"`
+	Source     ValueSource     `json:"source"`
+	Scope      string          `json:"scope,omitempty"`
+	Sensitive  bool            `json:"sensitive,omitempty"`
+	Origin     *Origin         `json:"origin,omitempty"`
+	SuppliedBy string          `json:"supplied_by,omitempty"`
 }
 
 // kindWireNames is the frozen on-disk spelling of every Kind.
@@ -68,11 +69,12 @@ func (v Value) MarshalJSON() ([]byte, error) {
 		return nil, err
 	}
 	w := wireValue{
-		Kind:      kindName,
-		Known:     v.Known,
-		Source:    v.Source,
-		Scope:     scopeName,
-		Sensitive: v.Sensitive,
+		Kind:       kindName,
+		Known:      v.Known,
+		Source:     v.Source,
+		Scope:      scopeName,
+		Sensitive:  v.Sensitive,
+		SuppliedBy: v.SuppliedBy,
 	}
 	if v.Origin.File != "" || v.Origin.Line != 0 || v.Origin.Column != 0 || v.Origin.Module != nil {
 		o := v.Origin
@@ -103,7 +105,7 @@ func (v *Value) UnmarshalJSON(data []byte) error {
 		return err
 	}
 
-	out := Value{Kind: kind, Known: w.Known, Source: w.Source, Scope: scope, Sensitive: w.Sensitive}
+	out := Value{Kind: kind, Known: w.Known, Source: w.Source, Scope: scope, Sensitive: w.Sensitive, SuppliedBy: w.SuppliedBy}
 	if w.Origin != nil {
 		out.Origin = *w.Origin
 	}

@@ -889,32 +889,40 @@ func decodeVariableValues(f File, out *ProjectDecl, ds *diag.Diagnostics) {
 // at the CLI layer, after resolution order is already known, with no stage 4
 // pass left to stamp it later. ScopeUnset is the zero value, so stamping it is
 // equivalent to never having set Scope at all.
-func retagSource(v value.Value, src value.ValueSource, scope value.Scope) value.Value {
+//
+// suppliedBy is threaded the same way, for the same reason (Amendment 6,
+// contract.md): a --var-file with a composite value must stamp every LEAF
+// with the path that supplied it, not just the composite's shell, or
+// annotation() would only ever see it on values a plan never actually
+// touches directly. Every caller except DecodeVariableFile's --var-file case
+// passes "", the zero value — equivalent to never stamping it — because
+// SuppliedBy is meaningful only at ScopeCLIOverride.
+func retagSource(v value.Value, src value.ValueSource, scope value.Scope, suppliedBy string) value.Value {
 	switch v.Kind {
 	case value.KindList:
 		items, ok := v.Raw.([]value.Value)
 		if !ok {
 			// Malformed: a diagnostic was already emitted where it was
 			// decoded. Retag the shell and stop rather than panicking.
-			return v.WithSource(src).WithScope(scope)
+			return v.WithSource(src).WithScope(scope).WithSuppliedBy(suppliedBy)
 		}
 		retagged := make([]value.Value, len(items))
 		for i, item := range items {
-			retagged[i] = retagSource(item, src, scope)
+			retagged[i] = retagSource(item, src, scope, suppliedBy)
 		}
 		v.Raw = retagged
 	case value.KindMap:
 		m, ok := v.Raw.(map[string]value.Value)
 		if !ok {
-			return v.WithSource(src).WithScope(scope)
+			return v.WithSource(src).WithScope(scope).WithSuppliedBy(suppliedBy)
 		}
 		retagged := make(map[string]value.Value, len(m))
 		for k, item := range m {
-			retagged[k] = retagSource(item, src, scope)
+			retagged[k] = retagSource(item, src, scope, suppliedBy)
 		}
 		v.Raw = retagged
 	}
-	return v.WithSource(src).WithScope(scope)
+	return v.WithSource(src).WithScope(scope).WithSuppliedBy(suppliedBy)
 }
 
 func decodeEnvironments(path string, node *yaml.Node, out *ProjectDecl, ds *diag.Diagnostics, seen map[string]int) {
@@ -1062,7 +1070,7 @@ func addOverride(path string, env *EnvironmentDecl, key, val *yaml.Node, ds *dia
 	}
 	env.Overrides = append(env.Overrides, OverrideDecl{
 		Name:   key.Value,
-		Value:  retagSource(v, value.SourceEnvironment, value.ScopeUnset).WithOrigin(origin),
+		Value:  retagSource(v, value.SourceEnvironment, value.ScopeUnset, "").WithOrigin(origin),
 		Origin: origin,
 	})
 }

@@ -185,8 +185,13 @@ func Resolve(decls []config.VariableDecl, chain environments.Chain,
 		}
 		// An undeclared variable is untyped, and --var carries text, so text
 		// is what it is. See Schema.ParseText for why no type is guessed.
+		//
+		// WithSuppliedBy(origin.File) reuses the same "--var" literal origin
+		// already carries, rather than a second spelling (Amendment 6,
+		// contract.md) — see Schema.ParseText's mirror of this for why
+		// SuppliedBy needs its own stamp instead of trusting Origin.
 		out.vars[name] = value.String(cliVars[name], value.SourceVariable).
-			WithScope(value.ScopeCLIOverride).WithOrigin(origin)
+			WithScope(value.ScopeCLIOverride).WithOrigin(origin).WithSuppliedBy(origin.File)
 	}
 
 	ds.Extend(checkAgainstSchemas(schemas, &out, chain))

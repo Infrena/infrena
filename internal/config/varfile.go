@@ -79,6 +79,17 @@ func DecodeVariableFile(f File, scope value.Scope) (map[string]value.Value, diag
 	var ds diag.Diagnostics
 	out := map[string]value.Value{}
 
+	// SuppliedBy (Amendment 6, contract.md) names f.Path only at
+	// ScopeCLIOverride — a --var-file — and stays "" for variables.yml
+	// (ScopeUnset), same signal already used above to pick which precedence
+	// level this decode stamps. f.Path is the path AS TYPED (see
+	// ParseVariableFile's doc comment); the same value already goes into
+	// origin below, so this is not a second spelling of it.
+	var suppliedBy string
+	if scope == value.ScopeCLIOverride {
+		suppliedBy = f.Path
+	}
+
 	root := documentRoot(f.Root)
 	if root == nil {
 		return out, ds
@@ -151,7 +162,7 @@ func DecodeVariableFile(f File, scope value.Scope) (map[string]value.Value, diag
 			})
 			continue
 		}
-		out[key.Value] = retagSource(v, value.SourceVariable, scope).WithOrigin(origin)
+		out[key.Value] = retagSource(v, value.SourceVariable, scope, suppliedBy).WithOrigin(origin)
 	}
 	return out, ds
 }

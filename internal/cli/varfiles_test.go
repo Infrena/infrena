@@ -201,6 +201,91 @@ resources:
 	}
 }
 
+// TestPlanAnnotatesVarFileAndVarWithTheirOwnSource is the end-to-end proof
+// Amendment 6 (owner ruling, contract.md) exists because unit-level tests
+// could not provide one.
+//
+// Amendment 5 tried to make a CLI-override annotation name its own source by
+// reusing Value.Origin, and every test written for it — constructing a
+// Value directly and rendering it — passed. The binary still regressed: a
+// real plan reaches its resource attributes through "${cidr}" interpolation,
+// and internal/expressions/eval.go's OpVarRef case re-origins every such
+// reference to the referencing expression's site BEFORE the value reaches
+// the renderer, which a test that never evaluates an expression cannot see.
+// Amendment 6 replaced Origin with the dedicated Value.SuppliedBy field
+// specifically because WithOrigin's overwrite cannot touch it — but that
+// claim is only worth as much as a test that actually exercises the real
+// path: compiled configuration with "${cidr}" in it, through
+// variables.Resolve, through expressions.Evaluate, into a rendered plan.
+func TestPlanAnnotatesVarFileAndVarWithTheirOwnSource(t *testing.T) {
+	const body = `
+project: myapp
+variables:
+  cidr:
+    type: string
+resources:
+  network:
+    type: test.network
+    cidr: ${cidr}
+`
+	run := func(t *testing.T, opts *GlobalOptions) string {
+		t.Helper()
+		cmd := newPlanCommand(opts)
+		cmd.SetArgs([]string{"dev"})
+		var stdout, stderr bytes.Buffer
+		cmd.SetOut(&stdout)
+		cmd.SetErr(&stderr)
+		if err := cmd.Execute(); !errors.Is(err, errChanges) {
+			t.Fatalf("Execute() = %v (stderr: %s), want errChanges", err, stderr.String())
+		}
+		return stdout.String()
+	}
+
+	t.Run("--var alone names the flag", func(t *testing.T) {
+		dir := projectDir(t, body)
+		opts := &GlobalOptions{Dir: dir, Parallelism: 4, Vars: []string{"cidr=10.88.0.0/16"}}
+		out := run(t, opts)
+		if !strings.Contains(out, `cidr: "10.88.0.0/16" [variable, from --var]`) {
+			t.Errorf("--var did not render annotated with its own flag:\n%s", out)
+		}
+	})
+
+	t.Run("--var-file alone names the file as typed", func(t *testing.T) {
+		dir := projectDir(t, body)
+		writeFile(t, dir, "vars.yml", "cidr: 10.77.0.0/16\n")
+		opts := &GlobalOptions{Dir: dir, Parallelism: 4, VarFiles: []string{"vars.yml"}}
+		out := run(t, opts)
+		if !strings.Contains(out, `cidr: "10.77.0.0/16" [variable, from vars.yml]`) {
+			t.Errorf("--var-file did not render annotated with its own path:\n%s", out)
+		}
+		// The exact defect Amendment 5 shipped: naming the DECLARATION file
+		// (infra.yml) instead of the file that actually supplied the value.
+		if strings.Contains(out, "infra.yml]") {
+			t.Errorf("annotation named the declaration file instead of the --var-file:\n%s", out)
+		}
+	})
+
+	t.Run("both together: --var still outranks --var-file and names itself", func(t *testing.T) {
+		dir := projectDir(t, body)
+		writeFile(t, dir, "vars.yml", "cidr: 10.77.0.0/16\n")
+		opts := &GlobalOptions{
+			Dir: dir, Parallelism: 4,
+			Vars:     []string{"cidr=10.99.0.0/16"},
+			VarFiles: []string{"vars.yml"},
+		}
+		out := run(t, opts)
+		if !strings.Contains(out, `cidr: "10.99.0.0/16" [variable, from --var]`) {
+			t.Errorf("--var did not outrank --var-file, or was not annotated with --var:\n%s", out)
+		}
+		if strings.Contains(out, "10.77.0.0/16") {
+			t.Errorf("the --var-file value leaked into the plan despite --var outranking it:\n%s", out)
+		}
+		if strings.Contains(out, "from vars.yml") {
+			t.Errorf("annotation named vars.yml even though --var supplied the winning value:\n%s", out)
+		}
+	})
+}
+
 // TestPlanRendersVarFileWarningsEvenWithoutErrors guards against gating the
 // --var-file diagnostic render on fds.HasErrors(): DecodeVariableFile can
 // produce a WARNING (a --var-file key shadowing one of infra.yml's own block

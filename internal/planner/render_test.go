@@ -116,6 +116,13 @@ func scopedPlan() *Plan {
 					"network": value.String("net-1", value.SourceVariable).WithScope(value.ScopeBaseConfig),
 					// The floor of the chain: a provider default.
 					"size": value.Int(100, value.SourceDefault).WithScope(value.ScopeProviderDefault),
+					// Won by --var-file: Amendment 6 (contract.md). The
+					// annotation names the file itself, not the generic
+					// "--var" Scope.String() would otherwise give every
+					// ScopeCLIOverride value — the fix Amendment 5 tried and
+					// had reverted.
+					"zone": value.String("us-east-1a", value.SourceVariable).
+						WithScope(value.ScopeCLIOverride).WithSuppliedBy("prod.yml"),
 				},
 			},
 			{
@@ -428,6 +435,64 @@ func TestRenderAnnotatesEveryScope(t *testing.T) {
 			}
 			if tc.v.Sensitive && strings.Contains(got, "hunter2") {
 				t.Errorf("the datum leaked through the annotation path: %q", got)
+			}
+		})
+	}
+}
+
+// TestRenderAnnotatesCLIOverrideWithSuppliedByOnly pins Amendment 6 (owner
+// ruling, contract.md): at ScopeCLIOverride, renderAnnotated names the
+// value's own SuppliedBy in preference to the scope's generic "--var" label,
+// and nowhere else.
+//
+// This replaced Amendment 5, which tried the same idea by reusing Origin and
+// was reverted: internal/expressions/eval.go's OpVarRef case re-origins
+// every "${var}" reference to the referencing expression's site, so Origin
+// does not survive to the renderer for any value that reaches a resource
+// attribute the normal way. SuppliedBy is a dedicated field that
+// WithOrigin's overwrite cannot touch, which is what makes this fix
+// different in kind from the one that failed — but this test alone, like
+// Amendment 5's, constructs a Value directly and cannot see whether that
+// survival claim actually holds through real expression evaluation. See
+// internal/cli's TestPlanAnnotatesVarFileAndVarWithTheirOwnSource for the
+// end-to-end proof; this test proves only that the renderer's wiring reaches
+// value.Annotate correctly, and the scope restriction Amendment 6 requires
+// (last case).
+func TestRenderAnnotatesCLIOverrideWithSuppliedByOnly(t *testing.T) {
+	cases := []struct {
+		name string
+		v    value.Value
+		want string
+	}{
+		{
+			name: "--var-file names the file as typed",
+			v:    value.Int(7, value.SourceVariable).WithScope(value.ScopeCLIOverride).WithSuppliedBy("f.yml"),
+			want: "7 [variable, from f.yml]",
+		},
+		{
+			name: "--var names the literal flag",
+			v:    value.Int(42, value.SourceVariable).WithScope(value.ScopeCLIOverride).WithSuppliedBy("--var"),
+			want: "42 [variable, from --var]",
+		},
+		{
+			name: "no SuppliedBy falls back to the scope label",
+			v:    value.Int(20, value.SourceVariable).WithScope(value.ScopeCLIOverride),
+			want: "20 [variable, from --var]",
+		},
+		{
+			// The restriction: SuppliedBy set at a scope OTHER than
+			// ScopeCLIOverride must be ignored, not preferred.
+			name: "SuppliedBy at base config is ignored",
+			v:    value.String("web", value.SourceVariable).WithScope(value.ScopeBaseConfig).WithSuppliedBy("vars.yml"),
+			want: `"web" [variable, from base config]`,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := renderAnnotated(tc.v)
+			if got != tc.want {
+				t.Errorf("renderAnnotated = %q, want %q", got, tc.want)
 			}
 		})
 	}

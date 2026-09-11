@@ -570,6 +570,29 @@ func TestParseTextConvertsToTheDeclaredKind(t *testing.T) {
 		if got.Source != value.SourceVariable || got.Scope != value.ScopeCLIOverride {
 			t.Errorf("%s: Source/Scope = %v/%v, want SourceVariable/ScopeCLIOverride", tc.kind, got.Source, got.Scope)
 		}
+		if got.SuppliedBy != "--var" {
+			t.Errorf("%s: SuppliedBy = %q, want %q", tc.kind, got.SuppliedBy, "--var")
+		}
+	}
+}
+
+// TestParseTextStampsSuppliedByFromOrigin pins that ParseText's SuppliedBy
+// stamp reuses origin.File exactly, rather than hardcoding the literal
+// "--var". Its one caller (resolve.go's rung 6) always builds origin from
+// that same literal, so a mutation that drops the SuppliedBy stamp entirely
+// is INVISIBLE to a rendered plan for --var specifically: --var's SuppliedBy
+// ("--var") is byte-identical to Scope.String()'s ScopeCLIOverride fallback,
+// so "stamped as --var" and "never stamped" render the same string. A
+// distinctive origin, checked against the field directly rather than through
+// rendering, is the only way to tell the two apart.
+func TestParseTextStampsSuppliedByFromOrigin(t *testing.T) {
+	origin := value.Origin{File: "a-distinctive-origin-name.yml"}
+	got, ds := schemaFor(t, value.KindInt).ParseText("20", origin)
+	if ds.HasErrors() {
+		t.Fatalf("unexpected diagnostics: %+v", ds)
+	}
+	if got.SuppliedBy != origin.File {
+		t.Errorf("SuppliedBy = %q, want %q", got.SuppliedBy, origin.File)
 	}
 }
 

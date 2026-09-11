@@ -4,6 +4,7 @@ Plan for project "myapp", environment "production":
       engine: "postgres"
       network: "net-1" [variable, from base config]
       size: 100 [default, from provider default]
+      zone: "us-east-1a" [variable, from prod.yml]
 
   ~ test.network.net
       cidr: "10.0.0.0/16" [variable, from base config] -> "10.9.0.0/16" [variable, from --var]

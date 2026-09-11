@@ -298,6 +298,14 @@ func TestResolveKeepsAnUndeclaredCLIVariable(t *testing.T) {
 	if got.Scope != value.ScopeCLIOverride {
 		t.Errorf("Scope = %v, want ScopeCLIOverride", got.Scope)
 	}
+	// Amendment 6 (contract.md): SuppliedBy must be stamped even though its
+	// value ("--var") happens to equal Scope.String()'s ScopeCLIOverride
+	// fallback — a rendering-only assertion cannot tell "stamped as --var"
+	// apart from "never stamped, fell back to --var", so this checks the
+	// field directly rather than through annotation().
+	if got.SuppliedBy != "--var" {
+		t.Errorf("SuppliedBy = %q, want %q", got.SuppliedBy, "--var")
+	}
 }
 
 func TestOverrideSetsAVariableOnAZeroValueScope(t *testing.T) {

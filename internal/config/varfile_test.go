@@ -134,6 +134,68 @@ tags:
 	}
 }
 
+// TestDecodeVariableFileStampsSuppliedByOnEveryLeafAtCLIOverride pins
+// Amendment 6 (contract.md): a --var-file decode (ScopeCLIOverride) stamps
+// every leaf's SuppliedBy with f.Path, per-leaf for the same reason Source
+// and Scope are — a composite's children must carry it too, or a nested
+// value could not name where it came from any better than the composite
+// shell around it.
+func TestDecodeVariableFileStampsSuppliedByOnEveryLeafAtCLIOverride(t *testing.T) {
+	f := fileFrom(t, "shared/vars.yml", `
+project_name: myapp
+regions:
+  - us-east-1
+  - eu-west-1
+tags:
+  team: platform
+`)
+
+	got, ds := DecodeVariableFile(f, value.ScopeCLIOverride)
+	if ds.HasErrors() {
+		t.Fatalf("unexpected diagnostics: %v", ds)
+	}
+
+	if got["project_name"].SuppliedBy != "shared/vars.yml" {
+		t.Errorf("project_name: SuppliedBy = %q, want %q", got["project_name"].SuppliedBy, "shared/vars.yml")
+	}
+	items, ok := got["regions"].Raw.([]value.Value)
+	if !ok || len(items) != 2 {
+		t.Fatalf("regions did not decode as a two-item list: %#v", got["regions"])
+	}
+	for i, item := range items {
+		if item.SuppliedBy != "shared/vars.yml" {
+			t.Errorf("regions[%d]: SuppliedBy = %q, want %q", i, item.SuppliedBy, "shared/vars.yml")
+		}
+	}
+	m, ok := got["tags"].Raw.(map[string]value.Value)
+	if !ok {
+		t.Fatalf("tags did not decode as a map: %#v", got["tags"])
+	}
+	if m["team"].SuppliedBy != "shared/vars.yml" {
+		t.Errorf("tags.team: SuppliedBy = %q, want %q", m["team"].SuppliedBy, "shared/vars.yml")
+	}
+}
+
+// TestDecodeVariableFileLeavesSuppliedByEmptyAtScopeUnset pins the other
+// half of the restriction: variables.yml (decoded at ScopeUnset, not a
+// --var-file) must NOT stamp SuppliedBy. SuppliedBy is meaningful only at
+// ScopeCLIOverride (see Value.SuppliedBy's doc comment) — a variables.yml
+// entry stamped with its own path would be harmless today (annotation()
+// only reads SuppliedBy at ScopeCLIOverride) but would misrepresent what the
+// field means the moment anything else starts trusting it being set as a
+// signal of "supplied from the command line".
+func TestDecodeVariableFileLeavesSuppliedByEmptyAtScopeUnset(t *testing.T) {
+	f := fileFrom(t, "variables.yml", `cidr: 10.0.0.0/16`)
+
+	got, ds := DecodeVariableFile(f, value.ScopeUnset)
+	if ds.HasErrors() {
+		t.Fatalf("unexpected diagnostics: %v", ds)
+	}
+	if got["cidr"].SuppliedBy != "" {
+		t.Errorf("SuppliedBy = %q, want empty at ScopeUnset", got["cidr"].SuppliedBy)
+	}
+}
+
 func TestDecodeVariableFileScopeIsAParameterNotAConstant(t *testing.T) {
 	// One decoder serves two precedence levels. If it hard-coded a scope,
 	// variables.yml and --var-file could not be told apart, which is the

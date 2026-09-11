@@ -103,7 +103,7 @@ func TestCoercePreservesEveryOtherField(t *testing.T) {
 	origin := Origin{File: "infra.yml", Line: 7, Column: 3}
 	sentinelExpr := &Expr{Op: OpLiteral, Literal: Int(1, SourceExplicit)}
 
-	in := Int(1, SourceDefault).WithScope(ScopeBaseConfig).WithSensitive(true).WithOrigin(origin)
+	in := Int(1, SourceDefault).WithScope(ScopeBaseConfig).WithSensitive(true).WithOrigin(origin).WithSuppliedBy("vars.yml")
 	in.Expr = sentinelExpr
 
 	got, ok := Coerce(in, KindFloat)
@@ -121,6 +121,9 @@ func TestCoercePreservesEveryOtherField(t *testing.T) {
 	}
 	if got.Origin.File != origin.File || got.Origin.Line != origin.Line || got.Origin.Column != origin.Column {
 		t.Errorf("Origin = %v, want %v", got.Origin, origin)
+	}
+	if got.SuppliedBy != "vars.yml" {
+		t.Errorf("SuppliedBy = %q, want %q", got.SuppliedBy, "vars.yml")
 	}
 	if got.Expr != sentinelExpr {
 		t.Error("Expr was dropped by Coerce")

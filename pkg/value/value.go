@@ -56,6 +56,24 @@ type Value struct {
 	// The executor evaluates it once the dependency has been created.
 	Expr   *Expr
 	Origin Origin
+	// SuppliedBy names the INPUT that supplied this value, as the user
+	// named it — "--var" for the flag, or a --var-file path exactly as
+	// typed. It exists because Origin does not survive to the renderer:
+	// internal/expressions/eval.go's OpVarRef case re-origins every
+	// variable reference to the referencing expression's site (the line in
+	// infra.yml where ${var} is written), which is correct for diagnostics
+	// but means Origin means "where this was referenced" by the time a
+	// value reaches a plan, not "where it came from". SuppliedBy is a
+	// separate field precisely so that overwrite cannot erase it — see
+	// value.Annotate's ScopeCLIOverride special case.
+	//
+	// Amendment 6 (owner ruling, contract.md), landed after Amendment 5
+	// tried to reuse Origin for this and was reverted: a --var-file value
+	// rendered "[variable, from --var]" pre-amendment (correct precedence,
+	// wrong label) and rendered "[variable, from <infra.yml's own path>]"
+	// with Amendment 5 (a value naming its own re-origined reference site).
+	// Only meaningful at ScopeCLIOverride today; empty everywhere else.
+	SuppliedBy string
 }
 
 func String(s string, src ValueSource) Value {
@@ -102,6 +120,13 @@ func (v Value) WithOrigin(o Origin) Value {
 	return v
 }
 
+// WithSuppliedBy returns a copy of the value recorded as supplied by input s
+// — "--var", or a --var-file path as typed. See Value.SuppliedBy.
+func (v Value) WithSuppliedBy(s string) Value {
+	v.SuppliedBy = s
+	return v
+}
+
 // Equal reports whether two values hold the same datum of the same kind.
 // Provenance, sensitivity and origin are deliberately excluded: they describe
 // how a value was arrived at, not what the desired state is, so they must never
@@ -116,6 +141,11 @@ func (v Value) WithOrigin(o Origin) Value {
 // Comparing Scope breaks acceptance invariant 2 (no-op plan) permanently and
 // silently, which is the phantom-diff shape M3 spent a Critical fixing.
 // Pinned by TestEqualIgnoresScopeForEveryPairOfScopes (scope_test.go).
+//
+// SAME RULE FOR SuppliedBy (Amendment 6): a `--var replicas=20` and a
+// `--var-file f.yml` entry of `replicas: 20` are the same input, whichever
+// one supplied it. Pinned by TestEqualIgnoresSuppliedByForEveryScope
+// (suppliedby_test.go).
 //
 // An unknown value is never equal to anything, including another unknown. The
 // planner relies on this: an attribute that cannot be proven unchanged must be
@@ -246,10 +276,11 @@ func (v Value) AsFloat() (float64, bool) {
 //     integer up to 2^53 exactly; past that, adjacent representable values
 //     are two apart, so some integers have no exact float64 form).
 //
-// On success, ONLY Kind and Raw change. Source, Scope, Sensitive, Origin and
-// Expr all survive untouched — v is taken and returned by value, so every
-// field neither this function nor its caller names is carried through
-// automatically, including one added to Value after this was written. A
+// On success, ONLY Kind and Raw change. Source, Scope, Sensitive, Origin,
+// SuppliedBy and Expr all survive untouched — v is taken and returned by
+// value, so every field neither this function nor its caller names is
+// carried through automatically, including one added to Value after this
+// was written. A
 // coercion that silently cleared Sensitive would be the M3 Critical again: a
 // secret recorded by dropping what was known about it, this time on the way
 // into a plan instead of out of a provider.

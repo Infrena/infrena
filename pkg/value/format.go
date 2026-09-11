@@ -185,6 +185,18 @@ func Annotate(v Value, opts FormatOptions) string {
 //     "[, from --var]" — string(v.Source) on the empty ValueSource zero value
 //     — would be the silent corruption. Do not "fix" one of these two
 //     functions to match the other; they differ on purpose.
+//
+//   - Amendment 6 (owner ruling, contract.md): at ScopeCLIOverride ONLY, the
+//     location named prefers v.SuppliedBy over Scope.String() when it is
+//     non-empty. This is scoped to that one rung deliberately — Amendment 5
+//     tried reusing Origin for this at every scope and was reverted, because
+//     Origin does not survive to the renderer (internal/expressions/eval.go's
+//     OpVarRef re-origins every reference to its own site), and Amendment 6
+//     chose a dedicated field for exactly that reason. Preferring SuppliedBy
+//     at every scope, rather than only ScopeCLIOverride, would mean the day
+//     any other rung starts stamping it, "variables.yml" starts rendering
+//     "from variables.yml" instead of "from base config" — a label change the
+//     owner did not choose. Generalising it is M5's call, not this one's.
 func annotation(v Value) string {
 	if !v.Known {
 		return ""
@@ -201,5 +213,9 @@ func annotation(v Value) string {
 	if v.Source == "" {
 		return ""
 	}
-	return "[" + string(v.Source) + ", from " + v.Scope.String() + "]"
+	location := v.Scope.String()
+	if v.Scope == ScopeCLIOverride && v.SuppliedBy != "" {
+		location = v.SuppliedBy
+	}
+	return "[" + string(v.Source) + ", from " + location + "]"
 }
