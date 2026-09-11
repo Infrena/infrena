@@ -81,13 +81,11 @@ func instantiateDecl(decl *config.ResourceDecl, module []string) *config.Resourc
 // this still does the right thing — it prepends `module`, preserving what was
 // already there, same as Address.InModule.
 func originInPath(o value.Origin, module []string) value.Origin {
-	if len(module) == 0 {
-		return o
+	// Applied outermost-last, because Origin.InModule PREPENDS: walking the
+	// path backwards leaves it in the same order as the address it belongs to.
+	for i := len(module) - 1; i >= 0; i-- {
+		o = o.InModule(module[i])
 	}
-	next := make([]string, 0, len(module)+len(o.Module))
-	next = append(next, module...)
-	next = append(next, o.Module...)
-	o.Module = next
 	return o
 }
 

@@ -27,6 +27,22 @@ type Origin struct {
 	Module []string
 }
 
+// InModule returns the origin as seen from inside a module instantiation,
+// prepending name to the module path. It copies the slice so that two
+// instantiations of one decoded module source cannot alias each other's path —
+// the same guarantee, in the same shape, as address.Address.InModule.
+//
+// Outermost first, so an Origin's module path reads identically to the Address
+// of the resource it belongs to. A diagnostic that spelled the path one way and
+// the address another would be two spellings of one thing.
+func (o Origin) InModule(name string) Origin {
+	next := make([]string, 0, len(o.Module)+1)
+	next = append(next, name)
+	next = append(next, o.Module...)
+	o.Module = next
+	return o
+}
+
 func (o Origin) String() string {
 	if o.File == "" {
 		return "<generated>"
@@ -117,6 +133,46 @@ func (v Value) WithSource(src ValueSource) Value {
 
 func (v Value) WithOrigin(o Origin) Value {
 	v.Origin = o
+	return v
+}
+
+// InModule re-roots this value's origin into the named module instantiation,
+// and every leaf's origin with it.
+//
+// Composites recurse because provenance is per-leaf (spec §5.1): a map with one
+// bad key produces a diagnostic pointing at that key's origin, and an origin
+// that stopped at the outer Value could not say which instantiation the key came
+// from. Returns a copy; composites are rebuilt rather than stamped in place,
+// because one decoded module source is instantiated many times and its literals
+// are shared between them.
+//
+// There is no Expr counterpart to this, for ORIGINS. An AttributeDecl carries
+// interpolated text as a Value, not a parsed Expr — stage 6 parses it, from
+// AttributeDecl.Origin, and expressions.Parse stamps that one origin onto every
+// node it builds. Re-rooting the declaration's origin therefore re-roots every
+// expression node parsed from it, and an origin primitive over *Expr would be
+// dead code.
+//
+// REFERENCES are a different axis and do walk an Expr, but at STAGE 6:
+// modules.Scope.Qualify makes a scope-relative reference absolute, so an
+// expression written inside a module names the module's own resource rather
+// than a root resource of the same name. Nothing here should grow to cover it.
+func (v Value) InModule(name string) Value {
+	v.Origin = v.Origin.InModule(name)
+	switch raw := v.Raw.(type) {
+	case []Value:
+		out := make([]Value, len(raw))
+		for i, e := range raw {
+			out[i] = e.InModule(name)
+		}
+		v.Raw = out
+	case map[string]Value:
+		out := make(map[string]Value, len(raw))
+		for k, e := range raw {
+			out[k] = e.InModule(name)
+		}
+		v.Raw = out
+	}
 	return v
 }
 

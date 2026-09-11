@@ -66,6 +66,26 @@ type Diagnostics []Diagnostic
 // Add appends a single diagnostic to the collection.
 func (ds *Diagnostics) Add(d Diagnostic) { *ds = append(*ds, d) }
 
+// InModule returns a copy of these diagnostics with every Origin re-rooted into
+// the named module instantiation.
+//
+// Stage 5 re-enters stages 1 and 2 for each module source (Ruling 2), and those
+// stages know nothing about instantiations — a malformed module file yields a
+// diagnostic naming only the file. Stamping on the way out is what turns three
+// identical copies of that diagnostic, one per instantiation, into three that
+// can be told apart.
+func (ds Diagnostics) InModule(name string) Diagnostics {
+	if len(ds) == 0 {
+		return nil
+	}
+	out := make(Diagnostics, len(ds))
+	for i, d := range ds {
+		d.Origin = d.Origin.InModule(name)
+		out[i] = d
+	}
+	return out
+}
+
 // Extend appends all diagnostics from another collection.
 func (ds *Diagnostics) Extend(other Diagnostics) { *ds = append(*ds, other...) }
 

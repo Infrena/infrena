@@ -1,6 +1,9 @@
 package value
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestConstructorsRecordKindAndSource(t *testing.T) {
 	v := String("postgres", SourceExplicit)
@@ -178,5 +181,60 @@ func TestCoerceLeavesAnUnknownOfANonNumericKindAlone(t *testing.T) {
 	// would be a type error whether or not the datum had arrived yet.
 	if _, ok := Coerce(Unknown(KindString, SourceVariable), KindInt); ok {
 		t.Error("an unknown string is still the wrong kind for an integer; the caller reports that, not Coerce")
+	}
+}
+
+// TestOriginInModuleDoesNotAliasBetweenInstantiations is the property the whole
+// primitive exists for. ONE decoded module source is instantiated many times,
+// and every instantiation re-roots the SAME origins. Appending in place would
+// let the second instantiation extend the first's path, so a diagnostic would
+// name a module the user never wrote there.
+func TestOriginInModuleDoesNotAliasBetweenInstantiations(t *testing.T) {
+	shared := Origin{File: "module.yml", Line: 3, Column: 5}
+
+	one := shared.InModule("one")
+	two := shared.InModule("two")
+
+	if got := strings.Join(one.Module, "."); got != "one" {
+		t.Errorf("first instantiation = %q, want %q", got, "one")
+	}
+	if got := strings.Join(two.Module, "."); got != "two" {
+		t.Errorf("second instantiation = %q, want %q — the two aliased", got, "two")
+	}
+	if shared.Module != nil {
+		t.Errorf("the shared origin was mutated: %v", shared.Module)
+	}
+
+	// Nesting reads outermost-first, matching the address it belongs to.
+	nested := shared.InModule("inner").InModule("outer")
+	if got := strings.Join(nested.Module, "."); got != "outer.inner" {
+		t.Errorf("nested = %q, want %q — an origin's path must read like the address", got, "outer.inner")
+	}
+}
+
+// TestValueInModuleRecursesIntoComposites. Provenance is per-leaf, so a map with
+// one bad key produces a diagnostic pointing at THAT key's origin. An origin
+// that stopped at the outer Value could not say which instantiation it came
+// from, which is the whole point of stamping.
+func TestValueInModuleRecursesIntoComposites(t *testing.T) {
+	leaf := String("x", SourceExplicit).WithOrigin(Origin{File: "module.yml", Line: 9})
+	m := Map(map[string]Value{"k": leaf}, SourceExplicit).WithOrigin(Origin{File: "module.yml", Line: 8})
+
+	got := m.InModule("net")
+
+	if p := strings.Join(got.Origin.Module, "."); p != "net" {
+		t.Errorf("outer origin = %q, want %q", p, "net")
+	}
+	inner, ok := got.Raw.(map[string]Value)
+	if !ok {
+		t.Fatalf("map lost its shape: %T", got.Raw)
+	}
+	if p := strings.Join(inner["k"].Origin.Module, "."); p != "net" {
+		t.Errorf("leaf origin = %q, want %q — a per-leaf diagnostic could not name the instantiation", p, "net")
+	}
+	// The source value must be untouched: it is shared between instantiations.
+	orig := m.Raw.(map[string]Value)
+	if orig["k"].Origin.Module != nil {
+		t.Errorf("the source value was stamped in place: %v", orig["k"].Origin.Module)
 	}
 }

@@ -664,18 +664,12 @@ func (w *walker) depthDiagnostic(r *config.ResourceDecl, lm loadedModule) diag.D
 // element outward, per that task's contract; the two are equivalent for every
 // diagnostic this package produces today.
 func inModulePath(ds diag.Diagnostics, module []string) diag.Diagnostics {
-	if len(module) == 0 || len(ds) == 0 {
-		return ds
+	// Outermost-last, for the same reason as originInPath: Diagnostics.InModule
+	// prepends one name at a time.
+	for i := len(module) - 1; i >= 0; i-- {
+		ds = ds.InModule(module[i])
 	}
-	out := make(diag.Diagnostics, len(ds))
-	for i, d := range ds {
-		next := make([]string, 0, len(module)+len(d.Origin.Module))
-		next = append(next, module...)
-		next = append(next, d.Origin.Module...)
-		d.Origin.Module = next
-		out[i] = d
-	}
-	return out
+	return ds
 }
 
 // loadedNames lists what is loaded at a level, sorted, for a diagnostic. Go's
