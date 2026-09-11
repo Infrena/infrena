@@ -96,6 +96,65 @@ func TestRenderMixedOperations(t *testing.T) {
 	checkGolden(t, "mixed.golden", Render(mixedPlan(), RenderOptions{}))
 }
 
+// scopedPlan hand-builds its values, like mixedPlan, rather than routing
+// through the compiler, so this golden depends on no other task's stamping.
+// ScopeProviderDefault is Task 7's to stamp onto a real plan (step 9.3); here
+// it is asserted directly against the renderer regardless of whether Task 7
+// has landed.
+func scopedPlan() *Plan {
+	return &Plan{
+		Project:     "myapp",
+		Environment: "production",
+		Operations: []Operation{
+			{
+				Address: address.Address{Name: "db"}, Type: "test.database", Kind: OpCreate,
+				After: map[string]value.Value{
+					// Explicit at base config: rule 2 suppresses the
+					// annotation entirely.
+					"engine": value.String("postgres", value.SourceExplicit).WithScope(value.ScopeBaseConfig),
+					// Variable at base config: annotated.
+					"network": value.String("net-1", value.SourceVariable).WithScope(value.ScopeBaseConfig),
+					// The floor of the chain: a provider default.
+					"size": value.Int(100, value.SourceDefault).WithScope(value.ScopeProviderDefault),
+				},
+			},
+			{
+				Address: address.Address{Name: "net"}, Type: "test.network", Kind: OpUpdate,
+				Before: map[string]value.Value{
+					"cidr": value.String("10.0.0.0/16", value.SourceVariable).WithScope(value.ScopeBaseConfig),
+				},
+				After: map[string]value.Value{
+					// Won by --var: the shape the user fixed.
+					"cidr": value.String("10.9.0.0/16", value.SourceVariable).WithScope(value.ScopeCLIOverride),
+				},
+			},
+		},
+	}
+}
+
+// TestRenderScopedValuesShowPrecedence is the golden covering a whole plan
+// with mixed scopes: spec §12.3's "values sourced from defaults annotated
+// [default]" plus M4's full ladder, in one artifact a person would actually
+// read.
+func TestRenderScopedValuesShowPrecedence(t *testing.T) {
+	checkGolden(t, "scopes.golden", Render(scopedPlan(), RenderOptions{}))
+}
+
+// TestRenderScopedPlanIsDeterministicAcrossRepeatedCalls extends the
+// determinism guarantee to scopedPlan specifically: the golden above proves
+// one render is right, this proves 100 of them agree byte for byte, so a
+// map-order leak in value.Annotate's call path would not hide behind a
+// single lucky render.
+func TestRenderScopedPlanIsDeterministicAcrossRepeatedCalls(t *testing.T) {
+	want := Render(scopedPlan(), RenderOptions{})
+	for i := 0; i < 100; i++ {
+		if got := Render(scopedPlan(), RenderOptions{}); got != want {
+			t.Fatalf("Render(scopedPlan()) is not deterministic; iteration %d differs.\n--- first ---\n%s--- iteration %d ---\n%s",
+				i, want, i, got)
+		}
+	}
+}
+
 func TestRenderVerboseListsUnchangedResources(t *testing.T) {
 	p := mixedPlan()
 	p.Operations = append(p.Operations, Operation{
@@ -240,10 +299,14 @@ func TestRenderDestructiveWithDependentsShowsCountSingularAndPlural(t *testing.T
 	}
 }
 
-// TestRenderLeafFailsClosedOnUnexpectedShapes covers the branch a golden file
-// cannot: values whose Kind and Raw disagree, or whose Kind was never set.
-// See renderLeaf's doc comment for the measured leak this prevents.
-func TestRenderLeafFailsClosedOnUnexpectedShapes(t *testing.T) {
+// TestRenderAnnotatedFailsClosedOnUnexpectedShapes covers the branch a golden
+// file cannot: values whose Kind and Raw disagree, or whose Kind was never
+// set. It drives renderAnnotated rather than renderLeaf (deleted in Task 9,
+// folded into value.Annotate) — which makes it strictly stronger than before,
+// since it now also covers the annotation path: a malformed value must not
+// leak through that either. See value.Format's doc comment for the two
+// measured leaks this prevents.
+func TestRenderAnnotatedFailsClosedOnUnexpectedShapes(t *testing.T) {
 	secret := value.String("hunter2", value.SourceProvider).WithSensitive(true)
 
 	cases := []struct {
@@ -260,12 +323,111 @@ func TestRenderLeafFailsClosedOnUnexpectedShapes(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := renderLeaf(tc.v)
+			got := renderAnnotated(tc.v)
 			if strings.Contains(got, "hunter2") {
 				t.Errorf("secret rendered in clear text: %s", got)
 			}
 			if got != "<unrenderable>" {
-				t.Errorf("renderLeaf = %q, want %q", got, "<unrenderable>")
+				t.Errorf("renderAnnotated = %q, want %q", got, "<unrenderable>")
+			}
+		})
+	}
+}
+
+// TestRenderAnnotatesEveryScope drives renderAnnotated, not value.Annotate
+// directly. Task 1 already proves Annotate itself works; what is unproven
+// until this test exists is the WIRING — that the plan renderer actually
+// reaches Annotate, with the plan's own FormatOptions, rather than a
+// planner-local copy. A test that called value.Annotate would pass even
+// against a renderer that never delegates to it.
+//
+// The expected strings duplicate Scope.String()'s wording, by design: this
+// asserts the user-visible result, Scope.String() produces the wording, and
+// a change to either that the other does not expect is exactly what this
+// table is meant to catch.
+func TestRenderAnnotatesEveryScope(t *testing.T) {
+	cases := []struct {
+		name string
+		v    value.Value
+		want string
+	}{
+		{
+			name: "unset scope keeps the M2 annotation",
+			v:    value.Int(10, value.SourceDefault),
+			want: "10 [default]",
+		},
+		{
+			name: "explicit at base config is not annotated",
+			v:    value.String("web", value.SourceExplicit).WithScope(value.ScopeBaseConfig),
+			want: `"web"`,
+		},
+		{
+			// The case an unconditional "explicit is never annotated" rule
+			// would hide: an attribute written explicitly and then won by a
+			// higher layer. Unreachable in M4, reachable in M5.
+			name: "explicit won by a higher layer IS annotated",
+			v:    value.String("web", value.SourceExplicit).WithScope(value.ScopeEnvironmentVar),
+			want: `"web" [explicit, from environment variable]`,
+		},
+		{
+			name: "provider default",
+			v:    value.Int(10, value.SourceDefault).WithScope(value.ScopeProviderDefault),
+			want: "10 [default, from provider default]",
+		},
+		{
+			name: "base config",
+			v:    value.String("10.0.0.0/16", value.SourceVariable).WithScope(value.ScopeBaseConfig),
+			want: `"10.0.0.0/16" [variable, from base config]`,
+		},
+		{
+			name: "module default",
+			v:    value.Int(2, value.SourceModule).WithScope(value.ScopeModuleDefault),
+			want: "2 [module, from module default]",
+		},
+		{
+			name: "environment inheritance",
+			v:    value.String("small", value.SourceEnvironment).WithScope(value.ScopeEnvironmentInherit),
+			want: `"small" [environment, from environment inheritance]`,
+		},
+		{
+			name: "environment variables",
+			v:    value.String("large", value.SourceEnvironment).WithScope(value.ScopeEnvironmentVar),
+			want: `"large" [environment, from environment variable]`,
+		},
+		{
+			name: "cli override — the shape the user fixed",
+			v:    value.Int(20, value.SourceVariable).WithScope(value.ScopeCLIOverride),
+			want: "20 [variable, from --var]",
+		},
+		{
+			name: "unknown values are not annotated",
+			v:    value.Unknown(value.KindString, value.SourceComputed).WithScope(value.ScopeCLIOverride),
+			want: "(known after apply)",
+		},
+		{
+			name: "a sensitive value redacts regardless of scope",
+			v:    value.String("hunter2", value.SourceVariable).WithScope(value.ScopeCLIOverride).WithSensitive(true),
+			want: "<sensitive> [variable, from --var]",
+		},
+		{
+			// Scope.String()'s default branch: an unrecognised level reports
+			// as unrecognised rather than collapsing into a real one, because
+			// a value attributed to the WRONG level is worse than one
+			// attributed to none — a user would act on it.
+			name: "a scope outside the enum reports itself",
+			v:    value.Int(1, value.SourceDefault).WithScope(value.Scope(200)),
+			want: "1 [default, from Scope(200)]",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := renderAnnotated(tc.v)
+			if got != tc.want {
+				t.Errorf("renderAnnotated = %q, want %q", got, tc.want)
+			}
+			if tc.v.Sensitive && strings.Contains(got, "hunter2") {
+				t.Errorf("the datum leaked through the annotation path: %q", got)
 			}
 		})
 	}
@@ -364,6 +526,11 @@ func TestRenderForcedByIsSortedRegardlessOfReasonOrder(t *testing.T) {
 // insertion order, so a one-shot comparison against a hand-written expectation
 // passes most of the time even when the sort is gone. Five attributes give
 // enough orderings that 30 renders effectively never all agree by accident.
+//
+// Two of the After attributes carry a Scope (Task 9), so this also covers
+// that value.Annotate's output is as deterministic as value.Format's — the
+// same reason this is an extension of the existing fixture rather than a
+// second determinism test.
 func TestRenderIsDeterministicAcrossRepeatedCalls(t *testing.T) {
 	plan := func() *Plan {
 		return &Plan{
@@ -380,8 +547,8 @@ func TestRenderIsDeterministicAcrossRepeatedCalls(t *testing.T) {
 				},
 				After: map[string]value.Value{
 					"engine":   value.String("mysql", value.SourceExplicit),
-					"size":     value.Int(50, value.SourceExplicit),
-					"network":  value.String("net-2", value.SourceExplicit),
+					"size":     value.Int(50, value.SourceExplicit).WithScope(value.ScopeCLIOverride),
+					"network":  value.String("net-2", value.SourceExplicit).WithScope(value.ScopeEnvironmentVar),
 					"zone":     value.String("b", value.SourceExplicit),
 					"endpoint": value.Unknown(value.KindString, value.SourceComputed),
 				},

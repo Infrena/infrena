@@ -88,8 +88,9 @@ func Render(r Result, opts RenderOptions) string {
 
 // renderAppliedLines renders one applied resource and the attributes the
 // provider returned for it, redacting through value.Format exactly as
-// planner.Render's renderLeaf does — the same, and only, redaction path
-// (see value.Format's own comment for the two leaks that made that rule).
+// planner.Render's renderAnnotated does, through value.Annotate — the same,
+// and only, redaction path (see value.Format's own comment for the two leaks
+// that made that rule).
 // A resource can be Applied with nothing in st when it was destroyed or
 // forgotten: State.Get's comma-ok reports that plainly rather than this
 // treating a missing entry as a bug.
@@ -173,7 +174,7 @@ func verboseProvenance(rs *resource.ResourceState) []string {
 }
 
 // renderValue is this package's one call site into value.Format, sibling to
-// internal/planner/render.go's renderLeaf. Unknown differs deliberately
+// internal/planner/render.go's planFormatOptions. Unknown differs deliberately
 // from the plan renderer's "(known after apply)": after an apply every
 // applied attribute should genuinely be known, so an unknown one here is an
 // anomaly, not a promise about the future.

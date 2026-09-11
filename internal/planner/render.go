@@ -188,7 +188,7 @@ func renderForcedBy(reasons []ChangeReason) string {
 // known.
 //
 // Looking a missing key up in a map yields the zero value.Value, whose Known
-// field is false, and renderLeaf renders any unknown value as "(known after
+// field is false, and value.Format renders any unknown value as "(known after
 // apply)". So an attribute the user REMOVED from configuration rendered as
 //
 //	tags: {"env": "dev"} -> (known after apply)
@@ -208,31 +208,30 @@ func renderSide(v value.Value, present bool) string {
 	return renderAnnotated(v)
 }
 
-// renderAnnotated renders one value plus, when it applies, the "[default]"
-// annotation. Unlike the replacement reason, this is read straight off the
-// Value — Source and Known already say everything Render needs.
-func renderAnnotated(v value.Value) string {
-	s := renderLeaf(v)
-	if v.Known && v.Source == value.SourceDefault {
-		s += " [default]"
-	}
-	return s
+// planFormatOptions is how a plan renders a value: an unknown is a promise
+// about what apply will do, and strings are quoted so a leading space or an
+// empty string is visible in a diff.
+//
+// Named once so every caller in this package agrees. Two callers with slightly
+// different options is how the plan renderer and internal/cli's state
+// inspector drifted apart in M2, which is the divergence value.Format's own
+// comment describes.
+var planFormatOptions = value.FormatOptions{
+	Unknown:      "(known after apply)",
+	QuoteStrings: true,
 }
 
-// renderLeaf renders one value for a plan, redacting sensitive data.
+// renderAnnotated renders one value plus, when it applies, the note saying
+// which precedence level supplied it.
 //
-// The whole implementation lives in value.Format, which is the ONLY copy in
-// the tree. It used to be duplicated here and in internal/cli's state
-// inspector, and the two had already diverged — which is how a leak fixed in
-// one survived in the other. See value.Format's comment for the two measured
-// leaks that produced its fail-closed rule.
-func renderLeaf(v value.Value) string {
-	return value.Format(v, value.FormatOptions{
-		// A plan promises what apply will do, so an unknown says so.
-		Unknown: "(known after apply)",
-		// Quoted, so a leading space or an empty string is visible in a diff.
-		QuoteStrings: true,
-	})
+// The entire implementation — the redaction, the fail-closed handling and the
+// annotation — lives in value.Annotate, which is the ONLY copy in the tree.
+// This function is the wiring and nothing else. Do not reimplement the
+// annotation here, or add a label table: value.Scope.String() is the one label
+// table, and a second one in this package would drift silently because nothing
+// would compare them.
+func renderAnnotated(v value.Value) string {
+	return value.Annotate(v, planFormatOptions)
 }
 
 // renderSummary is the "N to create, N to update, ..." line spec §12.3 asks
