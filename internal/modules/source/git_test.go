@@ -180,8 +180,14 @@ func TestTransportOfNamesExactlyWhatTheLocationClaims(t *testing.T) {
 // for a minute, which is what a private repository plus an interactive
 // credential path looks like from the inside.
 //
-// Delete the GIT_ASKPASS override in gitEnv and this fails by timing out —
-// which is the same way the bug hangs the CLI.
+// What this test does NOT prove, measured during Task 12: deleting the
+// GIT_ASKPASS override in gitEnv does not make it fail. gitEnv builds cmd.Env
+// from a fixed allowlist that never contained GIT_ASKPASS, and os/exec replaces
+// the child environment wholesale when Env is non-nil — so the t.Setenv above
+// cannot reach git whether the override is there or not. The protection is real
+// and is stronger than an override; it is just not the thing this test pins.
+//
+// TestGitEnvIsAnAllowlistNotTheParentEnvironment pins it, and can fail.
 func TestFetchDoesNotHangWhenTheRemoteAsksForAPassword(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("WWW-Authenticate", `Basic realm="private"`)
@@ -252,5 +258,48 @@ func TestGitEnvDisablesPromptingAndPinsTheTransport(t *testing.T) {
 	}
 	if seen["HOME"] == "" || seen["PATH"] == "" {
 		t.Error("HOME and PATH must be passed through: ssh keys and the git binary itself are found through them")
+	}
+}
+
+// TestGitEnvIsAnAllowlistNotTheParentEnvironment pins the property that actually
+// protects the child process: gitEnv composes cmd.Env from a fixed allowlist, so
+// nothing hostile in the parent environment reaches git at all.
+//
+// Two plausible edits break it, one per half. Replace the map with
+// append(os.Environ(), ...) and the "must not appear" assertions fail. Drop a
+// name from the allowlist loop and the "carried through" assertion fails.
+//
+// GIT_CONFIG_GLOBAL is the pointed case: it is how a hostile parent would inject
+// url.<base>.insteadOf rewrite rules, which git applies BEFORE its transport
+// check. Keeping it out of the child is not the whole defence — a rule in the
+// user's own ~/.gitconfig still applies, because HOME is allowlisted — which is
+// precisely why GIT_ALLOW_PROTOCOL is set here rather than relying on Parse.
+func TestGitEnvIsAnAllowlistNotTheParentEnvironment(t *testing.T) {
+	t.Setenv("GIT_ASKPASS", "/tmp/hostile-askpass")
+	t.Setenv("GIT_ALLOW_PROTOCOL", "file:ext")
+	t.Setenv("GIT_CONFIG_GLOBAL", "/tmp/hostile-gitconfig")
+	t.Setenv("HOME", "/tmp/home-under-test")
+
+	get := func(env []string, k string) (string, bool) {
+		for _, kv := range env {
+			if name, v, ok := strings.Cut(kv, "="); ok && name == k {
+				return v, true
+			}
+		}
+		return "", false
+	}
+	env := gitEnv("https://example.invalid/repo")
+
+	if v, _ := get(env, "GIT_ASKPASS"); v != "/bin/false" {
+		t.Errorf("GIT_ASKPASS = %q, want \"/bin/false\": the parent's value reached git", v)
+	}
+	if v, _ := get(env, "GIT_ALLOW_PROTOCOL"); v != "https" {
+		t.Errorf("GIT_ALLOW_PROTOCOL = %q, want \"https\": the parent's value reached git, which would reopen ext::", v)
+	}
+	if v, ok := get(env, "GIT_CONFIG_GLOBAL"); ok {
+		t.Errorf("GIT_CONFIG_GLOBAL = %q reached git; gitEnv is not an allowlist", v)
+	}
+	if v, ok := get(env, "HOME"); !ok || v != "/tmp/home-under-test" {
+		t.Errorf("HOME = %q (present=%v), want it carried through the allowlist", v, ok)
 	}
 }
