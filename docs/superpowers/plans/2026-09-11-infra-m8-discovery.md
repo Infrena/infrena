@@ -1,4 +1,4 @@
-# M7 — Discovery and Import Implementation Plan
+# M8 — Discovery and Import Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development to
 > implement this plan task-by-task.
@@ -64,6 +64,11 @@ configuration is scheduled for destruction by invariant 1, which is why §27.1 l
 `discovered/`. Any task that can leave state and configuration disagreeing is wrong.
 
 ---
+
+> **Sequencing note.** M7 (conventional directories) lands FIRST. It globs `resources/**`,
+> `vars/**` and `discovered/**`, so Task 1 below is subsumed by M7's Task 1 — check whether
+> `discovered/` is already loaded before implementing it, and if it is, this task is a
+> verification step rather than an implementation one.
 
 ## Task 1: the compiler loads `discovered/*.yml`
 
