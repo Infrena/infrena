@@ -1246,6 +1246,7 @@ Create `internal/modules/source/source_test.go`:
 package source
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 
@@ -1291,7 +1292,9 @@ func TestParseAcceptsTheThreeSourceForms(t *testing.T) {
 			if s.Ref != tc.wantRef {
 				t.Errorf("Ref = %q, want %q", s.Ref, tc.wantRef)
 			}
-			if s.Origin != testOrigin {
+			// reflect.DeepEqual, not !=: value.Origin holds Module []string,
+			// so a struct comparison is a COMPILE ERROR.
+			if !reflect.DeepEqual(s.Origin, testOrigin) {
 				t.Errorf("Origin = %+v, want the origin it was given: a diagnostic raised later must name the line the source was written on", s.Origin)
 			}
 		})
