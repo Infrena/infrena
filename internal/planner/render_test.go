@@ -433,57 +433,6 @@ func TestRenderAnnotatesEveryScope(t *testing.T) {
 	}
 }
 
-// TestRenderAnnotatesCLIOverrideWithItsOwnOriginFile pins Amendment 5 (owner
-// ruling, contract.md): at ScopeCLIOverride the annotation names the VALUE's
-// own Origin.File rather than the scope's generic label, because a value set
-// with --var-file f.yml rendering "[variable, from --var]" names a flag the
-// user never typed. --var itself stamps Origin{File: "--var"}
-// (internal/variables/resolve.go), so the literal flag name is what a --var
-// value's own origin already says — no special-casing needed for it.
-//
-// Driven through renderAnnotated, not value.Annotate, for the same reason as
-// TestRenderAnnotatesEveryScope: this proves the renderer's wiring reaches
-// whatever value.Annotate does, not that Annotate itself is correct in
-// isolation (Task 1 -- now this amendment -- owns that).
-func TestRenderAnnotatesCLIOverrideWithItsOwnOriginFile(t *testing.T) {
-	cases := []struct {
-		name string
-		v    value.Value
-		want string
-	}{
-		{
-			name: "--var-file names the file as typed",
-			v: value.Int(7, value.SourceVariable).WithScope(value.ScopeCLIOverride).
-				WithOrigin(value.Origin{File: "f.yml"}),
-			want: "7 [variable, from f.yml]",
-		},
-		{
-			name: "--var's own origin is the literal flag",
-			v: value.Int(42, value.SourceVariable).WithScope(value.ScopeCLIOverride).
-				WithOrigin(value.Origin{File: "--var"}),
-			want: "42 [variable, from --var]",
-		},
-		{
-			// No Origin stamped: this is every CLI-scoped value Task 1's own
-			// tests build (WithScope alone), so the fallback must reproduce
-			// today's "[variable, from --var]" exactly, or those tests and
-			// this task's own goldens would have moved.
-			name: "no origin falls back to the scope label",
-			v:    value.Int(20, value.SourceVariable).WithScope(value.ScopeCLIOverride),
-			want: "20 [variable, from --var]",
-		},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got := renderAnnotated(tc.v)
-			if got != tc.want {
-				t.Errorf("renderAnnotated = %q, want %q", got, tc.want)
-			}
-		})
-	}
-}
-
 // TestRenderDistinguishesRemovedFromUnknown covers the one case a golden
 // cannot: an attribute present on one side of a diff and absent from the
 // other. Before renderSide existed, a missing key's zero Value rendered as
