@@ -219,7 +219,7 @@ infra/
 │   └── networking/
 │       └── module.yml
 │
-└── generated/
+└── discovered/        # written by `infra import --generate`; LOADED like environments/
 ```
 
 Exact structure may evolve during implementation, but environments and modules must be first-class concepts.
@@ -1151,6 +1151,40 @@ database:
 ```
 
 Do not generate pages of unnecessary configuration.
+
+## 27.1 Where generation writes, and why it is loaded
+
+Generated configuration goes to `discovered/`, in files named for what they hold —
+`databases.yml`, `networks.yml` — rather than one file per import run. A person looking for
+the database they imported last month looks in `databases.yml`.
+
+**`discovered/*.yml` is LOADED by the compiler, exactly as `environments/*.yml` is.** That is
+not a convenience; it is what makes import safe. Import adds a resource to state (§26 step 5),
+and a resource in state that no configuration declares is scheduled for DESTRUCTION by
+invariant 1. If the generated file were a staging area, `infra import` followed by
+`infra apply` would destroy the very infrastructure just adopted — which §26's own rule that
+"import must not blindly destroy or modify infrastructure" forbids.
+
+So the resource is in state and in configuration at the same moment, and the next plan is
+clean. Moving a block out of `discovered/` into a file of your own is then an ordinary edit,
+made when you want to, not a step you must complete before it is safe to run anything.
+
+## 27.2 Naming a discovered resource
+
+§26 step 4 requires a logical identity. It comes from, in order:
+
+1. A `name` attribute or tag, if the resource has one. This is how people actually label cloud
+   resources, and it is the name they will look for.
+2. Otherwise the provider ID, sanitised to an identifier — `net-1` becomes `net_1`.
+
+A collision between two resources claiming the same name is resolved by suffixing the provider
+ID, never by dropping one: two resources silently becoming one is the shape this project
+guards against everywhere else.
+
+Names matter more here than they look. A resource's name is part of its address, and an address
+is what state is keyed by — so renaming an imported resource later is a destroy plus a create.
+Generation should therefore produce the name a person would have chosen, not one they will
+immediately want to change.
 
 ---
 
