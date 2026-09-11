@@ -53,7 +53,10 @@ Every task's requirements implicitly include this section.
   fold module inputs by re-serializing through `value.Expr.String()` — that function returns
   `value.Redacted`, so a sensitive input would be applied as the literal string `<sensitive>`.
   ```bash
-  grep -rn '"<sensitive>"' --include=*.go . | grep -v _test.go   # names only pkg/value/format.go
+  # The only NON-COMMENT hit must be pkg/value/format.go. Two comments in
+  # pkg/report and internal/cli legitimately mention the string; they are not
+  # redaction paths, and a check that flags them cries wolf.
+  grep -rn '"<sensitive>"' --include=*.go . | grep -v _test.go | grep -v ':[0-9]*:[[:space:]]*//'
   ```
 - **`internal/graph` imports no other infra package; `providers/*` import no `internal/*`.**
   No task here touches either, and none may start to.
