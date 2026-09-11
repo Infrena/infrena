@@ -532,8 +532,16 @@ and `lifecycle` apply, and its outputs are read as `${prod.endpoint}` — the sa
 spelling as a provider resource's attributes. A module may be instantiated any number
 of times; each instantiation is independent.
 
-Resources inside an instance are addressed by prefixing the instance name, and
-modules nest: `prod.database`, `prod.network.vpc`.
+Resources inside an instance are addressed with a `module.` segment per level, which
+is what `pkg/address` has produced since M1: `module.prod.database`,
+`module.prod.module.network.vpc`. Modules nest.
+
+The `module.` marker is redundant with the type's prefix and is kept anyway, because
+addresses and references would otherwise share a spelling. An instance `prod` both
+CONTAINS resources and EXPOSES outputs, so `prod.endpoint` (a reference to an output)
+and `prod.database` (an address of a contained resource) would be the same shape under
+two different grammars. `state show module.prod.database` cannot be misread as
+`${prod.endpoint}`.
 
 ## 11.3 The module file
 
