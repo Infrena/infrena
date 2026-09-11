@@ -156,9 +156,11 @@ func numericDatumMatchesKind(k value.Kind, v value.Value) bool {
 // show renders a value for a diagnostic. It goes through value.Format, which
 // is the engine's only rendering path — a second one is what leaked a
 // plaintext secret in M2, and a bound is as capable of being sensitive as
-// anything else.
+// anything else. value.ProseFormatOptions, not a package-local copy: this is
+// a value embedded inside a diagnostic sentence, not a diff, so it is bare
+// rather than quoted — see that value's doc comment.
 func show(v value.Value) string {
-	return value.Format(v, value.FormatOptions{Unknown: "(unknown)"})
+	return value.Format(v, value.ProseFormatOptions)
 }
 
 // Every diagnostic below that names "the value supplied by" a scope goes

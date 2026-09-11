@@ -154,6 +154,9 @@ func resolveAddress(input string, known []address.Address, typeOf func(address.A
 // survived in the other. See value.Format's comment for the two measured
 // leaks that produced this rule.
 func formatValue(v value.Value) string {
-	// Bare strings, not quoted: `state show` is for reading, not diffing.
-	return value.Format(v, value.FormatOptions{Unknown: "(unknown)"})
+	// value.ProseFormatOptions, not a package-local copy: `state show` is
+	// for reading, not diffing — see that value's doc comment for the bare-
+	// versus-quoted distinction and why a second literal here is how this
+	// inspector and the plan renderer drifted apart in M2.
+	return value.Format(v, value.ProseFormatOptions)
 }

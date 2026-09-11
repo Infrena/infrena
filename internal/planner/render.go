@@ -208,19 +208,6 @@ func renderSide(v value.Value, present bool) string {
 	return renderAnnotated(v)
 }
 
-// planFormatOptions is how a plan renders a value: an unknown is a promise
-// about what apply will do, and strings are quoted so a leading space or an
-// empty string is visible in a diff.
-//
-// Named once so every caller in this package agrees. Two callers with slightly
-// different options is how the plan renderer and internal/cli's state
-// inspector drifted apart in M2, which is the divergence value.Format's own
-// comment describes.
-var planFormatOptions = value.FormatOptions{
-	Unknown:      "(known after apply)",
-	QuoteStrings: true,
-}
-
 // renderAnnotated renders one value plus, when it applies, the note saying
 // which precedence level supplied it.
 //
@@ -230,8 +217,14 @@ var planFormatOptions = value.FormatOptions{
 // annotation here, or add a label table: value.Scope.String() is the one label
 // table, and a second one in this package would drift silently because nothing
 // would compare them.
+//
+// value.PlanFormatOptions, not a package-local copy: this package is exactly
+// the caller its own doc comment names ("Used by internal/planner's renderer
+// for Before/After") — see that comment for the two axes it fixes and why a
+// second, slightly different copy here is how the plan renderer and
+// internal/cli's state inspector drifted apart in M2.
 func renderAnnotated(v value.Value) string {
-	return value.Annotate(v, planFormatOptions)
+	return value.Annotate(v, value.PlanFormatOptions)
 }
 
 // renderSummary is the "N to create, N to update, ..." line spec §12.3 asks

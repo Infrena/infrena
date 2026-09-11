@@ -179,13 +179,14 @@ func verboseProvenance(rs *resource.ResourceState) []string {
 	}
 }
 
-// renderValue is this package's one call site into value.Format, sibling to
-// internal/planner/render.go's planFormatOptions. Unknown differs deliberately
-// from the plan renderer's "(known after apply)": after an apply every
-// applied attribute should genuinely be known, so an unknown one here is an
-// anomaly, not a promise about the future.
+// renderValue is this package's one call site into value.Format, using
+// value.ReportFormatOptions — see its doc comment for why Unknown differs
+// deliberately from the plan renderer's value.PlanFormatOptions ("known
+// after apply"): after an apply every applied attribute should genuinely be
+// known, so an unknown one here is an anomaly, not a promise about the
+// future.
 func renderValue(v value.Value) string {
-	return value.Format(v, value.FormatOptions{Unknown: "(unknown)", QuoteStrings: true})
+	return value.Format(v, value.ReportFormatOptions)
 }
 
 func sortedFailedIDs(failed map[string]error) []string {

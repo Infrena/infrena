@@ -28,6 +28,48 @@ type FormatOptions struct {
 	QuoteStrings bool
 }
 
+// The three FormatOptions values below are every caller in this tree's
+// canonical answer to the two axes FormatOptions' own doc comment names —
+// quoted or bare, and which Unknown text — named here so a sixth call site
+// has a question with an answer ("which of these three contexts is this?")
+// rather than a literal to copy from whichever site is nearest. Two literals
+// that happened to read the same have already drifted apart once: the plan
+// renderer and internal/cli's state inspector diverged in M2, which is the
+// exact failure FormatOptions' own comment and value.Format's comment both
+// describe. A caller that finds none of the three fits should say why in its
+// own comment before defining a fourth, rather than adjusting one of these
+// and silently changing it for every existing caller.
+var (
+	// PlanFormatOptions is how a plan renders a value: a diff-like listing
+	// of what apply WOULD do, never mind what is true right now. Strings
+	// are quoted so a leading space or an empty string is visible in the
+	// diff, and an unknown value reads as "(known after apply)" — a promise
+	// about the future, because that is what a plan is. Used by
+	// internal/planner's renderer for Before/After.
+	PlanFormatOptions = FormatOptions{Unknown: "(known after apply)", QuoteStrings: true}
+
+	// ReportFormatOptions is how a REPORT of reality that already happened
+	// renders a value: what apply actually produced, or what refresh
+	// actually observed. It shares PlanFormatOptions' quoting — this is
+	// still a diff-like listing (an applied resource's attributes, a
+	// refreshed attribute's before/after) — but never PlanFormatOptions'
+	// Unknown text: after an apply or a refresh, a value that is still not
+	// known is an anomaly being reported, not a promise about the future,
+	// so it reads as plain "(unknown)". Used by pkg/report's NDJSON output
+	// and internal/executor's apply summary.
+	ReportFormatOptions = FormatOptions{Unknown: "(unknown)", QuoteStrings: true}
+
+	// ProseFormatOptions is how a value renders standing on its own, or
+	// embedded inside a sentence — `state show`'s per-attribute listing,
+	// and a diagnostic's "the value supplied by ... is ...". Strings are
+	// bare, not quoted: this is for READING, not for diffing, so a leading
+	// space or an empty string does not need to be visibly marked, and a
+	// quoted value in the middle of a sentence would read oddly. Unknown is
+	// "(unknown)" for the same reason ReportFormatOptions uses it: nothing
+	// here is a promise about a future apply.
+	ProseFormatOptions = FormatOptions{Unknown: "(unknown)"}
+)
+
 // Format renders one value for display, redacting sensitive data at every
 // depth and refusing to render anything it cannot verify.
 //

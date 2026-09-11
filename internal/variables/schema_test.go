@@ -719,3 +719,19 @@ func TestParseTextLeavesAnUntypedDeclarationAsText(t *testing.T) {
 		t.Errorf("Kind = %v, want KindString — guessing a type from the spelling would make `--var version=1.10` the float 1.1", v.Kind)
 	}
 }
+
+// TestShowRendersStringsBareNotQuoted pins show's use of
+// value.ProseFormatOptions rather than value.ReportFormatOptions or
+// value.PlanFormatOptions: a diagnostic's "the value supplied by ... is ..."
+// reads as a sentence, not a diff, so a string value must appear bare — the
+// same distinction ProseFormatOptions' own doc comment names. A version of
+// show that quoted strings (either of the other two named option sets) would
+// pass every other test in this package, because none of them happens to
+// assert on the quoting of a string bound violation's Detail text — this
+// test exists specifically to close that gap.
+func TestShowRendersStringsBareNotQuoted(t *testing.T) {
+	got := show(value.String("staging", value.SourceExplicit))
+	if got != "staging" {
+		t.Errorf(`show(String("staging")) = %q, want the bare word "staging" — ProseFormatOptions does not quote strings`, got)
+	}
+}
