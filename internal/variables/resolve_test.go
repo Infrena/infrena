@@ -517,3 +517,91 @@ func TestResolveCoercionKeepsProvenanceAndSensitivity(t *testing.T) {
 		t.Errorf("Origin = %+v, want environments/production.yml:4:3 — a diagnostic about this value must still point at the line the user wrote", got.Origin)
 	}
 }
+
+// chainWith builds a one-environment Chain (no `extends`) whose named
+// environment sets exactly the given overrides, each as a plain string at
+// SourceEnvironment — environments.Resolve is what stamps their Scope
+// (ScopeEnvironmentVar for a chain with a single layer), not this helper.
+func chainWith(t *testing.T, envName string, overrides map[string]string) environments.Chain {
+	t.Helper()
+	var ov []config.OverrideDecl
+	for name, val := range overrides {
+		ov = append(ov, config.OverrideDecl{Name: name, Value: value.String(val, value.SourceEnvironment)})
+	}
+	chain, ds := environments.Resolve([]config.EnvironmentDecl{{Name: envName, Overrides: ov}}, envName)
+	if ds.HasErrors() {
+		t.Fatalf("building chain: %+v", ds)
+	}
+	return chain
+}
+
+// emptyChain is environments.Resolve's answer for no environment argument at
+// all (Selected: false, no layers) — the same Chain `infra validate` compiles
+// against.
+func emptyChain(t *testing.T) environments.Chain {
+	t.Helper()
+	chain, ds := environments.Resolve(nil, "")
+	if ds.HasErrors() {
+		t.Fatalf("building empty chain: %+v", ds)
+	}
+	return chain
+}
+
+func TestFileEntryAtCLIScopeOutranksEnvironmentConfiguration(t *testing.T) {
+	// A --var-file entry arrives inside the same `files` map as a
+	// variables.yml entry and is told apart ONLY by its Scope. An
+	// implementation that assigns one scope to the whole map cannot express
+	// this, and --var-file would be silently ignored for every name the
+	// environment also sets.
+	chain := chainWith(t, "production", map[string]string{"region": "us-east-1"}) // ScopeEnvironmentVar
+	files := map[string]value.Value{
+		"region": value.String("eu-west-1", value.SourceVariable).WithScope(value.ScopeCLIOverride),
+	}
+
+	scope, ds := Resolve(nil, chain, files, nil)
+	if ds.HasErrors() {
+		t.Fatalf("unexpected diagnostics: %v", ds)
+	}
+	got, ok := scope.Variable("region")
+	if !ok {
+		t.Fatal("region is not in scope")
+	}
+	if s, _ := got.AsString(); s != "eu-west-1" {
+		t.Errorf("region = %q, want eu-west-1 — a --var-file outranks environment configuration", s)
+	}
+	if got.Scope != value.ScopeCLIOverride {
+		t.Errorf("Scope = %v, want ScopeCLIOverride — the winning level must be recorded", got.Scope)
+	}
+}
+
+func TestFileEntryAtBaseScopeLosesToEnvironmentConfiguration(t *testing.T) {
+	// The mirror image, and the reason the first test is not satisfied by
+	// "the files map always wins": variables.yml sits BELOW the environment.
+	chain := chainWith(t, "production", map[string]string{"region": "us-east-1"})
+	files := map[string]value.Value{
+		"region": value.String("eu-west-1", value.SourceVariable).WithScope(value.ScopeBaseConfig),
+	}
+
+	scope, _ := Resolve(nil, chain, files, nil)
+	got, _ := scope.Variable("region")
+	if s, _ := got.AsString(); s != "us-east-1" {
+		t.Errorf("region = %q, want us-east-1", s)
+	}
+	if got.Scope != value.ScopeEnvironmentVar {
+		t.Errorf("Scope = %v, want ScopeEnvironmentVar", got.Scope)
+	}
+}
+
+func TestCLIVarOutranksAFileEntryAtTheSameScope(t *testing.T) {
+	// PLAN.md §8: "CLI values override variable files." Both sit at
+	// ScopeCLIOverride, so the tie is broken by application order, not by
+	// comparing Scope.
+	files := map[string]value.Value{
+		"region": value.String("eu-west-1", value.SourceVariable).WithScope(value.ScopeCLIOverride),
+	}
+	scope, _ := Resolve(nil, emptyChain(t), files, map[string]string{"region": "ap-south-1"})
+	got, _ := scope.Variable("region")
+	if s, _ := got.AsString(); s != "ap-south-1" {
+		t.Errorf("region = %q, want ap-south-1", s)
+	}
+}

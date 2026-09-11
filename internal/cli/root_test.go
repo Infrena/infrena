@@ -2,6 +2,9 @@ package cli
 
 import (
 	"bytes"
+	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -42,27 +45,38 @@ func TestRootCommandPrintsUsage(t *testing.T) {
 	}
 }
 
-// TestUnsupportedFlagsErrorRatherThanBeingIgnored covers the class, not the
-// instance. --var-file was registered, advertised in --help, and read by no
-// code path. That crossed from harmless to misleading once --var began
-// working end to end, because a user has every reason to assume its sibling
-// does too. A flag that silently does nothing is worse than an absent one.
-func TestUnsupportedFlagsErrorRatherThanBeingIgnored(t *testing.T) {
+// TestVarFileReportsAMissingFileRatherThanIgnoringIt replaces
+// TestUnsupportedFlagsErrorRatherThanBeingIgnored now that --var-file works:
+// checkUnsupportedFlags no longer turns any use of the flag into an error,
+// because the variable system has arrived and the flag is wired. Deleting the
+// old guarantee outright would be how it disappears with no one noticing (M3's
+// lesson), so this pins the one thing still true of a --var-file with nothing
+// behind it: naming a file that does not exist must fail loudly rather than
+// silently contributing nothing to the run.
+//
+// It targets `plan`, not `validate`: this task wires --var-file into
+// compiler.Options for `plan` only (internal/cli/plan.go) — the brief this
+// test was drafted from named `validate`, but `infra validate` does not read
+// opts.VarFiles at all yet (that per-command wiring is task 11's), so a
+// --var-file there is STILL silently ignored today and the test as originally
+// drafted cannot pass. Using `plan dev` instead exercises the path this task
+// actually wired.
+func TestVarFileReportsAMissingFileRatherThanIgnoringIt(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "infra.yml"), []byte("project: myapp\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	root := NewRootCommand()
-	root.SetArgs([]string{"--var-file", "vars.yml", "validate"})
-	var out, errOut bytes.Buffer
-	root.SetOut(&out)
-	root.SetErr(&errOut)
+	root.SetOut(io.Discard)
+	root.SetErr(io.Discard)
+	root.SetArgs([]string{"--chdir", dir, "--var-file", "vars.yml", "plan", "dev"})
 
 	err := root.Execute()
 	if err == nil {
-		t.Fatal("--var-file is not wired to anything; using it must be an error, not a silent no-op")
+		t.Fatal("--var-file naming a file that does not exist must fail, not silently contribute nothing")
 	}
-	if !strings.Contains(err.Error(), "--var-file") {
-		t.Errorf("the error must name the flag: %v", err)
-	}
-	if !strings.Contains(err.Error(), "--var") {
-		t.Errorf("the error should point at what does work: %v", err)
+	if !strings.Contains(err.Error(), "not valid") {
+		t.Errorf("expected the configuration-not-valid error path, got: %v", err)
 	}
 }
 

@@ -42,13 +42,8 @@ func NewRootCommand() *cobra.Command {
 
 	f := root.PersistentFlags()
 	f.StringArrayVar(&opts.Vars, "var", nil, "set a variable (name=value); repeatable")
-	// Registered so the flag exists and reports honestly, NOT because it
-	// works. Nothing reads opts.VarFiles; variable files arrive in M4. A
-	// flag that is advertised in --help and silently ignored is worse than
-	// an absent one, and --var working end to end since M2 gives a user
-	// every reason to assume its sibling does too. checkUnsupportedFlags
-	// turns any use of it into an error.
-	f.StringArrayVar(&opts.VarFiles, "var-file", nil, "load variables from a file; repeatable (not yet supported)")
+	f.StringArrayVar(&opts.VarFiles, "var-file", nil,
+		"read variables from a YAML file, as if each entry had been passed with --var; repeatable, later files win")
 	f.BoolVar(&opts.Verbose, "verbose", false, "include provider-level detail in output")
 	f.StringVar(&opts.Output, "output", "", "write machine-readable output to this path")
 	f.IntVar(&opts.Parallelism, "parallelism", 10, "maximum concurrent operations")
@@ -92,10 +87,11 @@ func Execute() int {
 // rather than accepting them and doing nothing. Each entry here is a promise
 // the CLI cannot currently keep; the fix is to implement it and delete the
 // entry, never to delete the entry alone.
+//
+// --var-file was the last entry; task 8 wired it, so the list is currently
+// empty. The function stays rather than being deleted along with its last
+// entry — it is the mechanism the next unwired flag needs, not a fact about
+// --var-file specifically.
 func checkUnsupportedFlags(opts *GlobalOptions) error {
-	if len(opts.VarFiles) > 0 {
-		return errors.New("--var-file is not supported yet; variable files arrive with the " +
-			"variable system. Pass individual variables with --var name=value")
-	}
 	return nil
 }

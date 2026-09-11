@@ -64,11 +64,28 @@ func (s *Scope) Override(name string, v value.Value) {
 // The rungs, lowest first — the last writer wins, and the loop never reverses:
 //
 //	ScopeBaseConfig          a schema's `default:`            SourceDefault
-//	ScopeBaseConfig          variables.yml and --var-file     SourceVariable
+//	ScopeBaseConfig          variables.yml                    SourceVariable
 //	ScopeModuleDefault       — M5 fills this in
 //	ScopeEnvironmentInherit  inherited environment layers     SourceEnvironment
 //	ScopeEnvironmentVar      the selected environment         SourceEnvironment
-//	ScopeCLIOverride         --var                            SourceVariable
+//	ScopeCLIOverride         --var-file, then --var            SourceVariable
+//
+// files holds two precedence levels in one map, told apart by each entry's OWN
+// Scope rather than by a second parameter: variables.yml decodes at
+// ScopeUnset (config.Decode is stage 2; it declares, it does not resolve — see
+// pkg/value/scope.go) and a --var-file entry decodes straight to
+// ScopeCLIOverride (internal/cli's loadVarFiles, which runs after resolution
+// order is already known). Anything NOT at ScopeCLIOverride is treated as the
+// variables.yml rung; this is a two-way split, not an equality check against
+// ScopeBaseConfig specifically, so a caller's ScopeUnset entry lands in the
+// same bucket a caller's explicit ScopeBaseConfig entry would. A --var-file
+// entry is applied in its own pass AFTER the environment chain and BEFORE
+// --var, which is what lets it outrank an environment's own configuration
+// while still losing to a --var naming the same variable on the same command
+// line (PLAN.md §8: "CLI values override variable files"). Task 8 is what
+// makes this split matter: before it, every files entry was stamped
+// ScopeBaseConfig unconditionally and a --var-file could never outrank an
+// environment no matter which flag order the user chose.
 //
 // The environment rungs are not judged here: environments.Chain already stamps
 // each layer with the scope it represents, and this walks the layers in order
@@ -110,11 +127,17 @@ func Resolve(decls []config.VariableDecl, chain environments.Chain,
 		}
 	}
 
-	// Rung 2: variables.yml and --var-file, already merged by the caller.
+	// Rung 2: variables.yml — every files entry NOT at ScopeCLIOverride.
 	// Explicit configuration beats the implicit default rung 1 just wrote
 	// (PLAN.md §7's closing line), which is why this is a separate pass at the
-	// same scope rather than merged with it.
-	for _, name := range sortedValueNames(files) {
+	// same scope rather than merged with it. The --var-file half of files is
+	// applied later, at rung 5 below, after the environment chain — see the
+	// doc comment above for why a single map holds two rungs.
+	fileNames := sortedValueNames(files)
+	for _, name := range fileNames {
+		if files[name].Scope == value.ScopeCLIOverride {
+			continue
+		}
 		out.vars[name] = files[name].
 			WithSource(value.SourceVariable).
 			WithScope(value.ScopeBaseConfig)
@@ -132,6 +155,23 @@ func Resolve(decls []config.VariableDecl, chain environments.Chain,
 				WithSource(value.SourceEnvironment).
 				WithScope(layer.Scope)
 		}
+	}
+
+	// Rung 5 (continued): --var-file — the files entries AT ScopeCLIOverride,
+	// applied after the environment chain so a --var-file outranks it, and
+	// before rung 6's --var so a --var on the same command line still wins a
+	// tie at this same Scope (PLAN.md §8's "CLI values override variable
+	// files"). With one entry per name inside files there is no tie WITHIN
+	// this pass; the real tie is against rung 6, and it is resolved by this
+	// pass running strictly before that one, never by comparing Scope values
+	// that are equal.
+	for _, name := range fileNames {
+		if files[name].Scope != value.ScopeCLIOverride {
+			continue
+		}
+		out.vars[name] = files[name].
+			WithSource(value.SourceVariable).
+			WithScope(value.ScopeCLIOverride)
 	}
 
 	// Rung 6: --var.

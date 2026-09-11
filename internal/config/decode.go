@@ -67,7 +67,7 @@ func Decode(files []File) (*ProjectDecl, diag.Diagnostics) {
 			out.Origin = originOf(f.Path, doc)
 			decodeDocument(f.Path, doc, out, &ds, seenResources, seenVariables, seenEnvironments)
 		case FileVariables:
-			decodeVariableValues(f.Path, doc, out, &ds)
+			decodeVariableValues(f, out, &ds)
 		case FileEnvironment:
 			decodeEnvironmentBody(f.Path, f.Environment, doc, out, &ds, seenEnvironments)
 		}
@@ -854,52 +854,20 @@ func decodeDefault(path, name string, node *yaml.Node, kind value.Kind, ds *diag
 
 // decodeVariableValues decodes variables.yml: a flat mapping of variable name
 // to value (PLAN.md §8).
-func decodeVariableValues(path string, doc *yaml.Node, out *ProjectDecl, ds *diag.Diagnostics) {
-	for i := 0; i+1 < len(doc.Content); i += 2 {
-		key, val := doc.Content[i], doc.Content[i+1]
-		origin := originOf(path, key)
-
-		// A key that names one of infra.yml's blocks is almost certainly the
-		// wrong file. A WARNING rather than an error: a variable may
-		// legitimately be called "project", and refusing it would break a
-		// valid configuration in order to catch a mistake.
-		switch key.Value {
-		case "project", "resources", "variables", "environments":
-			ds.Add(diag.Diagnostic{
-				Severity: diag.SeverityWarning,
-				Summary:  strconv.Quote(key.Value) + " in " + VariablesFileName + " is a variable, not a configuration block",
-				Detail: VariablesFileName + " is a flat mapping of variable name to value (PLAN.md §8). " +
-					"A `" + key.Value + "` block belongs in " + ProjectFileName + " — in particular, variable DECLARATIONS " +
-					"(`type`, `default`, `min`, `max`) live only under " + ProjectFileName + "'s `variables:` key, so that " +
-					"where a variable is declared has one answer.",
-				Action: "Move it to " + ProjectFileName + ", or ignore this if you really do have a variable called " + strconv.Quote(key.Value) + ".",
-				Origin: origin,
-			})
-		}
-
-		if first, dup := out.VariableValues[key.Value]; dup {
-			ds.Add(diag.Diagnostic{
-				Severity: diag.SeverityError,
-				Summary:  "variable " + strconv.Quote(key.Value) + " is set more than once in " + VariablesFileName,
-				Detail:   "The last assignment would silently win. It is also set at " + describeOrigin(first.Origin) + ".",
-				Action:   "Remove one of the two assignments.",
-				Origin:   origin,
-			})
-			continue
-		}
-
-		v, hasExpr := decodeValue(path, "variable "+strconv.Quote(key.Value), val, ds)
-		if hasExpr {
-			ds.Add(diag.Diagnostic{
-				Severity: diag.SeverityError,
-				Summary:  "variable " + strconv.Quote(key.Value) + " contains an interpolation",
-				Detail:   VariablesFileName + " is resolved before any expression scope exists, so `${...}` here has nothing to refer to.",
-				Action:   "Write a literal value.",
-				Origin:   originOf(path, val),
-			})
-			continue
-		}
-		out.VariableValues[key.Value] = retagSource(v, value.SourceVariable).WithOrigin(origin)
+//
+// It delegates to DecodeVariableFile rather than walking the mapping itself.
+// variables.yml and a --var-file have the identical shape, and a second
+// implementation of "decode a flat variable mapping" is exactly the defect
+// class that leaked a plaintext secret in M2 (internal/compiler/bind.go's
+// variableScope, deleted by task 7) — one fix applied to one copy left the
+// other silently wrong. scope is value.ScopeUnset because this runs at
+// decode time (stage 2): it declares, it does not resolve, and which
+// precedence level wins is stages 3 and 4's answer alone.
+func decodeVariableValues(f File, out *ProjectDecl, ds *diag.Diagnostics) {
+	vals, fds := DecodeVariableFile(f, value.ScopeUnset)
+	ds.Extend(fds)
+	for name, v := range vals {
+		out.VariableValues[name] = v
 	}
 }
 
@@ -912,35 +880,41 @@ func decodeVariableValues(path string, doc *yaml.Node, out *ProjectDecl, ds *dia
 // of a list variable claiming to be explicit configuration, which `explain`
 // and minimal generation both read straight off the leaves.
 //
-// Scope is deliberately NOT set: a declaration is not a resolution, and which
-// precedence level won is stages 3 and 4's answer. Two places deciding
-// provenance is how a plan starts disagreeing with itself.
-func retagSource(v value.Value, src value.ValueSource) value.Value {
+// scope is threaded through for the same per-leaf reason, but every DECODE-TIME
+// caller (this file's two: environment overrides, and variables.yml via
+// DecodeVariableFile) passes value.ScopeUnset: a declaration is not a
+// resolution, and which precedence level won is stages 3 and 4's answer — see
+// pkg/value/scope.go's doc comment. Passing a non-zero Scope through this same
+// function is what lets DecodeVariableFile serve --var-file too, which decodes
+// at the CLI layer, after resolution order is already known, with no stage 4
+// pass left to stamp it later. ScopeUnset is the zero value, so stamping it is
+// equivalent to never having set Scope at all.
+func retagSource(v value.Value, src value.ValueSource, scope value.Scope) value.Value {
 	switch v.Kind {
 	case value.KindList:
 		items, ok := v.Raw.([]value.Value)
 		if !ok {
 			// Malformed: a diagnostic was already emitted where it was
 			// decoded. Retag the shell and stop rather than panicking.
-			return v.WithSource(src)
+			return v.WithSource(src).WithScope(scope)
 		}
 		retagged := make([]value.Value, len(items))
 		for i, item := range items {
-			retagged[i] = retagSource(item, src)
+			retagged[i] = retagSource(item, src, scope)
 		}
 		v.Raw = retagged
 	case value.KindMap:
 		m, ok := v.Raw.(map[string]value.Value)
 		if !ok {
-			return v.WithSource(src)
+			return v.WithSource(src).WithScope(scope)
 		}
 		retagged := make(map[string]value.Value, len(m))
 		for k, item := range m {
-			retagged[k] = retagSource(item, src)
+			retagged[k] = retagSource(item, src, scope)
 		}
 		v.Raw = retagged
 	}
-	return v.WithSource(src)
+	return v.WithSource(src).WithScope(scope)
 }
 
 func decodeEnvironments(path string, node *yaml.Node, out *ProjectDecl, ds *diag.Diagnostics, seen map[string]int) {
@@ -1088,7 +1062,7 @@ func addOverride(path string, env *EnvironmentDecl, key, val *yaml.Node, ds *dia
 	}
 	env.Overrides = append(env.Overrides, OverrideDecl{
 		Name:   key.Value,
-		Value:  retagSource(v, value.SourceEnvironment).WithOrigin(origin),
+		Value:  retagSource(v, value.SourceEnvironment, value.ScopeUnset).WithOrigin(origin),
 		Origin: origin,
 	})
 }
