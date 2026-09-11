@@ -238,13 +238,39 @@ func TestBoundsAreRejectedOnNonNumericTypes(t *testing.T) {
 			})
 		}
 	}
+	// "type" alone does not discriminate here: decodeBound's generic
+	// non-numeric-type message ALSO contains "type" (it reads "has type
+	// invalid" when kind is KindInvalid and the KindInvalid-specific branch
+	// is skipped), so a fixture using only that fragment would pass whether
+	// or not the untyped-specific wording actually ran. "declares no" is
+	// unique to the untyped-specific Detail across the whole package
+	// (grepped decode.go before trusting it).
 	t.Run("untyped", func(t *testing.T) {
 		_, ds := decodeTree(t, map[string]string{
 			ProjectFileName: projectWithNoResources +
 				"variables:\n  v:\n    min: 1\n",
 		})
-		requireErrorAbout(t, ds, "min", "v", "type")
+		requireErrorAbout(t, ds, "min", "v", "declares no")
 	})
+}
+
+// TestUnusableTypeSuppressesTheBoundDiagnostic covers two audit gaps with one
+// fixture: decodeBound's `typeReported` suppression, and a non-scalar
+// `type:` (as opposed to an unknown spelling like `type: widget`, already
+// covered elsewhere). A non-scalar `type:` is the only route that sets
+// `typeReported = true` through requireScalar's OWN failure rather than
+// ParseKind's, so combining it with a `min` is what exercises decodeBound's
+// suppression specifically: without it, a variable whose `type:` is already
+// reported as unusable would ALSO get a second, misleading "`min` is not
+// valid on variable..." diagnostic about the same declaration.
+// requireErrorAbout's exactly-one-error assertion is what fails if that
+// suppression is skipped.
+func TestUnusableTypeSuppressesTheBoundDiagnostic(t *testing.T) {
+	_, ds := decodeTree(t, map[string]string{
+		ProjectFileName: projectWithNoResources +
+			"variables:\n  v:\n    type:\n      - a\n      - b\n    min: 1\n",
+	})
+	requireErrorAbout(t, ds, "v", "type")
 }
 
 // TestBoundIsCheckedEvenWhenTypeIsWrittenAfterIt is the ordering fixture, and
@@ -339,6 +365,22 @@ func TestBoundThatCannotBeCoercedIsRejected(t *testing.T) {
 	if strings.Contains(d.Summary+d.Detail, "must be a number") {
 		t.Error("1.5 IS a number; the diagnostic should say it is not a whole one")
 	}
+}
+
+// TestBoundThatOverflowsFloatIsRejected pins coerceBound's float-overflow
+// path: an int64 above 2^53 does not survive being converted to float64 and
+// back, so declaring `type: float` with such a `min` must be a diagnostic —
+// otherwise the stored bound silently is not the number the user wrote.
+// float64 can represent every integer up to 2^53 exactly; 2^53+1 is exactly
+// halfway between the two representable floats on either side of it, and
+// round-half-to-even rounds it down to 2^53, so this specific value is what
+// makes the conversion lossy rather than merely large.
+func TestBoundThatOverflowsFloatIsRejected(t *testing.T) {
+	_, ds := decodeTree(t, map[string]string{
+		ProjectFileName: projectWithNoResources +
+			"variables:\n  v:\n    type: float\n    min: 9007199254740993\n",
+	})
+	requireErrorAbout(t, ds, "min", "v", "float")
 }
 
 // TestQuotedBoundIsRejected: "10" is a string, and string bounds compare by
@@ -481,11 +523,22 @@ func TestEmptyDeclarationSaysTheRootCauseOnce(t *testing.T) {
 
 // TestVariableBodyMustBeAMapping pins ruling 1, and the Action must tell the
 // user where a bare value actually goes.
+//
+// The fragments matter here: `"v"` and VariablesFileName both also appear in
+// decodeVariable's "must specify at least a `type` or a `default`"
+// diagnostic — the one that fires INSTEAD when this guard is disabled, since
+// a scalar body has no Content for the key-walking loop to see, so nothing
+// sets Type or HasDefault and the declaration looks empty rather than
+// malformed. `"schema"` is unique to this diagnostic across the whole
+// package (grepped decode.go for every other "must be a mapping" and every
+// other use of the word "schema" before trusting it), so it is the fragment
+// that actually distinguishes "the body is the wrong shape" from "the body
+// says nothing".
 func TestVariableBodyMustBeAMapping(t *testing.T) {
 	_, ds := decodeTree(t, map[string]string{
 		ProjectFileName: projectWithNoResources + "variables:\n  v: 2\n",
 	})
-	requireErrorAbout(t, ds, "v", VariablesFileName)
+	requireErrorAbout(t, ds, "v", "must be a mapping", "schema")
 }
 
 // TestVariablesFileValuesAreTaggedVariableAtEveryDepth pins per-leaf
@@ -494,10 +547,24 @@ func TestVariableBodyMustBeAMapping(t *testing.T) {
 // variable, and setting only the top level leaves every list element claiming
 // to be explicit configuration — which `explain` and minimal generation both
 // read.
+//
+// `limits.ports` is a LIST NESTED INSIDE A MAP, deliberately, not a second
+// list of scalars alongside `tags`. retagSource(item, src) and
+// item.WithSource(src) are indistinguishable whenever `item` is itself a
+// scalar — recursing and not recursing look identical when there is nothing
+// underneath to leave untagged — so a fixture whose composites hold only
+// scalar leaves (the original version of this fixture: `tags` a list of
+// strings, `limits` a map of one int) cannot tell a genuinely recursive
+// retagSource from `v.WithSource(src)` called once at the top. `ports`
+// forces at least one level of real recursion: `limits` is a map holding a
+// list, and that list holds scalars, so a shallow retag would leave
+// `limits.ports[]` at SourceExplicit while `limits.cpu` and the top-level
+// `limits` itself both read SourceVariable — a result this test's per-leaf
+// walk would report at the `limits.ports[]` path specifically.
 func TestVariablesFileValuesAreTaggedVariableAtEveryDepth(t *testing.T) {
 	p, ds := decodeTree(t, map[string]string{
 		ProjectFileName:   projectWithNoResources,
-		VariablesFileName: "region: us-east-1\ntags:\n  - web\n  - api\nlimits:\n  cpu: 2\n",
+		VariablesFileName: "region: us-east-1\ntags:\n  - web\n  - api\nlimits:\n  cpu: 2\n  ports:\n    - 80\n    - 443\n",
 	})
 	requireNoErrors(t, ds)
 
