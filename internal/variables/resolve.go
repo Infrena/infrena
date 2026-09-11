@@ -1,0 +1,265 @@
+package variables
+
+import (
+	"sort"
+	"strconv"
+
+	"infra/internal/config"
+	"infra/internal/diag"
+	"infra/internal/environments"
+	"infra/pkg/value"
+)
+
+// Scope is the resolved variable scope: every variable name mapped to the
+// value that won the precedence chain (PLAN.md §7, spec §7.1).
+//
+// It is the ONLY variable scope in the engine. internal/compiler used to build
+// a second one (variableScope, deleted in task 7); two implementations of one
+// concept is the defect that leaked a plaintext secret in M2, because a fix
+// applied to one copy left the other one wrong.
+type Scope struct {
+	vars map[string]value.Value
+}
+
+// Variable resolves a variable by name. It satisfies half of
+// expressions.Scope, which is how compiler stage 6 reaches these values.
+func (s Scope) Variable(name string) (value.Value, bool) {
+	v, ok := s.vars[name]
+	return v, ok
+}
+
+// Names lists every resolved variable, sorted, for diagnostics that suggest
+// what the user might have meant. Go's map iteration is randomised and such a
+// list must not reorder itself between runs of the same configuration.
+func (s Scope) Names() []string {
+	out := make([]string, 0, len(s.vars))
+	for name := range s.vars {
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// Override records a value that comes from the process invocation rather than
+// from any configuration file.
+//
+// This is NOT a second precedence ladder. It exists for exactly three fixed
+// names — `environment`, `region`, `account` — whose values are not written in
+// any file and which must be authoritative: a ${environment} that disagreed
+// with the environment being planned would make every diagnostic and every
+// resource name that interpolates it lie about which environment it belongs
+// to. See task 7, which is the only caller.
+func (s *Scope) Override(name string, v value.Value) {
+	if s.vars == nil {
+		s.vars = map[string]value.Value{}
+	}
+	s.vars[name] = v
+}
+
+// Resolve is compiler stage 4. It builds the ordered scope stack in exactly
+// PLAN.md §7's order and resolves each variable to the entry that wins,
+// recording both what KIND of thing the value is (Source) and WHICH RUNG
+// supplied it (Scope).
+//
+// The rungs, lowest first — the last writer wins, and the loop never reverses:
+//
+//	ScopeBaseConfig          a schema's `default:`            SourceDefault
+//	ScopeBaseConfig          variables.yml and --var-file     SourceVariable
+//	ScopeModuleDefault       — M5 fills this in
+//	ScopeEnvironmentInherit  inherited environment layers     SourceEnvironment
+//	ScopeEnvironmentVar      the selected environment         SourceEnvironment
+//	ScopeCLIOverride         --var                            SourceVariable
+//
+// The environment rungs are not judged here: environments.Chain already stamps
+// each layer with the scope it represents, and this walks the layers in order
+// and copies it. That is what spec §7.1 means by one implementation — the
+// scope a value reports IS the rung that supplied it, never a parallel opinion
+// about it that could drift.
+//
+// Every winning value is stamped here even when stage 2 already tagged it the
+// same way. Stage 4 is the one place that decides what provenance a winning
+// value carries; a Source that was set elsewhere and merely survived is a
+// Source nobody is responsible for.
+//
+// ScopeProviderDefault is absent deliberately: provider defaults apply to
+// resource attributes in stage 7 and never to variables.
+//
+// Every problem is reported in one pass (spec §7.4); a variable that fails
+// validation keeps its winning value so later stages see a value of the right
+// shape rather than a hole, and the diagnostics are what make the compile fail.
+func Resolve(decls []config.VariableDecl, chain environments.Chain,
+	files map[string]value.Value, cliVars map[string]string,
+) (Scope, diag.Diagnostics) {
+	var ds diag.Diagnostics
+
+	schemas, schemaDiags := Schemas(decls)
+	ds.Extend(schemaDiags)
+
+	out := Scope{vars: make(map[string]value.Value, len(schemas)+len(files)+len(cliVars))}
+
+	// Rung 1: declared defaults.
+	for _, name := range sortedSchemaNames(schemas) {
+		if s := schemas[name]; s.HasDefault {
+			out.vars[name] = s.Default.
+				WithSource(value.SourceDefault).
+				WithScope(value.ScopeBaseConfig)
+		}
+	}
+
+	// Rung 2: variables.yml and --var-file, already merged by the caller.
+	// Explicit configuration beats the implicit default rung 1 just wrote
+	// (PLAN.md §7's closing line), which is why this is a separate pass at the
+	// same scope rather than merged with it.
+	for _, name := range sortedValueNames(files) {
+		out.vars[name] = files[name].
+			WithSource(value.SourceVariable).
+			WithScope(value.ScopeBaseConfig)
+	}
+
+	// Rung 3 (ScopeModuleDefault) is M5's. The constant exists so M5 inserts a
+	// pass here rather than renumbering the whole ladder.
+
+	// Rungs 4 and 5: the environment chain, ancestors first. Overrides are
+	// walked in the slice order stage 2 built and stage 3 preserved — nothing
+	// is sorted here, because nothing here is a map.
+	for _, layer := range chain.Layers {
+		for _, o := range layer.Overrides {
+			out.vars[o.Name] = o.Value.
+				WithSource(value.SourceEnvironment).
+				WithScope(layer.Scope)
+		}
+	}
+
+	// Rung 6: --var.
+	for _, name := range sortedTextNames(cliVars) {
+		origin := value.Origin{File: "--var"}
+		if s, declared := schemas[name]; declared {
+			v, parseDiags := s.ParseText(cliVars[name], origin)
+			ds.Extend(parseDiags)
+			out.vars[name] = v
+			continue
+		}
+		// An undeclared variable is untyped, and --var carries text, so text
+		// is what it is. See Schema.ParseText for why no type is guessed.
+		out.vars[name] = value.String(cliVars[name], value.SourceVariable).
+			WithScope(value.ScopeCLIOverride).WithOrigin(origin)
+	}
+
+	ds.Extend(checkAgainstSchemas(schemas, &out, chain))
+	return out, ds
+}
+
+func sortedSchemaNames(m map[string]Schema) []string {
+	out := make([]string, 0, len(m))
+	for name := range m {
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func sortedValueNames(m map[string]value.Value) []string {
+	out := make([]string, 0, len(m))
+	for name := range m {
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func sortedTextNames(m map[string]string) []string {
+	out := make([]string, 0, len(m))
+	for name := range m {
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// checkAgainstSchemas normalises and validates every declared variable's
+// winning value, and decides what an unset variable means.
+//
+// Normalisation happens before judgement: the winning value is coerced to its
+// schema's declared kind (see Schema.Coerce) and the coerced value is what
+// gets validated and stored. The order is load-bearing, not a style choice —
+// see Schema.Coerce's doc comment and TestResolveCoercesBeforeCheckingBounds.
+//
+// The meaning of "unset" depends on whether an environment was selected, and
+// this is the only place in the engine that distinguishes the two:
+//
+//   - An environment IS selected (`infra plan production`): every rung that
+//     could set the variable has been consulted, so "nothing set it" is a
+//     definite answer and an error.
+//   - No environment is selected (`infra validate`, which takes no environment
+//     argument): the variable may well be set by an environment this run never
+//     looked at. It resolves to an unknown of the declared kind, which is the
+//     engine's existing machinery for "typed but not yet determined" (spec
+//     §5.1). Downstream kind checks still work, and nothing invents a value.
+//     Erroring instead would make `infra validate` reject configuration that
+//     `infra plan production` plans perfectly well.
+//
+// This is PLAN.md §9's "validation must happen during `infra validate` AND
+// before planning" being two checks at two times: validate checks shape,
+// plan additionally checks presence.
+//
+// ASSUMPTION, and what it rests on: an entry reaching the unset branch always
+// has a real Kind to build an unknown from. An untyped declaration is legal,
+// but one that reaches stage 4 has a default, so rung 1 set it and it never
+// arrives here.
+//
+// That holds for every ProjectDecl that reaches stage 4 — not for declarations
+// in general. Stage 2 suppresses its empty-declaration error when another
+// diagnostic on the same line already names the root cause, so empty
+// declarations without that error do exist; they are kept out because Compile
+// halts at the stage boundary when HasErrors() is true. The assumption is
+// therefore on the HALTING, not on decode. Make decode errors non-fatal, or
+// run stage 4 before that boundary check, and this builds
+// value.Unknown(KindInvalid, ...) and hands an indeterminate value to the rest
+// of the pipeline.
+func checkAgainstSchemas(schemas map[string]Schema, out *Scope, chain environments.Chain) diag.Diagnostics {
+	var ds diag.Diagnostics
+
+	for _, name := range sortedSchemaNames(schemas) {
+		s := schemas[name]
+		v, set := out.vars[name]
+		if set {
+			// Coerce, then judge, and store the normalised value. The order is
+			// load-bearing: compareBounds reads both sides in the declared
+			// kind, so an uncoerced value is not merely mistyped — it is
+			// silently unbounded, because a bound it cannot read compares as
+			// no complaint.
+			coerced, coerceDiags := s.Coerce(v)
+			if coerceDiags.HasErrors() {
+				// Reported once, by the function that knows why it was lossy.
+				// Validate would add a kind mismatch on top, describing the
+				// same mistake less well.
+				ds.Extend(coerceDiags)
+				continue
+			}
+			out.vars[name] = coerced
+			ds.Extend(s.Validate(coerced))
+			continue
+		}
+
+		if !chain.Selected {
+			out.vars[name] = value.Unknown(s.Kind, value.SourceVariable).WithOrigin(s.Origin)
+			continue
+		}
+
+		ds.Add(diag.Diagnostic{
+			Severity: diag.SeverityError,
+			Summary:  "variable " + strconv.Quote(name) + " is not set",
+			Detail: strconv.Quote(name) + " is declared at " + s.Origin.String() +
+				" with no `default`, and nothing set it while resolving environment " +
+				strconv.Quote(chain.Name) + ".",
+			Action: "Give it a `default`, set it in variables.yml or environments/" +
+				chain.Name + ".yml, or pass --var " + name + "=<value>.",
+			Origin: s.Origin,
+		})
+		// Left absent rather than filled with a poison value: stage 6 will
+		// report `undefined variable` at each USE SITE, which tells the user
+		// where the missing value is needed. Both diagnostics are useful and
+		// spec §7.4 collects rather than choosing between them.
+	}
+	return ds
+}
