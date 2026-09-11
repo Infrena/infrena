@@ -195,6 +195,25 @@ func bindAttribute(
 	// value. That is why a VALID output reference never reaches the loop below
 	// and an INVALID one does: the fold removes exactly the cases that need no
 	// checking.
+	// BEFORE Qualify, and this order is the point. Qualify FOLDS a resolved
+	// module output into a literal carrying its value, so `${thedb.endpoint}`
+	// leaves no reference behind — and the edge it implies would be lost. The
+	// plan still renders correctly, because the value is there; the APPLY fails,
+	// because the executor schedules both in the same wave and the output is
+	// still unknown when the reader runs.
+	//
+	// A module call has many addresses, so one reference becomes many edges:
+	// the reader cannot begin until everything the call produced exists.
+	for _, ref := range e.References() {
+		b, ok := inst.Scope.Lookup(ref.Target.Name)
+		if !ok || b.Kind != modules.BindsModule {
+			continue
+		}
+		for _, a := range b.Addresses {
+			recordEdge(edges, a.String(), attr.Origin)
+		}
+	}
+
 	e = inst.Scope.Qualify(e)
 
 	self := inst.Address.String()

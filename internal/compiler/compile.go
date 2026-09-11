@@ -123,6 +123,29 @@ func Compile(files []config.File, reg *registry.Registry, opts Options) (Resolve
 		return ResolvedConfig{}, ds
 	}
 
+	// The lockfile comparison is a PURE READ, which is what lets `validate`
+	// report a moved tag without writing anything (Amendment 18b). Stage 5
+	// COLLECTS resolutions; nothing here records them — a command permitted to
+	// mutate the project directory writes modules.lock after a successful walk.
+	//
+	// Wired here rather than inside stage 5 because internal/modules must not
+	// read the project directory for anything but modules, and because a
+	// comparison that ran during the walk could not see the complete set.
+	if lf, lockDiags := source.LoadLockfile(opts.Dir); !lockDiags.HasErrors() {
+		for _, r := range expansion.Resolutions {
+			rec, ok := source.Pin(r.Source, r.Resolution)
+			if !ok {
+				continue // a path source has no revision to pin
+			}
+			ds.Extend(lf.Check(rec, r.Source.Origin))
+		}
+	} else {
+		ds.Extend(lockDiags)
+	}
+	if ds.HasErrors() {
+		return ResolvedConfig{}, ds
+	}
+
 	cfg, bindDiags := bindReferences(expansion, opts, reg)
 	ds.Extend(bindDiags)
 	if bindDiags.HasErrors() {

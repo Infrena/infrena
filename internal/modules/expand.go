@@ -293,6 +293,15 @@ func (w *walker) expand(lv level, scope *Scope, dir string, module []string) []a
 		supplied := w.evaluateCall(r, scope, exprs[r.Name])
 		inner, outputs := w.instantiate(r, loaded, scope, supplied, dir, module)
 		calls[r.Name] = inner
+		// A reference in the CALL'S OWN attributes — `network: ${net.id}` — is a
+		// dependency of everything the call expanded into, and NOTHING ELSE
+		// records it. The call is expanded away, so stage 6 never sees its
+		// attributes; inside the module that value arrives as an INPUT, which is
+		// a bare `${network}` with no dot, and stage 6 walks only resource
+		// references for edges. Without this the plan looks clean and the apply
+		// fails with "network is still unknown after its dependencies were
+		// applied", after the outer resource has already been created.
+		w.attachEdges(inner, w.callReferences(exprs[r.Name], scope))
 		produced = append(produced, inner...)
 		// Bound AFTER expansion, because the outputs do not exist until then.
 		// That is exactly why orderCalls exists.
@@ -301,6 +310,60 @@ func (w *walker) expand(lv level, scope *Scope, dir string, module []string) []a
 
 	w.fanOut(lv, calls, module)
 	return produced
+}
+
+// callReferences collects what a module call's own attributes refer to, as
+// addresses, deduplicated and sorted.
+//
+// Resolved through the scope rather than by qualifying the expression, for the
+// same reason fanOut resolves a depends_on name that way: a reference may name
+// an outer RESOURCE or another module CALL, and a call has many addresses.
+// Qualify would also fold a resolved output into a literal, leaving no
+// reference to see — so the edge to another module would go missing exactly as
+// the edge to a plain resource does.
+//
+// Coarse on purpose: every resource the call produced gets every edge, rather
+// than only those whose own attributes use the input. A superset is correct
+// here — the module cannot begin before its inputs exist — and per-input
+// tracking would buy nothing the executor can use.
+func (w *walker) callReferences(exprs map[string]*value.Expr, scope *Scope) []address.Address {
+	var out []address.Address
+	seen := map[string]bool{}
+	add := func(a address.Address) {
+		if k := a.String(); !seen[k] {
+			seen[k] = true
+			out = append(out, a)
+		}
+	}
+
+	names := make([]string, 0, len(exprs))
+	for name := range exprs {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	for _, name := range names {
+		if exprs[name] == nil {
+			continue
+		}
+		for _, ref := range exprs[name].References() {
+			// Scope-relative here: `${net.id}` names `net` at THIS level.
+			b, ok := scope.Lookup(ref.Target.Name)
+			if !ok {
+				// An unbound name is stage 6's diagnostic, not an edge.
+				continue
+			}
+			switch b.Kind {
+			case BindsResource:
+				add(b.Address)
+			case BindsModule:
+				for _, a := range b.Addresses {
+					add(a)
+				}
+			}
+		}
+	}
+	return sortAddresses(out)
 }
 
 // fanOut rewrites every depends_on edge that names, or is written on, a module

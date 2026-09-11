@@ -273,3 +273,59 @@ resources:
 			"must not carry the order the user happened to list it in", got, want)
 	}
 }
+
+// TestACallsOwnReferenceBecomesAnEdgeOnWhatItProduced is the canonical module
+// pattern — `network: ${net.id}` on the call — and the edge it needs exists
+// nowhere else.
+//
+// The call is expanded away, so stage 6 never sees its attributes. Inside the
+// module the value arrives as an INPUT, which is a bare `${network}` with no
+// dot, and stage 6 walks only resource references for edges. Before this edge
+// was recorded the plan was CLEAN and the apply failed after the outer resource
+// had already been created:
+//
+//	create module.primary.store failed: network is still unknown after its
+//	dependencies were applied
+//
+// A plan-only assertion cannot catch that, which is why this asserts the edge
+// rather than the rendered plan.
+func TestACallsOwnReferenceBecomesAnEdgeOnWhatItProduced(t *testing.T) {
+	decl, dir := fixture(t, map[string]string{
+		"infra.yml": `
+project: demo
+modules:
+  - ./db
+resources:
+  net:
+    type: test.network
+    cidr: 10.0.0.0/16
+  primary:
+    type: module.db
+    network: ${net.id}
+`,
+		"db/module.yml": "inputs:\n  network:\n    type: string\nresources:\n  store:\n    type: test.database\n    engine: postgres\n    network: ${network}\n",
+	})
+
+	exp, ds := Expand(decl, variables.Scope{}, dir, paths{})
+	if ds.HasErrors() {
+		t.Fatalf("unexpected diagnostics: %+v", ds)
+	}
+
+	var store Instance
+	for _, inst := range exp.Instances {
+		if inst.Address.String() == "module.primary.store" {
+			store = inst
+		}
+	}
+	if store.Decl == nil {
+		t.Fatal("no module.primary.store")
+	}
+	var deps []string
+	for _, a := range store.ExtraDeps {
+		deps = append(deps, a.String())
+	}
+	if strings.Join(deps, ",") != "net" {
+		t.Errorf("module.primary.store ExtraDeps = %v, want [net] — without this edge the "+
+			"executor schedules both in the same wave and the input is still unknown", deps)
+	}
+}
