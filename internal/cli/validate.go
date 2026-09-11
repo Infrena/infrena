@@ -12,6 +12,7 @@ import (
 	"github.com/infrata/infrata/internal/config"
 	"github.com/infrata/infrata/internal/diag"
 	"github.com/infrata/infrata/internal/registry"
+	"github.com/infrata/infrata/pkg/report"
 )
 
 // newValidateCommand builds `infra validate [environment]`.
@@ -39,25 +40,45 @@ func newValidateCommand(opts *GlobalOptions) *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			var environment string
+			if len(args) == 1 {
+				environment = args[0]
+			}
+
+			// validate has no per-resource progress to report (it never
+			// contacts a provider), so its NDJSON stream is exactly meta,
+			// then diagnostics, then this command's own "result" line — the
+			// same three-part shape apply and refresh open with, minus the
+			// event/observation lines neither has anything to report.
+			rw, closeReport, err := openReport(opts, "validate", environment, cmd.ErrOrStderr())
+			if err != nil {
+				return err
+			}
+			defer closeReport()
+
 			envs, ds := environmentsToValidate(opts.Dir, args)
-			if ds.HasErrors() {
-				ds.Render(cmd.ErrOrStderr())
-				return errors.New("configuration is not valid")
-			}
-
-			reg := buildRegistry(opts.Dir)
-			perEnv := make([]diag.Diagnostics, len(envs))
-			for i, env := range envs {
-				copts, cds := compilerOptions(opts, env)
-				if !cds.HasErrors() {
-					cds.Extend(validateProject(opts.Dir, reg, copts))
+			if !ds.HasErrors() {
+				reg := buildRegistry(opts.Dir)
+				perEnv := make([]diag.Diagnostics, len(envs))
+				for i, env := range envs {
+					copts, cds := compilerOptions(opts, env)
+					if !cds.HasErrors() {
+						cds.Extend(validateProject(opts.Dir, reg, copts))
+					}
+					perEnv[i] = cds
 				}
-				perEnv[i] = cds
+				ds.Extend(foldByEnvironment(envs, perEnv))
 			}
-			ds.Extend(foldByEnvironment(envs, perEnv))
-			ds.Render(cmd.ErrOrStderr())
+			renderDiagnostics(cmd.ErrOrStderr(), rw, ds)
 
-			if ds.HasErrors() {
+			valid := !ds.HasErrors()
+			if rw != nil {
+				if werr := rw.WriteValidateResult(report.ValidateResult{Valid: valid}); werr != nil {
+					fmt.Fprintf(cmd.ErrOrStderr(), "warning: failed to write --output result: %v\n", werr)
+				}
+			}
+
+			if !valid {
 				return errors.New("configuration is not valid")
 			}
 			fmt.Fprintln(cmd.OutOrStdout(), "✓ Configuration valid")

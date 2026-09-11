@@ -63,8 +63,12 @@ func newDestroyCommand(opts *GlobalOptions) *cobra.Command {
 			// (spec §11) — see this command's doc comment above.
 			emptyCfg := compiler.ResolvedConfig{Project: st0.Project, Environment: environment}
 
-			// Unlocked preview — identical in spirit to `infra plan`.
-			p, _, err := computePlan(cmd.Context(), cmd, backend, reg, emptyCfg, environment, opts)
+			// Unlocked preview — identical in spirit to `infra plan`. nil:
+			// destroy does not yet write pkg/report's NDJSON output (only
+			// validate, apply and refresh do so far) — see computePlan's
+			// rw parameter, which every caller that has no report.Writer
+			// passes as nil.
+			p, _, err := computePlan(cmd.Context(), cmd, backend, reg, emptyCfg, environment, opts, nil)
 			if err != nil {
 				return err
 			}
@@ -89,7 +93,7 @@ func newDestroyCommand(opts *GlobalOptions) *cobra.Command {
 				// Re-plan inside the lock — apply's doc comment explains why:
 				// destroy must never execute against state or provider
 				// reality gathered before the lock was held.
-				p2, st, err := computePlan(ctx, cmd, backend, reg, emptyCfg, environment, opts)
+				p2, st, err := computePlan(ctx, cmd, backend, reg, emptyCfg, environment, opts, nil)
 				if err != nil {
 					return err
 				}

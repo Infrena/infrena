@@ -10,6 +10,7 @@ import (
 
 	"github.com/infrata/infrata/internal/refresh"
 	"github.com/infrata/infrata/internal/state"
+	"github.com/infrata/infrata/pkg/report"
 )
 
 // newRefreshCommand builds `infra refresh <environment>`: read every
@@ -56,30 +57,60 @@ func newRefreshCommand(opts *GlobalOptions) *cobra.Command {
 
 			environment := args[0]
 
+			rw, closeReport, err := openReport(opts, "refresh", environment, cmd.ErrOrStderr())
+			if err != nil {
+				return err
+			}
+			defer closeReport()
+
 			reg := buildRegistry(opts.Dir)
 			backend := backendFor(opts.Dir)
 
 			return withLockedEnvironment(environment, "refresh", backend, cmd.ErrOrStderr(), func(ctx context.Context) error {
 				st, err := backend.Get(ctx, environment)
 				if err != nil {
-					return err
+					return finishRefresh(cmd.ErrOrStderr(), rw, report.RefreshResult{}, err)
 				}
 
-				obs, ds := refresh.Refresh(ctx, st, reg, opts.Parallelism, perProviderParallelism)
-				ds.Render(cmd.ErrOrStderr())
+				var onObservation func(refresh.Observation)
+				if rw != nil {
+					onObservation = func(o refresh.Observation) {
+						// Best-effort and silent on failure: this hook runs
+						// concurrently from multiple worker goroutines — the
+						// same contract executor.Options.OnEvent documents —
+						// and there is no safe place to report a write
+						// failure from here without racing a concurrent
+						// write to cmd.ErrOrStderr() from a sibling
+						// goroutine's own failed write. A failure here still
+						// surfaces once, non-concurrently, when
+						// finishRefresh below writes the final result line.
+						_ = rw.WriteObservation(classifyObservation(st, o))
+					}
+				}
+
+				obs, ds := refresh.Refresh(ctx, st, reg, opts.Parallelism, perProviderParallelism, onObservation)
+				renderDiagnostics(cmd.ErrOrStderr(), rw, ds)
+
+				// Built from st and obs BEFORE applyObservations mutates st
+				// below — classifyObservation compares against what st
+				// recorded before this refresh ran, and after
+				// applyObservations that would be comparing a resource's
+				// post-refresh state against itself.
+				result := buildRefreshResult(st, obs)
 
 				wrote := applyObservations(st, obs, cmd.OutOrStdout())
 
 				if wrote {
 					if err := backend.Put(ctx, environment, st); err != nil {
-						return fmt.Errorf("writing refreshed state: %w", err)
+						return finishRefresh(cmd.ErrOrStderr(), rw, result, fmt.Errorf("writing refreshed state: %w", err))
 					}
 				}
 
 				if ds.HasErrors() {
-					return errors.New("refresh completed with errors; some resources could not be read")
+					return finishRefresh(cmd.ErrOrStderr(), rw, result,
+						errors.New("refresh completed with errors; some resources could not be read"))
 				}
-				return nil
+				return finishRefresh(cmd.ErrOrStderr(), rw, result, nil)
 			})
 		},
 	}

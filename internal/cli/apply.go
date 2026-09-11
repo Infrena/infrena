@@ -19,6 +19,7 @@ import (
 	"github.com/infrata/infrata/internal/registry"
 	"github.com/infrata/infrata/internal/state"
 	"github.com/infrata/infrata/pkg/address"
+	"github.com/infrata/infrata/pkg/report"
 )
 
 // applyPrompt is what a human sees before infra mutates anything. "yes",
@@ -48,15 +49,21 @@ func newApplyCommand(opts *GlobalOptions) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			environment := args[0]
 
+			rw, closeReport, err := openReport(opts, "apply", environment, cmd.ErrOrStderr())
+			if err != nil {
+				return err
+			}
+			defer closeReport()
+
 			copts, cds := compilerOptions(opts, environment)
 			if cds.HasErrors() {
-				cds.Render(cmd.ErrOrStderr())
-				return errors.New("configuration is not valid")
+				renderDiagnostics(cmd.ErrOrStderr(), rw, cds)
+				return finishApply(cmd.ErrOrStderr(), rw, report.ApplyResult{}, errors.New("configuration is not valid"))
 			}
 
 			files, err := config.Load(opts.Dir)
 			if err != nil {
-				return err
+				return finishApply(cmd.ErrOrStderr(), rw, report.ApplyResult{}, err)
 			}
 
 			reg := buildRegistry(opts.Dir)
@@ -68,29 +75,30 @@ func newApplyCommand(opts *GlobalOptions) *cobra.Command {
 			// DecodeVariableFile) through to the user. Gating this render on
 			// HasErrors would silently drop it on an otherwise-successful
 			// apply.
-			ds.Render(cmd.ErrOrStderr())
+			renderDiagnostics(cmd.ErrOrStderr(), rw, ds)
 			if ds.HasErrors() {
-				return errors.New("configuration is not valid")
+				return finishApply(cmd.ErrOrStderr(), rw, report.ApplyResult{}, errors.New("configuration is not valid"))
 			}
 
 			backend := backendFor(opts.Dir)
 
 			// Unlocked preview — identical in spirit to `infra plan`: safe
 			// to run against a locked environment, in CI, or repeatedly.
-			p, _, err := computePlan(cmd.Context(), cmd, backend, reg, cfg, environment, opts)
+			p, _, err := computePlan(cmd.Context(), cmd, backend, reg, cfg, environment, opts, rw)
 			if err != nil {
-				return err
+				return finishApply(cmd.ErrOrStderr(), rw, report.ApplyResult{}, err)
 			}
 
 			fmt.Fprint(cmd.OutOrStdout(), planner.Render(p, planner.RenderOptions{Verbose: opts.Verbose}))
 
 			if !p.HasChanges() {
-				return nil
+				return finishApply(cmd.ErrOrStderr(), rw, report.ApplyResult{}, nil)
 			}
 
 			if !opts.AutoApprove {
 				if !confirm(cmd, applyPrompt, "yes") {
-					return errors.New("apply cancelled: you must type \"yes\" to approve")
+					return finishApply(cmd.ErrOrStderr(), rw, report.ApplyResult{},
+						errors.New("apply cancelled: you must type \"yes\" to approve"))
 				}
 			}
 
@@ -107,22 +115,38 @@ func newApplyCommand(opts *GlobalOptions) *cobra.Command {
 				// Re-plan inside the lock — see this task's doc comment above
 				// for why: apply must never execute against state or provider
 				// reality gathered before the lock was held.
-				p2, st, err := computePlan(ctx, cmd, backend, reg, cfg, environment, opts)
+				p2, st, err := computePlan(ctx, cmd, backend, reg, cfg, environment, opts, rw)
 				if err != nil {
-					return err
+					return finishApply(cmd.ErrOrStderr(), rw, report.ApplyResult{}, err)
 				}
 				if !p2.HasChanges() {
 					fmt.Fprintln(cmd.OutOrStdout(), "\nNo changes remained once the environment lock was acquired; nothing to apply.")
-					return nil
+					return finishApply(cmd.ErrOrStderr(), rw, report.ApplyResult{}, nil)
 				}
 
 				g, err := planner.BuildExecution(p2, dependentsOf(p2))
 				if err != nil {
-					return fmt.Errorf("building execution graph: %w", err)
+					return finishApply(cmd.ErrOrStderr(), rw, report.ApplyResult{},
+						fmt.Errorf("building execution graph: %w", err))
 				}
 
-				res, execDiags := executor.Apply(ctx, p2, g, st, executorOptions(opts, reg, backend, environment))
-				execDiags.Render(cmd.ErrOrStderr())
+				execOpts := executorOptions(opts, reg, backend, environment)
+				if rw != nil {
+					execOpts.OnEvent = func(e executor.Event) {
+						// Best-effort and silent on failure: OnEvent's own
+						// doc comment documents this call as concurrent
+						// across worker goroutines, so there is no safe
+						// place here to report a write failure without
+						// racing a sibling goroutine's own concurrent write
+						// to cmd.ErrOrStderr(). It still surfaces once,
+						// non-concurrently, from finishApply's write of the
+						// final result line below.
+						_ = rw.WriteEvent(toReportEvent(e))
+					}
+				}
+
+				res, execDiags := executor.Apply(ctx, p2, g, st, execOpts)
+				renderDiagnostics(cmd.ErrOrStderr(), rw, execDiags)
 
 				// executor.Render (Task 12) is THE result renderer. An earlier
 				// draft of this task wrote a private renderResult here; two
@@ -131,10 +155,11 @@ func newApplyCommand(opts *GlobalOptions) *cobra.Command {
 				// shared one.
 				fmt.Fprint(cmd.OutOrStdout(), executor.Render(res, executor.RenderOptions{Verbose: opts.Verbose}))
 
+				result := applyResultFrom(res)
 				if execDiags.HasErrors() || len(res.Failed) > 0 {
-					return errors.New("apply completed with failures")
+					return finishApply(cmd.ErrOrStderr(), rw, result, errors.New("apply completed with failures"))
 				}
-				return errChanges
+				return finishApply(cmd.ErrOrStderr(), rw, result, errChanges)
 			})
 		},
 	}
@@ -148,7 +173,7 @@ func newApplyCommand(opts *GlobalOptions) *cobra.Command {
 // what turns "everything currently in state" into a full teardown plan
 // through the planner's own decision table rather than a second, bespoke
 // "destroy everything" code path.
-func computePlan(ctx context.Context, cmd *cobra.Command, backend *state.Local, reg *registry.Registry, cfg compiler.ResolvedConfig, environment string, opts *GlobalOptions) (*planner.Plan, *state.State, error) {
+func computePlan(ctx context.Context, cmd *cobra.Command, backend *state.Local, reg *registry.Registry, cfg compiler.ResolvedConfig, environment string, opts *GlobalOptions, rw *report.Writer) (*planner.Plan, *state.State, error) {
 	st, err := backend.Get(ctx, environment)
 	if err != nil {
 		return nil, nil, err
@@ -169,8 +194,8 @@ func computePlan(ctx context.Context, cmd *cobra.Command, backend *state.Local, 
 	// no-op re-assignment on that path.
 	st.Project = cfg.Project
 
-	obs, refreshDiags := refresh.Refresh(ctx, st, reg, opts.Parallelism, perProviderParallelism)
-	refreshDiags.Render(cmd.ErrOrStderr())
+	obs, refreshDiags := refresh.Refresh(ctx, st, reg, opts.Parallelism, perProviderParallelism, nil)
+	renderDiagnostics(cmd.ErrOrStderr(), rw, refreshDiags)
 	if refreshDiags.HasErrors() {
 		return nil, nil, errors.New("refreshing provider state failed")
 	}
@@ -180,7 +205,7 @@ func computePlan(ctx context.Context, cmd *cobra.Command, backend *state.Local, 
 		Now:         time.Now,
 		Registry:    reg,
 	})
-	planDiags.Render(cmd.ErrOrStderr())
+	renderDiagnostics(cmd.ErrOrStderr(), rw, planDiags)
 	if planDiags.HasErrors() {
 		return nil, nil, errors.New("planning failed")
 	}

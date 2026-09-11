@@ -54,7 +54,7 @@ func TestRefreshReadsCurrentProviderState(t *testing.T) {
 	st := state.New("myapp", "dev")
 	st.Set(created)
 
-	obs, ds := Refresh(context.Background(), st, reg, 4, 4)
+	obs, ds := Refresh(context.Background(), st, reg, 4, 4, nil)
 	if ds.HasErrors() {
 		t.Fatalf("unexpected diagnostics: %+v", ds)
 	}
@@ -74,6 +74,74 @@ func TestRefreshReadsCurrentProviderState(t *testing.T) {
 	}
 }
 
+// TestRefreshCallsOnObservationOncePerResource pins the OnObservation hook's
+// contract: called exactly once per resource in st, concurrently, each call
+// carrying the SAME Observation the function's own return value holds for
+// that address. This is the property the `infra refresh` command's
+// streaming --output line depends on — a hook called zero times, called
+// with a stale or wrong Observation, or fired twice for one resource, would
+// each produce a report silently wrong in a different way, and none of
+// those would be caught by asserting on the returned Observations map
+// alone, which is why this test exists as its own case rather than being
+// folded into TestRefreshReadsCurrentProviderState.
+func TestRefreshCallsOnObservationOncePerResource(t *testing.T) {
+	dir := t.TempDir()
+	reg, prov := newTestRegistry(t, filepath.Join(dir, "cloud.json"))
+
+	present := createNetwork(t, prov, "present")
+	deleted := createNetwork(t, prov, "deleted")
+
+	cloud, err := testprovider.LoadCloud(filepath.Join(dir, "cloud.json"))
+	if err != nil {
+		t.Fatalf("loading fake cloud: %v", err)
+	}
+	delete(cloud.Resources, deleted.ProviderID)
+	if err := cloud.Save(filepath.Join(dir, "cloud.json")); err != nil {
+		t.Fatalf("saving fake cloud: %v", err)
+	}
+
+	st := state.New("myapp", "dev")
+	st.Set(present)
+	st.Set(deleted)
+
+	var mu sync.Mutex
+	seen := map[string]Observation{}
+	hook := func(o Observation) {
+		mu.Lock()
+		defer mu.Unlock()
+		seen[o.Address.String()] = o
+	}
+
+	obs, ds := Refresh(context.Background(), st, reg, 4, 4, hook)
+	if ds.HasErrors() {
+		t.Fatalf("unexpected diagnostics: %+v", ds)
+	}
+
+	if len(seen) != 2 {
+		t.Fatalf("OnObservation fired %d times, want 2 (one per resource)", len(seen))
+	}
+	for _, addr := range []address.Address{present.Address, deleted.Address} {
+		hookObs, ok := seen[addr.String()]
+		if !ok {
+			t.Fatalf("OnObservation was never called for %s", addr)
+		}
+		returnedObs := obs[addr.String()]
+		if hookObs.Err != returnedObs.Err {
+			t.Errorf("%s: hook saw Err=%v, Refresh returned Err=%v", addr, hookObs.Err, returnedObs.Err)
+		}
+		gotNil, wantNil := hookObs.State == nil, returnedObs.State == nil
+		if gotNil != wantNil {
+			t.Errorf("%s: hook saw State-is-nil=%v, Refresh returned State-is-nil=%v", addr, gotNil, wantNil)
+		}
+	}
+	if seen[present.Address.String()].State == nil {
+		t.Error("present's hook observation reports it gone; it was never deleted")
+	}
+	if seen[deleted.Address.String()].State != nil {
+		t.Error("deleted's hook observation reports it present; it was removed from the fake cloud")
+	}
+}
+
 func TestRefreshDetectsDeletionOutsideInfra(t *testing.T) {
 	dir := t.TempDir()
 	reg, prov := newTestRegistry(t, filepath.Join(dir, "cloud.json"))
@@ -88,7 +156,7 @@ func TestRefreshDetectsDeletionOutsideInfra(t *testing.T) {
 		t.Fatalf("Delete: %v", err)
 	}
 
-	obs, ds := Refresh(context.Background(), st, reg, 4, 4)
+	obs, ds := Refresh(context.Background(), st, reg, 4, 4, nil)
 	if ds.HasErrors() {
 		t.Fatalf("a deletion outside infra is not a planning error: %+v", ds)
 	}
@@ -126,7 +194,7 @@ func TestRefreshReadErrorIsADiagnosticAndNeverADeletion(t *testing.T) {
 		t.Fatalf("Save: %v", err)
 	}
 
-	obs, ds := Refresh(context.Background(), st, reg, 4, 4)
+	obs, ds := Refresh(context.Background(), st, reg, 4, 4, nil)
 	if !ds.HasErrors() {
 		t.Fatal("a read failure must fail planning for that resource")
 	}
@@ -143,7 +211,7 @@ func TestRefreshReadErrorIsADiagnosticAndNeverADeletion(t *testing.T) {
 	// exactly where it was — proving the first error was a transient read
 	// failure, not the resource going away. Mistaking the first result for
 	// absence would have proposed destroying live infrastructure.
-	obs2, ds2 := Refresh(context.Background(), st, reg, 4, 4)
+	obs2, ds2 := Refresh(context.Background(), st, reg, 4, 4, nil)
 	if ds2.HasErrors() {
 		t.Fatalf("the injected rule is one-shot; the second refresh must succeed: %+v", ds2)
 	}
@@ -182,7 +250,7 @@ func TestRefreshNeverWritesState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	if _, ds := Refresh(context.Background(), loaded, reg, 4, 4); ds.HasErrors() {
+	if _, ds := Refresh(context.Background(), loaded, reg, 4, 4, nil); ds.HasErrors() {
 		t.Fatalf("unexpected diagnostics: %+v", ds)
 	}
 
@@ -205,7 +273,7 @@ func TestRefreshUnregisteredTypeIsADiagnostic(t *testing.T) {
 		ProviderID: "ghost-1",
 	})
 
-	obs, ds := Refresh(context.Background(), st, reg, 4, 4)
+	obs, ds := Refresh(context.Background(), st, reg, 4, 4, nil)
 	if !ds.HasErrors() {
 		t.Fatal("a resource whose type is no longer registered must be a diagnostic, not silently skipped or treated as deleted")
 	}
@@ -222,7 +290,7 @@ func TestRefreshEmptyStateReturnsEmptyObservations(t *testing.T) {
 	reg := registry.New()
 	st := state.New("myapp", "dev")
 
-	obs, ds := Refresh(context.Background(), st, reg, 4, 4)
+	obs, ds := Refresh(context.Background(), st, reg, 4, 4, nil)
 	if ds.HasErrors() {
 		t.Fatalf("unexpected diagnostics: %+v", ds)
 	}
@@ -242,7 +310,7 @@ func TestRefreshTreatsParallelismBelowOneAsOne(t *testing.T) {
 	// on its first send, so "below 1 means 1" is the difference between a
 	// misconfigured flag and a hang.
 	for _, p := range []int{0, -1} {
-		obs, ds := Refresh(context.Background(), st, reg, p, p)
+		obs, ds := Refresh(context.Background(), st, reg, p, p, nil)
 		if ds.HasErrors() {
 			t.Fatalf("parallelism %d: unexpected diagnostics: %+v", p, ds)
 		}
@@ -347,7 +415,7 @@ func TestRefreshBoundsConcurrentReads(t *testing.T) {
 		})
 	}
 
-	obs, ds := Refresh(context.Background(), st, reg, 3, 3)
+	obs, ds := Refresh(context.Background(), st, reg, 3, 3, nil)
 	if ds.HasErrors() {
 		t.Fatalf("unexpected diagnostics: %+v", ds)
 	}
@@ -397,7 +465,7 @@ func TestRefreshBoundsReadsPerProviderIndependentlyOfGlobalParallelism(t *testin
 		})
 	}
 
-	obs, ds := Refresh(context.Background(), st, reg, 8, 2)
+	obs, ds := Refresh(context.Background(), st, reg, 8, 2, nil)
 	if ds.HasErrors() {
 		t.Fatalf("unexpected diagnostics: %+v", ds)
 	}
@@ -439,7 +507,7 @@ func TestRefreshDiagnosticsAreSortedByAddressNotCompletionOrder(t *testing.T) {
 	// zzz has no delay and fails almost immediately; aaa is deliberately
 	// slower. If diagnostics reflected completion order, zzz would come
 	// first despite sorting after aaa alphabetically.
-	_, ds := Refresh(context.Background(), st, reg, 2, 2)
+	_, ds := Refresh(context.Background(), st, reg, 2, 2, nil)
 	if len(ds) != 2 {
 		t.Fatalf("got %d diagnostics, want 2", len(ds))
 	}
@@ -517,7 +585,7 @@ func TestRefreshDoesNotExposeLiveStateToProviderRead(t *testing.T) {
 		},
 	})
 
-	if _, ds := Refresh(context.Background(), st, reg, 1, 1); ds.HasErrors() {
+	if _, ds := Refresh(context.Background(), st, reg, 1, 1, nil); ds.HasErrors() {
 		t.Fatalf("unexpected diagnostics: %+v", ds)
 	}
 
@@ -603,7 +671,7 @@ func TestRefreshSkipsProviderReadWhenContextAlreadyCancelled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	obs, ds := Refresh(ctx, st, reg, 4, 4)
+	obs, ds := Refresh(ctx, st, reg, 4, 4, nil)
 	if !ds.HasErrors() {
 		t.Fatal("a cancelled refresh must surface as diagnostics, not silently succeed")
 	}

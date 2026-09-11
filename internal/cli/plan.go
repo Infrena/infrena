@@ -69,7 +69,7 @@ func newPlanCommand(opts *GlobalOptions) *cobra.Command {
 				return err
 			}
 
-			obs, refreshDiags := refresh.Refresh(cmd.Context(), st, reg, opts.Parallelism, perProviderParallelism)
+			obs, refreshDiags := refresh.Refresh(cmd.Context(), st, reg, opts.Parallelism, perProviderParallelism, nil)
 			ds.Extend(refreshDiags)
 			if ds.HasErrors() {
 				ds.Render(cmd.ErrOrStderr())

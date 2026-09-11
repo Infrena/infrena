@@ -56,7 +56,18 @@ type Observations map[string]Observation
 // it is never treated as deletion. Results and diagnostics are assembled in
 // address order regardless of which read finishes first, so two runs over
 // the same state produce byte-identical output.
-func Refresh(ctx context.Context, st *state.State, reg *registry.Registry, parallelism, perProvider int) (Observations, diag.Diagnostics) {
+//
+// onObservation, when non-nil, is called once per resource as its
+// Observation is produced, before Refresh returns — the progress hook the
+// `infra refresh` command uses to stream machine-readable output. It carries
+// the identical concurrency contract as executor.Options.OnEvent: it may be
+// called concurrently from multiple worker goroutines (one per resource
+// being read at once, up to parallelism), so a receiver that is not itself
+// safe for concurrent use must serialize its own access. nil means no
+// hook — every other caller of Refresh (plan, and apply/destroy's
+// computePlan) passes nil, since neither reports refresh progress of its
+// own; only the refresh command does.
+func Refresh(ctx context.Context, st *state.State, reg *registry.Registry, parallelism, perProvider int, onObservation func(Observation)) (Observations, diag.Diagnostics) {
 	if parallelism < 1 {
 		parallelism = 1
 	}
@@ -109,6 +120,9 @@ func Refresh(ctx context.Context, st *state.State, reg *registry.Registry, paral
 				defer func() { <-ps }()
 			}
 			results[i], problems[i] = readOne(ctx, st, reg, addr)
+			if onObservation != nil {
+				onObservation(results[i])
+			}
 		}()
 	}
 	wg.Wait()
