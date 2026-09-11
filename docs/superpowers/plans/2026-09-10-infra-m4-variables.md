@@ -32,9 +32,18 @@ Each one, if violated, breaks something an earlier milestone paid for. Each gets
 
 ## Committing
 
-Other agents may share this worktree. NEVER `git add` followed by a bare `git commit` — `git commit` commits the INDEX, and that hazard appeared four separate times during M3, once as a stale index holding a 197-line deletion. Always:
+Other agents may share this worktree, so **every commit must name the paths it commits**. A `git commit` with no path scope commits whatever the INDEX happens to hold, which is not the same set as the files you edited — that hazard appeared four separate times during M3, once as a stale index carrying a 197-line deletion into an unrelated commit.
+
+For files git already tracks:
 
     git commit -m "your message" -- <explicit paths>
+
+For a file you just created, `git commit -- <path>` fails: an untracked path cannot be committed without being added first. Add it by name, then commit with the same paths — the path scope on `commit` is what makes it safe, not the absence of `add`:
+
+    git add <explicit paths>
+    git commit -m "your message" -- <explicit paths>
+
+What is forbidden is `git add -A` / `git add .`, and any `git commit` without `--` and a path list. Naming paths twice is deliberate: it means a file staged by someone else between your `add` and your `commit` cannot ride along.
 
 ---
 
