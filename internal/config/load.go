@@ -26,6 +26,19 @@ const VariablesFileName = "variables.yml"
 // is that environment's overrides.
 const EnvironmentsDirName = "environments"
 
+// ModuleFileName is the file a module's source directory must contain
+// (PLAN.md §11.3).
+//
+// Deliberately NOT infra.yml, confirmed as a product-API decision (contract
+// Amendment 1). A module file is a different document shape — `inputs` and
+// `outputs`, no `project` — and two names make the shapes distinguishable by
+// construction: neither decoder accepts the other's keys, so four bespoke
+// rejection rules never have to exist. It also stops a module directory looking
+// like a project: under a shared name, `infrata plan dev` run inside
+// modules/networking/ would find a valid infra.yml and TRY, producing a pile of
+// "variable not set" errors describing a situation that is not a mistake.
+const ModuleFileName = "module.yml"
+
 // FileKind says which of the three shapes a loaded file has. Stage 1 does not
 // read a file's contents — it is not permitted to touch yaml.Node — so this is
 // derived entirely from the path.
@@ -39,6 +52,9 @@ const (
 	FileVariables
 	// FileEnvironment is environments/<name>.yml: one environment's overrides.
 	FileEnvironment
+	// FileModule is a module's module.yml: `inputs`, `resources`, `modules`,
+	// `outputs`.
+	FileModule
 )
 
 // String names a file kind for diagnostics. Explicit default, for the reason
@@ -52,6 +68,8 @@ func (k FileKind) String() string {
 		return "variables file"
 	case FileEnvironment:
 		return "environment file"
+	case FileModule:
+		return "module file"
 	default:
 		return fmt.Sprintf("FileKind(%d)", uint8(k))
 	}
@@ -210,6 +228,61 @@ func loadEnvironmentDir(dir string) ([]File, error) {
 		out = append(out, f)
 	}
 	return out, nil
+}
+
+// LoadModule reads one module file (compiler stage 1), for a module's already
+// resolved source directory.
+//
+// Separate from Load because a module directory is not a project: it has no
+// infra.yml, no variables.yml and no environments/, and it has no environment of
+// its own for Load's file walk to discover. Stage 5 calls this once per module
+// SOURCE and hands the result to DecodeModule, which is how stage 5 loads module
+// sources while never touching a yaml.Node itself (contract Ruling 2, as refined
+// by Amendment 1).
+//
+// dir is already resolved. Turning a `source:` into a directory — joining a
+// relative path against the file that named it, or fetching and caching a git
+// remote — is internal/modules/source's job (Amendment 10), because only it knows
+// which file named the source and where the cache lives.
+//
+// Failures are errors rather than diagnostics, for Load's reason: a file that did
+// not load has no node tree, so there is no Origin for a diagnostic to point at.
+// Each of the three cases below reads identically as a bare "no such file", which
+// names the path and neither the expectation nor an action — exactly the shape
+// §44 forbids.
+func LoadModule(dir string) (File, error) {
+	path := filepath.Join(dir, ModuleFileName)
+	f, found, err := loadOptionalFile(path, FileModule, "")
+	if err != nil {
+		return File{}, err
+	}
+	if found {
+		return f, nil
+	}
+
+	info, statErr := os.Stat(dir)
+	switch {
+	case statErr != nil && os.IsNotExist(statErr):
+		return File{}, fmt.Errorf(
+			"module source %s does not exist; a module `source` names a directory containing %s. "+
+				"Create the directory, or correct the `source`.", dir, ModuleFileName)
+	case statErr != nil:
+		return File{}, statErr
+	case !info.IsDir():
+		return File{}, fmt.Errorf(
+			"module source %s is a file, not a directory; a module `source` names a directory containing %s. "+
+				"Point `source` at the directory instead.", dir, ModuleFileName)
+	}
+
+	if _, err := os.Stat(filepath.Join(dir, ProjectFileName)); err == nil {
+		return File{}, fmt.Errorf(
+			"module source %s contains %s but no %s; a module declares `inputs`, `resources` and `outputs` and no `project`. "+
+				"Rename %s to %s.", dir, ProjectFileName, ModuleFileName, ProjectFileName, ModuleFileName)
+	}
+
+	return File{}, fmt.Errorf(
+		"module source %s contains no %s. Create it with an `inputs`, `resources` and `outputs` block.",
+		dir, ModuleFileName)
 }
 
 // environmentNameFor returns the environment a file in environments/

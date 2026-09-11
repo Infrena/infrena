@@ -101,6 +101,8 @@ func topLevelShapeDetail(f File) string {
 		return "The top level of " + VariablesFileName + " is a flat mapping of variable name to value, for example `region: us-east-1`."
 	case FileEnvironment:
 		return "The top level of an environment file is a mapping of variable name to value, for example `replicas: 10`."
+	case FileModule:
+		return "The top level of " + ModuleFileName + " must be a set of keys such as `inputs`, `resources` and `outputs`."
 	default:
 		return "The top level of " + ProjectFileName + " must be a set of keys such as `project` and `resources`."
 	}
@@ -117,7 +119,7 @@ func decodeDocument(path string, doc *yaml.Node, out *ProjectDecl, ds *diag.Diag
 				out.Project = text
 			}
 		case "resources":
-			decodeResources(path, val, out, ds, seenResources)
+			decodeResources(path, val, &out.Resources, ds, seenResources)
 		case "variables":
 			decodeVariables(path, val, out, ds, seenVariables)
 		case "environments":
@@ -135,7 +137,7 @@ func decodeDocument(path string, doc *yaml.Node, out *ProjectDecl, ds *diag.Diag
 	}
 }
 
-func decodeResources(path string, node *yaml.Node, out *ProjectDecl, ds *diag.Diagnostics, seen map[string]value.Origin) {
+func decodeResources(path string, node *yaml.Node, dst *[]*ResourceDecl, ds *diag.Diagnostics, seen map[string]value.Origin) {
 	if node.Kind != yaml.MappingNode {
 		ds.Add(diag.Diagnostic{
 			Severity: diag.SeverityError,
@@ -265,7 +267,7 @@ func decodeResources(path string, node *yaml.Node, out *ProjectDecl, ds *diag.Di
 				Origin:   r.Origin,
 			})
 		}
-		out.Resources = append(out.Resources, r)
+		*dst = append(*dst, r)
 	}
 }
 
@@ -483,6 +485,39 @@ func variableTypeList() string {
 	return strings.Join(value.KindNames(), ", ")
 }
 
+// declNoun names what a `type`/`default`/`min`/`max` declaration declares, so ONE
+// decoder serves both a project variable (PLAN.md §9) and a module input (§11.3)
+// without either one's diagnostics carrying the other's advice.
+//
+// §11.3 says a module's `inputs:` is spelled exactly as §9's `variables:`, which
+// is what makes the reuse right — but a user with a broken input in
+// modules/net/module.yml must not be told a "variable" is wrong and sent to
+// variables.yml, a file that has nothing to do with their problem. That is the
+// §44 failure this parameter closes; a second copy of decodeVariable would close
+// it by reintroducing the duplication contract Ruling 3 forbids.
+type declNoun struct {
+	singular string // "variable"
+	titled   string // "Variable", at the start of a sentence
+	// supplied is how a value reaches this kind of declaration when the
+	// declaration itself does not carry one, phrased to slot into an action:
+	// "... or put the value <supplied> instead."
+	supplied string
+}
+
+// named renders "variable \"replicas\"" or "input \"replicas\"".
+func (d declNoun) named(name string) string {
+	return d.singular + " " + strconv.Quote(name)
+}
+
+var (
+	variableNoun = declNoun{singular: "variable", titled: "Variable", supplied: "in " + VariablesFileName}
+	inputNoun    = declNoun{
+		singular: "input",
+		titled:   "Input",
+		supplied: "on the resource that instantiates this module",
+	}
+)
+
 func decodeVariables(path string, node *yaml.Node, out *ProjectDecl, ds *diag.Diagnostics, seen map[string]value.Origin) {
 	if node.Kind != yaml.MappingNode {
 		ds.Add(diag.Diagnostic{
@@ -511,19 +546,19 @@ func decodeVariables(path string, node *yaml.Node, out *ProjectDecl, ds *diag.Di
 			continue
 		}
 		seen[nameNode.Value] = origin
-		out.Variables = append(out.Variables, decodeVariable(path, nameNode.Value, body, origin, ds))
+		out.Variables = append(out.Variables, decodeVariable(path, nameNode.Value, body, origin, variableNoun, ds))
 	}
 }
 
-func decodeVariable(path, name string, body *yaml.Node, origin value.Origin, ds *diag.Diagnostics) VariableDecl {
+func decodeVariable(path, name string, body *yaml.Node, origin value.Origin, d declNoun, ds *diag.Diagnostics) VariableDecl {
 	v := VariableDecl{Name: name, Origin: origin}
 
 	if body.Kind != yaml.MappingNode {
 		ds.Add(diag.Diagnostic{
 			Severity: diag.SeverityError,
-			Summary:  "variable " + strconv.Quote(name) + " must be a mapping",
+			Summary:  d.named(name) + " must be a mapping",
 			Detail:   "A `variables:` entry is a schema — `type`, `default`, `min`, `max` — not a value. A bare value here would be ambiguous with a declaration whose type is `map`.",
-			Action:   "Write `default:` beneath " + strconv.Quote(name) + ", or put the value in " + VariablesFileName + " instead.",
+			Action:   "Write `default:` beneath " + strconv.Quote(name) + ", or put the value " + d.supplied + " instead.",
 			Origin:   originOf(path, body),
 		})
 		return v
@@ -550,7 +585,7 @@ func decodeVariable(path, name string, body *yaml.Node, origin value.Origin, ds 
 		if first, dup := seenKeys[key.Value]; dup {
 			ds.Add(diag.Diagnostic{
 				Severity: diag.SeverityError,
-				Summary:  strconv.Quote(key.Value) + " is set more than once on variable " + strconv.Quote(name),
+				Summary:  strconv.Quote(key.Value) + " is set more than once on " + d.singular + " " + strconv.Quote(name),
 				Detail:   "The last assignment would silently win. " + strconv.Quote(key.Value) + " is also set at " + describeOrigin(first) + ".",
 				Action:   "Remove one of the two assignments.",
 				Origin:   keyOrigin,
@@ -561,7 +596,7 @@ func decodeVariable(path, name string, body *yaml.Node, origin value.Origin, ds 
 
 		switch key.Value {
 		case "type":
-			text, ok := requireScalar(path, "variable "+strconv.Quote(name)+"'s `type`", val, ds)
+			text, ok := requireScalar(path, d.named(name)+"'s `type`", val, ds)
 			if !ok {
 				typeReported = true
 				break
@@ -570,8 +605,8 @@ func decodeVariable(path, name string, body *yaml.Node, origin value.Origin, ds 
 			if !known {
 				ds.Add(diag.Diagnostic{
 					Severity: diag.SeverityError,
-					Summary:  "unknown variable type " + strconv.Quote(text),
-					Detail:   "Variable " + strconv.Quote(name) + " declares a type the engine does not have. Supported types are " + variableTypeList() + ".",
+					Summary:  "unknown " + d.singular + " type " + strconv.Quote(text),
+					Detail:   d.titled + " " + strconv.Quote(name) + " declares a type the engine does not have. Supported types are " + variableTypeList() + ".",
 					Action:   "Change `type` to one of " + variableTypeList() + ", or remove it to leave " + strconv.Quote(name) + " untyped.",
 					Origin:   originOf(path, val),
 				})
@@ -588,8 +623,8 @@ func decodeVariable(path, name string, body *yaml.Node, origin value.Origin, ds 
 		default:
 			ds.Add(diag.Diagnostic{
 				Severity: diag.SeverityError,
-				Summary:  "unknown key " + strconv.Quote(key.Value) + " in variable " + strconv.Quote(name),
-				Detail:   "A variable declaration understands `type`, `default`, `min` and `max`.",
+				Summary:  "unknown key " + strconv.Quote(key.Value) + " in " + d.named(name),
+				Detail:   "A " + d.singular + " declaration understands `type`, `default`, `min` and `max`.",
 				Action:   "Remove " + strconv.Quote(key.Value) + ".",
 				Origin:   keyOrigin,
 			})
@@ -597,7 +632,7 @@ func decodeVariable(path, name string, body *yaml.Node, origin value.Origin, ds 
 	}
 
 	if defaultNode != nil {
-		if dv, ok := decodeDefault(path, name, defaultNode, v.Type, ds); ok {
+		if dv, ok := decodeDefault(path, name, defaultNode, v.Type, d, ds); ok {
 			v.Default, v.HasDefault = dv, true
 		} else {
 			// decodeDefault already added its own diagnostic (interpolation,
@@ -608,8 +643,8 @@ func decodeVariable(path, name string, body *yaml.Node, origin value.Origin, ds 
 		}
 	}
 
-	v.Min, v.HasMin = decodeBound(path, name, "min", minNode, v.Type, typeReported, ds)
-	v.Max, v.HasMax = decodeBound(path, name, "max", maxNode, v.Type, typeReported, ds)
+	v.Min, v.HasMin = decodeBound(path, name, "min", minNode, v.Type, typeReported, d, ds)
+	v.Max, v.HasMax = decodeBound(path, name, "max", maxNode, v.Type, typeReported, d, ds)
 
 	// A declaration with neither a type nor a default carries no information:
 	// it names a variable and says nothing about it, so stage 4 has nothing to
@@ -632,9 +667,9 @@ func decodeVariable(path, name string, body *yaml.Node, origin value.Origin, ds 
 	if incomplete && !alreadyExplained {
 		ds.Add(diag.Diagnostic{
 			Severity: diag.SeverityError,
-			Summary:  "variable " + strconv.Quote(name) + " must specify at least a `type` or a `default`",
+			Summary:  d.named(name) + " must specify at least a `type` or a `default`",
 			Detail:   "The declaration says nothing about " + strconv.Quote(name) + ", so nothing can be validated against it and there is no value to fall back on when it is not set.",
-			Action:   "Add `type: string` (or another type), or `default:` with a value, or remove the declaration and set " + strconv.Quote(name) + " in " + VariablesFileName + ".",
+			Action:   "Add `type: string` (or another type), or `default:` with a value, or remove the declaration and set " + strconv.Quote(name) + " " + d.supplied + ".",
 			Origin:   origin,
 		})
 	}
@@ -646,7 +681,7 @@ func decodeVariable(path, name string, body *yaml.Node, origin value.Origin, ds 
 	if v.HasMin && v.HasMax && boundGreater(v.Min, v.Max) {
 		ds.Add(diag.Diagnostic{
 			Severity: diag.SeverityError,
-			Summary:  "variable " + strconv.Quote(name) + " has a `min` greater than its `max`",
+			Summary:  d.named(name) + " has a `min` greater than its `max`",
 			Detail:   "No value can satisfy this declaration, so every plan would fail with a range error naming the value rather than the declaration.",
 			Action:   "Swap `min` and `max`, or remove one of them.",
 			Origin:   v.Min.Origin,
@@ -692,7 +727,7 @@ func boundGreater(a, b value.Value) bool {
 // typeReported suppresses this when `type` itself was already rejected —
 // "`min` is not valid on an untyped variable" names a symptom of a problem
 // already reported one line up.
-func decodeBound(path, name, which string, node *yaml.Node, kind value.Kind, typeReported bool, ds *diag.Diagnostics) (value.Value, bool) {
+func decodeBound(path, name, which string, node *yaml.Node, kind value.Kind, typeReported bool, d declNoun, ds *diag.Diagnostics) (value.Value, bool) {
 	if node == nil {
 		return value.Value{}, false
 	}
@@ -700,15 +735,15 @@ func decodeBound(path, name, which string, node *yaml.Node, kind value.Kind, typ
 		if typeReported {
 			return value.Value{}, false
 		}
-		detail := "Variable " + strconv.Quote(name) + " has type " + kind.String() + ", which has no ordering, so `" + which + "` could not be checked against anything."
+		detail := d.titled + " " + strconv.Quote(name) + " has type " + kind.String() + ", which has no ordering, so `" + which + "` could not be checked against anything."
 		action := "Remove `" + which + "`, or declare `type: integer` or `type: float`."
 		if kind == value.KindInvalid {
-			detail = "Variable " + strconv.Quote(name) + " declares no `type`, so `" + which + "` has no ordering to be checked against."
+			detail = d.titled + " " + strconv.Quote(name) + " declares no `type`, so `" + which + "` has no ordering to be checked against."
 			action = "Add `type: integer` or `type: float`, or remove `" + which + "`."
 		}
 		ds.Add(diag.Diagnostic{
 			Severity: diag.SeverityError,
-			Summary:  "`" + which + "` is not valid on variable " + strconv.Quote(name),
+			Summary:  "`" + which + "` is not valid on " + d.named(name),
 			Detail:   detail,
 			Action:   action,
 			Origin:   originOf(path, node),
@@ -719,18 +754,18 @@ func decodeBound(path, name, which string, node *yaml.Node, kind value.Kind, typ
 	// Both numeric kinds are accepted here whatever the declared type. YAML
 	// tags `min: 1` as !!int even under `type: float`, so refusing KindInt
 	// would reject the obvious spelling of a float bound.
-	bv, hasExpr := decodeValue(path, "variable "+strconv.Quote(name)+"'s `"+which+"`", node, ds)
+	bv, hasExpr := decodeValue(path, d.named(name)+"'s `"+which+"`", node, ds)
 	if hasExpr || !bv.Known || (bv.Kind != value.KindInt && bv.Kind != value.KindFloat) {
 		ds.Add(diag.Diagnostic{
 			Severity: diag.SeverityError,
-			Summary:  "`" + which + "` on variable " + strconv.Quote(name) + " must be a number",
+			Summary:  "`" + which + "` on " + d.named(name) + " must be a number",
 			Detail:   "Got " + strconv.Quote(node.Value) + ". A quoted number is a string, and a string bound compares by text: \"10\" sorts before \"9\".",
 			Action:   "Write `" + which + ": " + node.Value + "` unquoted.",
 			Origin:   originOf(path, node),
 		})
 		return value.Value{}, false
 	}
-	return coerceBound(path, name, which, node, bv, kind, ds)
+	return coerceBound(path, name, which, node, bv, kind, d, ds)
 }
 
 // coerceBound converts a decoded bound to the variable's DECLARED kind, via
@@ -753,7 +788,7 @@ func decodeBound(path, name, which string, node *yaml.Node, kind value.Kind, typ
 // truncation. `type: integer` with `min: 1.5` must not quietly become 1: the
 // user would see values below their stated minimum accepted, with nothing
 // printed, which is the silent-loss shape this engine refuses everywhere else.
-func coerceBound(path, name, which string, node *yaml.Node, bv value.Value, kind value.Kind, ds *diag.Diagnostics) (value.Value, bool) {
+func coerceBound(path, name, which string, node *yaml.Node, bv value.Value, kind value.Kind, d declNoun, ds *diag.Diagnostics) (value.Value, bool) {
 	// origin is computed once, up front, and applied on the success path
 	// below. value.Coerce itself stays pure and never touches Origin — stage
 	// 4 (Task 6) has no line to re-origin to, and stage 2 does, so re-origining
@@ -774,16 +809,16 @@ func coerceBound(path, name, which string, node *yaml.Node, bv value.Value, kind
 	if kind == value.KindInt {
 		ds.Add(diag.Diagnostic{
 			Severity: diag.SeverityError,
-			Summary:  "`" + which + "` on variable " + strconv.Quote(name) + " is not a whole number",
-			Detail:   "Variable " + strconv.Quote(name) + " has type integer, so " + strconv.Quote(node.Value) + " cannot be its " + which + ". Rounding it would silently change the bound the user asked for.",
+			Summary:  "`" + which + "` on " + d.named(name) + " is not a whole number",
+			Detail:   d.titled + " " + strconv.Quote(name) + " has type integer, so " + strconv.Quote(node.Value) + " cannot be its " + which + ". Rounding it would silently change the bound the user asked for.",
 			Action:   "Write a whole number, or declare `type: float`.",
 			Origin:   origin,
 		})
 	} else {
 		ds.Add(diag.Diagnostic{
 			Severity: diag.SeverityError,
-			Summary:  "`" + which + "` on variable " + strconv.Quote(name) + " is too large to represent as a float",
-			Detail:   "Variable " + strconv.Quote(name) + " has type float, and " + strconv.Quote(node.Value) + " cannot be converted without changing its value.",
+			Summary:  "`" + which + "` on " + d.named(name) + " is too large to represent as a float",
+			Detail:   d.titled + " " + strconv.Quote(name) + " has type float, and " + strconv.Quote(node.Value) + " cannot be converted without changing its value.",
 			Action:   "Use a smaller bound, or declare `type: integer`.",
 			Origin:   origin,
 		})
@@ -802,12 +837,12 @@ func coerceBound(path, name, which string, node *yaml.Node, bv value.Value, kind
 //
 // ok is false whenever a diagnostic was added — an interpolation, or a lossy
 // numeric conversion — and the caller must not set HasDefault in that case.
-func decodeDefault(path, name string, node *yaml.Node, kind value.Kind, ds *diag.Diagnostics) (value.Value, bool) {
-	dv, hasExpr := decodeValue(path, "variable "+strconv.Quote(name)+"'s `default`", node, ds)
+func decodeDefault(path, name string, node *yaml.Node, kind value.Kind, d declNoun, ds *diag.Diagnostics) (value.Value, bool) {
+	dv, hasExpr := decodeValue(path, d.named(name)+"'s `default`", node, ds)
 	if hasExpr {
 		ds.Add(diag.Diagnostic{
 			Severity: diag.SeverityError,
-			Summary:  "variable " + strconv.Quote(name) + "'s default contains an interpolation",
+			Summary:  d.named(name) + "'s default contains an interpolation",
 			Detail:   "Defaults are resolved before any expression scope exists, so `${...}` here has nothing to refer to. Accepting it would store the literal text " + strconv.Quote(node.Value) + " as the default.",
 			Action:   "Write a literal value, or set " + strconv.Quote(name) + " per environment instead.",
 			Origin:   originOf(path, node),
@@ -856,16 +891,16 @@ func decodeDefault(path, name string, node *yaml.Node, kind value.Kind, ds *diag
 	if kind == value.KindInt {
 		ds.Add(diag.Diagnostic{
 			Severity: diag.SeverityError,
-			Summary:  "variable " + strconv.Quote(name) + "'s default is not a whole number",
-			Detail:   "Variable " + strconv.Quote(name) + " has type integer, so " + strconv.Quote(node.Value) + " cannot be its default. Rounding it would silently change the value the user wrote.",
+			Summary:  d.named(name) + "'s default is not a whole number",
+			Detail:   d.titled + " " + strconv.Quote(name) + " has type integer, so " + strconv.Quote(node.Value) + " cannot be its default. Rounding it would silently change the value the user wrote.",
 			Action:   "Write a whole number, or declare `type: float`.",
 			Origin:   origin,
 		})
 	} else {
 		ds.Add(diag.Diagnostic{
 			Severity: diag.SeverityError,
-			Summary:  "variable " + strconv.Quote(name) + "'s default is too large to represent as a float",
-			Detail:   "Variable " + strconv.Quote(name) + " has type float, and " + strconv.Quote(node.Value) + " cannot be converted without changing its value.",
+			Summary:  d.named(name) + "'s default is too large to represent as a float",
+			Detail:   d.titled + " " + strconv.Quote(name) + " has type float, and " + strconv.Quote(node.Value) + " cannot be converted without changing its value.",
 			Action:   "Use a smaller default, or declare `type: integer`.",
 			Origin:   origin,
 		})
