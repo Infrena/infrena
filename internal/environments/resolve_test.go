@@ -155,6 +155,40 @@ func TestResolveAcceptsAnyNameWhenNoEnvironmentsAreDeclared(t *testing.T) {
 	}
 }
 
+func TestDeclaredNamesPreservesDeclOrderNotSorted(t *testing.T) {
+	// declaredNames must reproduce the decls slice's order exactly: no
+	// re-sort, and no detour through a map (whose iteration order is
+	// randomised per run). Stage 2 already sorts alphabetically once
+	// (internal/config/decode.go); a fixture that happens to already be
+	// alphabetical couldn't tell "preserved" apart from "resorted", so this
+	// fixture is deliberately neither ascending nor descending: zulu, alpha,
+	// mike is not equal to its own sort in either direction.
+	decls := []config.EnvironmentDecl{
+		env("zulu", ""),
+		env("alpha", "missing"),
+		env("mike", ""),
+	}
+	_, ds := Resolve(decls, "alpha")
+	if !ds.HasErrors() {
+		t.Fatal("`alpha` extends undeclared `missing` and must be reported")
+	}
+	if len(ds) != 1 {
+		t.Fatalf("want exactly one diagnostic, got %d: %+v", len(ds), ds)
+	}
+	// Read Detail directly rather than the rendered string: the Summary line
+	// already contains "alpha" (the environment under test), so scanning the
+	// full render for substring order would find that occurrence first and
+	// the assertion would not test what it claims to.
+	detail := ds[0].Detail
+	zi, ai, mi := strings.Index(detail, "zulu"), strings.Index(detail, "alpha"), strings.Index(detail, "mike")
+	if zi < 0 || ai < 0 || mi < 0 {
+		t.Fatalf("Detail must list all three declared environments, got:\n%s", detail)
+	}
+	if !(zi < ai && ai < mi) {
+		t.Fatalf("Detail must list environments in decl order (zulu, alpha, mike), got:\n%s", detail)
+	}
+}
+
 func TestResolveWithNoEnvironmentNameSelectsNothing(t *testing.T) {
 	// `infra validate` compiles with the environment left empty.
 	chain, ds := Resolve([]config.EnvironmentDecl{env("production", "")}, "")
