@@ -271,3 +271,68 @@ func malformed(s Schema, v value.Value) diag.Diagnostic {
 		Origin:   originOr(v.Origin, s.Origin),
 	}
 }
+
+// ParseText converts one command-line string to s's kind.
+//
+// `--var name=value` can only ever produce text, so a typed variable needs the
+// text converted or `--var replicas=20` would fail its own integer schema. The
+// conversion is the whole of the mini-language this system has, and it stops
+// at scalars deliberately: `--var tags=a,b,c` would require a separator
+// convention, an escape for the separator, and then a nesting syntax, which is
+// the general-purpose language PLAN.md §9 forbids.
+//
+// An untyped declaration yields text unchanged. Guessing a type from the
+// spelling — "20" becomes an integer, "true" a boolean — would make a
+// variable's type depend on the value someone happened to pass, and
+// `--var version=1.10` would silently become the float 1.1.
+//
+// Booleans go through strconv.ParseBool rather than a bespoke table, so the
+// accepted spellings are Go's and documented rather than invented here.
+func (s Schema) ParseText(text string, origin value.Origin) (value.Value, diag.Diagnostics) {
+	var ds diag.Diagnostics
+	stamp := func(v value.Value) value.Value {
+		return v.WithScope(value.ScopeCLIOverride).WithOrigin(origin)
+	}
+	bad := func(expected string) (value.Value, diag.Diagnostics) {
+		ds.Add(diag.Diagnostic{
+			Severity: diag.SeverityError,
+			Summary:  "--var " + s.Name + "=" + text + " is not " + article(s.Kind) + " " + s.Kind.String(),
+			Detail:   strconv.Quote(s.Name) + " is declared as " + s.Kind.String() + " at " + s.Origin.String() + ". " + expected,
+			Action:   "Correct the value passed to --var.",
+			Origin:   origin,
+		})
+		return stamp(value.Unknown(s.Kind, value.SourceVariable)), ds
+	}
+
+	switch s.Kind {
+	case value.KindInvalid, value.KindString:
+		return stamp(value.String(text, value.SourceVariable)), ds
+	case value.KindInt:
+		n, err := strconv.ParseInt(text, 10, 64)
+		if err != nil {
+			return bad("Expected a whole number.")
+		}
+		return stamp(value.Int(n, value.SourceVariable)), ds
+	case value.KindFloat:
+		f, err := strconv.ParseFloat(text, 64)
+		if err != nil {
+			return bad("Expected a number.")
+		}
+		return stamp(value.Float(f, value.SourceVariable)), ds
+	case value.KindBool:
+		b, err := strconv.ParseBool(text)
+		if err != nil {
+			return bad("Expected true or false.")
+		}
+		return stamp(value.Bool(b, value.SourceVariable)), ds
+	default:
+		ds.Add(diag.Diagnostic{
+			Severity: diag.SeverityError,
+			Summary:  "variable " + strconv.Quote(s.Name) + " cannot be set with --var",
+			Detail:   "It is declared as " + s.Kind.String() + " at " + s.Origin.String() + ", and --var carries a single line of text.",
+			Action:   "Set " + strconv.Quote(s.Name) + " in variables.yml or in environments/<environment>.yml, where YAML can express " + article(s.Kind) + " " + s.Kind.String() + ".",
+			Origin:   origin,
+		})
+		return stamp(value.Unknown(s.Kind, value.SourceVariable)), ds
+	}
+}

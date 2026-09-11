@@ -457,3 +457,75 @@ func TestValidateChecksListAndMapByKindOnly(t *testing.T) {
 		t.Fatal("a string supplied for a list variable is still a kind mismatch")
 	}
 }
+
+func schemaFor(t *testing.T, kind value.Kind) Schema {
+	t.Helper()
+	got, ds := Schemas([]config.VariableDecl{decl("v", kind)})
+	if ds.HasErrors() {
+		t.Fatalf("fixture schema %s is invalid: %+v", kind, ds)
+	}
+	return got["v"]
+}
+
+func TestParseTextConvertsToTheDeclaredKind(t *testing.T) {
+	origin := value.Origin{File: "--var"}
+	for _, tc := range []struct {
+		kind value.Kind
+		text string
+		want any
+	}{
+		{value.KindString, "20", "20"},
+		{value.KindInt, "20", int64(20)},
+		{value.KindFloat, "2.5", 2.5},
+		{value.KindBool, "true", true},
+	} {
+		got, ds := schemaFor(t, tc.kind).ParseText(tc.text, origin)
+		if ds.HasErrors() {
+			t.Fatalf("%s: unexpected diagnostics: %+v", tc.kind, ds)
+		}
+		if got.Kind != tc.kind || got.Raw != tc.want {
+			t.Errorf("%s: ParseText(%q) = %v/%v, want %v/%v", tc.kind, tc.text, got.Kind, got.Raw, tc.kind, tc.want)
+		}
+		if got.Source != value.SourceVariable || got.Scope != value.ScopeCLIOverride {
+			t.Errorf("%s: Source/Scope = %v/%v, want SourceVariable/ScopeCLIOverride", tc.kind, got.Source, got.Scope)
+		}
+	}
+}
+
+func TestParseTextRejectsTextThatIsNotTheDeclaredKind(t *testing.T) {
+	for _, tc := range []struct {
+		kind value.Kind
+		text string
+	}{
+		{value.KindInt, "many"},
+		{value.KindInt, "2.5"},
+		{value.KindFloat, "many"},
+		{value.KindBool, "maybe"},
+	} {
+		if _, ds := schemaFor(t, tc.kind).ParseText(tc.text, value.Origin{File: "--var"}); !ds.HasErrors() {
+			t.Errorf("--var for a %s variable given %q must be rejected", tc.kind, tc.text)
+		}
+	}
+}
+
+func TestParseTextRefusesListAndMapVariables(t *testing.T) {
+	for _, k := range []value.Kind{value.KindList, value.KindMap} {
+		if _, ds := schemaFor(t, k).ParseText("a,b,c", value.Origin{File: "--var"}); !ds.HasErrors() {
+			t.Errorf("--var cannot supply a %s: parsing one needs a mini-language, and PLAN.md §9 forbids building one", k)
+		}
+	}
+}
+
+func TestParseTextLeavesAnUntypedDeclarationAsText(t *testing.T) {
+	d := decl("anything", value.KindInvalid)
+	d.Default, d.HasDefault = value.String("x", value.SourceExplicit), true
+	got, _ := Schemas([]config.VariableDecl{d})
+
+	v, ds := got["anything"].ParseText("20", value.Origin{File: "--var"})
+	if ds.HasErrors() {
+		t.Fatalf("an untyped declaration constrains nothing: %+v", ds)
+	}
+	if v.Kind != value.KindString {
+		t.Errorf("Kind = %v, want KindString — guessing a type from the spelling would make `--var version=1.10` the float 1.1", v.Kind)
+	}
+}
