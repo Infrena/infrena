@@ -117,6 +117,29 @@ func TestRegisterRefusesTheModuleNamespace(t *testing.T) {
 	}
 }
 
+// TestRegisterAcceptsATypeMerelyContainingModule is the boundary, and it is the
+// half that keeps the guard honest. The rule is a `module.` PREFIX, not the
+// substring: a provider legitimately offering `test.module_group`, `aws.module`
+// or `modulearium.thing` must still register.
+//
+// The cheapest implementation that satisfies the refusal test is
+// strings.Contains(d.Type, "module"), and it passes that test while quietly
+// reserving far more than the namespace it was meant to protect — including
+// every type of a provider whose NAME happens to start with "module".
+func TestRegisterAcceptsATypeMerelyContainingModule(t *testing.T) {
+	for _, typ := range []string{"test.module_group", "aws.module", "modulearium.thing"} {
+		r := New()
+		if err := r.Register(stubProvider{name: "legit", defs: []*schema.ResourceDefinition{
+			def(typ),
+		}}); err != nil {
+			t.Errorf("Register(%q) = %v, want it accepted: the guard reserves the `module.` prefix, not the word", typ, err)
+		}
+		if _, ok := r.Definition(typ); !ok {
+			t.Errorf("%q did not reach the registry", typ)
+		}
+	}
+}
+
 func TestTypesIsSorted(t *testing.T) {
 	r := New()
 	_ = r.Register(stubProvider{name: "test", defs: []*schema.ResourceDefinition{
