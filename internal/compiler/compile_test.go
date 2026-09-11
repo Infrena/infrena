@@ -24,6 +24,25 @@ func loadFiles(t *testing.T, body string) []config.File {
 	return files
 }
 
+// loadFilesWithVariablesYml is loadFiles plus a variables.yml, for the tests
+// that exercise Options.FileVars against config.ProjectDecl.VariableValues —
+// the one rung of the precedence chain the two share.
+func loadFilesWithVariablesYml(t *testing.T, infraBody, variablesBody string) []config.File {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "infra.yml"), []byte(infraBody), 0o644); err != nil {
+		t.Fatalf("write infra.yml: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "variables.yml"), []byte(variablesBody), 0o644); err != nil {
+		t.Fatalf("write variables.yml: %v", err)
+	}
+	files, err := config.Load(dir)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	return files
+}
+
 func TestCompileRunsTheFullPipelineOnAValidProject(t *testing.T) {
 	files := loadFiles(t, `
 project: myapp
@@ -268,6 +287,90 @@ resources:
 	_, ds := Compile(files, testRegistry(t), Options{Environment: "a"})
 	if len(ds) != 1 {
 		t.Fatalf("want exactly the cycle diagnostic, got %d:\n%+v", len(ds), ds)
+	}
+}
+
+// TestCompileStopsAfterVariableErrors is the stage-4-only sibling of
+// TestCompileStopsAfterEnvironmentErrors. That test's cycle makes
+// environments.Resolve fail, which returns a Chain with Selected false —
+// stage 4 already treats an unselected chain as "nothing to check" (an
+// unset variable becomes an unknown, not an error), so it produces no
+// diagnostics of its own either way and does not by itself prove the halt
+// after stage 4 does anything. This fixture resolves its environment
+// chain cleanly and fails only because a declared variable has no default
+// and nothing sets it: without the halt, stage 6 additionally reports
+// `undefined variable "domain"` at ${domain}'s use site — the same
+// problem told twice, exactly what the halt exists to prevent.
+func TestCompileStopsAfterVariableErrors(t *testing.T) {
+	files := loadFiles(t, `
+project: myapp
+variables:
+  domain:
+    type: string
+resources:
+  network:
+    type: test.network
+    cidr: ${domain}
+`)
+	_, ds := Compile(files, testRegistry(t), Options{Environment: "dev"})
+	if len(ds) != 1 {
+		t.Fatalf("want exactly the unset-variable diagnostic, got %d:\n%+v", len(ds), ds)
+	}
+}
+
+// TestCompileFileVarWinsOverVariablesYml exercises fileVars' merge order.
+// internal/cli does not populate Options.FileVars yet — --var-file still
+// errors upstream in root.go, so no end-to-end path reaches this today — but
+// fileVars is reachable directly through Compile, and its merge order (the
+// file named on the command line beats variables.yml) is exactly the
+// distinction Options.FileVars and ProjectDecl.VariableValues exist to
+// preserve as two separate fields rather than one.
+func TestCompileFileVarWinsOverVariablesYml(t *testing.T) {
+	files := loadFilesWithVariablesYml(t, `
+project: myapp
+variables:
+  name:
+    type: string
+    default: from-schema-default
+resources:
+  network:
+    type: test.network
+    cidr: ${name}
+`, "name: from-variables-yml\n")
+
+	cfg, ds := Compile(files, testRegistry(t), Options{
+		Environment: "dev",
+		FileVars:    map[string]value.Value{"name": value.String("from-var-file", value.SourceVariable)},
+	})
+	if ds.HasErrors() {
+		t.Fatalf("unexpected diagnostics: %+v", ds)
+	}
+	if got, _ := cfg.Resources["network"].Attrs["cidr"].AsString(); got != "from-var-file" {
+		t.Errorf("cidr = %q, want from-var-file — --var-file is more specific than variables.yml and must win", got)
+	}
+}
+
+// TestCompileVariablesYmlWinsWhenNoFileVarIsSupplied is the other direction:
+// absent Options.FileVars, variables.yml still beats the declared default.
+func TestCompileVariablesYmlWinsWhenNoFileVarIsSupplied(t *testing.T) {
+	files := loadFilesWithVariablesYml(t, `
+project: myapp
+variables:
+  name:
+    type: string
+    default: from-schema-default
+resources:
+  network:
+    type: test.network
+    cidr: ${name}
+`, "name: from-variables-yml\n")
+
+	cfg, ds := Compile(files, testRegistry(t), Options{Environment: "dev"})
+	if ds.HasErrors() {
+		t.Fatalf("unexpected diagnostics: %+v", ds)
+	}
+	if got, _ := cfg.Resources["network"].Attrs["cidr"].AsString(); got != "from-variables-yml" {
+		t.Errorf("cidr = %q, want from-variables-yml", got)
 	}
 }
 
