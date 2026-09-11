@@ -11,14 +11,14 @@ import (
 	"testing"
 	"time"
 
-	"infra/internal/registry"
-	"infra/internal/state"
-	"infra/pkg/address"
-	"infra/pkg/provider"
-	"infra/pkg/resource"
-	"infra/pkg/schema"
-	"infra/pkg/value"
-	testprovider "infra/providers/test"
+	"github.com/infrata/infrata/internal/registry"
+	"github.com/infrata/infrata/internal/state"
+	"github.com/infrata/infrata/pkg/address"
+	"github.com/infrata/infrata/pkg/provider"
+	"github.com/infrata/infrata/pkg/resource"
+	"github.com/infrata/infrata/pkg/schema"
+	"github.com/infrata/infrata/pkg/value"
+	testprovider "github.com/infrata/infrata/providers/test"
 )
 
 func newTestRegistry(t *testing.T, cloudPath string) (*registry.Registry, *testprovider.Provider) {

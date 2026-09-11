@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"sort"
 
-	"infra/pkg/provider"
-	"infra/pkg/schema"
+	"github.com/infrata/infrata/pkg/provider"
+	"github.com/infrata/infrata/pkg/schema"
 )
 
 // Registry maps resource types to their definitions and providers.

@@ -3,11 +3,11 @@ package executor
 import (
 	"testing"
 
-	"infra/internal/expressions"
-	"infra/internal/planner"
-	"infra/pkg/address"
-	"infra/pkg/resource"
-	"infra/pkg/value"
+	"github.com/infrata/infrata/internal/expressions"
+	"github.com/infrata/infrata/internal/planner"
+	"github.com/infrata/infrata/pkg/address"
+	"github.com/infrata/infrata/pkg/resource"
+	"github.com/infrata/infrata/pkg/value"
 )
 
 // planTimeScope reproduces the compiler's compile-time scope: it resolves

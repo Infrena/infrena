@@ -4,7 +4,7 @@ package main
 import (
 	"os"
 
-	"infra/internal/cli"
+	"github.com/infrata/infrata/internal/cli"
 )
 
 func main() {

@@ -3,8 +3,8 @@ package cli
 import (
 	"fmt"
 
-	"infra/internal/compiler"
-	"infra/internal/diag"
+	"github.com/infrata/infrata/internal/compiler"
+	"github.com/infrata/infrata/internal/diag"
 )
 
 // compilerOptions builds the compiler options for a command that compiles

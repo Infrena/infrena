@@ -6,10 +6,10 @@ import (
 	"strconv"
 	"strings"
 
-	"infra/internal/diag"
-	"infra/internal/registry"
-	"infra/pkg/schema"
-	"infra/pkg/value"
+	"github.com/infrata/infrata/internal/diag"
+	"github.com/infrata/infrata/internal/registry"
+	"github.com/infrata/infrata/pkg/schema"
+	"github.com/infrata/infrata/pkg/value"
 )
 
 // bindSchemas is compiler stage 7. It resolves each resource's type to its

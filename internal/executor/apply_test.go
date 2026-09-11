@@ -8,15 +8,15 @@ import (
 	"testing"
 	"time"
 
-	"infra/internal/diag"
-	"infra/internal/planner"
-	"infra/internal/registry"
-	"infra/internal/state"
-	"infra/pkg/address"
-	"infra/pkg/provider"
-	"infra/pkg/resource"
-	"infra/pkg/schema"
-	"infra/pkg/value"
+	"github.com/infrata/infrata/internal/diag"
+	"github.com/infrata/infrata/internal/planner"
+	"github.com/infrata/infrata/internal/registry"
+	"github.com/infrata/infrata/internal/state"
+	"github.com/infrata/infrata/pkg/address"
+	"github.com/infrata/infrata/pkg/provider"
+	"github.com/infrata/infrata/pkg/resource"
+	"github.com/infrata/infrata/pkg/schema"
+	"github.com/infrata/infrata/pkg/value"
 )
 
 func addr(name string) address.Address { return address.Address{Name: name} }

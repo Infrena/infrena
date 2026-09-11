@@ -10,10 +10,10 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"infra/internal/compiler"
-	"infra/internal/config"
-	"infra/internal/planner"
-	"infra/internal/refresh"
+	"github.com/infrata/infrata/internal/compiler"
+	"github.com/infrata/infrata/internal/config"
+	"github.com/infrata/infrata/internal/planner"
+	"github.com/infrata/infrata/internal/refresh"
 )
 
 // errChanges signals that a plan completed successfully but found changes to

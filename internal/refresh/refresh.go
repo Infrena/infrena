@@ -13,12 +13,12 @@ import (
 	"strings"
 	"sync"
 
-	"infra/internal/diag"
-	"infra/internal/registry"
-	"infra/internal/state"
-	"infra/pkg/address"
-	"infra/pkg/resource"
-	"infra/pkg/value"
+	"github.com/infrata/infrata/internal/diag"
+	"github.com/infrata/infrata/internal/registry"
+	"github.com/infrata/infrata/internal/state"
+	"github.com/infrata/infrata/pkg/address"
+	"github.com/infrata/infrata/pkg/resource"
+	"github.com/infrata/infrata/pkg/value"
 )
 
 // Observation is what Refresh learned about one resource recorded in state.

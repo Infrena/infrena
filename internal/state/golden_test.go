@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"infra/pkg/address"
-	"infra/pkg/resource"
-	"infra/pkg/value"
+	"github.com/infrata/infrata/pkg/address"
+	"github.com/infrata/infrata/pkg/resource"
+	"github.com/infrata/infrata/pkg/value"
 )
 
 // updateGolden regenerates testdata/state-v1.json. Run with

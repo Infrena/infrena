@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"infra/internal/graph"
-	"infra/pkg/address"
+	"github.com/infrata/infrata/internal/graph"
+	"github.com/infrata/infrata/pkg/address"
 )
 
 // addr is NOT redefined here: plan_test.go (Task 12) already declares it in

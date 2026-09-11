@@ -3,7 +3,7 @@ package schema
 import (
 	"testing"
 
-	"infra/pkg/value"
+	"github.com/infrata/infrata/pkg/value"
 )
 
 func sampleDefinition() *ResourceDefinition {

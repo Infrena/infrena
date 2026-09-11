@@ -4,10 +4,10 @@ import (
 	"path/filepath"
 	"sort"
 
-	"infra/internal/registry"
-	"infra/internal/state"
-	"infra/pkg/value"
-	"infra/providers/test"
+	"github.com/infrata/infrata/internal/registry"
+	"github.com/infrata/infrata/internal/state"
+	"github.com/infrata/infrata/pkg/value"
+	"github.com/infrata/infrata/providers/test"
 )
 
 // StateDirName is the per-project directory holding state, locks and, for the

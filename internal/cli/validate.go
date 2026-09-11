@@ -8,10 +8,10 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"infra/internal/compiler"
-	"infra/internal/config"
-	"infra/internal/diag"
-	"infra/internal/registry"
+	"github.com/infrata/infrata/internal/compiler"
+	"github.com/infrata/infrata/internal/config"
+	"github.com/infrata/infrata/internal/diag"
+	"github.com/infrata/infrata/internal/registry"
 )
 
 // newValidateCommand builds `infra validate [environment]`.

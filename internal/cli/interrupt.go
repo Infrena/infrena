@@ -8,7 +8,7 @@ import (
 	"os"
 	"os/signal"
 
-	"infra/internal/state"
+	"github.com/infrata/infrata/internal/state"
 )
 
 // errInterrupted signals that a run stopped because of a SIGINT rather than

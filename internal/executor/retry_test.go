@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"infra/pkg/provider"
+	"github.com/infrata/infrata/pkg/provider"
 )
 
 func alwaysSafe(error) provider.Retryability        { return provider.SafeToRetry }

@@ -8,11 +8,11 @@ import (
 	"sync"
 	"time"
 
-	"infra/pkg/address"
-	"infra/pkg/provider"
-	"infra/pkg/resource"
-	"infra/pkg/schema"
-	"infra/pkg/value"
+	"github.com/infrata/infrata/pkg/address"
+	"github.com/infrata/infrata/pkg/provider"
+	"github.com/infrata/infrata/pkg/resource"
+	"github.com/infrata/infrata/pkg/schema"
+	"github.com/infrata/infrata/pkg/value"
 )
 
 // ErrInjected wraps a deliberately injected failure so ClassifyError can

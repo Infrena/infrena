@@ -6,11 +6,11 @@ import (
 	"strings"
 	"testing"
 
-	"infra/internal/config"
-	"infra/internal/environments"
-	"infra/internal/variables"
-	"infra/pkg/address"
-	"infra/pkg/value"
+	"github.com/infrata/infrata/internal/config"
+	"github.com/infrata/infrata/internal/environments"
+	"github.com/infrata/infrata/internal/variables"
+	"github.com/infrata/infrata/pkg/address"
+	"github.com/infrata/infrata/pkg/value"
 )
 
 // scopeFor builds the variable scope bindReferences now requires, through the

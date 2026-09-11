@@ -6,8 +6,8 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"infra/internal/diag"
-	"infra/pkg/value"
+	"github.com/infrata/infrata/internal/diag"
+	"github.com/infrata/infrata/pkg/value"
 )
 
 func fileFrom(t *testing.T, path, body string) File {

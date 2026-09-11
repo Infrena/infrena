@@ -5,13 +5,13 @@ import (
 	"strings"
 	"testing"
 
-	"infra/internal/diag"
-	"infra/internal/registry"
-	"infra/pkg/address"
-	"infra/pkg/provider"
-	"infra/pkg/resource"
-	"infra/pkg/schema"
-	"infra/pkg/value"
+	"github.com/infrata/infrata/internal/diag"
+	"github.com/infrata/infrata/internal/registry"
+	"github.com/infrata/infrata/pkg/address"
+	"github.com/infrata/infrata/pkg/provider"
+	"github.com/infrata/infrata/pkg/resource"
+	"github.com/infrata/infrata/pkg/schema"
+	"github.com/infrata/infrata/pkg/value"
 )
 
 func TestValidateGraphDetectsCycle(t *testing.T) {

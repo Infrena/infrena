@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"infra/pkg/value"
+	"github.com/infrata/infrata/pkg/value"
 )
 
 func TestHasErrorsIgnoresWarnings(t *testing.T) {

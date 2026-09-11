@@ -1,12 +1,12 @@
 package compiler
 
 import (
-	"infra/internal/config"
-	"infra/internal/diag"
-	"infra/internal/environments"
-	"infra/internal/registry"
-	"infra/internal/variables"
-	"infra/pkg/value"
+	"github.com/infrata/infrata/internal/config"
+	"github.com/infrata/infrata/internal/diag"
+	"github.com/infrata/infrata/internal/environments"
+	"github.com/infrata/infrata/internal/registry"
+	"github.com/infrata/infrata/internal/variables"
+	"github.com/infrata/infrata/pkg/value"
 )
 
 // Compile runs the full compiler pipeline — decode, reference binding,

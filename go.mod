@@ -1,4 +1,4 @@
-module infra
+module github.com/infrata/infrata
 
 go 1.24.13
 

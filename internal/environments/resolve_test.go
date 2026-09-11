@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"infra/internal/config"
-	"infra/pkg/value"
+	"github.com/infrata/infrata/internal/config"
+	"github.com/infrata/infrata/pkg/value"
 )
 
 func override(name string, n int64) config.OverrideDecl {

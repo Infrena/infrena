@@ -7,9 +7,9 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"infra/internal/compiler"
-	"infra/internal/executor"
-	"infra/internal/planner"
+	"github.com/infrata/infrata/internal/compiler"
+	"github.com/infrata/infrata/internal/executor"
+	"github.com/infrata/infrata/internal/planner"
 )
 
 // newDestroyCommand builds `infra destroy <environment>`: plan the removal

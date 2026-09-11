@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"infra/pkg/value"
+	"github.com/infrata/infrata/pkg/value"
 )
 
 func findEnvironment(t *testing.T, p *ProjectDecl, name string) EnvironmentDecl {

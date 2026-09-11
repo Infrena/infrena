@@ -5,9 +5,9 @@ import (
 	"path/filepath"
 	"strconv"
 
-	"infra/internal/config"
-	"infra/internal/diag"
-	"infra/pkg/value"
+	"github.com/infrata/infrata/internal/config"
+	"github.com/infrata/infrata/internal/diag"
+	"github.com/infrata/infrata/pkg/value"
 )
 
 // loadVarFiles reads every --var-file in flag order and merges them into one

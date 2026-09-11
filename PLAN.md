@@ -6,7 +6,7 @@
 
 The product is named **Infrata** (*infra* + *strata*: layers of infrastructure), with the GitHub organization `github.com/infrata` and the domain `infrata.dev`. The command is `infrata`, installed with `go install github.com/infrata/infrata/cmd/infrata@latest`.
 
-Development still uses the working name `infra` for the Go module path and the `cmd/infra` binary until the rename lands.
+The Go module is `github.com/infrata/infrata` and the binary is `cmd/infrata`; the rename landed 2026-09-11, between M4 and M5.
 
 ---
 

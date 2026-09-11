@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"infra/internal/diag"
-	"infra/pkg/address"
-	"infra/pkg/value"
+	"github.com/infrata/infrata/internal/diag"
+	"github.com/infrata/infrata/pkg/address"
+	"github.com/infrata/infrata/pkg/value"
 )
 
 // addr and str are shared with planner_test.go; they are declared here because

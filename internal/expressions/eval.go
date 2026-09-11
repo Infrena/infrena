@@ -4,8 +4,8 @@ import (
 	"strconv"
 	"strings"
 
-	"infra/internal/diag"
-	"infra/pkg/value"
+	"github.com/infrata/infrata/internal/diag"
+	"github.com/infrata/infrata/pkg/value"
 )
 
 // Scope resolves the names an expression refers to.

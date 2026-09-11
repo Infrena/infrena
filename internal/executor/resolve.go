@@ -1,12 +1,12 @@
 package executor
 
 import (
-	"infra/internal/diag"
-	"infra/internal/expressions"
-	"infra/internal/planner"
-	"infra/pkg/address"
-	"infra/pkg/resource"
-	"infra/pkg/value"
+	"github.com/infrata/infrata/internal/diag"
+	"github.com/infrata/infrata/internal/expressions"
+	"github.com/infrata/infrata/internal/planner"
+	"github.com/infrata/infrata/pkg/address"
+	"github.com/infrata/infrata/pkg/resource"
+	"github.com/infrata/infrata/pkg/value"
 )
 
 // runtimeScope builds the apply-time scope: attribute references resolve

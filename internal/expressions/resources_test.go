@@ -3,7 +3,7 @@ package expressions
 import (
 	"testing"
 
-	"infra/pkg/value"
+	"github.com/infrata/infrata/pkg/value"
 )
 
 func origin() value.Origin { return value.Origin{File: "infra.yml", Line: 3} }

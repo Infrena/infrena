@@ -4,9 +4,9 @@ import (
 	"context"
 	"fmt"
 
-	"infra/internal/planner"
-	"infra/pkg/provider"
-	"infra/pkg/resource"
+	"github.com/infrata/infrata/internal/planner"
+	"github.com/infrata/infrata/pkg/provider"
+	"github.com/infrata/infrata/pkg/resource"
 )
 
 // dispatch performs the one provider call an OpNode implies and returns the

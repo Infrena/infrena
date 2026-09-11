@@ -7,8 +7,8 @@ import (
 	"sort"
 	"time"
 
-	"infra/pkg/address"
-	"infra/pkg/resource"
+	"github.com/infrata/infrata/pkg/address"
+	"github.com/infrata/infrata/pkg/resource"
 )
 
 // CurrentVersion is the state schema version this build writes.

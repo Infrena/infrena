@@ -5,13 +5,13 @@ import (
 	"strconv"
 	"strings"
 
-	"infra/internal/config"
-	"infra/internal/diag"
-	"infra/internal/expressions"
-	"infra/internal/variables"
-	"infra/pkg/address"
-	"infra/pkg/resource"
-	"infra/pkg/value"
+	"github.com/infrata/infrata/internal/config"
+	"github.com/infrata/infrata/internal/diag"
+	"github.com/infrata/infrata/internal/expressions"
+	"github.com/infrata/infrata/internal/variables"
+	"github.com/infrata/infrata/pkg/address"
+	"github.com/infrata/infrata/pkg/resource"
+	"github.com/infrata/infrata/pkg/value"
 )
 
 // compileScope resolves variables at compile time but reports every resource

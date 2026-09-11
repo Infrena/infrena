@@ -5,15 +5,15 @@ import (
 	"testing"
 	"time"
 
-	"infra/internal/compiler"
-	"infra/internal/planner"
-	"infra/internal/refresh"
-	"infra/internal/registry"
-	"infra/internal/state"
-	"infra/pkg/provider"
-	"infra/pkg/resource"
-	"infra/pkg/schema"
-	"infra/pkg/value"
+	"github.com/infrata/infrata/internal/compiler"
+	"github.com/infrata/infrata/internal/planner"
+	"github.com/infrata/infrata/internal/refresh"
+	"github.com/infrata/infrata/internal/registry"
+	"github.com/infrata/infrata/internal/state"
+	"github.com/infrata/infrata/pkg/provider"
+	"github.com/infrata/infrata/pkg/resource"
+	"github.com/infrata/infrata/pkg/schema"
+	"github.com/infrata/infrata/pkg/value"
 )
 
 // realisticProvider is the only Provider double in this package with an

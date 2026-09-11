@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"infra/pkg/address"
-	"infra/pkg/value"
+	"github.com/infrata/infrata/pkg/address"
+	"github.com/infrata/infrata/pkg/value"
 )
 
 var update = flag.Bool("update", false, "update golden files")

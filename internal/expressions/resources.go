@@ -3,9 +3,9 @@ package expressions
 import (
 	"sort"
 
-	"infra/internal/diag"
-	"infra/pkg/address"
-	"infra/pkg/value"
+	"github.com/infrata/infrata/internal/diag"
+	"github.com/infrata/infrata/pkg/address"
+	"github.com/infrata/infrata/pkg/value"
 )
 
 // ResourceScope resolves attribute references against resources whose

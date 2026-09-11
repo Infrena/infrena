@@ -6,14 +6,14 @@ import (
 	"fmt"
 	"time"
 
-	"infra/internal/diag"
-	"infra/internal/graph"
-	"infra/internal/planner"
-	"infra/internal/state"
-	"infra/pkg/address"
-	"infra/pkg/provider"
-	"infra/pkg/resource"
-	"infra/pkg/value"
+	"github.com/infrata/infrata/internal/diag"
+	"github.com/infrata/infrata/internal/graph"
+	"github.com/infrata/infrata/internal/planner"
+	"github.com/infrata/infrata/internal/state"
+	"github.com/infrata/infrata/pkg/address"
+	"github.com/infrata/infrata/pkg/provider"
+	"github.com/infrata/infrata/pkg/resource"
+	"github.com/infrata/infrata/pkg/value"
 )
 
 // Apply drains the execution graph, dispatching each operation's provider

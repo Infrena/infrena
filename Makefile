@@ -7,7 +7,7 @@ GO ?= go
 .PHONY: build test vet fmt check
 
 build:
-	$(GO) build -o bin/infra ./cmd/infra
+	$(GO) build -o bin/infrata ./cmd/infrata
 
 # -count=1 is not a preference, it disables the test cache — and without it
 # `make check` can pass while tests/integration has never run against the

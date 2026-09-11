@@ -7,9 +7,9 @@ import (
 	"strconv"
 	"strings"
 
-	"infra/internal/config"
-	"infra/internal/diag"
-	"infra/pkg/value"
+	"github.com/infrata/infrata/internal/config"
+	"github.com/infrata/infrata/internal/diag"
+	"github.com/infrata/infrata/pkg/value"
 )
 
 // Layer is one environment in a resolved extends chain.

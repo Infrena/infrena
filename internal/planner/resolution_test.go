@@ -4,10 +4,10 @@ import (
 	"strings"
 	"testing"
 
-	"infra/internal/expressions"
-	"infra/pkg/address"
-	"infra/pkg/resource"
-	"infra/pkg/value"
+	"github.com/infrata/infrata/internal/expressions"
+	"github.com/infrata/infrata/pkg/address"
+	"github.com/infrata/infrata/pkg/resource"
+	"github.com/infrata/infrata/pkg/value"
 )
 
 // deferred builds the value the compiler produces for a cross-resource

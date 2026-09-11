@@ -6,9 +6,9 @@ package variables
 import (
 	"strconv"
 
-	"infra/internal/config"
-	"infra/internal/diag"
-	"infra/pkg/value"
+	"github.com/infrata/infrata/internal/config"
+	"github.com/infrata/infrata/internal/diag"
+	"github.com/infrata/infrata/pkg/value"
 )
 
 // Schema is one variable's declared type and constraints (PLAN.md §9).

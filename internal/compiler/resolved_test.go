@@ -3,9 +3,9 @@ package compiler
 import (
 	"testing"
 
-	"infra/pkg/address"
-	"infra/pkg/resource"
-	"infra/pkg/value"
+	"github.com/infrata/infrata/pkg/address"
+	"github.com/infrata/infrata/pkg/resource"
+	"github.com/infrata/infrata/pkg/value"
 )
 
 func cfg(resources ...*resource.ResolvedResource) ResolvedConfig {

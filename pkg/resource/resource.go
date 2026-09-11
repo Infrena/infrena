@@ -11,8 +11,8 @@ import (
 	"sort"
 	"time"
 
-	"infra/pkg/address"
-	"infra/pkg/value"
+	"github.com/infrata/infrata/pkg/address"
+	"github.com/infrata/infrata/pkg/value"
 )
 
 // Lifecycle defines immutability constraints on a resource.

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"infra/pkg/value"
+	"github.com/infrata/infrata/pkg/value"
 )
 
 // writeIn writes one file into an existing project directory. `project` only

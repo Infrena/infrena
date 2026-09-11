@@ -5,9 +5,9 @@ import (
 	"reflect"
 	"testing"
 
-	"infra/internal/planner"
-	"infra/pkg/address"
-	"infra/pkg/value"
+	"github.com/infrata/infrata/internal/planner"
+	"github.com/infrata/infrata/pkg/address"
+	"github.com/infrata/infrata/pkg/value"
 )
 
 func TestEventKindStringNamesEveryKindDistinctly(t *testing.T) {

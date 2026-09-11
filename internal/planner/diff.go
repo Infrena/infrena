@@ -6,11 +6,11 @@ import (
 	"strconv"
 	"strings"
 
-	"infra/internal/diag"
-	"infra/pkg/address"
-	"infra/pkg/resource"
-	"infra/pkg/schema"
-	"infra/pkg/value"
+	"github.com/infrata/infrata/internal/diag"
+	"github.com/infrata/infrata/pkg/address"
+	"github.com/infrata/infrata/pkg/resource"
+	"github.com/infrata/infrata/pkg/schema"
+	"github.com/infrata/infrata/pkg/value"
 )
 
 // diffAttributes reports every attribute that differs between desired

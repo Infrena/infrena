@@ -8,8 +8,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"infra/internal/refresh"
-	"infra/internal/state"
+	"github.com/infrata/infrata/internal/refresh"
+	"github.com/infrata/infrata/internal/state"
 )
 
 // newRefreshCommand builds `infra refresh <environment>`: read every

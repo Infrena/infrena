@@ -4,7 +4,7 @@
 // later stage works with the typed declarations defined here. Spec §7.
 package config
 
-import "infra/pkg/value"
+import "github.com/infrata/infrata/pkg/value"
 
 // AttributeDecl is one configured attribute.
 //

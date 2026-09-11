@@ -26,8 +26,8 @@ func binary(t *testing.T) string {
 			buildErr = err
 			return
 		}
-		binPath = filepath.Join(dir, "infra")
-		cmd := exec.Command("go", "build", "-o", binPath, "infra/cmd/infra")
+		binPath = filepath.Join(dir, "infrata")
+		cmd := exec.Command("go", "build", "-o", binPath, "github.com/infrata/infrata/cmd/infrata")
 		cmd.Dir = repoRoot(t)
 		out, err := cmd.CombinedOutput()
 		if err != nil {

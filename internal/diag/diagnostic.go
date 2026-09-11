@@ -9,8 +9,8 @@ import (
 	"strconv"
 	"strings"
 
-	"infra/pkg/address"
-	"infra/pkg/value"
+	"github.com/infrata/infrata/pkg/address"
+	"github.com/infrata/infrata/pkg/value"
 )
 
 // Severity indicates whether a diagnostic is an error or warning.

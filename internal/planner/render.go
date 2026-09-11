@@ -5,7 +5,7 @@ import (
 	"sort"
 	"strings"
 
-	"infra/pkg/value"
+	"github.com/infrata/infrata/pkg/value"
 )
 
 // RenderOptions controls how a Plan is rendered to text.

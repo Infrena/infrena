@@ -5,7 +5,7 @@
 // environment-aware default resolvers can be functions. Spec §8.1.
 package schema
 
-import "infra/pkg/value"
+import "github.com/infrata/infrata/pkg/value"
 
 // DefaultContext is everything a default resolver is allowed to see.
 //

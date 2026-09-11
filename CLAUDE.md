@@ -82,7 +82,7 @@ the shim path structurally, or `export PATH="$HOME/.local/share/mise/shims:$PATH
 A bare `go` resolves to 1.20 and fails. Check with `go version` if anything looks odd.
 
 ```bash
-go build ./cmd/infra          # build the binary
+go build ./cmd/infrata        # build the binary
 go test ./...                 # full unit + fake-provider integration suite
 go test ./internal/planner/   # one package
 go test -run TestPlanDestroy ./internal/planner/   # one test
@@ -103,7 +103,7 @@ The CLI surface to implement (§37): `init`, `validate`, `plan <env>`, `apply <e
 Planned layout (§41):
 
 ```
-cmd/infra/          CLI entrypoint
+cmd/infrata/        CLI entrypoint
 internal/           config, compiler, expressions, environments, modules, variables,
                     state, planner, graph, executor, discovery, importer, generator,
                     lifecycle, secrets, cli

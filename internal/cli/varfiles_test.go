@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"infra/pkg/value"
+	"github.com/infrata/infrata/pkg/value"
 )
 
 func writeFile(t *testing.T, dir, name, body string) {

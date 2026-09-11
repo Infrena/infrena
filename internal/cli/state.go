@@ -6,8 +6,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"infra/pkg/address"
-	"infra/pkg/value"
+	"github.com/infrata/infrata/pkg/address"
+	"github.com/infrata/infrata/pkg/value"
 )
 
 // newStateCommand builds the `infra state` command group.

@@ -7,15 +7,15 @@ import (
 	"testing"
 	"time"
 
-	"infra/internal/compiler"
-	"infra/internal/diag"
-	"infra/internal/refresh"
-	"infra/internal/registry"
-	"infra/internal/state"
-	"infra/pkg/address"
-	"infra/pkg/resource"
-	"infra/pkg/value"
-	testprovider "infra/providers/test"
+	"github.com/infrata/infrata/internal/compiler"
+	"github.com/infrata/infrata/internal/diag"
+	"github.com/infrata/infrata/internal/refresh"
+	"github.com/infrata/infrata/internal/registry"
+	"github.com/infrata/infrata/internal/state"
+	"github.com/infrata/infrata/pkg/address"
+	"github.com/infrata/infrata/pkg/resource"
+	"github.com/infrata/infrata/pkg/value"
+	testprovider "github.com/infrata/infrata/providers/test"
 )
 
 // addr and str come from plan_test.go; do not redeclare them.

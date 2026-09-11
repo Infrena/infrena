@@ -7,15 +7,15 @@ import (
 	"strings"
 	"time"
 
-	"infra/internal/compiler"
-	"infra/internal/diag"
-	"infra/internal/expressions"
-	"infra/internal/graph"
-	"infra/internal/refresh"
-	"infra/internal/registry"
-	"infra/internal/state"
-	"infra/pkg/address"
-	"infra/pkg/resource"
+	"github.com/infrata/infrata/internal/compiler"
+	"github.com/infrata/infrata/internal/diag"
+	"github.com/infrata/infrata/internal/expressions"
+	"github.com/infrata/infrata/internal/graph"
+	"github.com/infrata/infrata/internal/refresh"
+	"github.com/infrata/infrata/internal/registry"
+	"github.com/infrata/infrata/internal/state"
+	"github.com/infrata/infrata/pkg/address"
+	"github.com/infrata/infrata/pkg/resource"
 )
 
 // Options carries what planning needs beyond the three inputs it diffs.

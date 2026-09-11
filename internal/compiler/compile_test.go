@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	"infra/internal/config"
-	"infra/pkg/address"
-	"infra/pkg/value"
+	"github.com/infrata/infrata/internal/config"
+	"github.com/infrata/infrata/pkg/address"
+	"github.com/infrata/infrata/pkg/value"
 )
 
 func loadFiles(t *testing.T, body string) []config.File {

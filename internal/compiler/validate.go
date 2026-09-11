@@ -4,11 +4,11 @@ import (
 	"strconv"
 	"strings"
 
-	"infra/internal/diag"
-	"infra/internal/graph"
-	"infra/internal/registry"
-	"infra/pkg/address"
-	"infra/pkg/value"
+	"github.com/infrata/infrata/internal/diag"
+	"github.com/infrata/infrata/internal/graph"
+	"github.com/infrata/infrata/internal/registry"
+	"github.com/infrata/infrata/pkg/address"
+	"github.com/infrata/infrata/pkg/value"
 )
 
 // validateGraph is compiler stage 8. It runs once schema binding has

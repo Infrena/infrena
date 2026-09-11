@@ -34,7 +34,7 @@ func NewRootCommand() *cobra.Command {
 	opts := &GlobalOptions{}
 
 	root := &cobra.Command{
-		Use:           "infra",
+		Use:           "infrata",
 		Short:         "Declarative infrastructure management",
 		SilenceUsage:  true,
 		SilenceErrors: true,

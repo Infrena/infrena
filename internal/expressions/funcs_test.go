@@ -3,7 +3,7 @@ package expressions
 import (
 	"testing"
 
-	"infra/pkg/value"
+	"github.com/infrata/infrata/pkg/value"
 )
 
 func call(t *testing.T, name string, args ...value.Value) value.Value {

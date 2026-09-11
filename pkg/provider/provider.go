@@ -7,9 +7,9 @@ import (
 	"context"
 	"errors"
 
-	"infra/pkg/resource"
-	"infra/pkg/schema"
-	"infra/pkg/value"
+	"github.com/infrata/infrata/pkg/resource"
+	"github.com/infrata/infrata/pkg/schema"
+	"github.com/infrata/infrata/pkg/value"
 )
 
 // ErrNotImplemented is returned by capabilities a provider does not offer.

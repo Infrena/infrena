@@ -9,8 +9,8 @@ import (
 	"strconv"
 	"strings"
 
-	"infra/internal/diag"
-	"infra/pkg/value"
+	"github.com/infrata/infrata/internal/diag"
+	"github.com/infrata/infrata/pkg/value"
 )
 
 // Parse converts a configuration scalar into an expression tree. Text with no

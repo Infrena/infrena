@@ -11,14 +11,14 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"infra/internal/compiler"
-	"infra/internal/config"
-	"infra/internal/executor"
-	"infra/internal/planner"
-	"infra/internal/refresh"
-	"infra/internal/registry"
-	"infra/internal/state"
-	"infra/pkg/address"
+	"github.com/infrata/infrata/internal/compiler"
+	"github.com/infrata/infrata/internal/config"
+	"github.com/infrata/infrata/internal/executor"
+	"github.com/infrata/infrata/internal/planner"
+	"github.com/infrata/infrata/internal/refresh"
+	"github.com/infrata/infrata/internal/registry"
+	"github.com/infrata/infrata/internal/state"
+	"github.com/infrata/infrata/pkg/address"
 )
 
 // applyPrompt is what a human sees before infra mutates anything. "yes",

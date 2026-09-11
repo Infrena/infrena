@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"infra/internal/diag"
-	"infra/pkg/value"
+	"github.com/infrata/infrata/internal/diag"
+	"github.com/infrata/infrata/pkg/value"
 )
 
 // decodeTree writes files to a temp dir, runs the REAL Load, and decodes the

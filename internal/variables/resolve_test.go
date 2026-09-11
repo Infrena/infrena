@@ -4,9 +4,9 @@ import (
 	"strings"
 	"testing"
 
-	"infra/internal/config"
-	"infra/internal/environments"
-	"infra/pkg/value"
+	"github.com/infrata/infrata/internal/config"
+	"github.com/infrata/infrata/internal/environments"
+	"github.com/infrata/infrata/pkg/value"
 )
 
 func envOverride(name string, n int64) config.OverrideDecl {

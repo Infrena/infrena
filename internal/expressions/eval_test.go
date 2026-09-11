@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"infra/internal/diag"
-	"infra/pkg/value"
+	"github.com/infrata/infrata/internal/diag"
+	"github.com/infrata/infrata/pkg/value"
 )
 
 // testScope resolves variables but not resource attributes, which is exactly
