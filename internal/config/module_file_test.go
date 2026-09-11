@@ -319,6 +319,21 @@ func TestBareOutputReferenceIsRefused(t *testing.T) {
 		}
 	})
 
+	// A hostname is the single most likely thing a module publishes, and it is
+	// dotted. Before this case existed the guard accepted ANY number of
+	// identifier segments, so `db.example.com` was refused with an error
+	// telling the user they had forgotten `${...}` when they had not.
+	t.Run("a dotted hostname is a literal, not a forgotten reference", func(t *testing.T) {
+		for _, host := range []string{"db.example.com", "api.internal.corp", "a.b.c.d"} {
+			f := writeModule(t, "outputs:\n  endpoint:\n    value: "+host+"\n")
+			got, ds := DecodeModule(f)
+			requireNoErrors(t, ds)
+			if s, _ := got.Outputs[0].Value.AsString(); s != host {
+				t.Errorf("output = %q, want the literal %q", s, host)
+			}
+		}
+	})
+
 	t.Run("quoted means the literal", func(t *testing.T) {
 		f := writeModule(t, "outputs:\n  endpoint:\n    value: \"service.endpoint\"\n")
 		got, ds := DecodeModule(f)

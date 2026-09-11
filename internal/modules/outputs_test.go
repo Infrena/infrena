@@ -256,54 +256,6 @@ outputs:
 	}
 }
 
-// PLAN.md §11's own spelling of an output, which is a literal string in this
-// language (Amendment 4).
-func TestBareOutputValueThatLooksLikeAReferenceWarns(t *testing.T) {
-	decl, dir := fixture(t, map[string]string{
-		"infra.yml": "project: demo\nmodules:\n  - ./db\nresources:\n  d:\n    type: module.db\n",
-		"db/module.yml": `
-resources:
-  service:
-    type: test.thing
-outputs:
-  endpoint:
-    value: service.endpoint
-`,
-	})
-
-	_, ds := Expand(decl, variables.Scope{}, dir, paths{})
-	if ds.HasErrors() {
-		t.Fatalf("a literal output is legal, not an error: %+v", ds)
-	}
-	if !hasFragment(ds, "did you mean ${service.endpoint}") {
-		t.Errorf("a bare value naming something in scope is almost certainly a missing ${}; "+
-			"got %+v", ds)
-	}
-}
-
-// The false positive the filter has to survive: a hostname whose first segment
-// happens to name a resource in the same module. A one-dot check alone would
-// warn here, and a warning on legitimate configuration is what makes users stop
-// reading warnings.
-func TestDottedLiteralOutputDoesNotWarnEvenWhenItsFirstSegmentIsBound(t *testing.T) {
-	decl, dir := fixture(t, map[string]string{
-		"infra.yml": "project: demo\nmodules:\n  - ./m\nresources:\n  d:\n    type: module.m\n",
-		"m/module.yml": `
-resources:
-  db:
-    type: test.thing
-outputs:
-  host:
-    value: db.example.com
-`,
-	})
-
-	_, ds := Expand(decl, variables.Scope{}, dir, paths{})
-	if len(ds) != 0 {
-		t.Errorf("`db.example.com` is a hostname, not a missing ${}; got %+v", ds)
-	}
-}
-
 // PLAN.md §11's flagship example. `application` sorts BEFORE `database`, so name
 // order expands it first and its attribute reads an output that does not exist
 // yet. The fixture's names contradict the required order on purpose.

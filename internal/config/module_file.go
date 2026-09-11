@@ -327,8 +327,16 @@ func bareReference(node *yaml.Node) (string, bool) {
 	if node.Kind != yaml.ScalarNode || node.Style != 0 || node.Tag != "!!str" {
 		return "", false
 	}
+	// EXACTLY one dot. Two segments is where the ambiguity lives —
+	// `service.endpoint` reads as a reference to a resource's attribute, which
+	// is this language's shape for one. Three or more is a hostname:
+	// `db.example.com` and `api.internal.corp` are ordinary output values, and
+	// an output is the single most likely place in a module to publish one.
+	// Refusing those told the user they had forgotten `${...}` when they had
+	// not, which is worse than saying nothing (measured: both were REFUSED
+	// before this bound, alongside `service.endpoint`).
 	segments := strings.Split(node.Value, ".")
-	if len(segments) < 2 {
+	if len(segments) != 2 {
 		return "", false
 	}
 	for _, s := range segments {

@@ -2,7 +2,6 @@ package modules
 
 import (
 	"sort"
-	"strconv"
 	"strings"
 
 	"github.com/infrata/infrata/internal/config"
@@ -201,7 +200,10 @@ func (w *walker) collectOutputs(lv level, scope *Scope) map[string]value.Value {
 
 func (w *walker) collectOutput(o config.OutputDecl, scope *Scope) value.Value {
 	if !o.HasExpressions {
-		w.warnBareReference(o, scope)
+		// No bare-reference check here. internal/config refuses a bare
+		// one-dot output at DECODE, where the line number is, and two
+		// implementations of one heuristic drift. See the note on
+		// bareReference in internal/config/module_file.go.
 		// A literal output is legal: `outputs: {region: {value: us-east-1}}`.
 		return o.Value.WithSource(value.SourceModule)
 	}
@@ -241,40 +243,6 @@ func (w *walker) collectOutput(o config.OutputDecl, scope *Scope) value.Value {
 	// SourceVariable/SourceDefault) mislabeled as something other than what a
 	// module boundary actually is.
 	return v.WithSource(value.SourceModule)
-}
-
-// warnBareReference catches PLAN.md §11's own spelling of an output —
-// `value: service.endpoint`, with no ${} — which in this language is the
-// literal string "service.endpoint" (Amendment 4).
-//
-// A warning rather than an error, because a literal output is legal and useful.
-// The filter is narrow on purpose: exactly one dot, a first segment that is
-// actually bound, and nothing that reads as data. `db.example.com` has two dots
-// and does not warn even in a module that declares a resource called `db`;
-// `1.2.3` has two; a URL or a path has a character from the set. The only shape
-// that survives is the one the spec prints.
-func (w *walker) warnBareReference(o config.OutputDecl, scope *Scope) {
-	s, ok := o.Value.AsString()
-	if !ok {
-		return
-	}
-	name, attr, found := strings.Cut(s, ".")
-	if !found || name == "" || attr == "" ||
-		strings.Contains(attr, ".") || strings.ContainsAny(s, " /:$") {
-		return
-	}
-	if _, bound := scope.Lookup(name); !bound {
-		return
-	}
-	w.ds.Add(diag.Diagnostic{
-		Severity: diag.SeverityWarning,
-		Summary:  "output " + strconv.Quote(o.Name) + " is the literal string " + strconv.Quote(s),
-		Detail: strconv.Quote(name) + " is a resource or module call in " + where(scope.Module) +
-			", so this looks like a reference written without its interpolation.",
-		Action: "Write `value: ${" + s + "}` if you meant the reference — did you mean ${" + s +
-			"}? Otherwise quote it to say you meant the text.",
-		Origin: o.Origin,
-	})
 }
 
 // sortedValueKeys lists a value map's keys for a diagnostic.
