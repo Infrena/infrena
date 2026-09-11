@@ -39,13 +39,14 @@ func evaluate(e *value.Expr, scope Scope, ds *diag.Diagnostics) value.Value {
 		return e.Literal.WithOrigin(e.Origin)
 
 	case value.OpVarRef:
-		v, ok := scope.Variable(e.Ref.Resource)
+		name := e.Ref.VarName()
+		v, ok := scope.Variable(name)
 		if !ok {
 			ds.Add(diag.Diagnostic{
 				Severity: diag.SeverityError,
-				Summary:  "undefined variable " + strconv.Quote(e.Ref.Resource),
+				Summary:  "undefined variable " + strconv.Quote(name),
 				Detail:   "No variable of that name is in scope.",
-				Action:   "Define it in variables.yml, or pass --var " + e.Ref.Resource + "=value.",
+				Action:   "Define it in variables.yml, or pass --var " + name + "=value.",
 				Origin:   e.Origin,
 			})
 			return unknownFrom(e, value.KindString, false)

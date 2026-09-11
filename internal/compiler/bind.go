@@ -144,17 +144,21 @@ func bindAttribute(
 	}
 
 	for _, ref := range e.References() {
+		// The canonical address string, not the bare name: after stage 5 a
+		// reference may carry a module path, and `declared` is keyed by the
+		// same rendering.
+		target := ref.Target.String()
 		switch {
-		case !declared[ref.Resource]:
+		case !declared[target]:
 			ds.Add(diag.Diagnostic{
 				Severity: diag.SeverityError,
-				Summary:  "reference to undeclared resource " + strconv.Quote(ref.Resource),
+				Summary:  "reference to undeclared resource " + strconv.Quote(target),
 				Detail: "${" + ref.String() + "} names a resource that does not exist.\nKnown resources:\n  " +
 					strings.Join(sortedNames(declared), "\n  "),
-				Action: "Correct the reference, or declare " + strconv.Quote(ref.Resource) + ".",
+				Action: "Correct the reference, or declare " + strconv.Quote(target) + ".",
 				Origin: attr.Origin,
 			})
-		case ref.Resource == decl.Name:
+		case target == decl.Name:
 			ds.Add(diag.Diagnostic{
 				Severity: diag.SeverityError,
 				Summary:  "resource " + strconv.Quote(decl.Name) + " refers to itself",
@@ -162,7 +166,7 @@ func bindAttribute(
 				Origin:   attr.Origin,
 			})
 		default:
-			recordEdge(edges, ref.Resource, attr.Origin)
+			recordEdge(edges, target, attr.Origin)
 		}
 	}
 

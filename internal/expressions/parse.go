@@ -246,21 +246,72 @@ func parseReference(src string, origin value.Origin, ds *diag.Diagnostics) *valu
 		}
 	}
 
+	// A user-written reference never contains a `module` segment. Qualify
+	// PRODUCES module-qualified targets at stage 6; the parser must never accept
+	// one (contract Amendment 14a).
+	//
+	// This is not a stylistic rule. ${module.prod.database.id} parses to the
+	// target name "module.prod.database", and address.Address{Name:
+	// "module.prod.database"}.String() returns that verbatim — byte for byte
+	// what Address{Module: ["prod"], Name: "database"} renders for the real
+	// resource inside instance prod. Stage 6 keys its target map by canonical
+	// address, so the two collide and a module's internals become addressable
+	// from outside it. A module exposes its outputs, not its resources
+	// (PLAN.md §11.2).
+	//
+	// At parse time the two are trivially distinguishable, because Qualify has
+	// not run and never routes through here — it sets Target.Module structurally
+	// on an already-parsed expression. A guard at the lookup instead would have
+	// to tell "qualified by Qualify" from "typed by the user" when both are the
+	// same bytes, which is not a check that can be made right.
+	for i, s := range segments {
+		if s != "module" {
+			continue
+		}
+		// Two different mistakes wear the same segment, and telling a user to
+		// reference an output would be nonsense for the second.
+		if i+2 <= len(segments)-1 {
+			instance := segments[i+1]
+			ds.Add(diag.Diagnostic{
+				Severity: diag.SeverityError,
+				Summary:  "reference ${" + src + "} names a module's internals",
+				Detail: "`module` is part of an ADDRESS — how a resource is named in state and in a plan — " +
+					"and is never part of a reference. A module exposes its OUTPUTS to its caller, not the " +
+					"resources it contains, so nothing inside " + strconv.Quote(instance) +
+					" can be referenced from outside it.",
+				Action: "Reference one of its outputs instead, as ${" + instance + ".<output>}, and add an " +
+					"`outputs:` entry to the module if it does not already publish the value you need.",
+				Origin: origin,
+			})
+			return nil
+		}
+		ds.Add(diag.Diagnostic{
+			Severity: diag.SeverityError,
+			Summary:  "reference ${" + src + "} names a resource called " + strconv.Quote("module"),
+			Detail: "`module` is reserved: it is the first segment of every module-qualified address, so a " +
+				"resource with that name has an address that cannot be read back unambiguously.",
+			Action: "Rename the resource to something other than " + strconv.Quote("module") + ".",
+			Origin: origin,
+		})
+		return nil
+	}
+
 	// One segment is a variable; two or more is a resource attribute. The
 	// compiler resolves each against a different scope.
+	//
+	// Both are SCOPE-RELATIVE: the parser has no scope, so it cannot know
+	// whether it is reading a module file or infra.yml, and a reference
+	// written inside a module is re-rooted by stage 5 rather than here.
 	if len(segments) == 1 {
 		return &value.Expr{
 			Op:     value.OpVarRef,
-			Ref:    value.Reference{Resource: segments[0]},
+			Ref:    value.VarRef(segments[0]),
 			Origin: origin,
 		}
 	}
 	return &value.Expr{
-		Op: value.OpResourceRef,
-		Ref: value.Reference{
-			Resource:  strings.Join(segments[:len(segments)-1], "."),
-			Attribute: segments[len(segments)-1],
-		},
+		Op:     value.OpResourceRef,
+		Ref:    value.LocalRef(strings.Join(segments[:len(segments)-1], "."), segments[len(segments)-1]),
 		Origin: origin,
 	}
 }

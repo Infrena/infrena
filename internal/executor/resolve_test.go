@@ -239,7 +239,7 @@ func TestResolveAfterUsesLiveSnapshotNotPlanTimeBefore(t *testing.T) {
 func TestResolveAfterTreatsResidualVarRefAsCompilerBug(t *testing.T) {
 	malformed := &value.Expr{
 		Op:     value.OpVarRef,
-		Ref:    value.Reference{Resource: "environment"},
+		Ref:    value.VarRef("environment"),
 		Origin: value.Origin{File: "infra.yml", Line: 1},
 	}
 	op := &planner.Operation{

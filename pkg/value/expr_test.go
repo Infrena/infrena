@@ -6,7 +6,7 @@ import (
 )
 
 func TestReferenceString(t *testing.T) {
-	r := Reference{Resource: "database", Attribute: "endpoint"}
+	r := LocalRef("database", "endpoint")
 	if got := r.String(); got != "database.endpoint" {
 		t.Errorf("String() = %q, want \"database.endpoint\"", got)
 	}
@@ -18,10 +18,10 @@ func TestReferencesCollectsFromNestedExpr(t *testing.T) {
 		Op: OpConcat,
 		Args: []*Expr{
 			{Op: OpCall, Function: "lower", Args: []*Expr{
-				{Op: OpResourceRef, Ref: Reference{Resource: "database", Attribute: "endpoint"}},
+				{Op: OpResourceRef, Ref: LocalRef("database", "endpoint")},
 			}},
 			{Op: OpLiteral, Literal: String("-", SourceExplicit)},
-			{Op: OpResourceRef, Ref: Reference{Resource: "network", Attribute: "id"}},
+			{Op: OpResourceRef, Ref: LocalRef("network", "id")},
 		},
 	}
 
@@ -36,8 +36,8 @@ func TestReferencesCollectsFromNestedExpr(t *testing.T) {
 
 func TestReferencesDeduplicates(t *testing.T) {
 	e := &Expr{Op: OpConcat, Args: []*Expr{
-		{Op: OpResourceRef, Ref: Reference{Resource: "db", Attribute: "id"}},
-		{Op: OpResourceRef, Ref: Reference{Resource: "db", Attribute: "id"}},
+		{Op: OpResourceRef, Ref: LocalRef("db", "id")},
+		{Op: OpResourceRef, Ref: LocalRef("db", "id")},
 	}}
 	if got := e.References(); len(got) != 1 {
 		t.Errorf("References() = %v, want one entry — a reference used twice is one dependency edge", got)
@@ -56,7 +56,7 @@ func TestStringRendersPasteableSource(t *testing.T) {
 	// delimiters belong at the top level only: rendering a call's arguments
 	// through String() would give ${lower(${db.endpoint})}.
 	ref := func(res, attr string) *Expr {
-		return &Expr{Op: OpResourceRef, Ref: Reference{Resource: res, Attribute: attr}}
+		return &Expr{Op: OpResourceRef, Ref: LocalRef(res, attr)}
 	}
 
 	cases := []struct {
@@ -121,7 +121,7 @@ func TestStringRedactsASensitiveLiteral(t *testing.T) {
 	concat := &Expr{Op: OpConcat, Args: []*Expr{
 		secret,
 		{Op: OpLiteral, Literal: String("-", SourceExplicit)},
-		{Op: OpResourceRef, Ref: Reference{Resource: "network", Attribute: "id"}},
+		{Op: OpResourceRef, Ref: LocalRef("network", "id")},
 	}}
 	if got := concat.String(); strings.Contains(got, "hunter2") {
 		t.Errorf("String() = %q leaks the sensitive literal", got)
@@ -146,14 +146,14 @@ func TestStringOnNilIsEmptyNotPanic(t *testing.T) {
 }
 
 func TestValueCarriesExpr(t *testing.T) {
-	e := &Expr{Op: OpResourceRef, Ref: Reference{Resource: "db", Attribute: "endpoint"}}
+	e := &Expr{Op: OpResourceRef, Ref: LocalRef("db", "endpoint")}
 	v := Unknown(KindString, SourceComputed)
 	v.Expr = e
 
 	if v.Known {
 		t.Error("a value awaiting an expression must not be Known")
 	}
-	if v.Expr.Ref.Resource != "db" {
+	if v.Expr.Ref.Target.Name != "db" {
 		t.Error("Value must carry the expression that will produce it")
 	}
 }
@@ -162,7 +162,7 @@ func TestExprIsNotSerialised(t *testing.T) {
 	// State on disk records what a provider reported, never a pending
 	// expression. Persisting one would resurrect a dangling reference on load.
 	v := Unknown(KindString, SourceComputed)
-	v.Expr = &Expr{Op: OpResourceRef, Ref: Reference{Resource: "db", Attribute: "endpoint"}}
+	v.Expr = &Expr{Op: OpResourceRef, Ref: LocalRef("db", "endpoint")}
 
 	data, err := v.MarshalJSON()
 	if err != nil {

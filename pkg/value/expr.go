@@ -3,6 +3,8 @@ package value
 import (
 	"strconv"
 	"strings"
+
+	"github.com/infrata/infrata/pkg/address"
 )
 
 // ExprOp is the kind of an expression node.
@@ -22,18 +24,71 @@ const (
 	OpCall
 )
 
-// Reference names another resource's attribute.
+// Reference names another resource's attribute — or, under OpVarRef, a
+// variable by name.
+//
+// Target is an address.Address rather than a bare name because a reference and
+// an address name the same thing and must agree about what that thing is. With
+// a bare name, ${db.id} written inside a module and ${db.id} written at the
+// root are indistinguishable, so once stage 5 re-roots a module's resources to
+// module.net.db a lookup keyed on "db" misses the module's — or, when two
+// modules each declare a `db`, matches the WRONG one and returns its
+// attributes as the answer. That is a silently wrong plan, not an error.
+//
+// A reference parsed out of configuration is SCOPE-RELATIVE: its module path is
+// empty, meaning "in whichever scope this expression was written". At the root
+// that is already absolute, which is why LocalRef is the constructor for both.
+//
+// Stage 6 fills the path, via the scope stage 5 recorded for each instantiated
+// resource: bindAttribute parses, qualifies, then evaluates. Carrying the field
+// is only half of it — a module path that nothing ever fills leaves every
+// reference scope-relative and two modules' same-named resources resolving to
+// one, with a field present that makes it look handled.
+//
+// Under OpVarRef only Target.Name is meaningful. A variable has no module path:
+// it is resolved in the scope the expression was written in, by stage 4, before
+// any of this.
 type Reference struct {
-	Resource  string
+	Target    address.Address
 	Attribute string
+}
+
+// LocalRef builds a reference as written, with no module path — which is what
+// the parser produces and what a root-scoped reference is.
+func LocalRef(resource, attribute string) Reference {
+	return Reference{Target: address.Address{Name: resource}, Attribute: attribute}
+}
+
+// VarRef builds the reference an OpVarRef node carries.
+func VarRef(name string) Reference {
+	return Reference{Target: address.Address{Name: name}}
+}
+
+// VarName returns the variable named by a reference under OpVarRef.
+func (r Reference) VarName() string { return r.Target.Name }
+
+// InModule returns the reference as seen from inside a parent module
+// instantiation: the primitive modules.Scope.Qualify applies, outermost last,
+// to turn a scope-relative reference into an absolute one at stage 6.
+//
+// If Task 8's Qualify sets Target.Module from the scope's path directly rather
+// than chaining this, DELETE this method in that task. An unused constructor on
+// a type whose whole point is that its module path gets filled is the same
+// misleading-by-presence problem the field itself would be.
+//
+// It delegates to address.InModule rather than appending to Target.Module,
+// because that function copies the slice first: appending in place would let
+// one instantiation's re-rooting alias into another's.
+func (r Reference) InModule(module string) Reference {
+	return Reference{Target: r.Target.InModule(module), Attribute: r.Attribute}
 }
 
 // String renders a reference in the form used in configuration.
 func (r Reference) String() string {
 	if r.Attribute == "" {
-		return r.Resource
+		return r.Target.String()
 	}
-	return r.Resource + "." + r.Attribute
+	return r.Target.String() + "." + r.Attribute
 }
 
 // Expr is a parsed expression.

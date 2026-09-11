@@ -198,13 +198,13 @@ func TestResourceScopeNeverAnswersForAVariable(t *testing.T) {
 func TestResourceScopeReportsAMissingResourceUnavailable(t *testing.T) {
 	scope := ResourceScope{"network": {"id": value.String("net-1", value.SourceProvider)}}
 
-	if _, ok := scope.Attribute(value.Reference{Resource: "database", Attribute: "endpoint"}); ok {
+	if _, ok := scope.Attribute(value.LocalRef("database", "endpoint")); ok {
 		t.Error("Attribute answered for a resource the scope does not hold")
 	}
-	if _, ok := scope.Attribute(value.Reference{Resource: "network", Attribute: "missing"}); ok {
+	if _, ok := scope.Attribute(value.LocalRef("network", "missing")); ok {
 		t.Error("Attribute answered for an attribute the resource does not have")
 	}
-	if _, ok := scope.Attribute(value.Reference{Resource: "network", Attribute: "id"}); !ok {
+	if _, ok := scope.Attribute(value.LocalRef("network", "id")); !ok {
 		t.Error("Attribute did not answer for an attribute it holds")
 	}
 }
@@ -223,7 +223,109 @@ func TestResourceScopeWillNotAnswerWithAnUnknownAttribute(t *testing.T) {
 	scope := ResourceScope{
 		"network": {"id": value.Unknown(value.KindString, value.SourceProvider)},
 	}
-	if v, ok := scope.Attribute(value.Reference{Resource: "network", Attribute: "id"}); ok {
+	if v, ok := scope.Attribute(value.LocalRef("network", "id")); ok {
 		t.Errorf("Attribute answered %+v for an attribute nobody knows yet", v)
+	}
+}
+
+// TestAttributeResolvesWithinItsModuleAndNotAgainstASameNamedRootResource is
+// the M5 landmine M3 filed against this file, made executable.
+//
+// The snapshot holds TWO resources both logically named "db": one at the root
+// and one inside module "net", with DIFFERENT endpoints. A reference carrying
+// the module path must resolve to the module's.
+//
+// Against the bare-name lookup this replaces —
+// s[(address.Address{Name: ref.Resource}).String()] — the module reference
+// resolves to the ROOT db and hands back "root.example.com". Nothing errors:
+// the plan is written with another resource's endpoint in it, and apply
+// carries it out. This is why the fixture gives the two DIFFERENT values; two
+// identical ones would pass against the broken lookup.
+func TestAttributeResolvesWithinItsModuleAndNotAgainstASameNamedRootResource(t *testing.T) {
+	scope := ResourceScope{
+		"db": {
+			"endpoint": value.String("root.example.com", value.SourceProvider),
+		},
+		"module.net.db": {
+			"endpoint": value.String("net.example.com", value.SourceProvider),
+		},
+	}
+
+	inModule := value.LocalRef("db", "endpoint").InModule("net")
+	got, ok := scope.Attribute(inModule)
+	if !ok {
+		t.Fatalf("%s did not resolve; a reference inside a module must find that module's resource", inModule)
+	}
+	if s, _ := got.AsString(); s != "net.example.com" {
+		t.Errorf("%s resolved to %q, want \"net.example.com\": the lookup is keyed on the bare name, "+
+			"so it matched the root resource of the same name", inModule, s)
+	}
+
+	atRoot, ok := scope.Attribute(value.LocalRef("db", "endpoint"))
+	if !ok {
+		t.Fatal("the root db did not resolve")
+	}
+	if s, _ := atRoot.AsString(); s != "root.example.com" {
+		t.Errorf("root db resolved to %q, want \"root.example.com\"", s)
+	}
+}
+
+// TestAttributeDoesNotResolveAModuleReferenceAgainstAnAbsentModule is the
+// other answer, and it stops the test above from passing against a lookup that
+// simply ignores the module path in the other direction.
+func TestAttributeDoesNotResolveAModuleReferenceAgainstAnAbsentModule(t *testing.T) {
+	scope := ResourceScope{
+		"db": {"endpoint": value.String("root.example.com", value.SourceProvider)},
+	}
+	ref := value.LocalRef("db", "endpoint").InModule("net")
+	if v, ok := scope.Attribute(ref); ok {
+		s, _ := v.AsString()
+		t.Errorf("%s resolved to %q against a snapshot with no module \"net\"; a reference inside a "+
+			"module must not fall back to a root resource of the same name", ref, s)
+	}
+}
+
+// TestAttributeRefusesAnUnqualifiedReference is the test that fails if stage 6
+// never qualifies (contract Amendment 7).
+//
+// Carrying a module path on Reference is only half the fix. If bindAttribute
+// parses and evaluates without calling Qualify, every reference stays
+// scope-relative with an empty module path, and one reaches this lookup looking
+// exactly like the reference below. The snapshot holds ONLY the module's db, so
+// the lookup misses — which is correct, and is what makes the failure visible.
+//
+// The real target is the tempting wrong fix. Faced with "my module's reference
+// does not resolve", the fastest repair is a bare-name fallback in Attribute:
+// try the canonical key, then try matching on Name alone. That makes the symptom
+// go away and silently restores Ruling 1's landmine in full — two modules each
+// declaring a `db` would match each other's. This test fails against that
+// fallback, so the missing Qualify has to be fixed where it actually is.
+func TestAttributeRefusesAnUnqualifiedReference(t *testing.T) {
+	scope := ResourceScope{
+		"module.net.db": {"endpoint": value.String("net.example.com", value.SourceProvider)},
+	}
+
+	// As parsed, before qualification: no module path.
+	unqualified := value.LocalRef("db", "endpoint")
+	if len(unqualified.Target.Module) != 0 {
+		t.Fatalf("LocalRef is not scope-relative: %v", unqualified.Target.Module)
+	}
+	if v, ok := scope.Attribute(unqualified); ok {
+		s, _ := v.AsString()
+		t.Errorf("an unqualified %s resolved to %q against a snapshot holding only module.net.db. "+
+			"Either stage 6's Qualify was skipped and this lookup is covering for it, or Attribute has "+
+			"grown a bare-name fallback — which is Ruling 1's cross-module mismatch restored.", unqualified, s)
+	}
+
+	// The same reference, qualified as stage 6 will qualify it, DOES resolve.
+	// Without this half the test above is satisfied by a lookup that resolves
+	// nothing at all.
+	qualified := unqualified.InModule("net")
+	v, ok := scope.Attribute(qualified)
+	if !ok {
+		t.Fatalf("%s did not resolve; qualification is what makes a module's reference findable", qualified)
+	}
+	if s, _ := v.AsString(); s != "net.example.com" {
+		t.Errorf("%s resolved to %q", qualified, s)
 	}
 }

@@ -33,7 +33,7 @@ func TestParseLoneInterpolationIsNotWrapped(t *testing.T) {
 	if e.Op != value.OpResourceRef {
 		t.Fatalf("Op = %v, want OpResourceRef (not wrapped in OpConcat)", e.Op)
 	}
-	if e.Ref.Resource != "database" || e.Ref.Attribute != "endpoint" {
+	if e.Ref.Target.Name != "database" || e.Ref.Attribute != "endpoint" {
 		t.Errorf("Ref = %+v, want database.endpoint", e.Ref)
 	}
 }
@@ -46,7 +46,7 @@ func TestParseMixedTextIsAConcat(t *testing.T) {
 	if len(e.Args) != 2 {
 		t.Fatalf("Args = %d, want 2", len(e.Args))
 	}
-	if e.Args[0].Op != value.OpVarRef || e.Args[0].Ref.Resource != "project" {
+	if e.Args[0].Op != value.OpVarRef || e.Args[0].Ref.Target.Name != "project" {
 		t.Errorf("first arg = %+v, want a var ref to project", e.Args[0])
 	}
 	if s, _ := e.Args[1].Literal.AsString(); s != "-db" {
@@ -68,7 +68,7 @@ func TestParseCall(t *testing.T) {
 	if e.Op != value.OpCall || e.Function != "lower" {
 		t.Fatalf("Op = %v Function = %q, want OpCall lower", e.Op, e.Function)
 	}
-	if len(e.Args) != 1 || e.Args[0].Ref.Resource != "database" {
+	if len(e.Args) != 1 || e.Args[0].Ref.Target.Name != "database" {
 		t.Errorf("Args = %+v, want one ref to database.engine", e.Args)
 	}
 }
@@ -184,5 +184,107 @@ func TestParseEscapedQuoteInLiteral(t *testing.T) {
 	}
 	if s, _ := e.Args[0].Literal.AsString(); s != `test"more` {
 		t.Errorf("first arg = %q, want \"test\"more\" with escaped quote unescaped", s)
+	}
+}
+
+// TestReferenceIntoAModuleIsRefused is contract Amendment 14a.
+//
+// ${module.prod.database.id} parses to the target name "module.prod.database",
+// and address.Address{Name: "module.prod.database"}.String() returns that
+// verbatim — byte for byte what Address{Module: ["prod"], Name: "database"}
+// renders for the REAL database inside instance prod. Stage 6 keys its target
+// map by canonical address, so without this guard the two collide and a user
+// can reach inside a module. A module exposes outputs, not resources.
+//
+// The nested case is here because a two-level address has `module` at position
+// 0 AND 2, so a guard that checked only the first segment would pass the first
+// case and leak the second.
+func TestReferenceIntoAModuleIsRefused(t *testing.T) {
+	for _, src := range []string{
+		"${module.prod.database.id}",
+		"${module.prod.module.net.vpc.id}",
+		"${prod.module.net.vpc.id}",
+	} {
+		t.Run(src, func(t *testing.T) {
+			e, ds := Parse(src, value.Origin{File: "infra.yml", Line: 3})
+			if !ds.HasErrors() {
+				t.Fatalf("Parse(%q) produced no error; a module's internals are addressable from outside it", src)
+			}
+			d := ds[0]
+			text := d.Summary + " | " + d.Detail + " | " + d.Action
+			if !strings.Contains(text, "names a module's internals") {
+				t.Errorf("wrong diagnostic: %s", text)
+			}
+			if !strings.Contains(d.Action, "outputs") {
+				t.Errorf("action does not name the alternative: %s", d.Action)
+			}
+			if e != nil && e.Op == value.OpResourceRef && len(e.Ref.Target.Module) == 0 {
+				t.Errorf("a rejected reference still produced a resource target %q", e.Ref.Target.String())
+			}
+		})
+	}
+}
+
+// TestReferenceNamingTheInstanceIsAccepted is the half that stops the guard
+// being satisfied by rejecting everything.
+//
+// ${prod.endpoint} is how a caller reads a module instance's output, and it is
+// the spelling PLAN.md §11.2 shows. A guard that refused it would make modules
+// unusable while passing every assertion in the test above.
+func TestReferenceNamingTheInstanceIsAccepted(t *testing.T) {
+	for _, src := range []string{"${prod.endpoint}", "${database.connection_string}"} {
+		t.Run(src, func(t *testing.T) {
+			e, ds := Parse(src, value.Origin{File: "infra.yml", Line: 3})
+			if ds.HasErrors() {
+				t.Fatalf("Parse(%q) errored: %v", src, ds)
+			}
+			if e.Op != value.OpResourceRef {
+				t.Fatalf("Op = %v, want OpResourceRef", e.Op)
+			}
+			if len(e.Ref.Target.Module) != 0 {
+				t.Errorf("a parsed reference carries a module path %v; Qualify fills it, not the parser",
+					e.Ref.Target.Module)
+			}
+		})
+	}
+}
+
+// TestResourceNamedModuleIsRefusedWithItsOwnReason.
+//
+// ${module.id} is not someone reaching into a module — it is a resource
+// literally named `module`, which address.Parse already cannot round-trip
+// ("module" alone is "must be followed by a module name"). It gets its own
+// action, because "reference one of the module's outputs instead" would be
+// nonsense advice for it.
+func TestResourceNamedModuleIsRefusedWithItsOwnReason(t *testing.T) {
+	_, ds := Parse("${module.id}", value.Origin{File: "infra.yml", Line: 3})
+	if !ds.HasErrors() {
+		t.Fatal("a resource named `module` parsed cleanly; its address cannot round-trip")
+	}
+	if !strings.Contains(ds[0].Action, "Rename") {
+		t.Errorf("action does not tell the user to rename the resource: %s", ds[0].Action)
+	}
+}
+
+// TestQualifiedReferencesDoNotRouteThroughTheParser pins WHY the guard can live
+// at parse time.
+//
+// Qualify sets Target.Module structurally on an already-parsed expression; it
+// never re-parses a rendered address. If it did, every qualified reference would
+// hit the guard above and modules would not work at all. This test states the
+// property the guard depends on in the one place a reader will look for it.
+func TestQualifiedReferencesDoNotRouteThroughTheParser(t *testing.T) {
+	e, ds := Parse("${db.id}", value.Origin{File: "module.yml", Line: 2})
+	if ds.HasErrors() {
+		t.Fatalf("unexpected errors: %v", ds)
+	}
+	qualified := e.Ref.InModule("net")
+	if qualified.String() != "module.net.db.id" {
+		t.Fatalf("InModule gave %q", qualified.String())
+	}
+	// The rendered form is exactly what the guard refuses as INPUT. That is the
+	// point: it is produced, never typed.
+	if _, ds := Parse("${"+qualified.String()+"}", value.Origin{File: "infra.yml", Line: 1}); !ds.HasErrors() {
+		t.Error("the guard does not refuse a rendered qualified address; it must, or a user can type one")
 	}
 }

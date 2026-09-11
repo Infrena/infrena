@@ -106,7 +106,7 @@ func TestHashDistinguishesDifferentUnresolvedReferences(t *testing.T) {
 		v := value.Unknown(value.KindString, value.SourceComputed)
 		v.Expr = &value.Expr{
 			Op:  value.OpResourceRef,
-			Ref: value.Reference{Resource: res, Attribute: attr},
+			Ref: value.LocalRef(res, attr),
 		}
 		return v
 	}
@@ -127,7 +127,7 @@ func TestHashDistinguishesDifferentCalls(t *testing.T) {
 		v.Expr = &value.Expr{
 			Op:       value.OpCall,
 			Function: fn,
-			Args:     []*value.Expr{{Op: value.OpResourceRef, Ref: value.Reference{Resource: "db", Attribute: "engine"}}},
+			Args:     []*value.Expr{{Op: value.OpResourceRef, Ref: value.LocalRef("db", "engine")}},
 		}
 		return v
 	}
