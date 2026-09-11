@@ -246,3 +246,71 @@ func TestSchemaReportsEveryProblemAtOnce(t *testing.T) {
 		t.Errorf("got %d diagnostics, want at least 3 (two unknown attributes and one missing required)", len(ds))
 	}
 }
+
+func TestSchemaStampsProviderDefaultsWithTheirScope(t *testing.T) {
+	// test.database's `size` is optional with a default (providers/test's
+	// definitions.go): 10 outside production. Filling it is the only rung of
+	// PLAN.md §7's chain that stages 3 and 4 never see.
+	cfg := oneResource("test.database", map[string]value.Value{
+		"engine": value.String("postgres", value.SourceExplicit),
+	})
+	ds := bindSchemas(cfg, testRegistry(t), Options{Environment: "dev"})
+	if ds.HasErrors() {
+		t.Fatalf("unexpected diagnostics: %+v", ds)
+	}
+
+	size, ok := cfg.Resources["r"].Attrs["size"]
+	if !ok {
+		t.Fatal("the default for `size` was not filled in at all")
+	}
+	if size.Source != value.SourceDefault {
+		t.Errorf("Source = %v, want SourceDefault", size.Source)
+	}
+	if size.Scope != value.ScopeProviderDefault {
+		t.Errorf("Scope = %v, want ScopeProviderDefault — provider defaults are the floor of PLAN.md §7's precedence chain, and a chain that cannot show its own floor is not explainable", size.Scope)
+	}
+}
+
+func TestSchemaDoesNotStampValuesConfigurationSupplied(t *testing.T) {
+	// The other direction, and the one that matters more: applyDefaults'
+	// contract is that an explicit value always beats an implicit one, so a
+	// stamp that leaked onto explicit values would make a plan claim the
+	// provider supplied something the user wrote. That is a precedence lie,
+	// and unlike a missing stamp it is invisible — the value is right and only
+	// its provenance is wrong.
+	cfg := oneResource("test.database", map[string]value.Value{
+		"engine": value.String("postgres", value.SourceExplicit),
+		"size":   value.Int(50, value.SourceExplicit),
+	})
+	ds := bindSchemas(cfg, testRegistry(t), Options{Environment: "dev"})
+	if ds.HasErrors() {
+		t.Fatalf("unexpected diagnostics: %+v", ds)
+	}
+
+	size := cfg.Resources["r"].Attrs["size"]
+	if n, _ := size.AsInt(); n != 50 {
+		t.Fatalf("size = %d, want the explicit 50 — applyDefaults must never overwrite a configured value", n)
+	}
+	if size.Scope != value.ScopeUnset {
+		t.Errorf("Scope = %v, want ScopeUnset: nothing in stage 7 supplied this value, so stage 7 must not claim it did", size.Scope)
+	}
+}
+
+func TestSchemaStampingADefaultDoesNotMakeItCompareUnequal(t *testing.T) {
+	// Task 1's invariant 1 at this site. Equal ignores Scope; if it ever
+	// stopped doing so, every resource with a filled default would diff
+	// against the same value from configuration or state, and acceptance
+	// invariant 2 (no-op plan) would fail for most resources in most projects.
+	cfg := oneResource("test.database", map[string]value.Value{
+		"engine": value.String("postgres", value.SourceExplicit),
+	})
+	if ds := bindSchemas(cfg, testRegistry(t), Options{Environment: "dev"}); ds.HasErrors() {
+		t.Fatalf("unexpected diagnostics: %+v", ds)
+	}
+
+	stamped := cfg.Resources["r"].Attrs["size"]
+	plain := value.Int(10, value.SourceDefault)
+	if !stamped.Equal(plain) {
+		t.Error("a stamped default must still be Equal to the same datum with no Scope — provenance describes how a value was arrived at, not what the desired state is")
+	}
+}

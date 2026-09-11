@@ -199,6 +199,10 @@ func applyDefaults(attrs map[string]value.Value, def *schema.ResourceDefinition,
 // computable at plan time (nothing ever resolves it later, unlike a
 // reference), so an unknown default would show as a change on every single
 // plan forever, with no way for the user to fix it.
+//
+// The matching Scope — ScopeProviderDefault, the floor of PLAN.md §7's
+// precedence chain — is stamped once by checkedDefault rather than in each arm
+// here, so it cannot be applied to six kinds and missed on the seventh.
 func fromDefault(raw any, kind value.Kind) (value.Value, bool) {
 	switch v := raw.(type) {
 	case string:
@@ -234,7 +238,7 @@ func checkedDefault(raw any, kind value.Kind) (value.Value, bool) {
 	if !ok || v.Kind != kind {
 		return value.Value{}, false
 	}
-	return v, true
+	return v.WithScope(value.ScopeProviderDefault), true
 }
 
 // checkRequired reports every required attribute configuration did not
