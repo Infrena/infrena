@@ -15245,12 +15245,37 @@ func TestRenderDoesNotNoteADestroyWithNoMatchingCreate(t *testing.T) {
 }
 ```
 
-`lineContainingInRender` is the same idea as Task 10.1's `lineContaining`, in package
-`planner`; if `render_test.go` already has such a helper, use that one instead of
-adding a second.
+`lineContainingInRender` does not exist yet — verified against HEAD, no planner test
+file defines a helper of this shape. It is deliberately a SECOND copy of Task 10.1's
+`lineContaining` rather than a shared one: that copy lives in `tests/integration` and a
+Go test helper does not cross packages. Add this to `render_test.go`:
 
-`render_test.go` will need `"github.com/infrata/infrata/pkg/address"` if it does not
-already import it.
+```go
+// lineContainingInRender returns the single rendered line containing needle,
+// failing if there is not exactly one. The count is the point: a note that
+// appears twice is as wrong as one that never appears, and an assertion on
+// "contains" alone would pass for both.
+//
+// This duplicates tests/integration's lineContaining (Task 10.1) because a
+// test helper does not cross packages. If either grows a behaviour the other
+// lacks, that is a signal the assertion moved, not that they should be merged.
+func lineContainingInRender(t *testing.T, out, needle string) string {
+	t.Helper()
+	var found []string
+	for _, l := range strings.Split(out, "\n") {
+		if strings.Contains(l, needle) {
+			found = append(found, l)
+		}
+	}
+	if len(found) != 1 {
+		t.Fatalf("want exactly one line containing %q, found %d:\n%s", needle, len(found), out)
+	}
+	return found[0]
+}
+```
+
+`render_test.go` will need `"strings"` and
+`"github.com/infrata/infrata/pkg/address"` if it does not already import them.
 
 ```bash
 export PATH="$HOME/.local/share/mise/shims:$PATH"
