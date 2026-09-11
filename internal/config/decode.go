@@ -29,6 +29,12 @@ func Decode(files []File) (*ProjectDecl, diag.Diagnostics) {
 	// seenEnvironments maps an environment name to its index in
 	// out.Environments, because the block and the file MERGE into one decl.
 	seenEnvironments := map[string]int{}
+	// seenModules maps a module's NAME to the entry that claimed it, so a
+	// collision names both sources. It is separate from seenResources because
+	// they are separate namespaces: a module name is only ever half of a
+	// resource type (`module.app`), never a bare name, so a module called `app`
+	// and a resource called `app` do not collide.
+	seenModules := map[string]loadedName{}
 
 	for _, f := range files {
 		doc := documentRoot(f.Root)
@@ -65,7 +71,7 @@ func Decode(files []File) (*ProjectDecl, diag.Diagnostics) {
 			// diagnostic that points at "the project" would point at
 			// environments/zulu.yml.
 			out.Origin = originOf(f.Path, doc)
-			decodeDocument(f.Path, doc, out, &ds, seenResources, seenVariables, seenEnvironments)
+			decodeDocument(f.Path, doc, out, &ds, seenResources, seenVariables, seenEnvironments, seenModules)
 		case FileVariables:
 			decodeVariableValues(f, out, &ds)
 		case FileEnvironment:
@@ -76,6 +82,7 @@ func Decode(files []File) (*ProjectDecl, diag.Diagnostics) {
 	sort.Slice(out.Resources, func(i, j int) bool { return out.Resources[i].Name < out.Resources[j].Name })
 	sort.Slice(out.Variables, func(i, j int) bool { return out.Variables[i].Name < out.Variables[j].Name })
 	sort.Slice(out.Environments, func(i, j int) bool { return out.Environments[i].Name < out.Environments[j].Name })
+	sort.Slice(out.Modules, func(i, j int) bool { return out.Modules[i].Name < out.Modules[j].Name })
 	// Sorted ONCE, here, so no consumer has to. Overrides are built by
 	// appending in file order, which is the filesystem's order across the
 	// block and the file, not the user's.
@@ -100,7 +107,8 @@ func topLevelShapeDetail(f File) string {
 }
 
 func decodeDocument(path string, doc *yaml.Node, out *ProjectDecl, ds *diag.Diagnostics,
-	seenResources, seenVariables map[string]value.Origin, seenEnvironments map[string]int) {
+	seenResources, seenVariables map[string]value.Origin, seenEnvironments map[string]int,
+	seenModules map[string]loadedName) {
 	for i := 0; i+1 < len(doc.Content); i += 2 {
 		key, val := doc.Content[i], doc.Content[i+1]
 		switch key.Value {
@@ -114,6 +122,8 @@ func decodeDocument(path string, doc *yaml.Node, out *ProjectDecl, ds *diag.Diag
 			decodeVariables(path, val, out, ds, seenVariables)
 		case "environments":
 			decodeEnvironments(path, val, out, ds, seenEnvironments)
+		case "modules":
+			decodeModuleLoads(path, val, &out.Modules, ds, seenModules)
 		default:
 			ds.Add(diag.Diagnostic{
 				Severity: diag.SeverityWarning,
@@ -141,6 +151,10 @@ func decodeResources(path string, node *yaml.Node, out *ProjectDecl, ds *diag.Di
 			Name:       nameNode.Value,
 			Attributes: map[string]AttributeDecl{},
 			Origin:     originOf(path, nameNode),
+		}
+
+		if !checkResourceName(path, r.Name, r.Origin, ds) {
+			continue
 		}
 
 		// A duplicate name is silent resource loss, not a stylistic problem:
@@ -200,6 +214,13 @@ func decodeResources(path string, node *yaml.Node, out *ProjectDecl, ds *diag.Di
 					// The `type` key is present but unusable. Reporting "has no
 					// `type`" as well would name a symptom rather than the
 					// problem.
+					typeReported = true
+					break
+				}
+				if !checkResourceType(path, r.Name, text, originOf(path, val), ds) {
+					// Same suppression, same reason: a malformed `module.` type
+					// has been reported, and "has no `type`" would describe a
+					// symptom of it.
 					typeReported = true
 					break
 				}

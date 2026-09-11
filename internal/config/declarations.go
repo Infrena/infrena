@@ -4,7 +4,10 @@
 // later stage works with the typed declarations defined here. Spec §7.
 package config
 
-import "github.com/infrata/infrata/pkg/value"
+import (
+	"github.com/infrata/infrata/internal/modules/source"
+	"github.com/infrata/infrata/pkg/value"
+)
 
 // AttributeDecl is one configured attribute.
 //
@@ -103,12 +106,53 @@ type EnvironmentDecl struct {
 	Origin    value.Origin
 }
 
+// ModuleLoadDecl is one entry in `modules:` (PLAN.md §11.1).
+//
+// It makes a module AVAILABLE under a name and says nothing else about it. It
+// carries no inputs and no depends_on: loading and instantiating are separate
+// steps, and both of those belong to the instantiation, which is an ordinary
+// ResourceDecl whose Type is "module.<Name>" (§11.2).
+//
+// That separation is why there is no ModuleInputDecl. A caller's input is an
+// AttributeDecl in ResourceDecl.Attributes, bound by stage 6's existing
+// bindAttribute, so it carries whatever provenance its source gave it with no
+// module-specific rung logic — which is a thing the compiler already gets right
+// for every other attribute.
+type ModuleLoadDecl struct {
+	// Name is what a resource type refers to: `type: module.<Name>`. It is
+	// either written explicitly with `name:` or derived from Source.
+	Name string
+	// Source is the PARSED source, not the text (contract Amendment 15b). It has
+	// been through internal/modules/source.Parse, so it is one Parse accepted: a
+	// path, or a git remote with a scheme on the allowlist and the required
+	// `:tag-or-hash` pin.
+	//
+	// Parsed rather than raw so stage 5 CANNOT re-report. Stage 5 hands this
+	// straight to Cache.Resolve, which takes a source.Source — so it never
+	// parses, so it cannot emit a parse diagnostic a second time. Storing the
+	// string instead would leave "do not report this twice" as a rule an
+	// implementer has to remember, and "call Parse and pass the diagnostics up"
+	// is the obvious thing to write.
+	//
+	// Stage 2 still touches neither the filesystem nor the network: Parse is
+	// pure. What moved to stage 2 is the REPORTING, because Parse's diagnostics
+	// want a line and stage 2 is the only stage that has one — so a missing pin,
+	// a refused scheme and `ext::` all surface at `infra validate`.
+	//
+	// There is no SourceOrigin field: source.Source carries its own Origin,
+	// stamped from the one passed to Parse, and a second copy of that fact is a
+	// second thing to keep true.
+	Source source.Source
+	Origin value.Origin
+}
+
 // ProjectDecl is the decoded, still-unresolved configuration.
 type ProjectDecl struct {
 	Project      string
 	Resources    []*ResourceDecl   // sorted by Name
 	Variables    []VariableDecl    // sorted by Name
 	Environments []EnvironmentDecl // sorted by Name
+	Modules      []ModuleLoadDecl  // sorted by Name
 	// VariableValues is variables.yml's contents: a flat mapping of name to
 	// value (PLAN.md §8). Never nil. These are VALUES, not declarations —
 	// stage 4 checks them against Variables. variables.yml may NOT carry a
