@@ -150,3 +150,33 @@ func TestEqualStillComparesWellFormedValues(t *testing.T) {
 		t.Error("different strings must not be equal")
 	}
 }
+
+func TestCoerceRetypesAnUnknown(t *testing.T) {
+	// An unknown carries a Kind as a CLAIM about what it will become, with no
+	// datum to lose, so retyping one is exact by definition. The shipped
+	// Coerce falls through to AsInt/AsFloat, which report ok=false for a value
+	// with no datum, so it currently answers "cannot convert exactly" to a
+	// conversion that cannot lose anything.
+	got, ok := Coerce(Unknown(KindInt, SourceVariable), KindFloat)
+	if !ok {
+		t.Fatal("an unknown has no datum to lose; retyping it is exact")
+	}
+	if got.Kind != KindFloat {
+		t.Errorf("Kind = %v, want KindFloat", got.Kind)
+	}
+	if got.Known {
+		t.Error("it must stay unknown: Coerce changes a value's type, never whether it is known")
+	}
+	if got.Raw != nil {
+		t.Errorf("Raw = %v, want nil — an unknown holds no datum (see Value's doc comment)", got.Raw)
+	}
+}
+
+func TestCoerceLeavesAnUnknownOfANonNumericKindAlone(t *testing.T) {
+	// The other direction. Retyping is exact only because there is no datum;
+	// it is not a licence to reinterpret an unknown string as a number, which
+	// would be a type error whether or not the datum had arrived yet.
+	if _, ok := Coerce(Unknown(KindString, SourceVariable), KindInt); ok {
+		t.Error("an unknown string is still the wrong kind for an integer; the caller reports that, not Coerce")
+	}
+}

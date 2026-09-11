@@ -179,6 +179,50 @@ func article(k value.Kind) string {
 	return "a"
 }
 
+// Coerce normalises v to s's declared kind before it is judged.
+//
+// It reports ONLY a lossy numeric conversion. A kind mismatch that is not a
+// numeric pair — a string where a float is declared — is passed through
+// untouched for Validate to report, because Validate's message names the
+// declared type and the supplying scope and this one could not.
+//
+// An untyped schema coerces nothing: it has declared no kind to normalise to.
+func (s Schema) Coerce(v value.Value) (value.Value, diag.Diagnostics) {
+	var ds diag.Diagnostics
+	if s.Kind == value.KindInvalid || v.Kind == s.Kind {
+		return v, ds
+	}
+	if !isNumericKind(s.Kind) || !isNumericKind(v.Kind) {
+		return v, ds
+	}
+
+	out, ok := value.Coerce(v, s.Kind)
+	if !ok {
+		ds.Add(diag.Diagnostic{
+			Severity: diag.SeverityError,
+			Summary:  "variable " + strconv.Quote(s.Name) + " cannot be stored as " + article(s.Kind) + " " + s.Kind.String(),
+			Detail: "The value supplied by " + v.Scope.String() + " is " + show(v) +
+				", which cannot be converted to " + s.Kind.String() + " without changing it. " +
+				strconv.Quote(s.Name) + " is declared at " + s.Origin.String() + ".",
+			Action: "Write a value that is exactly representable as " + article(s.Kind) + " " + s.Kind.String() + ", or change the declared type.",
+			Origin: originOr(v.Origin, s.Origin),
+		})
+		return v, ds
+	}
+	return out, ds
+}
+
+// isNumericKind reports whether k is one of the two numeric kinds.
+//
+// Not to be confused with its neighbour numericDatumMatchesKind, which asks a
+// different question — whether a Value's DATUM really is of the kind it claims
+// — and is what Validate uses to catch a malformed value. This one looks only
+// at a Kind and never at a datum, which is why it is safe to call on an
+// unknown.
+func isNumericKind(k value.Kind) bool {
+	return k == value.KindInt || k == value.KindFloat
+}
+
 // Validate reports every way v violates s.
 //
 // An untyped declaration (Kind KindInvalid) constrains nothing: PLAN.md §9

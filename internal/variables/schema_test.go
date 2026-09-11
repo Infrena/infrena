@@ -498,6 +498,28 @@ func TestValidateAcceptsAnythingForAnUntypedDeclaration(t *testing.T) {
 	}
 }
 
+func TestCoerceLeavesAnUntypedDeclarationUnconstrained(t *testing.T) {
+	// Coerce's first guard is an OR of two conditions: s.Kind == KindInvalid,
+	// or v.Kind == s.Kind. The rest of this package's Resolve-level coercion
+	// tests all use a typed schema, so this is the only place the untyped
+	// half of that OR is exercised: an untyped declaration has declared no
+	// kind to normalise to, so a numeric literal must pass through exactly
+	// as supplied, unconverted.
+	d := decl("anything", value.KindInvalid)
+	d.Default, d.HasDefault = value.String("x", value.SourceExplicit), true
+	got, _ := Schemas([]config.VariableDecl{d})
+	s := got["anything"]
+
+	in := value.Int(1, value.SourceVariable)
+	out, ds := s.Coerce(in)
+	if ds.HasErrors() {
+		t.Fatalf("an untyped declaration coerces nothing: %+v", ds)
+	}
+	if out.Kind != value.KindInt {
+		t.Errorf("Kind = %v, want KindInt unchanged — nothing declares a target kind to coerce to", out.Kind)
+	}
+}
+
 func TestValidateChecksListAndMapByKindOnly(t *testing.T) {
 	got, ds := Schemas([]config.VariableDecl{decl("tags", value.KindList)})
 	if ds.HasErrors() {

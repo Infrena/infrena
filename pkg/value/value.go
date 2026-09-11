@@ -259,6 +259,29 @@ func Coerce(v Value, k Kind) (Value, bool) {
 	}
 	switch {
 	case k == KindInt && v.Kind == KindFloat:
+		if !v.Known {
+			// An unknown's Kind is a CLAIM about what it will become; there is
+			// no datum to round, so retyping one is exact by definition.
+			// Without this, AsFloat below reports ok=false for a value holding
+			// nothing, and Coerce answers "cannot convert exactly" about a
+			// conversion that cannot lose anything. Schema.Coerce then renders
+			// that as "the value supplied by ... is (unknown), which cannot be
+			// converted to int without changing it" — a complaint about a
+			// value that has not arrived yet.
+			//
+			// Guarded by the surrounding case, not hoisted above the switch:
+			// an unknown is exact to retype ONLY across a numeric pair. An
+			// unknown string retyped to an int would still be the wrong kind,
+			// known or not, and that is a type error the caller reports, not
+			// a lossy conversion this function judges. Raw is set to nil
+			// explicitly rather than left alone: Value's contract is that Raw
+			// is nil when Known is false, and an unknown that kept a stale
+			// datum of the OLD kind would be a value whose Raw contradicts
+			// its Kind — the exact shape Equal and Format each shipped a bug
+			// over.
+			v.Kind, v.Raw = k, nil
+			return v, true
+		}
 		f, ok := v.AsFloat()
 		if !ok {
 			return v, false
@@ -273,6 +296,11 @@ func Coerce(v Value, k Kind) (Value, bool) {
 		return v, true
 
 	case k == KindFloat && v.Kind == KindInt:
+		if !v.Known {
+			// See the symmetric comment in the case above.
+			v.Kind, v.Raw = k, nil
+			return v, true
+		}
 		n, ok := v.AsInt()
 		if !ok {
 			return v, false
