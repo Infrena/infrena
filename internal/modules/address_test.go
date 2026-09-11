@@ -221,3 +221,55 @@ resources:
 			"CALL belongs to everything the call expands into", server.ExtraDeps)
 	}
 }
+
+// TestFanOutEdgesAreSortedAcrossTwoCalls pins sortAddresses in fanOut, which
+// nothing else reaches.
+//
+// The existing fan-out tests have ONE module call, so `edges` is a single
+// slice read out of `calls` and is already ordered however expansion produced
+// it — deleting the sort changes nothing and the tests pass twenty times out of
+// twenty. That was measured, not assumed.
+//
+// Two calls named in an order that is NOT their sorted order is the shape that
+// discriminates: without the sort the edges come back in depends_on order, and
+// depends_on order is the user's, so the plan a user reads would reorder itself
+// when they reorder a list that is meant to be a set. Invariant 6.
+func TestFanOutEdgesAreSortedAcrossTwoCalls(t *testing.T) {
+	decl, dir := fixture(t, map[string]string{
+		"infra.yml": `
+project: demo
+modules:
+  - ./net
+resources:
+  zeta:
+    type: module.net
+  alpha:
+    type: module.net
+  web:
+    type: test.thing
+    depends_on: [zeta, alpha]
+`,
+		"net/module.yml": "resources:\n  subnet:\n    type: test.thing\n",
+	})
+
+	exp, ds := Expand(decl, variables.Scope{}, dir, paths{})
+	if ds.HasErrors() {
+		t.Fatalf("unexpected diagnostics: %+v", ds)
+	}
+
+	var web Instance
+	for _, inst := range exp.Instances {
+		if inst.Address.String() == "web" {
+			web = inst
+		}
+	}
+	var got []string
+	for _, a := range web.ExtraDeps {
+		got = append(got, a.String())
+	}
+	want := []string{"module.alpha.subnet", "module.zeta.subnet"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Errorf("web ExtraDeps = %v, want %v — depends_on is a set, so the edges it produces "+
+			"must not carry the order the user happened to list it in", got, want)
+	}
+}
