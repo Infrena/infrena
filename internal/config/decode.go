@@ -712,55 +712,15 @@ func decodeBound(path, name, which string, node *yaml.Node, kind value.Kind, typ
 	return coerceBound(path, name, which, node, bv, kind, ds)
 }
 
-// coerceNumeric converts a numeric value to the given numeric kind, applying
-// the SAME exactness rule everywhere a declared numeric type meets a literal
-// of the other numeric kind: a variable's bounds (coerceBound) and, since
-// Amendment 4 of the M4 contract, its default (decodeDefault). Extracted
-// once rather than duplicated per caller, because a second copy of this
-// int<->float exactness logic is a defect class this project has already
-// paid for twice (M2's leaked plaintext secret; M3's eleven redundant
-// sorts).
-//
-// ok is false when the conversion would lose information: a fractional part
-// rounded away, or an int64 above 2^53 that does not survive the round trip
-// through float64 (float64 represents every integer up to 2^53 exactly; past
-// that, adjacent representable values are two apart, so some integers have
-// no exact float64 form). This function raises no diagnostic of its own —
-// callers word their own, because "min", "max" and "default" each read
-// differently in context, and PLAN.md §44 wants the message to say what was
-// expected in place, not through a shared, context-free string.
-//
-// bv must already be known numeric (KindInt or KindFloat) and kind must be
-// KindInt or KindFloat; callers establish both before calling. When bv is
-// already the declared kind, this is a no-op that still re-origins the
-// value, matching every other exit path.
-func coerceNumeric(kind value.Kind, bv value.Value, origin value.Origin) (value.Value, bool) {
-	switch {
-	case kind == value.KindInt && bv.Kind == value.KindFloat:
-		f, _ := bv.AsFloat()
-		n := int64(f)
-		// Exactness both ways: float64(n) == f rejects a fractional part, and
-		// it also rejects a float too large to survive the round trip.
-		if float64(n) != f {
-			return value.Value{}, false
-		}
-		return value.Int(n, value.SourceExplicit).WithOrigin(origin), true
-
-	case kind == value.KindFloat && bv.Kind == value.KindInt:
-		n, _ := bv.AsInt()
-		f := float64(n)
-		// An int64 above 2^53 does not survive this.
-		if int64(f) != n {
-			return value.Value{}, false
-		}
-		return value.Float(f, value.SourceExplicit).WithOrigin(origin), true
-	}
-
-	// Already the declared kind.
-	return bv, true
-}
-
-// coerceBound converts a decoded bound to the variable's DECLARED kind.
+// coerceBound converts a decoded bound to the variable's DECLARED kind, via
+// value.Coerce — the ONE int<->float exactness rule shared with
+// decodeDefault and, from M4 Task 6, stage 4's resolution of a supplied
+// value against a schema. Extracted to pkg/value rather than kept here or
+// duplicated per caller, because the rule must never differ between the
+// places applying it: a precision bug in one is a precision bug in all of
+// them, which is the shared-fate argument for one function rather than one
+// copy per caller — the defect class this project has already paid for
+// twice (M2's leaked plaintext secret; M3's eleven redundant sorts).
 //
 // This is why stage 2 is the right place: it is the only stage that knows both
 // the declared type and the line number. After it, a bound's Kind always equals
@@ -773,17 +733,19 @@ func coerceNumeric(kind value.Kind, bv value.Value, origin value.Origin) (value.
 // user would see values below their stated minimum accepted, with nothing
 // printed, which is the silent-loss shape this engine refuses everywhere else.
 func coerceBound(path, name, which string, node *yaml.Node, bv value.Value, kind value.Kind, ds *diag.Diagnostics) (value.Value, bool) {
-	origin := originOf(path, node)
-	coerced, ok := coerceNumeric(kind, bv, origin)
+	coerced, ok := value.Coerce(bv, kind)
 	if ok {
 		return coerced, true
 	}
 
-	// coerceNumeric only fails on one of the two cross-kind conversions, so
-	// which one follows from `kind` alone: kind == KindInt means bv was the
-	// float being rounded; kind == KindFloat means bv was the int overflowing
-	// 2^53. Diagnostics kept word-for-word identical to before this function
-	// was split, so no existing test's assertion needed to change.
+	// decodeBound already refused a non-numeric kind, and a non-numeric bv,
+	// before ever calling coerceBound — so value.Coerce's failure here is
+	// always the genuine numeric exactness case, and which direction follows
+	// from `kind` alone: KindInt means bv was the float being rounded,
+	// KindFloat means bv was the int overflowing 2^53. Diagnostics kept
+	// word-for-word identical to before this used value.Coerce, so no
+	// existing test's assertion needed to change.
+	origin := originOf(path, node)
 	if kind == value.KindInt {
 		ds.Add(diag.Diagnostic{
 			Severity: diag.SeverityError,
@@ -828,34 +790,35 @@ func decodeDefault(path, name string, node *yaml.Node, kind value.Kind, ds *diag
 		return value.Value{}, false
 	}
 
-	// Coercion applies only when BOTH sides are numeric. An untyped variable
-	// has no declared kind to coerce toward — its default is stored exactly
-	// as written, per the amendment's ruling on that case — and a default
-	// under a non-numeric declared type, or a non-numeric literal under a
-	// numeric one, is a type MISMATCH for stage 4 to report
-	// (`v.Kind == decl.Type`, per Task 3's contract note for Task 4), not a
-	// numeric conversion for stage 2 to perform. `default:` has no
-	// counterpart to decodeBound's upfront "kind has no ordering" refusal,
-	// because unlike a bound, a default is valid on every type, typed or not.
-	//
-	// This guard is BEHAVIOURALLY REDUNDANT with coerceNumeric's own switch —
-	// verified by deleting it and re-running the suite, 0 failures — because
-	// coerceNumeric's two cases already require an exact kind match and fall
-	// through to an identical passthrough otherwise. It stays anyway: it says
-	// the rule in one place a reader of THIS function sees immediately,
-	// rather than requiring a trip into coerceNumeric to work out why a
-	// non-numeric default is never touched.
+	// Attempt coercion only when BOTH sides are numeric — and this guard is
+	// LOAD-BEARING here, unlike in coerceBound. decodeBound already refuses
+	// any non-numeric kind or bv before coerceBound is ever called, so
+	// value.Coerce there only ever sees a genuine numeric exactness question.
+	// A default has no such upfront refusal — it is valid on every type,
+	// typed or not — and value.Coerce reports ok=false for ANY kind
+	// mismatch, not only a numeric one (that is the point of it not judging
+	// a type mismatch as a lossy conversion: it does not itself distinguish
+	// "nothing to coerce" from "coercion failed"). Calling it unconditionally
+	// would treat an untyped variable's default, or a default under a
+	// non-numeric declared type, as a coercion FAILURE worth one of the
+	// numeric diagnostics below — when it is neither: an untyped variable has
+	// no declared kind to coerce toward (the amendment's ruling on that
+	// case), and a default under a non-numeric declared type — or a
+	// non-numeric literal under a numeric one — is a type MISMATCH for
+	// stage 4 to report (`v.Kind == decl.Type`, per Task 3's contract note
+	// for Task 4), not a numeric conversion for stage 2 to perform.
 	numericType := kind == value.KindInt || kind == value.KindFloat
 	numericLiteral := dv.Kind == value.KindInt || dv.Kind == value.KindFloat
 	if !numericType || !numericLiteral {
 		return dv, true
 	}
 
-	origin := originOf(path, node)
-	coerced, ok := coerceNumeric(kind, dv, origin)
+	coerced, ok := value.Coerce(dv, kind)
 	if ok {
 		return coerced, true
 	}
+
+	origin := originOf(path, node)
 
 	// Diagnostics mirror coerceBound's wording for the same exactness rule,
 	// substituting "default" for "min"/"max" — PLAN.md §44's shape (name the

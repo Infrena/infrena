@@ -218,3 +218,76 @@ func (v Value) AsFloat() (float64, bool) {
 	f, ok := v.Raw.(float64)
 	return f, ok && v.Known
 }
+
+// Coerce converts v to the given numeric Kind, applying the ONE exactness
+// rule everywhere a declared numeric kind meets a literal of the other
+// numeric kind: internal/config's stage 2 on a variable's bounds, stage 2 on
+// its default, and stage 4 on a supplied value resolved against a schema
+// (M4 contract Amendment 4). The rule mentions only Kind and Value and must
+// never differ between those call sites — a precision bug in one is a
+// precision bug in the others — so it lives here once rather than once per
+// caller. Contrast pkg/value's OWN Kind-name table (ParseKind, Kind.String):
+// those were free to diverge across call sites and so stayed separate; this
+// one must never diverge, so it is one function.
+//
+// ok is false, and v is returned UNCHANGED, in three cases:
+//
+//   - v is already Kind k: this is then a no-op success (ok=true), not a
+//     failure — a caller need not special-case "nothing to coerce".
+//   - v.Kind or k is not KindInt or KindFloat, OR they are numeric but not a
+//     cross-kind pair (e.g. v is a string where k is KindFloat): this is a
+//     TYPE MISMATCH, not a lossy conversion, and Coerce does not report it —
+//     it normalises, it does not judge. The caller's own diagnostic says
+//     "must be a float"; Coerce saying so too would be a second, competing
+//     description of the same problem.
+//   - the cross-kind conversion would lose information: a fractional part
+//     rounded away converting float to int, or an int64 above 2^53 that does
+//     not survive round-tripping through float64 (float64 represents every
+//     integer up to 2^53 exactly; past that, adjacent representable values
+//     are two apart, so some integers have no exact float64 form).
+//
+// On success, ONLY Kind and Raw change. Source, Scope, Sensitive, Origin and
+// Expr all survive untouched — v is taken and returned by value, so every
+// field neither this function nor its caller names is carried through
+// automatically, including one added to Value after this was written. A
+// coercion that silently cleared Sensitive would be the M3 Critical again: a
+// secret recorded by dropping what was known about it, this time on the way
+// into a plan instead of out of a provider.
+func Coerce(v Value, k Kind) (Value, bool) {
+	if v.Kind == k {
+		return v, true
+	}
+	switch {
+	case k == KindInt && v.Kind == KindFloat:
+		f, ok := v.AsFloat()
+		if !ok {
+			return v, false
+		}
+		n := int64(f)
+		// Exactness both ways: float64(n) == f rejects a fractional part, and
+		// it also rejects a float too large to survive the round trip.
+		if float64(n) != f {
+			return v, false
+		}
+		v.Kind, v.Raw = KindInt, n
+		return v, true
+
+	case k == KindFloat && v.Kind == KindInt:
+		n, ok := v.AsInt()
+		if !ok {
+			return v, false
+		}
+		f := float64(n)
+		// An int64 above 2^53 does not survive this.
+		if int64(f) != n {
+			return v, false
+		}
+		v.Kind, v.Raw = KindFloat, f
+		return v, true
+	}
+	// Any other kind pairing (a non-numeric v, a non-numeric k, or both
+	// numeric but neither cross-kind case above) is a type error, not a
+	// lossy conversion — Coerce does not report it; the caller's own
+	// diagnostic does.
+	return v, false
+}
