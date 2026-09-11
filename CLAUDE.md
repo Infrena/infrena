@@ -6,10 +6,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Current state
 
-**M1-M4 are merged to `main`** (tags `m1`-`m4`); **M5 (modules) is in authoring on `m5-modules`**. The reconcile loop
-closes end to end against the fake provider: `validate` → `plan` → `apply` → re-plan
-clean → externally mutate → `refresh` → drift shown → remove from YAML → destroy
-proposed → `apply`. ~39,581 lines of Go across 21 packages.
+**M1-M4 are merged to `main`** (tags `m1`-`m4`); **M5 (modules) is authored on
+`m5-modules`, with Task 10's integration suite finding two unresolved gaps** (below).
+The reconcile loop closes end to end against the fake provider: `validate` → `plan` →
+`apply` → re-plan clean → externally mutate → `refresh` → drift shown → remove from
+YAML → destroy proposed → `apply`. ~52,235 lines of Go across 24 packages.
 
 Present: the value model with per-leaf provenance and sensitivity, addressing, diagnostics,
 declarative resource schemas, the provider interface, a hand-editable file-backed fake
@@ -32,9 +33,9 @@ round-trip through the plan artifact; that is proved through the binary, not ass
 `validate`, `plan` and `apply` resolve variables identically; `destroy` and `refresh`
 refuse the flags rather than accept and ignore them.
 
-M5 in progress: modules. `PLAN.md` §11 was rewritten on 2026-09-11 and the module model
-is NOT what an earlier reading of it would suggest. Loading a module and instantiating it
-are two separate steps:
+M5: modules, and compiler stage 5. `PLAN.md` §11 was rewritten on 2026-09-11 and the
+module model is NOT what an earlier reading of it would suggest. Loading a module and
+instantiating it are two separate steps:
 
 ```yaml
 modules:                  # a LIST of sources. No inputs. Loading only makes a
@@ -65,10 +66,55 @@ Three consequences worth knowing before touching module code:
   applied as the literal string `<sensitive>`. Stage 5 records a per-instance scope
   instead (`modules.Expansion`); stage 6 resolves names against it.
 
+Modules nest, bounded at depth 32 (a cycle and excessive depth are reported as distinct
+diagnostics), and `ScopeModuleDefault` — the rung `PLAN.md` §7's precedence chain
+declares and M4 left unpopulated — is now filled by a module's own declared `default:`,
+closing that chain end to end. A module exposes `outputs:`, addressed by the caller as
+`${call.output}`; the value may be unknown (it can read a computed provider attribute)
+and reading an output the module does not declare is reported at `validate`, naming what
+it does declare. After stage 5, addresses are module-qualified at every level
+(`module.platform.module.storage.store`) and nothing downstream — the planner, the
+executor, the state package — knows a module exists.
+
+**Two gaps Task 10's integration suite found and did not fix (out of that task's
+scope), both still open as of this writing:**
+
+1. **A module call's own attribute that references an outer-scope resource records no
+   dependency edge.** `network: ${net.id}` passed into a module call — the pattern
+   nearly every module fixture in `PLAN.md` and the M5 test suite uses — evaluates to a
+   value inside `internal/modules/inputs.go`'s `evaluateCall`, but nothing records a
+   graph edge from the module's expanded resources to `net`. Stage 6's `bindAttribute`
+   cannot see it either: inside the module the reference is a bare `${network}`
+   (a Variable, not a dotted Reference), so its edge-recording loop never runs. The
+   executor then schedules the module's resource in the same wave as the one it
+   actually depends on and `apply` fails: `"network is still unknown after its
+   dependencies were applied"`. This breaks acceptance invariant 2 for essentially any
+   module that takes a caller's resource as an input, and is reproducible with the
+   smallest possible fixture (one `test.network`, one module call passing its `id`
+   through one input). Confirmed failing:
+   `TestAModuleOutputReachesTheCallerAndMayBeUnknown`,
+   `TestAModuleOutputBindsToTheModulesOwnResource`,
+   `TestASensitiveAttributeInsideAModuleStaysRedacted`,
+   `TestALocalOnlyProjectWritesNoLockFileOrModuleCache`,
+   `TestMovingAResourceBetweenModulesDestroysAndRecreatesIt` (all
+   `tests/integration/m5_modules_test.go`).
+2. **`modules.lock` reading, comparing and writing is unwired.**
+   `internal/modules/source`'s `Lockfile.Check`, `LoadLockfile` and `WriteLockfile` are
+   never called from `internal/cli` or `internal/compiler` — `modules.Expand`'s
+   `Expansion.Resolutions` field (documented as "what a command permitted to mutate the
+   project directory writes to modules.lock") is collected and then read by nothing.
+   The lockfile disagree-and-refuse feature (Amendment 20c) is consequently dead code,
+   exercised only by `internal/modules/source`'s own unit tests. Confirmed failing:
+   `TestALockfileEntryThatDisagreesIsRefusedAndNotRewritten`
+   (`tests/integration/m5_modules_test.go`) — and its sibling
+   `TestEditingAPinIsNotALockfileConflict` currently passes only vacuously, since
+   nothing reads the lockfile it hand-writes.
+
 Acceptance invariants 1, 2, 4 and 5 each have a test that fails against the unfixed code.
 That phrasing is deliberate: invariant 4's test once passed 20/20 with its dependency edge
 deleted, and invariant 5's atomicity test caught a real TOCTOU only 2 times in 5. A test
-naming an invariant is not evidence it holds.
+naming an invariant is not evidence it holds — gap 1 above is invariant 2 failing for
+exactly this reason, caught only once the integration suite exercised the pattern.
 
 Absent until M6-M7: reading a saved plan back, `init`, `explain`, `graph`,
 `discover`, `import`. Nothing half-implements one of those.
@@ -176,6 +222,17 @@ Key architectural rules, in rough order of how easy they are to violate:
   (`explicit`, `default`, `environment`, `variable`, `module`, `computed`, `provider`)
   — §43. Do not merge defaults into user config and lose the origin: plans mark
   defaults `[default]`, generation emits minimal YAML, and `explain` all depend on this.
+- **Addresses embed the module path, so moving a resource between modules
+  destroys it.** Stage 5 flattens: after it, nothing downstream knows modules
+  exist (spec §7.2). That simplification is paid for twice — `Origin.Module` is
+  the only thing letting a diagnostic say which instantiation a problem came
+  from, and an address is coupled to module structure, so renaming an
+  instantiation or moving a resource between modules renames the resource, and
+  a renamed resource is destroyed and recreated rather than moved. `state mv`
+  is deferred past Phase 1 (§5.2). `infra plan` notes the destroy/create pair
+  when it sees one (`moveCandidates` in `internal/planner/render.go`), which is
+  the only warning a user gets; do not remove it without replacing it with
+  something a user reads before typing `apply`.
 - **Environments are first-class, not workspaces.** Each environment has independent
   state and its own lock. Inheritance (`extends`) resolution order is
   provider defaults → base config → module defaults → environment inheritance →
@@ -201,8 +258,10 @@ Test these explicitly; they are the correctness definition of the product.
 
 > **Addresses embed the module path** (spec §5.2, §7.2). Moving a resource between modules
 > renames it, which the planner reads as a destroy plus a create. This is the price of
-> compile-time flattening and is documented in `PLAN.md` §11; `state mv` is deferred past
-> Phase 1.
+> compile-time flattening and is documented in `PLAN.md` §11 and, where a user actually
+> meets it, on the destroy operation itself — the plan notes it was "also created in this
+> plan" at a different module path (`moveCandidates` in `internal/planner/render.go`).
+> `state mv` is deferred past Phase 1.
 
 5. **Locking.** Two applies cannot mutate the same environment concurrently; different
    environments concurrently is fine.
