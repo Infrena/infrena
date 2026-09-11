@@ -198,6 +198,12 @@ Test these explicitly; they are the correctness definition of the product.
 3. **Import round trip.** discover → import → generate minimal YAML → plan ⇒ no
    unexpected changes. This is an integration test (§29).
 4. **Dependency ordering.** A resource never executes before its dependencies.
+
+> **Addresses embed the module path** (spec §5.2, §7.2). Moving a resource between modules
+> renames it, which the planner reads as a destroy plus a create. This is the price of
+> compile-time flattening and is documented in `PLAN.md` §11; `state mv` is deferred past
+> Phase 1.
+
 5. **Locking.** Two applies cannot mutate the same environment concurrently; different
    environments concurrently is fine.
 6. **Plan determinism.** Same configuration + state + provider observations ⇒

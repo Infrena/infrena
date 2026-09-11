@@ -553,6 +553,17 @@ and `prod.database` (an address of a contained resource) would be the same shape
 two different grammars. `state show module.prod.database` cannot be misread as
 `${prod.endpoint}`.
 
+### A resource's address includes its module path
+
+A resource declared inside a module is addressed `module.<instantiation>.<name>`, and
+state is keyed by that address. Moving a resource from one module to another — or renaming
+the resource that instantiates the module — therefore RENAMES it, and a rename is a
+destroy followed by a create, not a move.
+
+There is no `infra state mv` yet. Before restructuring modules that manage a resource
+holding data, run `infra plan <env>` and read it: a destroy you did not intend appears
+there.
+
 ## 11.3 The module file
 
 A module is a directory containing `module.yml`. It declares `inputs:`, `resources:`,

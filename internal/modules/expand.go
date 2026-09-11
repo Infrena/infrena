@@ -40,6 +40,7 @@ import (
 	"github.com/infrata/infrata/internal/diag"
 	"github.com/infrata/infrata/internal/modules/source"
 	"github.com/infrata/infrata/internal/variables"
+	"github.com/infrata/infrata/pkg/address"
 	"github.com/infrata/infrata/pkg/value"
 )
 
@@ -76,11 +77,23 @@ const TypePrefix = "module."
 // that Task 6 then stamps with two different module paths. Task 6 makes the
 // copy; until then the field holds what the walk found.
 type Instance struct {
-	Decl *config.ResourceDecl
+	// Address is module-qualified: a resource `db` inside an instantiation
+	// `net` is `module.net.db`. A root resource keeps an empty Module.
+	//
+	// THE ADDRESS EMBEDS THE MODULE PATH PERMANENTLY (spec §5.2). Moving a
+	// resource from one module to another renames it, and a rename is a destroy
+	// plus a create — there is no `state mv` in Phase 1.
+	Address address.Address
+	Decl    *config.ResourceDecl
 	// Scope is the level this resource was instantiated at, shared by every
 	// resource at that level. Compiler stage 6 evaluates the resource's
 	// attributes against it.
 	Scope *Scope
+	// ExtraDeps are edges that could not be written as a bare name, because the
+	// name they came from expanded away. Separate from Decl.DependsOn, which
+	// holds bare names stage 6 resolves against the level's own scope: one
+	// slice holding both kinds would make every consumer ask which it had.
+	ExtraDeps []address.Address
 }
 
 // Expansion is stage 5's output: a flat resource set, and nothing in it that
@@ -212,6 +225,15 @@ func Expand(project *config.ProjectDecl, scope variables.Scope, dir string, reso
 
 	w := &walker{root: abs, resolve: resolve, ds: &ds}
 	w.expand(rootLevel(project), &Scope{Vars: scope}, abs, nil)
+
+	// ONE sort, here, after everything is collected. The walk is already
+	// deterministic — stage 2 sorts resources by name — but a deterministic
+	// walk is not address order: a level's own resources interleave with its
+	// modules'. Invariant 6 wants address order, and sorting anywhere earlier
+	// would be undone by the next append.
+	sort.Slice(w.instances, func(i, j int) bool {
+		return w.instances[i].Address.String() < w.instances[j].Address.String()
+	})
 	return &Expansion{
 		Project:     project.Project,
 		Resolutions: w.sortedResolutions(),
@@ -220,22 +242,36 @@ func Expand(project *config.ProjectDecl, scope variables.Scope, dir string, reso
 }
 
 // expand walks one level: it records that level's plain resources, then
-// instantiates each module call in turn.
+// instantiates each module call in turn, then fans depends_on edges that name
+// or are written on a module call out to what that call produced.
 //
 // module is the instantiation path to this level, outermost first, empty at the
-// root. It names the level in diagnostics here; Task 6 turns it into an address.
-func (w *walker) expand(lv level, scope *Scope, dir string, module []string) {
+// root. It returns the addresses this level produced, so a caller instantiating
+// a module can fan its own depends_on out to them.
+func (w *walker) expand(lv level, scope *Scope, dir string, module []string) []address.Address {
 	loaded := w.loadModules(lv, dir, module)
 
+	var produced []address.Address
+	// calls maps a module call's resource NAME to the addresses it produced.
+	// Nothing is addressed with that name after expansion, so this table is the
+	// only way an edge naming it can be resolved.
+	calls := map[string][]address.Address{}
+
 	// Stage 2 sorted Resources by name, so this walk is deterministic. It is
-	// NOT the final order — Task 6 sorts the whole expansion by address, once,
+	// NOT the final order — Expand sorts the whole expansion by address, once,
 	// at the end. Sorting here would be the twelfth redundant sort in this tree
 	// and would be undone by the next append.
 	for _, r := range lv.Resources {
 		if strings.HasPrefix(r.Type, TypePrefix) {
 			continue
 		}
-		w.instances = append(w.instances, Instance{Decl: r, Scope: scope})
+		addr := addressIn(module, r.Name)
+		w.instances = append(w.instances, Instance{
+			Address: addr,
+			Decl:    instantiateDecl(r, module),
+			Scope:   scope,
+		})
+		produced = append(produced, addr)
 	}
 
 	// Task 7 replaces this with a topological order over sibling references,
@@ -244,8 +280,61 @@ func (w *walker) expand(lv level, scope *Scope, dir string, module []string) {
 		if !strings.HasPrefix(r.Type, TypePrefix) {
 			continue
 		}
-		w.instantiate(r, loaded, scope, dir, module)
+		inner := w.instantiate(r, loaded, scope, dir, module)
+		calls[r.Name] = inner
+		produced = append(produced, inner...)
 	}
+
+	w.fanOut(lv, calls, module)
+	return produced
+}
+
+// fanOut rewrites every depends_on edge that names, or is written on, a module
+// call — the two cases Amendment 8 created by making an instantiation a
+// resource with a name that does not survive expansion.
+func (w *walker) fanOut(lv level, calls map[string][]address.Address, module []string) {
+	for _, r := range lv.Resources {
+		isCall := strings.HasPrefix(r.Type, TypePrefix)
+
+		var edges []address.Address
+		for _, target := range r.DependsOn {
+			produced, ok := calls[target]
+			if !ok {
+				// A plain resource: stage 6 resolves the bare name against the
+				// level's scope, which is where a name that binds to nothing is
+				// reported. Nothing to do here.
+				continue
+			}
+			edges = append(edges, produced...)
+		}
+		edges = sortAddresses(edges)
+
+		if isCall {
+			// The call's own depends_on belongs to everything it expanded into.
+			// Its non-call targets are bare names that no longer have a
+			// resource to sit on, so they are resolved here too.
+			w.attachEdges(calls[r.Name], append(edges, w.plainTargets(r, calls, module)...))
+			continue
+		}
+		w.attachEdges([]address.Address{addressIn(module, r.Name)}, edges)
+	}
+}
+
+// plainTargets resolves a module call's depends_on entries that name ordinary
+// resources at the same level. A plain resource keeps its bare names for stage
+// 6; a module call cannot, because the resources that inherit the edge are in a
+// different scope and stage 6 would resolve the name there.
+func (w *walker) plainTargets(
+	r *config.ResourceDecl, calls map[string][]address.Address, module []string,
+) []address.Address {
+	var out []address.Address
+	for _, target := range r.DependsOn {
+		if _, isCall := calls[target]; isCall {
+			continue
+		}
+		out = append(out, addressIn(module, target))
+	}
+	return sortAddresses(out)
 }
 
 // loadedModule is one module made available under a name at one level.
@@ -322,10 +411,10 @@ func (w *walker) loadModules(lv level, dir string, module []string) map[string]l
 func (w *walker) instantiate(
 	r *config.ResourceDecl, loaded map[string]loadedModule,
 	caller *Scope, dir string, module []string,
-) {
+) []address.Address {
 	lm, ok := w.resolveCall(r, loaded, module)
 	if !ok {
-		return
+		return nil
 	}
 
 	// ORDER IS LOAD-BEARING, but NOT for the reason it first appears. A cycle
@@ -343,11 +432,11 @@ func (w *walker) instantiate(
 	// wrong and would have justified deleting that test as redundant.
 	if at := w.onPath(lm.Dir); at >= 0 {
 		w.ds.Add(w.cycleDiagnostic(at, r, lm))
-		return
+		return nil
 	}
 	if len(w.path) >= MaxDepth {
 		w.ds.Add(w.depthDiagnostic(r, lm))
-		return
+		return nil
 	}
 
 	// LoadModule/DecodeModule, not config.Load/config.Decode: a module has no
@@ -365,7 +454,7 @@ func (w *walker) instantiate(
 				filepath.ToSlash(filepath.Join(lm.Source, config.ModuleFileName)) + ".",
 			Origin: lm.Origin,
 		})
-		return
+		return nil
 	}
 
 	inner := make([]string, len(module)+1)
@@ -385,7 +474,7 @@ func (w *walker) instantiate(
 		// A module whose own file did not decode has no usable declarations.
 		// Recursing would report every consequence of the syntax error as a
 		// second, worse-told problem.
-		return
+		return nil
 	}
 
 	w.path = append(w.path, frame{name: r.Name, source: lm.Source, dir: lm.Dir})
@@ -397,7 +486,7 @@ func (w *walker) instantiate(
 	childLevel := moduleLevel(child)
 	supplied := w.evaluateCall(r, caller)
 	innerScope := w.moduleScope(r, childLevel, caller, supplied, inner)
-	w.expand(childLevel, innerScope, lm.Dir, inner)
+	return w.expand(childLevel, innerScope, lm.Dir, inner)
 }
 
 // resolveCall turns a `module.<name>` type into the module it names, applying
