@@ -6,11 +6,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Current state
 
-**M1-M4 are merged to `main`** (tags `m1`-`m4`); **M5 (modules) is authored on
-`m5-modules`, with Task 10's integration suite finding two unresolved gaps** (below).
-The reconcile loop closes end to end against the fake provider: `validate` → `plan` →
-`apply` → re-plan clean → externally mutate → `refresh` → drift shown → remove from
-YAML → destroy proposed → `apply`. ~52,235 lines of Go across 24 packages.
+**M1-M4 are merged to `main`** (tags `m1`-`m4`); **M5 (modules) is complete on
+`m5-modules`**. The reconcile loop closes end to end against the fake provider,
+including through a module: `validate` → `plan` → `apply` → re-plan clean →
+externally mutate → `refresh` → drift shown → remove from YAML → destroy proposed →
+`apply`. ~52,235 lines of Go across 24 packages.
 
 Present: the value model with per-leaf provenance and sensitivity, addressing, diagnostics,
 declarative resource schemas, the provider interface, a hand-editable file-backed fake
@@ -76,45 +76,36 @@ it does declare. After stage 5, addresses are module-qualified at every level
 (`module.platform.module.storage.store`) and nothing downstream — the planner, the
 executor, the state package — knows a module exists.
 
-**Two gaps Task 10's integration suite found and did not fix (out of that task's
-scope), both still open as of this writing:**
+Task 10's integration suite found two gaps, both since fixed and both worth knowing the
+shape of:
 
-1. **A module call's own attribute that references an outer-scope resource records no
+1. **A module call's own attribute that references an outer-scope resource recorded no
    dependency edge.** `network: ${net.id}` passed into a module call — the pattern
-   nearly every module fixture in `PLAN.md` and the M5 test suite uses — evaluates to a
-   value inside `internal/modules/inputs.go`'s `evaluateCall`, but nothing records a
-   graph edge from the module's expanded resources to `net`. Stage 6's `bindAttribute`
-   cannot see it either: inside the module the reference is a bare `${network}`
-   (a Variable, not a dotted Reference), so its edge-recording loop never runs. The
-   executor then schedules the module's resource in the same wave as the one it
-   actually depends on and `apply` fails: `"network is still unknown after its
-   dependencies were applied"`. This breaks acceptance invariant 2 for essentially any
-   module that takes a caller's resource as an input, and is reproducible with the
-   smallest possible fixture (one `test.network`, one module call passing its `id`
-   through one input). Confirmed failing:
-   `TestAModuleOutputReachesTheCallerAndMayBeUnknown`,
-   `TestAModuleOutputBindsToTheModulesOwnResource`,
-   `TestASensitiveAttributeInsideAModuleStaysRedacted`,
-   `TestALocalOnlyProjectWritesNoLockFileOrModuleCache`,
-   `TestMovingAResourceBetweenModulesDestroysAndRecreatesIt` (all
-   `tests/integration/m5_modules_test.go`).
-2. **`modules.lock` reading, comparing and writing is unwired.**
-   `internal/modules/source`'s `Lockfile.Check`, `LoadLockfile` and `WriteLockfile` are
-   never called from `internal/cli` or `internal/compiler` — `modules.Expand`'s
-   `Expansion.Resolutions` field (documented as "what a command permitted to mutate the
-   project directory writes to modules.lock") is collected and then read by nothing.
-   The lockfile disagree-and-refuse feature (Amendment 20c) is consequently dead code,
-   exercised only by `internal/modules/source`'s own unit tests. Confirmed failing:
-   `TestALockfileEntryThatDisagreesIsRefusedAndNotRewritten`
-   (`tests/integration/m5_modules_test.go`) — and its sibling
-   `TestEditingAPinIsNotALockfileConflict` currently passes only vacuously, since
-   nothing reads the lockfile it hand-writes.
+   nearly every module fixture in `PLAN.md` uses — evaluated to a value inside
+   `internal/modules/inputs.go`'s `evaluateCall`, but nothing recorded a graph edge from
+   the module's expanded resources to `net`; the same class hit the reverse direction
+   too, where `Qualify` folds a resolved module OUTPUT reference into a literal before
+   `bindAttribute`'s reference walk runs, so an edge to that output was lost the same
+   way. Both fixed by recording edges before the fold. The failure mode is worth
+   remembering because it is the worst available shape: `plan` showed a clean, correct
+   plan and `apply` failed on it (`"network is still unknown after its dependencies
+   were applied"`) — package-level tests could not see it because nothing at that level
+   ran a real apply across a module boundary.
+2. **`modules.lock` reading, comparing and writing was unwired.**
+   `internal/modules/source`'s `Lockfile.Check`, `LoadLockfile` and `WriteLockfile`
+   existed and were unit-tested, but nothing in `internal/cli` or `internal/compiler`
+   called any of them. Now: the comparison is a pure read, wired into `Compile` so
+   `validate` can report a moved tag without writing anything; the write is gated on a
+   new `compiler.Options.RecordLocks`, set only by `apply` (the command already
+   permitted to change the project directory), and happens once, with the complete
+   resolved set, after a walk succeeds — never per-resolution, which is the shape
+   `ae1e309` already fixed once for the file's atomicity.
 
 Acceptance invariants 1, 2, 4 and 5 each have a test that fails against the unfixed code.
 That phrasing is deliberate: invariant 4's test once passed 20/20 with its dependency edge
-deleted, and invariant 5's atomicity test caught a real TOCTOU only 2 times in 5. A test
-naming an invariant is not evidence it holds — gap 1 above is invariant 2 failing for
-exactly this reason, caught only once the integration suite exercised the pattern.
+deleted, invariant 5's atomicity test caught a real TOCTOU only 2 times in 5, and gap 1
+above is invariant 2 failing for exactly this reason — caught only once the integration
+suite exercised a real apply across a module boundary, not a plan.
 
 Absent until M6-M7: reading a saved plan back, `init`, `explain`, `graph`,
 `discover`, `import`. Nothing half-implements one of those.
