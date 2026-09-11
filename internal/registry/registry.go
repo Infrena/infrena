@@ -6,6 +6,7 @@ package registry
 import (
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/infrata/infrata/pkg/provider"
 	"github.com/infrata/infrata/pkg/schema"
@@ -38,6 +39,23 @@ func (r *Registry) Register(p provider.Provider) error {
 	for _, d := range defs {
 		if err := d.Validate(); err != nil {
 			return fmt.Errorf("provider %s: %w", p.Name(), err)
+		}
+		if strings.HasPrefix(d.Type, "module.") {
+			// Compiler stage 5 selects module instantiations by this prefix
+			// (PLAN.md §11). A provider claiming the namespace would turn a
+			// user's `type: module.app_stack` into a silently shadowed provider
+			// resource — a plan that is wrong and looks fine.
+			//
+			// Belt-and-braces: stage 5 runs before stage 7, so a module type
+			// from a user's config is always expanded away before
+			// Definition() is reached. What this stops is the provider side,
+			// and it stops it at startup in that provider's own tests.
+			//
+			// In the FIRST loop with the other two checks, because that loop is
+			// deliberately validate-before-mutate: a failed registration must
+			// leave the registry untouched.
+			return fmt.Errorf("provider %s: resource type %q is reserved: the `module.` namespace "+
+				"is how configuration instantiates a module", p.Name(), d.Type)
 		}
 		if existing, ok := r.providers[d.Type]; ok {
 			return fmt.Errorf("provider %s: resource type %q is already registered by provider %s", p.Name(), d.Type, existing.Name())

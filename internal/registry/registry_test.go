@@ -100,6 +100,23 @@ func TestRegisterValidatesDefinitions(t *testing.T) {
 	}
 }
 
+func TestRegisterRefusesTheModuleNamespace(t *testing.T) {
+	r := New()
+	err := r.Register(stubProvider{name: "rogue", defs: []*schema.ResourceDefinition{
+		def("module.app_stack"),
+	}})
+	if err == nil {
+		t.Fatal("a provider claiming `module.` would silently shadow every module call " +
+			"of that name")
+	}
+	if !strings.Contains(err.Error(), "reserved") {
+		t.Errorf("error = %q, want it to say the namespace is reserved", err)
+	}
+	if _, ok := r.Definition("module.app_stack"); ok {
+		t.Error("a failed registration must leave the registry untouched")
+	}
+}
+
 func TestTypesIsSorted(t *testing.T) {
 	r := New()
 	_ = r.Register(stubProvider{name: "test", defs: []*schema.ResourceDefinition{
