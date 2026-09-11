@@ -383,3 +383,50 @@ func TestPrepopulateCacheRefusesWhatResolveWouldDiscard(t *testing.T) {
 		t.Error("a path source was accepted")
 	}
 }
+
+// TestResolveRefusesAPathSourceThatEscapesAFetchedCheckout.
+//
+// A module fetched from git may declare its own relative sources, and they
+// resolve against its checkout. "../other" then walks out of the checkout and
+// into the cache directory itself, where the neighbours are other refs of other
+// repositories — a module reading a sibling it never declared. A path source
+// inside a local module tree has no such boundary and is unaffected.
+func TestResolveRefusesAPathSourceThatEscapesAFetchedCheckout(t *testing.T) {
+	repo := newTestRepo(t, map[string]string{"module.yml": "inputs: {}\n"})
+	repo.Tag(t, "v1.0.0", false)
+	project := t.TempDir()
+	c := c13(t, project)
+
+	fetched, ds := c.Resolve(gitSource(repo.Path, "v1.0.0"), project)
+	if ds.HasErrors() {
+		t.Fatalf("Resolve: %+v", ds)
+	}
+
+	if _, ds := c.Resolve(Source{Kind: KindPath, Location: "../.."}, fetched.Dir); !ds.HasErrors() {
+		t.Error("a path source inside a fetched module reached outside its checkout")
+	}
+	// A path INSIDE the checkout is fine, and must stay fine.
+	if err := os.MkdirAll(filepath.Join(fetched.Dir, "sub"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if _, ds := c.Resolve(Source{Kind: KindPath, Location: "./sub"}, fetched.Dir); ds.HasErrors() {
+		t.Errorf("a path source inside the checkout was refused: %+v", ds)
+	}
+}
+
+// TestResolveWritesNoLockfile is Amendment 18 asserted from the other side.
+// Resolve fetches; it does not record. Everything in this test is a real
+// resolve against a real repository, and the project directory must come back
+// holding only the cache.
+func TestResolveWritesNoLockfile(t *testing.T) {
+	repo := newTestRepo(t, map[string]string{"module.yml": "inputs: {}\n"})
+	repo.Tag(t, "v1.0.0", false)
+	project := t.TempDir()
+
+	if _, ds := c13(t, project).Resolve(gitSource(repo.Path, "v1.0.0"), project); ds.HasErrors() {
+		t.Fatalf("Resolve: %+v", ds)
+	}
+	if _, err := os.Stat(filepath.Join(project, "modules.lock")); !os.IsNotExist(err) {
+		t.Errorf("Resolve wrote modules.lock (stat err = %v); only stage 5 sees every resolution, and a file written one entry at a time is readable half-written", err)
+	}
+}

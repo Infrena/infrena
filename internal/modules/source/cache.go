@@ -78,6 +78,22 @@ func (c *Cache) lockPath(s Source) string {
 	return filepath.Join(c.root(), locationKey(s.Location), refSlug(s.Ref)+".lock")
 }
 
+// checkoutRootOf reports whether dir is inside a fetched checkout and, if so,
+// returns that checkout's root: <cache root>/<16 hex>/<slug>. A directory
+// outside the cache entirely — the project's own tree, or the cache root
+// itself — is not inside any checkout.
+func (c *Cache) checkoutRootOf(dir string) (string, bool) {
+	rel, err := filepath.Rel(c.root(), dir)
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", false
+	}
+	parts := strings.Split(rel, string(filepath.Separator))
+	if len(parts) < 2 {
+		return "", false
+	}
+	return filepath.Join(c.root(), parts[0], parts[1]), true
+}
+
 func locationKey(location string) string {
 	sum := sha256.Sum256([]byte(location))
 	return hex.EncodeToString(sum[:])[:16]
@@ -123,6 +139,26 @@ func (c *Cache) resolvePath(s Source, baseDir string) (Resolution, diag.Diagnost
 	dir := filepath.FromSlash(s.Location)
 	if !filepath.IsAbs(dir) {
 		dir = filepath.Join(baseDir, dir)
+	}
+
+	// A module fetched from git may declare its own relative sources, and
+	// they resolve against its checkout. "../.." from there walks into the
+	// cache root, where the neighbours are other refs of other repositories.
+	// A module may reach anywhere inside its own checkout and nowhere above
+	// it. A path source declared in the project's own tree has no such
+	// boundary: "../shared/modules/net" is a legitimate thing to write.
+	if root, ok := c.checkoutRootOf(baseDir); ok {
+		rel, err := filepath.Rel(root, dir)
+		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return Resolution{}, one(diag.Diagnostic{
+				Severity: diag.SeverityError,
+				Summary:  "module source " + strconv.Quote(s.Location) + " reaches outside its own repository",
+				Detail: "It was declared inside a module fetched from a git remote, and a relative source there is " +
+					"resolved against the checkout. " + strconv.Quote(s.Location) + " resolves above it, into the module cache itself.",
+				Action: "Use a path inside the repository, or declare the other module as its own pinned source.",
+				Origin: s.Origin,
+			})
+		}
 	}
 
 	info, err := os.Stat(dir)
