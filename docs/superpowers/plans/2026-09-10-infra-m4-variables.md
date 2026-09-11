@@ -8439,6 +8439,27 @@ git commit -m "M4 Task 9: render which precedence level supplied each value" -- 
 
 ## Task 10 — the three contract invariants, proved end to end
 
+> **Amendment 6 (2026-09-11) widened this task: there are now TWO fields, not
+> one.** `Value.SuppliedBy` was added after Task 9, carrying the input that
+> supplied a CLI-rung value (`"--var"`, or a `--var-file` path as typed), and it
+> is bound by the SAME three invariants as `Scope` — `Equal` ignores it,
+> `ConfigHash` excludes it, it round-trips through `wireValue`. Prove both
+> fields, not just `Scope`.
+>
+> One of the three is already covered here incidentally, and that is exactly why
+> it must be made explicit: `TestAVarMatchingTheFileValueIsNotAChange` applies
+> with `variables.yml` supplying `cidr`, then plans with a matching `--var`. The
+> desired value carries `SuppliedBy: "--var"` and the recorded one carries `""`,
+> so an `Equal` comparing the new field fails that test — loudly, since `cidr`
+> is `ForceNew` and the plan would propose a REPLACEMENT. Say so in that test's
+> comment. Coverage nobody has written down evaporates the next time someone
+> edits the fixture for an unrelated reason.
+>
+> The other two need siblings, and their failures differ from `Scope`'s: a
+> hashed `SuppliedBy` makes unchanged configuration look stale in M6, and a
+> dropped one makes a saved plan render a DIFFERENT annotation than the plan it
+> was saved from — which is the one thing a saved plan exists to prevent.
+
 ### Why this task exists
 
 Task 1 pins the three invariants as unit tests on `pkg/value`. This task proves
