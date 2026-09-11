@@ -32,7 +32,7 @@ func TestSchemasCarriesEveryKindThrough(t *testing.T) {
 		decls = append(decls, decl("v_"+k.String(), k))
 	}
 
-	got, ds := Schemas(decls)
+	got, ds := Schemas(decls, "variable")
 	if ds.HasErrors() {
 		t.Fatalf("unexpected diagnostics: %+v", ds)
 	}
@@ -53,7 +53,7 @@ func TestSchemasKeepsAnUntypedDeclarationThatHasADefault(t *testing.T) {
 	d := decl("greeting", value.KindInvalid)
 	d.Default, d.HasDefault = value.String("hello", value.SourceExplicit), true
 
-	got, ds := Schemas([]config.VariableDecl{d})
+	got, ds := Schemas([]config.VariableDecl{d}, "variable")
 	if ds.HasErrors() {
 		t.Fatalf("an untyped declaration with a default is legal: %+v", ds)
 	}
@@ -76,7 +76,7 @@ func TestSchemasKeepsEveryDeclarationItIsGiven(t *testing.T) {
 		decl("typed", value.KindInt),
 		withDefault(decl("untyped", value.KindInvalid), value.String("x", value.SourceExplicit)),
 	}
-	got, ds := Schemas(decls)
+	got, ds := Schemas(decls, "variable")
 	if ds.HasErrors() {
 		t.Fatalf("both declarations are legal: %+v", ds)
 	}
@@ -91,7 +91,7 @@ func TestSchemasStoresTheDeclaredDefaultUnstamped(t *testing.T) {
 	d := decl("replicas", value.KindInt)
 	d.Default, d.HasDefault = value.Int(2, value.SourceExplicit), true
 
-	got, _ := Schemas([]config.VariableDecl{d})
+	got, _ := Schemas([]config.VariableDecl{d}, "variable")
 	if s := got["replicas"]; s.Default.Scope != value.ScopeUnset {
 		t.Errorf("Default.Scope = %v, want ScopeUnset: only stage 4 may say which rung won", s.Default.Scope)
 	}
@@ -114,7 +114,7 @@ func TestSchemasReportsEveryBadDeclarationNotJustTheFirst(t *testing.T) {
 		numDecl("toolarge", value.KindInt, value.Int(1, value.SourceExplicit), value.Int(100, value.SourceExplicit), true, true),
 		value.Int(500, value.SourceExplicit))
 
-	_, ds := Schemas([]config.VariableDecl{wrongKind, outOfBounds})
+	_, ds := Schemas([]config.VariableDecl{wrongKind, outOfBounds}, "variable")
 	if !ds.HasErrors() {
 		t.Fatal("both declarations are individually bad and must both be reported")
 	}
@@ -140,7 +140,7 @@ func TestSchemasCarriesBoundsThrough(t *testing.T) {
 		numDecl("replicas", value.KindInt, value.Int(1, value.SourceExplicit), value.Int(100, value.SourceExplicit), true, true),
 		numDecl("ratio", value.KindFloat, value.Float(0.5, value.SourceExplicit), value.Float(1.5, value.SourceExplicit), true, true),
 	}
-	got, ds := Schemas(decls)
+	got, ds := Schemas(decls, "variable")
 	if ds.HasErrors() {
 		t.Fatalf("unexpected diagnostics: %+v", ds)
 	}
@@ -164,7 +164,7 @@ func TestSchemasCarriesBoundsWithoutFlatteningThem(t *testing.T) {
 	const tooBigForFloat64 = int64(1)<<53 + 1
 	d := numDecl("big", value.KindInt, value.Int(tooBigForFloat64, value.SourceExplicit), value.Value{}, true, false)
 
-	got, ds := Schemas([]config.VariableDecl{d})
+	got, ds := Schemas([]config.VariableDecl{d}, "variable")
 	if ds.HasErrors() {
 		t.Fatalf("unexpected diagnostics: %+v", ds)
 	}
@@ -180,7 +180,7 @@ func TestSchemasKeepsTheBoundsOrigin(t *testing.T) {
 	d := numDecl("replicas", value.KindInt, value.Int(1, value.SourceExplicit), value.Value{}, true, false)
 	d.Min = d.Min.WithOrigin(value.Origin{File: "variables.yml", Line: 5, Column: 7})
 
-	got, _ := Schemas([]config.VariableDecl{d})
+	got, _ := Schemas([]config.VariableDecl{d}, "variable")
 	if got["replicas"].Min.Origin.Line != 5 {
 		t.Errorf("Min.Origin = %+v, want variables.yml:5:7", got["replicas"].Min.Origin)
 	}
@@ -194,7 +194,7 @@ func TestSchemasChecksTheDeclaredDefaultAgainstItsOwnConstraints(t *testing.T) {
 		d := withDefault(
 			numDecl("replicas", value.KindInt, value.Int(1, value.SourceExplicit), value.Int(100, value.SourceExplicit), true, true),
 			value.Int(def, value.SourceExplicit))
-		_, ds := Schemas([]config.VariableDecl{d})
+		_, ds := Schemas([]config.VariableDecl{d}, "variable")
 		return ds
 	}
 	if !build(500).HasErrors() {
@@ -214,7 +214,7 @@ func TestSchemasDefaultDiagnosticNamesTheLineTheDefaultIsOn(t *testing.T) {
 		numDecl("replicas", value.KindInt, value.Int(1, value.SourceExplicit), value.Int(100, value.SourceExplicit), true, true),
 		value.Int(500, value.SourceExplicit).WithOrigin(value.Origin{File: "variables.yml", Line: 9, Column: 11}))
 
-	_, ds := Schemas([]config.VariableDecl{d})
+	_, ds := Schemas([]config.VariableDecl{d}, "variable")
 	var sb strings.Builder
 	ds.Render(&sb)
 	if !strings.Contains(sb.String(), "variables.yml:9:11") {
@@ -233,7 +233,7 @@ func intSchema(t *testing.T, min, max int64) Schema {
 	// "the diagnostic locates the VIOLATED bound's own declared origin" per
 	// PLAN.md §44, rather than passing by coincidence.
 	d.Max = d.Max.WithOrigin(value.Origin{File: "variables.yml", Line: 5, Column: 7})
-	got, ds := Schemas([]config.VariableDecl{d})
+	got, ds := Schemas([]config.VariableDecl{d}, "variable")
 	if ds.HasErrors() {
 		t.Fatalf("fixture schema is itself invalid: %+v", ds)
 	}
@@ -304,7 +304,7 @@ func TestValidateUsesTheGrammaticallyCorrectArticle(t *testing.T) {
 		return sb.String()
 	}
 
-	got, ds := Schemas([]config.VariableDecl{decl("v", value.KindInt)})
+	got, ds := Schemas([]config.VariableDecl{decl("v", value.KindInt)}, "variable")
 	if ds.HasErrors() {
 		t.Fatalf("fixture: %+v", ds)
 	}
@@ -316,7 +316,7 @@ func TestValidateUsesTheGrammaticallyCorrectArticle(t *testing.T) {
 		t.Errorf("diagnostic uses the wrong article for KindInt:\n%s", out)
 	}
 
-	got, ds = Schemas([]config.VariableDecl{decl("v", value.KindString)})
+	got, ds = Schemas([]config.VariableDecl{decl("v", value.KindString)}, "variable")
 	if ds.HasErrors() {
 		t.Fatalf("fixture: %+v", ds)
 	}
@@ -351,7 +351,7 @@ func TestValidateEnforcesBoundsInclusively(t *testing.T) {
 func floatSchema(t *testing.T, min, max float64) Schema {
 	t.Helper()
 	d := numDecl("ratio", value.KindFloat, value.Float(min, value.SourceExplicit), value.Float(max, value.SourceExplicit), true, true)
-	got, ds := Schemas([]config.VariableDecl{d})
+	got, ds := Schemas([]config.VariableDecl{d}, "variable")
 	if ds.HasErrors() {
 		t.Fatalf("fixture schema is itself invalid: %+v", ds)
 	}
@@ -513,7 +513,7 @@ func TestValidateRejectsAnUnknownOfTheWrongKind(t *testing.T) {
 func TestValidateAcceptsAnythingForAnUntypedDeclaration(t *testing.T) {
 	d := decl("anything", value.KindInvalid)
 	d.Default, d.HasDefault = value.String("x", value.SourceExplicit), true
-	got, _ := Schemas([]config.VariableDecl{d})
+	got, _ := Schemas([]config.VariableDecl{d}, "variable")
 	s := got["anything"]
 
 	for _, v := range []value.Value{
@@ -536,7 +536,7 @@ func TestCoerceLeavesAnUntypedDeclarationUnconstrained(t *testing.T) {
 	// as supplied, unconverted.
 	d := decl("anything", value.KindInvalid)
 	d.Default, d.HasDefault = value.String("x", value.SourceExplicit), true
-	got, _ := Schemas([]config.VariableDecl{d})
+	got, _ := Schemas([]config.VariableDecl{d}, "variable")
 	s := got["anything"]
 
 	in := value.Int(1, value.SourceVariable)
@@ -579,7 +579,7 @@ func TestCoerceDiagnosticNamesTheVarFileNotDashDashVar(t *testing.T) {
 }
 
 func TestValidateChecksListAndMapByKindOnly(t *testing.T) {
-	got, ds := Schemas([]config.VariableDecl{decl("tags", value.KindList)})
+	got, ds := Schemas([]config.VariableDecl{decl("tags", value.KindList)}, "variable")
 	if ds.HasErrors() {
 		t.Fatalf("fixture: %+v", ds)
 	}
@@ -599,7 +599,7 @@ func TestValidateChecksListAndMapByKindOnly(t *testing.T) {
 
 func schemaFor(t *testing.T, kind value.Kind) Schema {
 	t.Helper()
-	got, ds := Schemas([]config.VariableDecl{decl("v", kind)})
+	got, ds := Schemas([]config.VariableDecl{decl("v", kind)}, "variable")
 	if ds.HasErrors() {
 		t.Fatalf("fixture schema %s is invalid: %+v", kind, ds)
 	}
@@ -709,7 +709,7 @@ func TestParseTextRefusesListAndMapVariables(t *testing.T) {
 func TestParseTextLeavesAnUntypedDeclarationAsText(t *testing.T) {
 	d := decl("anything", value.KindInvalid)
 	d.Default, d.HasDefault = value.String("x", value.SourceExplicit), true
-	got, _ := Schemas([]config.VariableDecl{d})
+	got, _ := Schemas([]config.VariableDecl{d}, "variable")
 
 	v, ds := got["anything"].ParseText("20", value.Origin{File: "--var"})
 	if ds.HasErrors() {
@@ -733,5 +733,69 @@ func TestShowRendersStringsBareNotQuoted(t *testing.T) {
 	got := show(value.String("staging", value.SourceExplicit))
 	if got != "staging" {
 		t.Errorf(`show(String("staging")) = %q, want the bare word "staging" — ProseFormatOptions does not quote strings`, got)
+	}
+}
+
+func TestNoDiagnosticNamesAnUnsetScope(t *testing.T) {
+	s := Schema{Name: "replicas", Noun: "input", Kind: value.KindInt,
+		Origin: value.Origin{File: "module.yml", Line: 3, Column: 5}}
+	// Exactly what stage 2 produces for a literal attribute: Source explicit,
+	// Scope unset, no SuppliedBy.
+	ds := s.Validate(value.String("large", value.SourceExplicit))
+	if !ds.HasErrors() {
+		t.Fatal("a string against an integer schema must be refused")
+	}
+	if strings.Contains(ds[0].Detail, "unset") {
+		t.Errorf("Detail = %q; \"supplied by unset\" reads as a noun and names a thing the "+
+			"user cannot act on. A value with no recorded provenance gets a sentence with "+
+			"no clause, not a clause naming the absence", ds[0].Detail)
+	}
+	if !strings.Contains(ds[0].Detail, "The value is a string") {
+		t.Errorf("Detail = %q, want the clause omitted entirely", ds[0].Detail)
+	}
+}
+
+func TestTheSuppliedByClauseSurvivesWhereThereIsAScope(t *testing.T) {
+	// The omission must be narrow. Dropping the clause unconditionally would
+	// undo M4's MAJOR 1 fix, which exists so a --var-file value is not credited
+	// to --var.
+	s := Schema{Name: "replicas", Kind: value.KindInt,
+		Origin: value.Origin{File: "infra.yml", Line: 3, Column: 5}}
+	v := value.String("large", value.SourceVariable).
+		WithScope(value.ScopeCLIOverride).WithSuppliedBy("conf/prod.yml")
+	ds := s.Validate(v)
+	if !strings.Contains(ds[0].Detail, "supplied by conf/prod.yml") {
+		t.Errorf("Detail = %q, want it to name the file that supplied the value", ds[0].Detail)
+	}
+}
+
+func TestSchemaDiagnosticsUseTheDeclarationsOwnNoun(t *testing.T) {
+	decls := []config.VariableDecl{{
+		Name:   "replicas",
+		Type:   value.KindInt,
+		Origin: value.Origin{File: "module.yml", Line: 3, Column: 5},
+	}}
+	schemas, _ := Schemas(decls, "input")
+
+	ds := schemas["replicas"].Validate(value.String("plenty", value.SourceExplicit))
+	if !ds.HasErrors() {
+		t.Fatal("a string against an integer schema must be refused")
+	}
+	if !strings.Contains(ds[0].Summary, `input "replicas"`) {
+		t.Errorf("Summary = %q, want it to call this an input", ds[0].Summary)
+	}
+	if strings.Contains(ds[0].Summary, "variable") {
+		t.Errorf("Summary = %q, still calls it a variable", ds[0].Summary)
+	}
+}
+
+func TestSchemaWithNoNounStillSaysVariable(t *testing.T) {
+	// A Schema built by hand — in a test, or by a caller that has not thought
+	// about the noun — must read as the common case, not as an empty word
+	// dropped into the middle of a sentence.
+	s := Schema{Name: "replicas", Kind: value.KindInt}
+	ds := s.Validate(value.String("plenty", value.SourceExplicit))
+	if !strings.Contains(ds[0].Summary, `variable "replicas"`) {
+		t.Errorf("Summary = %q, want the zero Noun to mean \"variable\"", ds[0].Summary)
 	}
 }

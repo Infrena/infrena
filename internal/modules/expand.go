@@ -77,6 +77,10 @@ const TypePrefix = "module."
 // copy; until then the field holds what the walk found.
 type Instance struct {
 	Decl *config.ResourceDecl
+	// Scope is the level this resource was instantiated at, shared by every
+	// resource at that level. Compiler stage 6 evaluates the resource's
+	// attributes against it.
+	Scope *Scope
 }
 
 // Expansion is stage 5's output: a flat resource set, and nothing in it that
@@ -207,7 +211,7 @@ func Expand(project *config.ProjectDecl, scope variables.Scope, dir string, reso
 	}
 
 	w := &walker{root: abs, resolve: resolve, ds: &ds}
-	w.expand(rootLevel(project), scope, abs, nil)
+	w.expand(rootLevel(project), &Scope{Vars: scope}, abs, nil)
 	return &Expansion{
 		Project:     project.Project,
 		Resolutions: w.sortedResolutions(),
@@ -220,7 +224,7 @@ func Expand(project *config.ProjectDecl, scope variables.Scope, dir string, reso
 //
 // module is the instantiation path to this level, outermost first, empty at the
 // root. It names the level in diagnostics here; Task 6 turns it into an address.
-func (w *walker) expand(lv level, vars variables.Scope, dir string, module []string) {
+func (w *walker) expand(lv level, scope *Scope, dir string, module []string) {
 	loaded := w.loadModules(lv, dir, module)
 
 	// Stage 2 sorted Resources by name, so this walk is deterministic. It is
@@ -231,7 +235,7 @@ func (w *walker) expand(lv level, vars variables.Scope, dir string, module []str
 		if strings.HasPrefix(r.Type, TypePrefix) {
 			continue
 		}
-		w.instances = append(w.instances, Instance{Decl: r})
+		w.instances = append(w.instances, Instance{Decl: r, Scope: scope})
 	}
 
 	// Task 7 replaces this with a topological order over sibling references,
@@ -240,7 +244,7 @@ func (w *walker) expand(lv level, vars variables.Scope, dir string, module []str
 		if !strings.HasPrefix(r.Type, TypePrefix) {
 			continue
 		}
-		w.instantiate(r, loaded, vars, dir, module)
+		w.instantiate(r, loaded, scope, dir, module)
 	}
 }
 
@@ -317,7 +321,7 @@ func (w *walker) loadModules(lv level, dir string, module []string) map[string]l
 // and recurses.
 func (w *walker) instantiate(
 	r *config.ResourceDecl, loaded map[string]loadedModule,
-	vars variables.Scope, dir string, module []string,
+	caller *Scope, dir string, module []string,
 ) {
 	lm, ok := w.resolveCall(r, loaded, module)
 	if !ok {
@@ -390,7 +394,10 @@ func (w *walker) instantiate(
 	// diamond and not a cycle.
 	defer func() { w.path = w.path[:len(w.path)-1] }()
 
-	w.expand(moduleLevel(child), vars, lm.Dir, inner)
+	childLevel := moduleLevel(child)
+	supplied := w.evaluateCall(r, caller)
+	innerScope := w.moduleScope(r, childLevel, caller, supplied, inner)
+	w.expand(childLevel, innerScope, lm.Dir, inner)
 }
 
 // resolveCall turns a `module.<name>` type into the module it names, applying

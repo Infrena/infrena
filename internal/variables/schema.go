@@ -24,7 +24,18 @@ import (
 // has a default — see the empty-declaration warning below — so a consumer that
 // needs a kind to build an unknown from always has one when it needs one.
 type Schema struct {
-	Name       string
+	Name string
+	// Noun is what the user called this declaration: "variable" or "input".
+	// The two are the same SHAPE — PLAN.md §11 spells a module's `inputs:`
+	// exactly as `variables:` — which is why one Schema serves both. They are
+	// not the same WORD, and every diagnostic below reaches a user who wrote
+	// one of them and not the other.
+	//
+	// Read through noun(), never directly: the zero value must keep meaning
+	// "variable", so a Schema built by hand in a test — or by a future caller
+	// that has not thought about this — reports the common case rather than an
+	// empty string in the middle of a sentence.
+	Noun       string
 	Kind       value.Kind
 	Default    value.Value
 	HasDefault bool
@@ -33,6 +44,15 @@ type Schema struct {
 	Max        value.Value
 	HasMax     bool
 	Origin     value.Origin
+}
+
+// noun returns what to call this declaration in a diagnostic, defaulting to
+// "variable".
+func (s Schema) noun() string {
+	if s.Noun == "" {
+		return "variable"
+	}
+	return s.Noun
 }
 
 // Schemas builds the schema table from stage 2's declarations.
@@ -45,7 +65,12 @@ type Schema struct {
 // Every problem in every declaration is reported in one pass (spec §7.4): a
 // declaration with a bad bound keeps its type and loses the bound rather than
 // stopping the walk, so a second bad declaration is still reported.
-func Schemas(decls []config.VariableDecl) (map[string]Schema, diag.Diagnostics) {
+//
+// noun is what the user called these declarations — "variable" for infra.yml's
+// `variables:` block, "input" for a module's `inputs:`. The two share this type
+// because PLAN.md §11 gives them the same shape, so the word is the one thing
+// that cannot be shared and must be carried.
+func Schemas(decls []config.VariableDecl, noun string) (map[string]Schema, diag.Diagnostics) {
 	var ds diag.Diagnostics
 	out := make(map[string]Schema, len(decls))
 
@@ -55,7 +80,7 @@ func Schemas(decls []config.VariableDecl) (map[string]Schema, diag.Diagnostics) 
 		// the user wrote it — do not add a second check that DROPS one here.
 		// Discarding a declaration discards input the user supplied, and a
 		// warning in front of a discard is still a discard.
-		s := Schema{Name: d.Name, Kind: d.Type, Origin: d.Origin}
+		s := Schema{Name: d.Name, Noun: noun, Kind: d.Type, Origin: d.Origin}
 		// Bounds are copied, not re-validated. Stage 2 coerced each one to
 		// d.Type and rejected every malformed declaration, with the line and
 		// column this stage does not have. Adding a second check here would
@@ -174,6 +199,26 @@ func show(v value.Value) string {
 // scope label only when SuppliedBy is unset. One rule, read from one place,
 // rather than a second copy that can drift from the renderer's.
 
+// suppliedBy renders the " supplied by X" clause of a diagnostic, or nothing at
+// all when the value carries no provenance.
+//
+// A value can genuinely have none: stage 2 stamps Source and leaves Scope
+// alone, so a literal written in a configuration file arrives at ScopeUnset —
+// and ScopeUnset.String() is "unset", which reads as a noun in this sentence
+// and produces "The value supplied by unset is a string." Nothing reached this
+// before M5, because every variable carries a scope stamped by stage 4; a
+// module input is the first value to reach this validator without one.
+//
+// The alternative — having stage 5 stamp ScopeBaseConfig so the sentence reads
+// well — would invent a claim about where the value came from, which is the
+// thing contract Amendment 8b deleted. Saying less is the honest fix.
+func suppliedBy(v value.Value) string {
+	if v.Scope == value.ScopeUnset {
+		return ""
+	}
+	return " supplied by " + value.ScopeLabel(v)
+}
+
 // originOr prefers the more specific of two origins. A bound decoded from YAML
 // carries its own line; a synthesised one does not, and the declaration's
 // origin is then the closest true answer.
@@ -213,8 +258,8 @@ func (s Schema) Coerce(v value.Value) (value.Value, diag.Diagnostics) {
 	if !ok {
 		ds.Add(diag.Diagnostic{
 			Severity: diag.SeverityError,
-			Summary:  "variable " + strconv.Quote(s.Name) + " cannot be stored as " + article(s.Kind) + " " + s.Kind.String(),
-			Detail: "The value supplied by " + value.ScopeLabel(v) + " is " + show(v) +
+			Summary:  s.noun() + " " + strconv.Quote(s.Name) + " cannot be stored as " + article(s.Kind) + " " + s.Kind.String(),
+			Detail: "The value" + suppliedBy(v) + " is " + show(v) +
 				", which cannot be converted to " + s.Kind.String() + " without changing it. " +
 				strconv.Quote(s.Name) + " is declared at " + s.Origin.String() + ".",
 			Action: "Write a value that is exactly representable as " + article(s.Kind) + " " + s.Kind.String() + ", or change the declared type.",
@@ -263,9 +308,9 @@ func (s Schema) Validate(v value.Value) diag.Diagnostics {
 	if v.Kind != s.Kind {
 		ds.Add(diag.Diagnostic{
 			Severity: diag.SeverityError,
-			Summary:  "variable " + strconv.Quote(s.Name) + " must be " + article(s.Kind) + " " + s.Kind.String(),
+			Summary:  s.noun() + " " + strconv.Quote(s.Name) + " must be " + article(s.Kind) + " " + s.Kind.String(),
 			Detail: "Declared as " + s.Kind.String() + " at " + s.Origin.String() +
-				". The value supplied by " + value.ScopeLabel(v) + " is " + article(v.Kind) + " " + v.Kind.String() + ".",
+				". The value" + suppliedBy(v) + " is " + article(v.Kind) + " " + v.Kind.String() + ".",
 			Action: "Supply " + article(s.Kind) + " " + s.Kind.String() + " value, or change the declared type.",
 			Origin: originOr(v.Origin, s.Origin),
 		})
@@ -329,8 +374,8 @@ func boundDiag(s Schema, relation string, bound value.Value, v value.Value) diag
 	limit := show(bound)
 	return diag.Diagnostic{
 		Severity: diag.SeverityError,
-		Summary:  "variable " + strconv.Quote(s.Name) + " must be " + relation + " " + limit,
-		Detail: "The value supplied by " + value.ScopeLabel(v) + " is " + show(v) + ". The bound is declared at " +
+		Summary:  s.noun() + " " + strconv.Quote(s.Name) + " must be " + relation + " " + limit,
+		Detail: "The value" + suppliedBy(v) + " is " + show(v) + ". The bound is declared at " +
 			originOr(bound.Origin, s.Origin).String() + ".",
 		Action: "Choose a value " + relation + " " + limit + ".",
 		Origin: originOr(v.Origin, s.Origin),
@@ -343,7 +388,7 @@ func boundDiag(s Schema, relation string, bound value.Value, v value.Value) diag
 func malformed(s Schema, v value.Value) diag.Diagnostic {
 	return diag.Diagnostic{
 		Severity: diag.SeverityError,
-		Summary:  "variable " + strconv.Quote(s.Name) + " holds a malformed value",
+		Summary:  s.noun() + " " + strconv.Quote(s.Name) + " holds a malformed value",
 		Detail:   "It claims kind " + v.Kind.String() + " but its datum does not match. This is an internal error.",
 		Action:   "Report this, with the configuration that produced it.",
 		Origin:   originOr(v.Origin, s.Origin),
@@ -361,7 +406,7 @@ func malformed(s Schema, v value.Value) diag.Diagnostic {
 func malformedBound(s Schema, which string, bound value.Value) diag.Diagnostic {
 	return diag.Diagnostic{
 		Severity: diag.SeverityError,
-		Summary:  "variable " + strconv.Quote(s.Name) + "'s " + which + " bound does not match its declared kind",
+		Summary:  s.noun() + " " + strconv.Quote(s.Name) + "'s " + which + " bound does not match its declared kind",
 		Detail: "Declared as " + s.Kind.String() + " at " + s.Origin.String() +
 			", but its " + which + " bound is " + article(bound.Kind) + " " + bound.Kind.String() + ". This is an internal error.",
 		Action: "Report this, with the configuration that produced it.",
@@ -447,7 +492,7 @@ func (s Schema) ParseText(text string, origin value.Origin) (value.Value, diag.D
 	default:
 		ds.Add(diag.Diagnostic{
 			Severity: diag.SeverityError,
-			Summary:  "variable " + strconv.Quote(s.Name) + " cannot be set with --var",
+			Summary:  s.noun() + " " + strconv.Quote(s.Name) + " cannot be set with --var",
 			Detail:   "It is declared as " + s.Kind.String() + " at " + s.Origin.String() + ", and --var carries a single line of text.",
 			Action:   "Set " + strconv.Quote(s.Name) + " in variables.yml or in environments/<environment>.yml, where YAML can express " + article(s.Kind) + " " + s.Kind.String() + ".",
 			Origin:   origin,

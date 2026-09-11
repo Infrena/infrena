@@ -703,3 +703,16 @@ func TestResolveRefusesVarFileNamingReservedNames(t *testing.T) {
 		}
 	}
 }
+
+func TestProcessVariablesMatchesWhatOverrideDocuments(t *testing.T) {
+	want := []string{"account", "environment", "region"}
+	if len(ProcessVariables) != len(want) {
+		t.Fatalf("ProcessVariables = %v, want %v", ProcessVariables, want)
+	}
+	for i := range want {
+		if ProcessVariables[i] != want[i] {
+			t.Fatalf("ProcessVariables = %v, want %v (sorted, so consumers need no sort)",
+				ProcessVariables, want)
+		}
+	}
+}

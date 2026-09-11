@@ -40,6 +40,17 @@ func (s Scope) Names() []string {
 	return out
 }
 
+// ProcessVariables names the three variables that come from the process
+// invocation rather than from any configuration file, sorted.
+//
+// Listed here, once, because two places need the same list and a second copy
+// would drift: compiler.seedProcessVariables sets them, and internal/modules
+// carries them across a module boundary (a module sees these and its own
+// inputs, and nothing else — PLAN.md §11.3). Override's doc comment below has
+// always named exactly these three; this is that sentence made readable by a
+// caller.
+var ProcessVariables = []string{"account", "environment", "region"}
+
 // Override records a value that comes from the process invocation rather than
 // from any configuration file.
 //
@@ -113,7 +124,7 @@ func Resolve(decls []config.VariableDecl, chain environments.Chain,
 ) (Scope, diag.Diagnostics) {
 	var ds diag.Diagnostics
 
-	schemas, schemaDiags := Schemas(decls)
+	schemas, schemaDiags := Schemas(decls, "variable")
 	ds.Extend(schemaDiags)
 
 	out := Scope{vars: make(map[string]value.Value, len(schemas)+len(files)+len(cliVars))}
