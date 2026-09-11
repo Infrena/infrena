@@ -16,7 +16,10 @@ func (l *Local) lockPath(environment string) string {
 	return filepath.Join(l.root, "state", environment+".lock")
 }
 
-// Lock acquires an exclusive environment lock by creating a file with O_EXCL.
+// Lock acquires an exclusive environment lock by writing the lock content to
+// a temp file and then linking it into place with os.Link, which — like
+// O_CREATE|O_EXCL — fails with EEXIST if the target already exists. See the
+// comment inside for why Link and not Rename.
 // Locks never expire: a timeout that guesses wrong is exactly how two applies
 // end up running at once. Spec §9.2.
 func (l *Local) Lock(ctx context.Context, environment string) (Lock, error) {
@@ -34,25 +37,60 @@ func (l *Local) Lock(ctx context.Context, environment string) (Lock, error) {
 		At:          time.Now().UTC(),
 	}
 
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
-	if errors.Is(err, fs.ErrExist) {
-		held, _, inspectErr := l.Inspect(environment)
-		if inspectErr != nil {
-			return Lock{}, fmt.Errorf("environment %q is locked, and the lock file could not be read: %w", environment, ErrLocked)
-		}
-		return Lock{}, fmt.Errorf("environment %q is locked: held by %s on %s (pid %d) since %s, running %q; release it with `infra state unlock %s`: %w",
-			environment, held.User, held.Host, held.PID, held.At.Format(time.RFC3339), held.Operation, environment, ErrLocked)
-	}
-	if err != nil {
-		return Lock{}, err
-	}
-	defer f.Close()
-
 	data, err := json.MarshalIndent(lock, "", "  ")
 	if err != nil {
 		return Lock{}, err
 	}
-	if _, err := f.Write(append(data, '\n')); err != nil {
+
+	// Acquisition must be atomic AND the content must never be observable
+	// half-written: a concurrent Inspect (including the one a few lines
+	// below, on the fs.ErrExist path) can land between file creation and
+	// content being written. os.OpenFile(O_CREATE|O_EXCL) alone makes only
+	// creation atomic, leaving a window where the file exists but is
+	// empty.
+	//
+	// The fix is write-then-link, not write-then-rename: os.Rename
+	// OVERWRITES its target, which would let a second Lock silently
+	// replace the first holder's lock file — destroying the exclusivity
+	// O_EXCL exists to provide, exactly the failure mode invariant 5
+	// (spec §47.5) forbids. os.Link fails with EEXIST if the target
+	// already exists, so it gives the same atomic create-or-fail semantics
+	// as O_EXCL|O_CREATE while guaranteeing the linked file is always
+	// fully written the instant it becomes visible under its final name.
+	// Put's use of Rename in local.go, by contrast, is correct for ITS
+	// job: overwriting is exactly what saving state should do.
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".lock-*.tmp")
+	if err != nil {
+		return Lock{}, err
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName) // no-op once the link has succeeded and this temp is orphaned
+
+	if err := tmp.Chmod(0o600); err != nil {
+		tmp.Close()
+		return Lock{}, err
+	}
+	if _, err := tmp.Write(append(data, '\n')); err != nil {
+		tmp.Close()
+		return Lock{}, err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return Lock{}, err
+	}
+	if err := tmp.Close(); err != nil {
+		return Lock{}, err
+	}
+
+	if err := os.Link(tmpName, path); err != nil {
+		if errors.Is(err, fs.ErrExist) {
+			held, _, inspectErr := l.Inspect(environment)
+			if inspectErr != nil {
+				return Lock{}, fmt.Errorf("environment %q is locked, and the lock file could not be read: %w", environment, ErrLocked)
+			}
+			return Lock{}, fmt.Errorf("environment %q is locked: held by %s on %s (pid %d) since %s, running %q; release it with `infra state unlock %s`: %w",
+				environment, held.User, held.Host, held.PID, held.At.Format(time.RFC3339), held.Operation, environment, ErrLocked)
+		}
 		return Lock{}, err
 	}
 	return lock, nil
