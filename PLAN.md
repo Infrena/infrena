@@ -2,9 +2,11 @@
 
 ## Product & Implementation Specification
 
-### Working Name
+### Name
 
-Use a temporary project name such as `infra` throughout development. The final product name can be selected later.
+The product is named **Infrata** (*infra* + *strata*: layers of infrastructure), with the GitHub organization `github.com/infrata` and the domain `infrata.dev`. The command is `infrata`, installed with `go install github.com/infrata/infrata/cmd/infrata@latest`.
+
+Development still uses the working name `infra` for the Go module path and the `cmd/infra` binary until the rename lands.
 
 ---
 
@@ -1851,6 +1853,8 @@ Do not initially build:
 
 The architecture should allow these later, but they should not delay the core product.
 
+The web UI, SaaS control plane and remote collaboration platform are the commercial product (§60). They are built later, as a separate codebase, and never inside the open core.
+
 ---
 
 # 55. Future Architecture
@@ -2069,3 +2073,94 @@ The final experience should feel like:
 > **Ansible's readability + Terraform's state and planning + a much better environment/import/default experience.**
 
 The most important engineering goal is to make the **core reconciliation engine correct and deterministic**. Provider breadth can come later.
+
+---
+
+# 60. Open Source and Commercial Model
+
+Infrata will be sold as a commercial product built around an open-source core.
+
+**The core stays open source permanently.** This is a commitment to users, not a phase: the core is never relicensed, and no feature is ever moved out of the core into the paid product.
+
+## The open core
+
+The open core permanently contains:
+
+* The `infrata` CLI and every command in §37.
+* The engine: compiler, planner, executor, state, graph, discovery, import and generation.
+* All providers, including AWS.
+* Local and S3 state backends with locking (§21, §22, §52).
+* Engine-enforced production protections: `require_approval`, `prevent_destroy` and stale-plan refusal (§20, §38).
+
+The dividing line: **what one engineer needs is free; what a team needs to coordinate, or an organization needs to prove, is paid.**
+
+## The commercial product
+
+### Hosted control plane
+
+* Managed state with version history and per-address change history.
+* Remote plan and apply on hosted runners, or on self-hosted agents inside the customer's network so cloud credentials never leave it.
+* VCS integration: a plan on every pull request, apply on merge, with the guarantee that the approved plan is the plan applied (§20).
+* A run queue per environment, and a live run view streamed from executor events.
+* Notifications, webhooks, and integration points between plan and apply.
+
+### Differentiated features
+
+A hosted run interface alone is a crowded market. These features use data only Infrata's engine has, and are where the commercial product competes:
+
+* **Environment matrix and promotion.** Status per environment, diffs between environments, and promoting a change applied in one environment to the next (relies on `extends`, §7).
+* **Provenance in the plan UI.** Every value shows where it came from and what it overrode (§43).
+* **Unmanaged-resource inventory.** Resources no environment manages, with one-click import to a pull request of minimal YAML (§24–27).
+* **Drift triage.** Scheduled detection, then either accept into configuration (a pull request) or revert (an apply) (§23).
+* **Ephemeral per-pull-request environments** that extend an existing environment and expire.
+* **Blast radius** of a change, from the dependency graph (§16).
+* **Throttling per cloud account across all runs**, not only within one process (§34).
+
+### Governance
+
+* SSO (SAML/OIDC), SCIM, and per-environment RBAC separating plan, apply and approve.
+* Server-enforced approvals: N approvers for production, named approvers for destructive changes. The CLI's protections (§38) stay free; the commercial product makes them impossible to bypass, because production credentials exist only on the runner.
+* Policy checks at advisory, soft-mandatory (overridable with a reason) and hard levels: simple declarative rules plus OPA integration. Infrata still does not grow a complex policy language of its own (§54).
+* Change windows, freeze periods, and break-glass access with a recorded justification.
+* An immutable audit log exportable to a SIEM, and signed plan attestations.
+* Cost estimates in plans, and cost-based policies.
+
+### Enterprise deployment
+
+* Self-hosted and air-gapped control plane.
+* Private module and provider registries.
+* Short-lived, OIDC-federated cloud credentials per environment.
+* Secrets backend integrations such as Vault, AWS Secrets Manager and 1Password.
+* Support agreements and long-term-support releases.
+
+## Constraints on the open core
+
+The commercial product is a separate, proprietary codebase. It is built on the open core's public contracts, never on a fork. That imposes constraints on the core now:
+
+1. **The CLI's machine-readable output is a product API.** The commercial runner invokes the `infrata` binary, as Terraform Cloud agents invoke `terraform`, rather than importing the engine; the engine's packages live under `internal/` and cannot be imported from another module anyway. The JSON plan artifact, a JSON event stream and exit codes are held to the same compatibility standard as the configuration language (§58).
+2. **Redaction stays in the engine.** Executor events carry only pre-redacted text, so no integration ever receives a raw attribute (§36).
+3. **The actor is recorded.** Plans and state record who made a change, so an audit trail never has to be retrofitted.
+4. **Plan and apply keep a seam between them** where policy checks and approvals attach.
+5. **No commercial code paths in the core.** No license checks and no feature gates.
+6. **The rename completes before the first public release**, so no user's import path ever breaks.
+
+## Making "open source forever" credible
+
+HashiCorp relicensed Terraform in 2023 after years as open source, and the community forked it as OpenTofu. A promise alone will not be believed, so it is made structural:
+
+* **Publish an open-core policy** stating the dividing line and that features never move from free to paid, before the commercial product exists.
+* **Accept contributions under a DCO sign-off, not a CLA.** A permissive license already lets contributed code ship inside the commercial product. A CLA would only add the right to relicense, which is exactly what is promised never to happen.
+* **Trademark "Infrata".** The code is open; the name is controlled. A trademark policy lets forks use the code but not the name.
+
+## Accepted risk
+
+A permissive core means competitors such as Spacelift, env0 and Scalr can build the same commercial features on the same engine. The advantage has to come from being the maintainers: velocity, trust, the brand, and a better hosted product.
+
+## Open decisions
+
+* **License.** Apache 2.0 is recommended: it carries a patent grant and enterprise legal teams approve it without review. MPL 2.0 is acceptable. AGPL is ruled out, since enterprises commonly ban it and the commercial product depends on adoption.
+* **Copyright holder**, an individual or a company. Settle before anything is sold.
+* **Contribution sign-off.** DCO is recommended, above.
+* **Module path.** `github.com/infrata/infrata`, or a vanity path `infrata.dev/infrata`, which keeps import paths stable if hosting ever moves off GitHub.
+* **Trademark registration.**
+* **Pricing model.** Avoid pricing per resource under management, which was widely unpopular for HCP Terraform.

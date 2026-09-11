@@ -6,10 +6,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Current state
 
-**M1, M2 and M3 are merged to `main`** (tags `m1`, `m2`, `m3`). The reconcile loop
+**M1, M2 and M3 are merged to `main`** (tags `m1`, `m2`, `m3`); **M4 is complete on `m4-variables`**. The reconcile loop
 closes end to end against the fake provider: `validate` → `plan` → `apply` → re-plan
 clean → externally mutate → `refresh` → drift shown → remove from YAML → destroy
-proposed → `apply`. ~30,200 lines of Go across 18 packages.
+proposed → `apply`. ~39,581 lines of Go across 21 packages.
 
 Present: the value model with per-leaf provenance and sensitivity, addressing, diagnostics,
 declarative resource schemas, the provider interface, a hand-editable file-backed fake
@@ -19,21 +19,46 @@ new in M3 — the executor (a worker pool bounded globally and per provider, per
 state persistence, failure isolation, SIGINT handling, retries classified three ways) and
 the commands `apply`, `destroy` and `refresh`.
 
+New in M4: compiler stages 3 and 4, so PLAN.md §7's precedence chain is real end to end —
+provider defaults → base configuration (`variables.yml`) → environment inheritance
+(`extends`) → the selected environment → `--var-file` → `--var`, each rung winning in that
+order. Typed variable schemas (`type`, `default`, `min`, `max`) validate the value that WINS
+its rung — not every value supplied, so a bad entry in `variables.yml` that every environment
+overrides is not reported today. A numeric literal is coerced to its declared kind wherever it
+appears — exactly, or it is rejected. `Value` gained `Scope` (which rung supplied it) and `SuppliedBy` (which
+input, at the CLI rung), so a plan names its own provenance: `size: 7 [variable, from
+conf/prod-sizes.yml]`. Both fields are excluded from `Equal` and `ConfigHash` and both
+round-trip through the plan artifact; that is proved through the binary, not asserted.
+`validate`, `plan` and `apply` resolve variables identically; `destroy` and `refresh`
+refuse the flags rather than accept and ignore them.
+
 Acceptance invariants 1, 2, 4 and 5 each have a test that fails against the unfixed code.
 That phrasing is deliberate: invariant 4's test once passed 20/20 with its dependency edge
 deleted, and invariant 5's atomicity test caught a real TOCTOU only 2 times in 5. A test
 naming an invariant is not evidence it holds.
 
-Absent until M4-M7: variables, environments, modules, reading a saved plan back, `init`,
-`explain`, `graph`, `discover`, `import`. Nothing half-implements one of those;
-`--var-file` errors rather than being silently ignored, which is the standard to hold.
+Absent until M5-M7: modules, reading a saved plan back, `init`, `explain`, `graph`,
+`discover`, `import`. Nothing half-implements one of those.
 
-`PLAN.md` remains the product spec. The Phase 1 design spec and the M1/M2/M3 implementation
+The standard that kept `--var-file` erroring rather than being silently ignored still
+holds, and M4 showed why it is worth stating as a rule about TASK BOUNDARIES and not only
+about flags: one task removed the flag from the unsupported list for every command while
+wiring only `plan`, and for four tasks `apply --var-file` accepted the file and applied the
+default instead. Remove a guard and add the capability it guards in the same change, per
+command. Neither task's tests could see that window, because each covered its own command.
+
+`PLAN.md` remains the product spec. The Phase 1 design spec and the M1-M4 implementation
 plans are under `docs/superpowers/`.
 
 `PLAN.md` is the authoritative spec. Read the relevant section before implementing a
 feature; the sections below summarise the architecture but do not replace it. Section
 numbers referenced here match `PLAN.md` headings.
+
+## Name
+
+The product is **Infrata** (GitHub org `infrata`, command `infrata`). The Go module path
+and binary are still `infra` until a dedicated rename, so don't rename piecemeal inside
+feature work.
 
 ## What is being built
 
