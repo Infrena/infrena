@@ -134,6 +134,65 @@ resources:
 	}
 }
 
+func TestCompileAlwaysDefinesEnvironmentRegionAndAccount(t *testing.T) {
+	files := loadFiles(t, `
+project: myapp
+resources:
+  network:
+    type: test.network
+    cidr: ${environment}/${region}/${account}
+`)
+	cfg, ds := Compile(files, testRegistry(t), Options{
+		Environment: "production",
+		Region:      "us-east-1",
+		Account:     "123456789012",
+	})
+	if ds.HasErrors() {
+		t.Fatalf("unexpected diagnostics: %+v", ds)
+	}
+	got, _ := cfg.Resources["network"].Attrs["cidr"].AsString()
+	if got != "production/us-east-1/123456789012" {
+		t.Errorf("cidr = %q, want %q — configuration must be able to name its own environment, region and account", got, "production/us-east-1/123456789012")
+	}
+}
+
+func TestCompileLeavesRegionUndefinedWhenNoneWasSupplied(t *testing.T) {
+	// The other direction of the predicate. Injecting an empty string instead
+	// would interpolate silently into a resource name; an undefined variable
+	// is a diagnostic the user can act on.
+	files := loadFiles(t, `
+project: myapp
+resources:
+  network:
+    type: test.network
+    cidr: ${region}
+`)
+	_, ds := Compile(files, testRegistry(t), Options{Environment: "dev"})
+	if !ds.HasErrors() {
+		t.Fatal("${region} with no region supplied must be reported as undefined, not resolved to an empty string")
+	}
+}
+
+func TestCompileWillNotLetAVarFlagRedefineTheEnvironment(t *testing.T) {
+	files := loadFiles(t, `
+project: myapp
+resources:
+  network:
+    type: test.network
+    cidr: ${environment}
+`)
+	cfg, ds := Compile(files, testRegistry(t), Options{
+		Environment: "production",
+		Vars:        map[string]string{"environment": "staging"},
+	})
+	if ds.HasErrors() {
+		t.Fatalf("unexpected diagnostics: %+v", ds)
+	}
+	if got, _ := cfg.Resources["network"].Attrs["cidr"].AsString(); got != "production" {
+		t.Errorf("cidr = %q, want production — a plan whose resource names said staging while it planned production would be lying about what it was changing", got)
+	}
+}
+
 func TestCompileReportsStage8Diagnostics(t *testing.T) {
 	files := loadFiles(t, `
 project: myapp
