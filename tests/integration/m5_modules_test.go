@@ -394,8 +394,8 @@ resources:
 	}
 
 	// And the whole thing converges: apply, then re-plan clean.
-	if a := run(t, dir, "apply", "dev", "--auto-approve"); a.ExitCode != 0 {
-		t.Fatalf("apply exit = %d, want 0\n%s", a.ExitCode, a.combined())
+	if a := run(t, dir, "apply", "dev", "--auto-approve"); a.ExitCode != 2 {
+		t.Fatalf("apply exit = %d, want 2 (success with changes: a fresh apply always has changes)\n%s", a.ExitCode, a.combined())
 	}
 	again := run(t, dir, "plan", "dev")
 	if again.ExitCode != 0 {
@@ -435,8 +435,8 @@ resources:
 `
 	dir := projectWithFiles(t, withDecoy, map[string]string{"modules/db/module.yml": dbModule})
 
-	if a := run(t, dir, "apply", "dev", "--auto-approve"); a.ExitCode != 0 {
-		t.Fatalf("apply exit = %d, want 0\n%s", a.ExitCode, a.combined())
+	if a := run(t, dir, "apply", "dev", "--auto-approve"); a.ExitCode != 2 {
+		t.Fatalf("apply exit = %d, want 2 (success with changes: a fresh apply always has changes)\n%s", a.ExitCode, a.combined())
 	}
 
 	// Drop the decoy. Nothing references it, so this must be a lone destroy.
@@ -638,8 +638,13 @@ resources:
 	// The regression that matters. Before Amendment 11 this apply created
 	// `store` for real and then failed on `db`.
 	a := run(t, dir, "apply", "dev", "--auto-approve")
-	if a.ExitCode == 0 {
-		t.Fatalf("apply succeeded on configuration validate rejects\n%s", a.combined())
+	if a.ExitCode != 1 {
+		// Not merely "!= 0": a successful apply that found and applied
+		// changes exits 2 (every other apply-based test in this file relies
+		// on that), so checking only for 0 would let a wrongly-successful
+		// apply through uncaught.
+		t.Fatalf("apply exit = %d, want 1 (an error, not a success) — apply succeeded on configuration "+
+			"validate rejects\n%s", a.ExitCode, a.combined())
 	}
 	st := run(t, dir, "state", "list", "dev")
 	if strings.Contains(st.Stdout, "store") {
@@ -801,8 +806,8 @@ resources:
 	}
 
 	// Apply, then check it did not leak through state inspection either.
-	if a := run(t, dir, "apply", "dev", "--auto-approve"); a.ExitCode != 0 {
-		t.Fatalf("apply exit = %d, want 0\n%s", a.ExitCode, a.combined())
+	if a := run(t, dir, "apply", "dev", "--auto-approve"); a.ExitCode != 2 {
+		t.Fatalf("apply exit = %d, want 2 (success with changes: a fresh apply always has changes)\n%s", a.ExitCode, a.combined())
 	}
 	show := run(t, dir, "state", "show", "dev", "module.primary.store")
 	if show.ExitCode != 0 {
@@ -939,8 +944,8 @@ resources:
     network: ${net.id}
 `, map[string]string{"modules/db/module.yml": dbModule})
 
-	if a := run(t, dir, "apply", "dev", "--auto-approve"); a.ExitCode != 0 {
-		t.Fatalf("apply exit = %d, want 0\n%s", a.ExitCode, a.combined())
+	if a := run(t, dir, "apply", "dev", "--auto-approve"); a.ExitCode != 2 {
+		t.Fatalf("apply exit = %d, want 2 (success with changes: a fresh apply always has changes)\n%s", a.ExitCode, a.combined())
 	}
 
 	if _, err := os.Stat(filepath.Join(dir, "modules.lock")); !os.IsNotExist(err) {
@@ -1126,8 +1131,8 @@ resources:
 `
 	dir := projectWithFiles(t, fmt.Sprintf(body, "old"), map[string]string{"modules/db/module.yml": dbModule})
 
-	if a := run(t, dir, "apply", "dev", "--auto-approve"); a.ExitCode != 0 {
-		t.Fatalf("apply exit = %d, want 0\n%s", a.ExitCode, a.combined())
+	if a := run(t, dir, "apply", "dev", "--auto-approve"); a.ExitCode != 2 {
+		t.Fatalf("apply exit = %d, want 2 (success with changes: a fresh apply always has changes)\n%s", a.ExitCode, a.combined())
 	}
 	if p := run(t, dir, "plan", "dev"); p.ExitCode != 0 {
 		t.Fatalf("re-plan exit = %d, want 0 before the rename\n%s", p.ExitCode, p.combined())
