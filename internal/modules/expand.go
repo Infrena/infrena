@@ -242,8 +242,10 @@ func Expand(project *config.ProjectDecl, scope variables.Scope, dir string, reso
 }
 
 // expand walks one level: it records that level's plain resources, then
-// instantiates each module call in turn, then fans depends_on edges that name
-// or are written on a module call out to what that call produced.
+// instantiates each module call in turn — in an order where every call a
+// sibling's attributes read has already been expanded (Ruling 4) — then fans
+// depends_on edges that name or are written on a module call out to what that
+// call produced.
 //
 // module is the instantiation path to this level, outermost first, empty at the
 // root. It returns the addresses this level produced, so a caller instantiating
@@ -272,17 +274,29 @@ func (w *walker) expand(lv level, scope *Scope, dir string, module []string) []a
 			Scope:   scope,
 		})
 		produced = append(produced, addr)
+		// Bound before any call is expanded, because a call's attributes may
+		// read a sibling RESOURCE and resources need no ordering pass — they
+		// are not expanded, only named.
+		scope.bind(r.Name, Binding{Kind: BindsResource, Address: addr})
 	}
 
-	// Task 7 replaces this with a topological order over sibling references,
-	// which degenerates to name order when there are none.
+	// Attributes are parsed ONCE (Ruling 6): the ordering pass below reads the
+	// references and evaluateCall reads the trees.
+	exprs := map[string]map[string]*value.Expr{}
 	for _, r := range lv.Resources {
-		if !strings.HasPrefix(r.Type, TypePrefix) {
-			continue
+		if strings.HasPrefix(r.Type, TypePrefix) {
+			exprs[r.Name] = w.parseCall(r)
 		}
-		inner := w.instantiate(r, loaded, scope, dir, module)
+	}
+
+	for _, r := range w.orderCalls(lv, exprs, module) {
+		supplied := w.evaluateCall(r, scope, exprs[r.Name])
+		inner, outputs := w.instantiate(r, loaded, scope, supplied, dir, module)
 		calls[r.Name] = inner
 		produced = append(produced, inner...)
+		// Bound AFTER expansion, because the outputs do not exist until then.
+		// That is exactly why orderCalls exists.
+		scope.bind(r.Name, Binding{Kind: BindsModule, Addresses: inner, Outputs: outputs})
 	}
 
 	w.fanOut(lv, calls, module)
@@ -407,14 +421,17 @@ func (w *walker) loadModules(lv level, dir string, module []string) map[string]l
 
 // instantiate expands one module call: it resolves the type to a loaded module,
 // checks the two guards, re-enters stages 1 and 2 through the module loader,
-// and recurses.
+// and recurses. supplied is the call's attributes, already evaluated in the
+// caller's scope by evaluateCall. It returns the addresses the module
+// produced and the outputs it collected — nil, nil on every early return,
+// because a module that failed one of these guards produced nothing to bind.
 func (w *walker) instantiate(
 	r *config.ResourceDecl, loaded map[string]loadedModule,
-	caller *Scope, dir string, module []string,
-) []address.Address {
+	caller *Scope, supplied map[string]value.Value, dir string, module []string,
+) ([]address.Address, map[string]value.Value) {
 	lm, ok := w.resolveCall(r, loaded, module)
 	if !ok {
-		return nil
+		return nil, nil
 	}
 
 	// ORDER IS LOAD-BEARING, but NOT for the reason it first appears. A cycle
@@ -432,11 +449,11 @@ func (w *walker) instantiate(
 	// wrong and would have justified deleting that test as redundant.
 	if at := w.onPath(lm.Dir); at >= 0 {
 		w.ds.Add(w.cycleDiagnostic(at, r, lm))
-		return nil
+		return nil, nil
 	}
 	if len(w.path) >= MaxDepth {
 		w.ds.Add(w.depthDiagnostic(r, lm))
-		return nil
+		return nil, nil
 	}
 
 	// LoadModule/DecodeModule, not config.Load/config.Decode: a module has no
@@ -454,7 +471,7 @@ func (w *walker) instantiate(
 				filepath.ToSlash(filepath.Join(lm.Source, config.ModuleFileName)) + ".",
 			Origin: lm.Origin,
 		})
-		return nil
+		return nil, nil
 	}
 
 	inner := make([]string, len(module)+1)
@@ -474,7 +491,7 @@ func (w *walker) instantiate(
 		// A module whose own file did not decode has no usable declarations.
 		// Recursing would report every consequence of the syntax error as a
 		// second, worse-told problem.
-		return nil
+		return nil, nil
 	}
 
 	w.path = append(w.path, frame{name: r.Name, source: lm.Source, dir: lm.Dir})
@@ -484,9 +501,11 @@ func (w *walker) instantiate(
 	defer func() { w.path = w.path[:len(w.path)-1] }()
 
 	childLevel := moduleLevel(child)
-	supplied := w.evaluateCall(r, caller)
 	innerScope := w.moduleScope(r, childLevel, caller, supplied, inner)
-	return w.expand(childLevel, innerScope, lm.Dir, inner)
+	addrs := w.expand(childLevel, innerScope, lm.Dir, inner)
+	// Collected AFTER expanding, so the module's own names are all bound and an
+	// output reading ${service.endpoint} resolves to module.<call>.service.
+	return addrs, w.collectOutputs(childLevel, innerScope)
 }
 
 // resolveCall turns a `module.<name>` type into the module it names, applying

@@ -30,6 +30,12 @@ type Scope struct {
 	// three process variables, or the project's whole variable scope at the
 	// root.
 	Vars variables.Scope
+	// names is what a bare name in ${name.attr} binds to at this level:
+	// either a plain resource or a module call, each addressed once
+	// expansion is done. Filled only while expanding, by bind (outputs.go),
+	// and read through Lookup, Names and Qualify — never touched outside this
+	// package.
+	names map[string]Binding
 }
 
 // Variable satisfies half of expressions.Scope.
@@ -151,14 +157,19 @@ func (w *walker) moduleScope(
 //
 // Stage 5 does this rather than leaving it to stage 6's bindAttribute, because
 // stage 5 runs first and cannot build the module's scope without these values;
-// after expansion the call resource is gone, so stage 6 never sees it. The
-// calls below are the same ones bindAttribute makes — Parse, then Evaluate —
-// so the two stages cannot disagree about what an attribute means. Qualify
-// (Task 7) is not called: no resource exists yet for a reference to resolve
-// against, module outputs are not implemented until Task 7, and caller.Attribute
-// already reports every reference unavailable, which is the same answer
-// Qualify's absence produces here.
-func (w *walker) evaluateCall(r *config.ResourceDecl, caller *Scope) map[string]value.Value {
+// after expansion the call resource is gone, so stage 6 never sees it.
+//
+// exprs is the call's attributes, already parsed once by parseCall
+// (outputs.go) — Ruling 6: the ordering pass reads the references and this
+// evaluates the trees, and parsing twice would report every syntax error
+// twice. caller.Qualify resolves a bare name against the caller's own
+// bindings before evaluation, exactly as stage 6's bindAttribute does — Task 5
+// left this uncalled because no module output existed yet for a reference to
+// resolve to; now a sibling module call's OUTPUT is reachable here, which is
+// the entire reason orderCalls exists.
+func (w *walker) evaluateCall(
+	r *config.ResourceDecl, caller *Scope, exprs map[string]*value.Expr,
+) map[string]value.Value {
 	out := make(map[string]value.Value, len(r.Attributes))
 	for _, name := range sortedAttributeNames(r.Attributes) {
 		attr := r.Attributes[name]
@@ -166,28 +177,13 @@ func (w *walker) evaluateCall(r *config.ResourceDecl, caller *Scope) map[string]
 			out[name] = attr.Value
 			continue
 		}
-
-		src, ok := attr.Value.AsString()
+		e, ok := exprs[name]
 		if !ok {
-			// A composite carrying an interpolation is not supported: the
-			// language interpolates strings, not structures — the same guard
-			// bindAttribute applies to a resource's own attributes.
-			w.ds.Add(diag.Diagnostic{
-				Severity: diag.SeverityError,
-				Summary:  "interpolation inside a " + attr.Value.Kind.String() + " is not supported",
-				Detail:   "Expressions may appear in string values only.",
-				Origin:   attr.Origin,
-			})
+			// parseCall already reported the syntax error or the
+			// composite-carrying-interpolation refusal; nothing to evaluate.
 			continue
 		}
-
-		e, parseDiags := expressions.Parse(src, attr.Origin)
-		w.ds.Extend(parseDiags)
-		if parseDiags.HasErrors() {
-			continue
-		}
-
-		v, evalDiags := expressions.Evaluate(e, caller)
+		v, evalDiags := expressions.Evaluate(caller.Qualify(e), caller)
 		w.ds.Extend(evalDiags)
 		out[name] = v
 	}
