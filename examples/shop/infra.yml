@@ -1,0 +1,32 @@
+project: shop
+
+variables:
+  db_password:
+    type: string
+
+environments:
+  dev:
+    type: development
+  production:
+    type: production
+    variables:
+      db_password: prod-secret
+
+modules:
+  - ./modules/app-stack
+
+resources:
+  network:
+    type: test.network
+    cidr: 10.0.0.0/16
+
+  stack:
+    type: module.app_stack
+    network: ${network.id}
+    size: 50
+    password: ${db_password}
+
+  web:
+    type: test.application
+    image: nginx:1.27
+    database_url: ${stack.endpoint}

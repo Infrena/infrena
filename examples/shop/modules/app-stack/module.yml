@@ -1,0 +1,18 @@
+inputs:
+  network:
+    type: string
+  size:
+    type: integer
+    default: 10
+  password:
+    type: string
+resources:
+  db:
+    type: test.database
+    engine: postgres
+    network: ${network}
+    size: ${size}
+    password: ${password}
+outputs:
+  endpoint:
+    value: ${db.endpoint}
