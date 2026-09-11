@@ -222,7 +222,49 @@ infra/
 └── discovered/        # written by `infra import --generate`; LOADED like environments/
 ```
 
-Exact structure may evolve during implementation, but environments and modules must be first-class concepts.
+Exact structure may evolve during implementation, but environments and modules must be
+first-class concepts.
+
+## 4.1 Conventional directories, globbed
+
+Three directories are read automatically, in the spirit of Ansible's layout — a project is
+organised by putting files where they belong, not by listing them somewhere:
+
+| Directory | Holds | Notes |
+|---|---|---|
+| `resources/**` | resource declarations | `infra.yml`'s own `resources:` still works and is equivalent |
+| `vars/**` | variable values | the directory form of `variables.yml`; both are base configuration |
+| `modules/**` | modules | a directory containing `module.yml`, already discovered in M5 |
+| `discovered/**` | generated configuration | written by `infra import --generate` (§27.1) |
+
+A resource directory may hold its own scoped material:
+
+```text
+resources/
+  database/
+    database.yml         the resources
+    vars/                variables visible ONLY to resources in this directory
+    templates/           reserved; see below
+```
+
+`resources/<dir>/vars/**` is scoped: those values are visible to the resources declared in that
+directory and nowhere else. A value defined both there and in the project-wide `vars/` resolves
+to the directory's, per §7 — the more specific statement about the same thing wins.
+
+**A name defined twice at the SAME level is an error naming both files**, never last-one-wins.
+Two files silently becoming one is the failure this language refuses everywhere else, and a
+globbed directory makes it easy to do by accident.
+
+### `templates/` is reserved, not implemented
+
+It will hold text blobs rendered into attributes — IAM policy documents, lambda sources, unit
+files, anything a provider takes as a string. That needs a template language, and choosing one
+is a decision in its own right: `${}` interpolation is deliberately not a programming language
+(§10), and a template engine is.
+
+The directory is named now so the layout does not change when the engine arrives, and so the
+choice is made against a stated purpose rather than in the abstract. Nothing reads it yet, and
+a `templates/` directory present today is not an error.
 
 ---
 
@@ -333,7 +375,9 @@ Recommended precedence:
 ```text
 provider defaults
         ↓
-base configuration
+base configuration          variables.yml and vars/**
+        ↓
+directory-scoped variables  resources/<dir>/vars/**
         ↓
 module defaults
         ↓
@@ -341,10 +385,20 @@ environment inheritance
         ↓
 environment variables
         ↓
-CLI overrides
+CLI overrides               --var, --var-file
 ```
 
 Explicit user configuration always overrides an implicit default.
+
+**More specific file scope wins, and an environment wins over every file.** Those are two
+different axes and conflating them is the mistake to avoid. A directory is how the project is
+ORGANISED; an environment is where it is DEPLOYED. A `resources/db/vars/` value therefore beats
+a project-wide one, because it is the more specific statement about the same thing — but an
+environment beats both, or `production` could no longer tune a value the code happened to set
+locally, and environments being first-class (§6) would mean nothing.
+
+`--var` is above everything, always. It is the operator saying what they want right now, and it
+is the one rung that cannot be outranked by a file someone else wrote.
 
 ---
 
