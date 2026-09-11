@@ -295,3 +295,67 @@ func TestLoadStillDemandsTheProjectFile(t *testing.T) {
 		t.Errorf("error should still suggest `infra init`: %v", err)
 	}
 }
+
+// TestLoadSkipsAFileNamedJustAnExtension pins environmentNameFor's name == ""
+// guard. Without it, a file literally named ".yml" or ".yaml" strips down to
+// an empty environment name, which then flows into paths[""], the sorted
+// name list, and out of Load as a File with Environment: "" — an environment
+// stage 2 would be asked to decode with no name at all.
+//
+// dev.yml sits alongside it for the same reason staging2.yml did in
+// TestLoadSkipsADirectoryNamedLikeAnEnvironmentFile: without a real file
+// present, a mutant that skips everything in environments/ would also pass.
+func TestLoadSkipsAFileNamedJustAnExtension(t *testing.T) {
+	dir := writeTree(t, map[string]string{
+		ProjectFileName:        minimalProject,
+		"environments/.yml":    "replicas: 1\n",
+		"environments/dev.yml": "replicas: 2\n",
+	})
+	files, err := Load(dir)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	var envs []string
+	for _, f := range files {
+		if f.Kind == FileEnvironment {
+			envs = append(envs, f.Environment)
+		}
+	}
+	if len(envs) != 1 || envs[0] != "dev" {
+		t.Fatalf("environments = %v, want [dev] (environments/.yml names no environment and must be skipped)", envs)
+	}
+}
+
+// TestLoadReportsEnvironmentsAsAPlainFile pins spec §44 for the case where
+// environments/ exists but is a plain file rather than a directory — a typo,
+// a `touch` where `mkdir` was meant, or a bad merge. os.ReadDir returns
+// ENOTDIR for this, which is not os.IsNotExist, so without special handling
+// it propagates as a bare OS error ("open .../environments: not a
+// directory") naming the path but neither the expectation nor a suggested
+// action, the same silent-shape §44 already refuses for the ambiguous-spelling
+// error.
+func TestLoadReportsEnvironmentsAsAPlainFile(t *testing.T) {
+	dir := writeTree(t, map[string]string{ProjectFileName: minimalProject})
+	envPath := filepath.Join(dir, EnvironmentsDirName)
+	if err := os.WriteFile(envPath, []byte("not a directory\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := Load(dir)
+	if err == nil {
+		t.Fatal("Load accepted environments/ as a plain file")
+	}
+	if !strings.Contains(err.Error(), envPath) {
+		t.Errorf("error does not name the path: %v", err)
+	}
+	if !strings.Contains(err.Error(), "directory") {
+		t.Errorf("error does not say what was expected (a directory): %v", err)
+	}
+	// The raw ENOTDIR message already contains the path and the word
+	// "directory" ("open .../environments: not a directory"), so those two
+	// checks alone would pass against the unhandled error. This one only
+	// passes once the error carries an actual suggested action.
+	if !strings.Contains(err.Error(), "Remove") && !strings.Contains(err.Error(), "remove") {
+		t.Errorf("error does not suggest an action: %v", err)
+	}
+}

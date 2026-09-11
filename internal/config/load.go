@@ -1,11 +1,13 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 
 	"gopkg.in/yaml.v3"
 )
@@ -145,6 +147,18 @@ func loadEnvironmentDir(dir string) ([]File, error) {
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
+		}
+		if errors.Is(err, syscall.ENOTDIR) {
+			// environments/ exists but is a plain file: a typo, a `touch`
+			// where `mkdir` was meant, or a bad merge. Left as the raw
+			// ENOTDIR error, this would name the path but neither the
+			// expectation nor an action — exactly the shape spec §44
+			// forbids, and the duplicate-spelling error below already
+			// gets right.
+			return nil, fmt.Errorf(
+				"%s exists but is not a directory; it must be a directory holding one YAML file per environment. "+
+					"Remove the file or move it aside, then create %s as a directory.",
+				dir, dir)
 		}
 		return nil, err
 	}
