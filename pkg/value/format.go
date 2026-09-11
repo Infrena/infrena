@@ -185,6 +185,21 @@ func Annotate(v Value, opts FormatOptions) string {
 //     "[, from --var]" — string(v.Source) on the empty ValueSource zero value
 //     — would be the silent corruption. Do not "fix" one of these two
 //     functions to match the other; they differ on purpose.
+//
+//   - Amendment 5 (owner ruling, contract.md): at ScopeCLIOverride, the
+//     location named is the VALUE's own Origin.File when it has one, not
+//     Scope.String()'s generic "--var". A value set via --var-file f.yml sits
+//     at ScopeCLIOverride same as one set via --var — that precedence is
+//     correct — but "[variable, from --var]" names a flag the user never
+//     typed. Both call sites already stamp what this needs: --var-file stamps
+//     Origin{File: <path as typed>} (internal/config/varfile.go), and --var
+//     stamps Origin{File: "--var"} (internal/variables/resolve.go) — the
+//     literal flag name — so one rule serves both without a new Scope or a
+//     second label table. The fallback to Scope.String() when Origin.File is
+//     empty is load-bearing, not defensive: Task 1's own tests build
+//     ScopeCLIOverride values with WithScope alone and no Origin, and every
+//     existing "[variable, from --var]" assertion depends on the fallback
+//     reproducing that string exactly.
 func annotation(v Value) string {
 	if !v.Known {
 		return ""
@@ -201,5 +216,9 @@ func annotation(v Value) string {
 	if v.Source == "" {
 		return ""
 	}
-	return "[" + string(v.Source) + ", from " + v.Scope.String() + "]"
+	location := v.Scope.String()
+	if v.Scope == ScopeCLIOverride && v.Origin.File != "" {
+		location = v.Origin.File
+	}
+	return "[" + string(v.Source) + ", from " + location + "]"
 }
