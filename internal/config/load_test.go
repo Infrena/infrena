@@ -146,7 +146,7 @@ func TestLoadTreatsTheOptionalFilesAsOptional(t *testing.T) {
 			},
 		},
 		{
-			name: "environments dir holds a subdirectory",
+			name: "environments dir holds a subdirectory with no YAML extension",
 			files: map[string]string{
 				ProjectFileName:             minimalProject,
 				"environments/old/prod.yml": "replicas: 1\n",
@@ -169,6 +169,46 @@ func TestLoadTreatsTheOptionalFilesAsOptional(t *testing.T) {
 				t.Fatalf("got %v, want just the project file", pathsOf(files))
 			}
 		})
+	}
+}
+
+// TestLoadSkipsADirectoryNamedLikeAnEnvironmentFile pins the IsDir guard in
+// loadEnvironmentDir specifically — the "subdirectory" case above names its
+// subdirectory "old", which has no YAML extension and so is already rejected
+// by environmentNameFor's ok check before the IsDir guard would ever matter.
+// That case would keep passing with the IsDir guard deleted entirely.
+//
+// A directory whose name DOES end in .yml is the case the guard exists for: a
+// typo, a `mkdir` where `touch` was meant, or a bad merge. Without the guard,
+// environmentNameFor("staging.yml") accepts it, and loadOptionalFile calls
+// os.ReadFile on a directory, which fails with EISDIR — not os.IsNotExist —
+// and propagates out of Load as a raw OS error instead of being silently
+// skipped per ruling 7.
+//
+// staging2.yml sits alongside it so that a mutant which skips everything in
+// environments/ (not just directories) also fails this test.
+func TestLoadSkipsADirectoryNamedLikeAnEnvironmentFile(t *testing.T) {
+	dir := writeTree(t, map[string]string{
+		ProjectFileName:             minimalProject,
+		"environments/staging2.yml": "replicas: 2\n",
+	})
+	if err := os.MkdirAll(filepath.Join(dir, "environments", "staging.yml"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	files, err := Load(dir)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	var envs []string
+	for _, f := range files {
+		if f.Kind == FileEnvironment {
+			envs = append(envs, f.Environment)
+		}
+	}
+	if len(envs) != 1 || envs[0] != "staging2" {
+		t.Fatalf("environments = %v, want [staging2] (the directory environments/staging.yml/ must be skipped, not read)", envs)
 	}
 }
 
