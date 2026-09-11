@@ -733,9 +733,14 @@ func decodeBound(path, name, which string, node *yaml.Node, kind value.Kind, typ
 // user would see values below their stated minimum accepted, with nothing
 // printed, which is the silent-loss shape this engine refuses everywhere else.
 func coerceBound(path, name, which string, node *yaml.Node, bv value.Value, kind value.Kind, ds *diag.Diagnostics) (value.Value, bool) {
+	// origin is computed once, up front, and applied on the success path
+	// below. value.Coerce itself stays pure and never touches Origin — stage
+	// 4 (Task 6) has no line to re-origin to, and stage 2 does, so re-origining
+	// belongs here, in the caller, not in the shared arithmetic.
+	origin := originOf(path, node)
 	coerced, ok := value.Coerce(bv, kind)
 	if ok {
-		return coerced, true
+		return coerced.WithOrigin(origin), true
 	}
 
 	// decodeBound already refused a non-numeric kind, and a non-numeric bv,
@@ -745,7 +750,6 @@ func coerceBound(path, name, which string, node *yaml.Node, bv value.Value, kind
 	// KindFloat means bv was the int overflowing 2^53. Diagnostics kept
 	// word-for-word identical to before this used value.Coerce, so no
 	// existing test's assertion needed to change.
-	origin := originOf(path, node)
 	if kind == value.KindInt {
 		ds.Add(diag.Diagnostic{
 			Severity: diag.SeverityError,
@@ -813,12 +817,14 @@ func decodeDefault(path, name string, node *yaml.Node, kind value.Kind, ds *diag
 		return dv, true
 	}
 
+	// origin computed up front, applied on the success path below — the same
+	// re-origining coerceBound does, and for the same reason: value.Coerce
+	// stays pure, stage 2 stamps its own line.
+	origin := originOf(path, node)
 	coerced, ok := value.Coerce(dv, kind)
 	if ok {
-		return coerced, true
+		return coerced.WithOrigin(origin), true
 	}
-
-	origin := originOf(path, node)
 
 	// Diagnostics mirror coerceBound's wording for the same exactness rule,
 	// substituting "default" for "min"/"max" — PLAN.md §44's shape (name the
