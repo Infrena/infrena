@@ -211,7 +211,7 @@ func writeGenerated(dir string, selected []discovery.Result, reg *registry.Regis
 		})
 	}
 
-	files, err := generator.Generate(resources, reg, ctx)
+	files, err := generator.Generate(resources, reg, ctx, generator.MinimalOptions())
 	if err != nil {
 		return nil, err
 	}

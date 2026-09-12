@@ -36,7 +36,7 @@ func devContext() schema.DefaultContext {
 // not exactly one.
 func oneFile(t *testing.T, rs []Resource, ctx schema.DefaultContext) File {
 	t.Helper()
-	files, err := Generate(rs, testRegistry(t), ctx)
+	files, err := Generate(rs, testRegistry(t), ctx, MinimalOptions())
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
 	}
@@ -168,7 +168,7 @@ func TestGenerationIsDeterministic(t *testing.T) {
 
 	var first string
 	for i := 0; i < 20; i++ {
-		files, err := Generate(rs, testRegistry(t), devContext())
+		files, err := Generate(rs, testRegistry(t), devContext(), MinimalOptions())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -239,7 +239,7 @@ func TestGeneratedConfigurationParsesBackAndPlansClean(t *testing.T) {
 			"cidr": prov("10.0.0.0/16"),
 			"id":   prov("vpc-0a1b"),
 		}},
-	}, testRegistry(t), devContext())
+	}, testRegistry(t), devContext(), MinimalOptions())
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
 	}
@@ -294,5 +294,85 @@ func TestGeneratedConfigurationParsesBackAndPlansClean(t *testing.T) {
 	if db.Attrs["size"].Scope != value.ScopeProviderDefault {
 		t.Errorf("size scope = %v, want ScopeProviderDefault — the omission must be why it is "+
 			"there, not a coincidence", db.Attrs["size"].Scope)
+	}
+}
+
+// TestExportModeKeepsDefaultsButStillOmitsSecrets is §28 against §27.
+//
+// The two modes differ in exactly ONE of the three omissions. A value equal to
+// its default is a fact about the resource that an audit wants and a
+// configuration file does not need. The other two omissions are not
+// negotiable: a computed attribute cannot be set at all, and a secret in an
+// export is if anything more likely to be pasted somewhere public than one in a
+// generated file.
+func TestExportModeKeepsDefaultsButStillOmitsSecrets(t *testing.T) {
+	const secret = "hunter2-correct-horse"
+	rs := []Resource{{
+		Name: "orders", Type: "test.database", ProviderID: "db-9",
+		Attributes: map[string]value.Value{
+			"engine":   prov("postgres"),
+			"size":     provInt(10), // the development default
+			"endpoint": prov("db-9.internal"),
+			"password": prov(secret).WithSensitive(true),
+		},
+	}}
+
+	full, err := Generate(rs, testRegistry(t), devContext(), Options{Minimal: false})
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	out := string(full[0].Bytes)
+
+	// The one difference.
+	if !strings.Contains(out, "size: 10") {
+		t.Errorf("export must keep a value equal to its default:\n%s", out)
+	}
+	// The two non-differences. Asserting only the first would pass against an
+	// export mode that simply skipped every omission.
+	if strings.Contains(out, secret) {
+		t.Fatalf("the secret is in the export:\n%s", out)
+	}
+	if strings.Contains(out, "endpoint:") {
+		t.Errorf("a computed attribute cannot be set and must stay out of both modes:\n%s", out)
+	}
+
+	// And minimal mode, from the same input, still omits the default — so the
+	// difference is the flag rather than the fixture.
+	min := string(oneFile(t, rs, devContext()).Bytes)
+	if strings.Contains(min, "size:") {
+		t.Errorf("minimal mode emitted the default:\n%s", min)
+	}
+}
+
+// TestTheOmissionNoteSuitsItsReader. A generated file is configuration someone
+// must complete; an export is a record someone is reading. "TODO: set this" in
+// an audit dump is an instruction to edit a file nobody will apply.
+func TestTheOmissionNoteSuitsItsReader(t *testing.T) {
+	rs := []Resource{{
+		Name: "orders", Type: "test.database", ProviderID: "db-9",
+		Attributes: map[string]value.Value{
+			"engine":   prov("postgres"),
+			"password": prov("s3cret").WithSensitive(true),
+		},
+	}}
+
+	min := string(oneFile(t, rs, devContext()).Bytes)
+	full, err := Generate(rs, testRegistry(t), devContext(), Options{Minimal: false})
+	if err != nil {
+		t.Fatal(err)
+	}
+	exp := string(full[0].Bytes)
+
+	if !strings.Contains(min, "TODO") {
+		t.Errorf("a generated file must tell the reader to supply the secret:\n%s", min)
+	}
+	if strings.Contains(exp, "TODO") {
+		t.Errorf("an export must not instruct the reader to edit it:\n%s", exp)
+	}
+	// Both must still NAME the attribute, whatever the wording.
+	for label, out := range map[string]string{"generated": min, "export": exp} {
+		if !strings.Contains(out, "password") {
+			t.Errorf("the %s output does not name the omitted attribute:\n%s", label, out)
+		}
 	}
 }
