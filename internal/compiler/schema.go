@@ -260,7 +260,7 @@ func markSensitive(attrs map[string]value.Value, def *schema.ResourceDefinition)
 func defaultContextFor(cfg *ResolvedConfig, resourceType string, opts Options) schema.DefaultContext {
 	return schema.DefaultContext{
 		Environment:     opts.Environment,
-		EnvironmentType: environmentType(opts.Environment),
+		EnvironmentType: EnvironmentType(opts.Environment),
 		Region:          opts.Region,
 		Account:         opts.Account,
 		Project:         cfg.Project,
@@ -268,10 +268,22 @@ func defaultContextFor(cfg *ResolvedConfig, resourceType string, opts Options) s
 	}
 }
 
-// environmentType classifies an environment for default resolution. Explicit
-// declaration via `environment: type:` arrives with the environment system in
-// M4; until then the name is the only signal available.
-func environmentType(name string) string {
+// EnvironmentType classifies an environment for default resolution.
+//
+// Exported so internal/cli's `import` judges a discovered value against the
+// SAME context the compiler will use when it later reads the generated file. If
+// the two disagreed, generation would omit an attribute as "equal to its
+// default" that the compiler then fills with something else, and the resource
+// would change on the first apply after an import that reported no changes.
+//
+// KNOWN GAP, pre-dating M8: this reads the environment's NAME, and an
+// environment's declared `type:` is not consulted at all. `staging` declared
+// `type: production` gets development defaults, and `production` declared
+// `type: development` gets production ones. The comment here used to say
+// explicit declaration arrives with M4; M4 shipped and this was never wired.
+// Fixing it means threading the declared type through Options, and it changes
+// what existing projects plan — so it is recorded rather than done in passing.
+func EnvironmentType(name string) string {
 	if name == "production" || name == "prod" {
 		return "production"
 	}
