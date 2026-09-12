@@ -1,10 +1,18 @@
-# M10 — Provider-Wide Defaults, Composite Interpolation, and `merge()`
+# M10 — Composite Interpolation, Literals, and `merge()`
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development to
 > implement this plan task-by-task.
 
-**Goal:** Let a project say once what every resource of a provider should carry — tags, lifecycle
-protection — with the values varying per environment through variables.
+**Goal:** Make the expression language able to express a map whose values interpolate, and to
+combine two of them — which is what everything asking for provider-wide tags actually needs
+underneath.
+
+**RESCOPED mid-milestone.** This plan originally ended with a `provider:` block (§12.1). The
+owner replaced that design with provider INSTANCES — a `providers:` list, named instances of one
+plugin, per-resource selection, and `defaults:` nested inside each. That is a milestone of its
+own (M11) and not a task: it changes the registry's one-provider-per-type key, five provider
+lookups, and what `ResourceState.Provider` means, which is a state migration. Tasks 1-4 stand on
+their own and are what M10 now is.
 
 **Architecture:** Four capabilities, strictly ordered because each is load-bearing for the next.
 One scanner replaces two. Composite values learn to carry interpolations, in ONE walk that three
@@ -64,6 +72,8 @@ is supplying a map whose leaves interpolate.
 
 ## Task 1: one scanner
 
+**Status: done** (`88f81c6`). The depth counter was deliberately NOT unified — see the commit.
+
 **Files:**
 - Modify: `internal/expressions/parse.go`
 - Test: `internal/expressions/parse_test.go`
@@ -106,6 +116,8 @@ func TestParseShapesAreUnchangedByTheScannerRewrite(t *testing.T) { /* ... */ }
 ---
 
 ## Task 2: interpolation inside a composite value
+
+**Status: done** (`5d6f04f`).
 
 **Files:**
 - Create: `internal/expressions/composite.go`, `internal/expressions/composite_test.go`
@@ -170,6 +182,8 @@ func TestAnUnknownLeafMakesTheCompositeUnknownAndRecordsTheEdge(t *testing.T) { 
 
 ## Task 3: literals in argument position
 
+**Status: done** (`e29954c`).
+
 **Files:** Modify `internal/expressions/parse.go`; test in `parse_test.go`.
 
 §10.3. Depends on Task 1 — do not start it first.
@@ -203,6 +217,8 @@ func TestAnUnquotedMapLiteralIsCaughtByTheLoader(t *testing.T) { /* in internal/
 ---
 
 ## Task 4: `merge()`
+
+**Status: done** (`59bec7e`).
 
 **Files:** Modify `internal/expressions/funcs.go`; test in `funcs_test.go`.
 
@@ -244,73 +260,35 @@ func TestMergeDoesNotMutateItsArguments(t *testing.T) { /* ... */ }
 
 ---
 
-## Task 5: the `provider:` block
+## Task 5: MOVED to M11
 
-**Files:**
-- Modify: `internal/config/load.go` and `decode.go` (the new top-level key),
-  `internal/config/declarations.go`, `internal/compiler/schema.go` (the new rung),
-  `internal/registry/registry.go` (the reserved-name check), `pkg/value/scope.go` (the label)
-- Test: all of the above, plus `tests/integration/m10_test.go`
-
-§12.1. Everything above exists so this task can be small.
-
-- [ ] **Step 5.1: Failing tests**
-
-```go
-// TestAProviderBlockDefaultReachesEveryResourceThatAcceptsIt. The fixture needs
-// a resource that ACCEPTS the attribute and one that does NOT, or it cannot tell
-// "applied where declared" from "applied everywhere".
-func TestAProviderBlockDefaultReachesEveryResourceThatAcceptsIt(t *testing.T) { /* ... */ }
-
-// TestAResourceOwnValueReplacesTheBlocksEntirely — the owner's ruling. The
-// fixture's two maps must share a key AND differ in another, so a merge would
-// visibly produce a third thing.
-func TestAResourceOwnValueReplacesTheBlocksEntirely(t *testing.T) { /* ... */ }
-
-// TestTheBlockBeatsASchemaDefaultAndLosesToTheResource — all three rungs in one
-// assertion, on one attribute.
-func TestTheBlockBeatsASchemaDefaultAndLosesToTheResource(t *testing.T) { /* ... */ }
-
-// TestAKeyNoResourceTypeDeclaresIsAnError. `tag:` for `tags:`. Assert the
-// diagnostic LISTS the attributes that do exist — this is the fail-closed rule
-// §12.1 exists for, and without the list a user cannot act on it.
-func TestAKeyNoResourceTypeDeclaresIsAnError(t *testing.T) { /* ... */ }
-
-// TestLifecycleKeysInTheBlockApplyToEveryResource, because every resource
-// accepts lifecycle — the second namespace.
-func TestLifecycleKeysInTheBlockApplyToEveryResource(t *testing.T) { /* ... */ }
-
-// TestAProviderDeclaringALifecycleNamedAttributeIsRejectedAtRegistration, in
-// internal/registry, beside the `module.` namespace check it mirrors.
-func TestAProviderDeclaringALifecycleNamedAttributeIsRejectedAtRegistration(t *testing.T) { /* ... */ }
-
-// TestThePlanSaysAValueCameFromTheProviderBlock — provenance (§43). A value
-// nobody wrote on the resource must not be credited to it.
-func TestThePlanSaysAValueCameFromTheProviderBlock(t *testing.T) { /* ... */ }
-
-// TestGenerationOmitsAProviderBlockValue — §27. It is not something the reader
-// has to supply, so minimal generation leaves it out.
-func TestGenerationOmitsAProviderBlockValue(t *testing.T) { /* ... */ }
-```
-
-- [ ] **Steps 5.2-5.6:** fail, implement, pass, discriminate (apply the block to types that do
-      not declare the key; let a resource's value merge instead of replace; drop the
-      fail-closed check; credit the value to the resource), commit.
+The `provider:` block specified here is superseded by §12.1's provider instances. See
+`2026-09-12-infra-m11-providers.md`. The parts of it that were right and carry over: the
+fail-closed rule for a key nothing declares, the reserved lifecycle names checked at
+registration, the provenance rung, and generation omitting a provider-supplied value.
 
 ---
 
-## Task 6: the whole thing through the binary
+## Task 6: the expression work through the binary
 
 **Files:** Create `tests/integration/m10_test.go`.
 
-- [ ] The owner's worked example, end to end: a `provider:` block setting `tags` and
-      `prevent_destroy` from variables, with per-environment values, applied to two environments.
-- [ ] Assert the tags DIFFER between environments and that each resource carries them.
-- [ ] Assert a resource setting its own `tags` gets only its own, and that the same resource
-      using `merge()` gets the union — the two halves of the owner's ruling in one fixture.
-- [ ] Assert a SECRET in a merged map is redacted in the plan and absent from `export`, which is
-      this milestone's governing rule at the only place a user meets it.
-- [ ] Update `examples/shop` to use a `provider:` block, and check its README still describes
+What Tasks 1-4 actually deliver, end to end, with the provider-block half removed:
+
+- [ ] A map whose values interpolate, planned in two environments, with the values DIFFERING —
+      the case §10.1 exists for. Assert both environments, because one cannot tell "resolved" from
+      "resolved correctly".
+- [ ] `merge()` combining a variable map with an inline literal, in the owner's own spelling:
+      `tags: "${merge(base_tags, {team: payments, project: billing})}"`. Assert the union AND that
+      the literal wins the shared key.
+- [ ] **A SECRET inside a map is redacted in the plan and absent from `export`** — the assertion
+      deferred from Task 2, which could not reach it at the compiler level because sensitivity
+      arrives at apply. This is the milestone's governing rule at the only place a user meets it,
+      so it goes through a real `apply` and then a real `plan` and `export`.
+- [ ] A dependency edge recorded from INSIDE a map: apply must order the two resources, not just
+      plan them. A missing edge here is a clean plan and a failed apply.
+- [ ] The unquoted-literal YAML error carries the quoting hint.
+- [ ] Update `examples/shop` to use an interpolated tag map, and check its README still describes
       what the example does.
 
 ---
@@ -325,5 +303,7 @@ Four things this plan asserts that the implementer should verify rather than tru
    and the governing rule needs its own task.
 3. **`anySensitive` exists and unions across arguments.** Task 4 says to reuse it rather than
    write a third union.
-4. **`registry.Register` validates before mutating.** Task 5's reserved-name check must go in the
-   FIRST loop, or a failed registration leaves the registry half-populated.
+4. **`registry.Register` validates before mutating.** Carried to M11, where the reserved-name
+   check must go in the FIRST loop, or a failed registration leaves the registry half-populated.
+
+All four were verified against the code before Task 1 began, and all four held.
