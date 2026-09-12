@@ -87,49 +87,112 @@ func split(src string, origin value.Origin, ds *diag.Diagnostics) ([]*value.Expr
 	return parts, true
 }
 
-// skipEscape reports the index to continue scanning from when src[i] begins an
-// escape sequence inside a quoted literal, and whether it did.
+// scanner walks a string once, maintaining quote state and nesting depth, and is
+// the ONE place either of those is tracked.
 //
-// matchBrace and splitArgs both scan for delimiters while tracking quotes, and
-// both must agree about what is escaped. Sharing this is not tidiness: when two
-// scanners disagree, input is accepted by one and rejected by the other, which
-// is the class of bug the quote handling was added to fix in the first place.
-func skipEscape(src string, i int, quoted bool) (int, bool) {
-	if quoted && src[i] == '\\' && i+1 < len(src) {
-		return i + 1, true
-	}
-	return i, false
+// There used to be two loops doing this — matchBrace counting `{}` and splitArgs
+// counting `()` — sharing only skipEscape, whose comment already explained the
+// hazard:
+//
+//	when two scanners disagree, input is accepted by one and rejected by the
+//	other, which is the class of bug the quote handling was added to fix in the
+//	first place
+//
+// That hazard is about QUOTES AND ESCAPES, which is what the two really must
+// agree on, and it is now impossible for them to disagree: a caller never sees a
+// quote character or an escaped byte at all.
+//
+// WHICH delimiters nest is per caller, deliberately. Counting parens toward the
+// interpolation's own depth was tried and reverted: it made `${lower(a}` report
+// "unclosed interpolation" instead of `unclosed call to "lower" — add the missing
+// )`, which is a strictly worse message for the same mistake, and §44 asks for
+// the actionable one. The characterisation test caught it.
+type scanner struct {
+	src    string
+	i      int
+	depth  int
+	quoted bool
+	// open and close are matched by index: open[k] nests, close[k] unnests.
+	open, close string
 }
 
-// matchBrace returns the index of the } closing the interpolation that starts
-// at from, accounting for nesting and quoted literals, or -1 if there is none.
-func matchBrace(src string, from int) int {
-	depth := 1
-	quoted := false
-	for i := from; i < len(src); i++ {
-		if next, skipped := skipEscape(src, i, quoted); skipped {
-			i = next
+// next advances to the next significant byte and reports it, along with the depth
+// AFTER any delimiter at that position is counted.
+//
+// Escapes and quote toggles are consumed silently, so no caller can hold an
+// opinion about them.
+func (s *scanner) next() (b byte, depth int, ok bool) {
+	for s.i < len(s.src) {
+		c := s.src[s.i]
+
+		if s.quoted && c == '\\' && s.i+1 < len(s.src) {
+			s.i += 2
 			continue
 		}
-		// Toggle quote state
-		if src[i] == '"' {
-			quoted = !quoted
+		if c == '"' {
+			s.quoted = !s.quoted
+			s.i++
 			continue
 		}
-		// Only count braces outside of quotes
-		if !quoted {
-			switch src[i] {
-			case '{':
-				depth++
-			case '}':
-				depth--
-				if depth == 0 {
-					return i
-				}
+		if !s.quoted {
+			if strings.IndexByte(s.open, c) >= 0 {
+				s.depth++
+			} else if strings.IndexByte(s.close, c) >= 0 {
+				s.depth--
 			}
 		}
+		at := s.i
+		s.i++
+		if s.quoted {
+			// Inside a quoted literal: consumed, but never significant. A caller
+			// asking "is this byte a delimiter" must never be handed one from
+			// inside quotes.
+			continue
+		}
+		return s.src[at], s.depth, true
 	}
-	return -1
+	return 0, s.depth, false
+}
+
+// matchBrace returns the index of the } closing the interpolation that starts at
+// from, or -1 if there is none.
+//
+// Braces ONLY. A stray `(` must not consume the closing brace — see the scanner's
+// doc comment.
+func matchBrace(src string, from int) int {
+	// Seeded at 1 for the `${` already consumed, so the closing brace is the one
+	// that brings the depth back to zero.
+	sc := &scanner{src: src, i: from, depth: 1, open: "{", close: "}"}
+	for {
+		b, depth, ok := sc.next()
+		if !ok {
+			return -1
+		}
+		if b == '}' && depth == 0 {
+			return sc.i - 1
+		}
+	}
+}
+
+// splitArgs splits on commas at the top level of an argument list.
+//
+// Every bracket pair nests here, including braces: §10.3's map literals put a
+// comma inside `{a: b, c: d}` that is NOT an argument separator.
+func splitArgs(src string) []string {
+	sc := &scanner{src: src, open: "({[", close: ")}]"}
+	var out []string
+	start := 0
+	for {
+		b, depth, ok := sc.next()
+		if !ok {
+			break
+		}
+		if b == ',' && depth == 0 {
+			out = append(out, src[start:sc.i-1])
+			start = sc.i
+		}
+	}
+	return append(out, src[start:])
 }
 
 // parseExpr parses the inside of one interpolation.
@@ -199,36 +262,6 @@ func parseCall(src string, open int, origin value.Origin, ds *diag.Diagnostics) 
 	}
 
 	return &value.Expr{Op: value.OpCall, Function: name, Args: args, Origin: origin}
-}
-
-// splitArgs splits on commas that are not inside parentheses or quotes.
-func splitArgs(src string) []string {
-	var out []string
-	depth, quoted, start := 0, false, 0
-	for i := 0; i < len(src); i++ {
-		if next, skipped := skipEscape(src, i, quoted); skipped {
-			i = next
-			continue
-		}
-		switch src[i] {
-		case '"':
-			quoted = !quoted
-		case '(':
-			if !quoted {
-				depth++
-			}
-		case ')':
-			if !quoted {
-				depth--
-			}
-		case ',':
-			if !quoted && depth == 0 {
-				out = append(out, src[start:i])
-				start = i + 1
-			}
-		}
-	}
-	return append(out, src[start:])
 }
 
 func parseReference(src string, origin value.Origin, ds *diag.Diagnostics) *value.Expr {
