@@ -94,3 +94,39 @@ func (r *Registry) Types() []string {
 	sort.Strings(out)
 	return out
 }
+
+// Providers returns every registered provider once, sorted by name.
+//
+// Discovery is the only caller that needs this: it asks each provider what
+// exists rather than asking about a type it already knows. Deduplicated,
+// because a provider appears in the map once per type it offers, and sorted,
+// because discovery output is read by people and diffed by scripts.
+func (r *Registry) Providers() []provider.Provider {
+	seen := map[string]provider.Provider{}
+	for _, p := range r.providers {
+		seen[p.Name()] = p
+	}
+	names := make([]string, 0, len(seen))
+	for name := range seen {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	out := make([]provider.Provider, 0, len(names))
+	for _, name := range names {
+		out = append(out, seen[name])
+	}
+	return out
+}
+
+// TypesOf returns the registered types belonging to one provider, sorted.
+func (r *Registry) TypesOf(providerName string) []string {
+	var out []string
+	for t, p := range r.providers {
+		if p.Name() == providerName {
+			out = append(out, t)
+		}
+	}
+	sort.Strings(out)
+	return out
+}

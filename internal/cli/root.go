@@ -65,6 +65,7 @@ func NewRootCommand() *cobra.Command {
 	root.AddCommand(newRefreshCommand(opts))
 	root.AddCommand(newExplainCommand(opts))
 	root.AddCommand(newGraphCommand(opts))
+	root.AddCommand(newDiscoverCommand(opts))
 
 	return root
 }
