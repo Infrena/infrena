@@ -1121,26 +1121,69 @@ Three assumptions in the engine are one-provider-per-type and must change:
   `state.Decode`), so this is the change that makes fixing it urgent rather than
   theoretical.
 
-### OPEN — resolve before implementing
+### Resource-attribute defaults live under `defaults:`
 
-1. **Where do resource-attribute defaults live?** The earlier design in this
-   section was `provider: aws: {tags: ${tags}}` — defaults applied to every
-   resource of a provider. In the list shape above, `tags: ${tags}` and
-   `iam-role: x` are indistinguishable: one configures the PROVIDER, the other
-   defaults a RESOURCE. A nested key would separate them unambiguously:
+An instance may also default attributes on every resource that uses it:
 
-   ```yaml
-   providers:
-     - plugin: aws
-       iam-role: some-role
-       defaults:
-         tags: ${tags}
-         prevent_destroy: ${protect}
-   ```
+```yaml
+providers:
+  - plugin: aws
+    iam-role: some-role
+    region: ${region}
+    defaults:
+      tags: ${tags}
+      prevent_destroy: ${protect}
+```
 
-2. **Is the default markable explicitly?** "First entry wins" is settled. Whether
-   there is also a `default: true` key is not — the internal shape above shows
-   `default` as something DERIVED from order.
+Nested rather than mixed in, because at the top level `tags: ${tags}` and
+`iam-role: x` are indistinguishable while meaning entirely different things — one
+defaults a RESOURCE, the other configures the PROVIDER. The alternative
+considered was letting the plugin declare its own config keys and treating
+anything else as a resource default; it was rejected because a typo in a config
+key (`iam-rol:`) would then silently become a resource default applied to
+everything the provider owns.
+
+Attribute resolution gains one rung, between what the resource says and what the
+plugin's schema says:
+
+```
+explicit on the resource        tags: {team: payments}
+        ↓
+the instance's `defaults:`      defaults: {tags: ${tags}}
+        ↓
+the plugin's schema default     whatever the plugin ships
+```
+
+A user-authored default beats a plugin-authored one; anything written on the
+resource beats both, WHOLE — a map is replaced, not merged, which is why §10.2
+has `merge()`.
+
+**A `defaults:` key must be an attribute some resource type of that plugin
+declares.** One that nothing declares is an error naming what exists, because
+`tag:` for `tags:` would otherwise apply to nothing, in every environment,
+forever, with no output in which its absence is visible.
+
+`prevent_destroy` and `retain` are accepted there too, and every resource accepts
+those — so the lifecycle key names are RESERVED, and a plugin declaring an
+attribute that collides with one is rejected at registration, the same place and
+for the same reason the `module.` type namespace is.
+
+### `default: true` overrides order
+
+Order is the fallback, not the only mechanism:
+
+```yaml
+providers:
+  - plugin: aws
+    name: main
+  - plugin: aws
+    name: acct2
+    default: true      # wins over being second
+```
+
+Two entries both marked is an error, for the same reason two entries with one
+name are: there is no precedence to invent, and either choice sends some
+resources to the wrong account.
 
 ---
 
