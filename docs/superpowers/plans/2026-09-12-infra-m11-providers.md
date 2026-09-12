@@ -144,10 +144,11 @@ the reason Task 4 of M9 records: anything the switch does not recognise becomes 
 **Status: done** (`<this commit>`). Decoded as a scalar name; a list is refused, because an
 instance name is one name and a list would silently pick one.
 
-**A question this raises, for Task 5 to settle.** `provider:` on a module CALL — does everything
-the call expands into inherit it?
+**SETTLED by the owner: a module call's `provider:` IS inherited** by everything it expands into,
+unless an inner resource names one itself. Recorded in §12.1. Task 5 implements it and needs the
+test named below.
 
-The useful answer is yes: deploying one stack into two accounts should be two calls differing by
+The reasoning: deploying one stack into two accounts should be two calls differing by
 one line, not a `provider:` threaded onto every resource inside the module through an input. There
 is precedent in the codebase — `fanOut` already gives a call's `depends_on` to everything it
 produced, for the same reason.

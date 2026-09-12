@@ -1046,6 +1046,10 @@ resources:
 - **A resource's `provider:` names an INSTANCE, never a plugin.** An unknown name
   is an error listing the declared instances, for the reason §6.2 gives about
   `skip`: a filter or selector that quietly matches nothing is worse than none.
+- **A module CALL's `provider:` is inherited by everything it expands into**, unless an inner
+  resource names one itself. Deploying one stack into two accounts is then two calls differing by
+  one line, rather than a provider threaded through a module input onto every resource inside.
+  `depends_on` on a call already fans out the same way, for the same reason.
 - **Moving a resource between instances is a DESTROY and a CREATE**, not an
   update. The resource genuinely lives in a different account; the same reasoning
   as §5.2's module paths, and the planner must say so where a user reads it.
