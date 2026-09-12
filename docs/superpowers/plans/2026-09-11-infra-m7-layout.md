@@ -251,6 +251,23 @@ func TestThePlanNamesTheScopeAValueCameFrom(t *testing.T) { /* ... */ }
 
 ## Task 4: the whole layout, through the binary
 
+**Status: done** (`8de9c51`). `tests/integration/m7_layout_test.go`, plus
+`TestTheShopExampleTeachesTheLayout` beside the existing example test.
+
+Two things the task text did not anticipate:
+
+- **The equivalence check is byte-identical plan output**, and it excludes scoped variables on
+  purpose. `resources/<dir>/vars` has no single-file spelling, so a fixture using it would
+  compare two different projects and the comparison would mean nothing.
+- **A `templates/` fixture must be `.yml`.** The walk reads only `.yml`, so a `.tmpl` file is
+  skipped whether or not the directory is read — the test would pass for the wrong reason. The
+  fixture is now a `.yml` holding something a resources file would be REFUSED for.
+
+The example's README turned out to contain an error nothing could catch: it told a reader to
+delete a module's input declaration and showed the resulting `undefined variable`, but
+following those steps reports `has no input` first, from the call the reader was not told to
+change. Both halves are now documented and both are now executed by the test.
+
 **Files:** Create `tests/integration/m7_layout_test.go`; update `examples/shop` to use the
 directory form; update `CLAUDE.md`.
 
