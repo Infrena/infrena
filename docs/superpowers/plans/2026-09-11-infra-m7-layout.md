@@ -192,12 +192,30 @@ func TestAVariableCollidingWithAnEnvironmentNameIsAnError(t *testing.T) { /* ...
 
 ## Task 3: directory-scoped variables
 
+**Status: done** (`d362ae6`, `ecfe053`).
+
 **Files:** Modify `internal/variables/`, `internal/compiler/`; tests in both.
+`internal/modules/` too — not listed here originally, and it has to be: M5 routes
+every resource through stage 5, so a scope that stops at the compiler reaches no
+resource. `Scope.In` is where the narrowing lives.
 
 **Interfaces:**
 - Consumes: Task 1's walk, Task 2's collision rule.
 - Produces: a new `value.Scope` constant between `ScopeBaseConfig` and `ScopeModuleDefault`,
   and its label in `Scope.String()` — the single label table.
+- `variables.Resolve` gains a `scoped map[string]value.Value` parameter — ONE
+  directory's values per call, not a map of every directory's. It could not ride
+  inside `files`: that map is keyed by name, so it holds one rung per name.
+- `modules.Expand` gains `dirScopes map[string]variables.Scope`, applied at the
+  root level only.
+
+**Open question this surfaced, deliberately not settled here.** A variable
+DECLARED with no `default:` is required of the project, and a directory's vars/
+does not satisfy it — `infra.yml` refuses to compile before the directory is
+consulted. "Every directory must set its own size" is a plausible thing to want
+and is currently unsayable. Settling it means deciding whether a declaration is
+a promise about the project or about each scope, which is a language decision,
+not a Task 3 decision.
 
 - [ ] **Step 3.1: Failing tests**
 
