@@ -376,6 +376,20 @@ func decodeResources(path string, node *yaml.Node, dst *[]*ResourceDecl, ds *dia
 					}
 					r.DependsOn = append(r.DependsOn, text)
 				}
+			case "provider":
+				// A named key, not an attribute, for the reason `skip` and `only`
+				// are: everything this switch does not recognise BECOMES an
+				// attribute, so falling through would reach stage 7 as "no
+				// attribute provider" on every resource that names one.
+				text, ok := requireScalar(path, "`provider`", val, ds)
+				if !ok {
+					break
+				}
+				r.Provider = AttributeDecl{
+					Name:   "provider",
+					Value:  value.String(text, value.SourceExplicit).WithOrigin(originOf(path, val)),
+					Origin: keyOrigin,
+				}
 			case "skip", "only":
 				// Named keys rather than attributes: everything this switch does
 				// not recognise becomes an ATTRIBUTE, so falling through would

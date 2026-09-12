@@ -141,9 +141,24 @@ func TestPluginIsRequired(t *testing.T) { /* an entry with only a name */ }
 the reason Task 4 of M9 records: anything the switch does not recognise becomes an attribute, and
 `provider` would then reach stage 7 as "no such attribute" on every resource that uses it.
 
-- [ ] **Step 2.1: Failing tests** — it decodes; it is NOT an attribute; it survives in a module
-      file (one decoder serves both, so this pins the sharing).
-- [ ] **Steps 2.2-2.6.**
+**Status: done** (`<this commit>`). Decoded as a scalar name; a list is refused, because an
+instance name is one name and a list would silently pick one.
+
+**A question this raises, for Task 5 to settle.** `provider:` on a module CALL — does everything
+the call expands into inherit it?
+
+The useful answer is yes: deploying one stack into two accounts should be two calls differing by
+one line, not a `provider:` threaded onto every resource inside the module through an input. There
+is precedent in the codebase — `fanOut` already gives a call's `depends_on` to everything it
+produced, for the same reason.
+
+The inner resource's own `provider:` must still win, so the rule is "inherit unless it names one".
+Task 5 owns it, and it needs its own test: a module called twice with two providers, asserting the
+inner resources land in different clouds.
+
+Expressions in `provider:` are NOT resolved, deliberately. The shape allows them (AttributeDecl)
+but nothing reads one yet — with call inheritance there is no case that needs it, and a name that
+cannot be read without resolving variables is a name `state show` cannot print.
 
 ---
 

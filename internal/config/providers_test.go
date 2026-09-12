@@ -1,6 +1,8 @@
 package config
 
 import (
+	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -242,5 +244,112 @@ func TestPluginIsRequired(t *testing.T) {
 	}
 	if !strings.Contains(out, "plugin") {
 		t.Errorf("the diagnostic does not name the missing key:\n%s", out)
+	}
+}
+
+// A resource names its provider INSTANCE (PLAN.md §12.1).
+
+func TestAResourceRecordsItsProviderInstance(t *testing.T) {
+	decl, out := providersIn(t, `
+project: p
+providers:
+  - plugin: test
+    name: main
+  - plugin: test
+    name: acct2
+resources:
+  a:
+    type: test.network
+    cidr: 10.0.0.0/16
+    provider: acct2
+  b:
+    type: test.network
+    cidr: 10.1.0.0/16
+`)
+	if out != "" {
+		t.Fatalf("unexpected diagnostics:\n%s", out)
+	}
+	byName := map[string]*ResourceDecl{}
+	for _, r := range decl.Resources {
+		byName[r.Name] = r
+	}
+	if got, _ := byName["a"].Provider.Value.AsString(); got != "acct2" {
+		t.Errorf("a's provider = %q, want acct2", got)
+	}
+	if byName["a"].Provider.Origin.File == "" {
+		t.Error("the provider key carries no origin, so `no such instance` cannot point at it")
+	}
+	// Unset, not defaulted here: which instance is the default is resolved later,
+	// and stage 2 declares rather than resolves.
+	if byName["b"].Provider.Name != "" {
+		t.Errorf("b names no provider, but decoded %+v", byName["b"].Provider)
+	}
+}
+
+// TestProviderIsNotAResourceAttribute keeps the namespace honest: everything the
+// resource switch does not recognise becomes an ATTRIBUTE, so a `provider` that
+// fell through would reach stage 7 as "test.network has no attribute provider" on
+// every resource that names one.
+func TestProviderIsNotAResourceAttribute(t *testing.T) {
+	decl, _ := providersIn(t, `
+project: p
+providers:
+  - plugin: test
+resources:
+  a:
+    type: test.network
+    cidr: 10.0.0.0/16
+    provider: test
+`)
+	for _, r := range decl.Resources {
+		if _, leaked := r.Attributes["provider"]; leaked {
+			t.Error("`provider` leaked into Attributes, where stage 7 would reject it on every " +
+				"resource that uses the feature")
+		}
+	}
+}
+
+// TestProviderSurvivesInAModuleFile. decodeResources is shared between project
+// files and module files, so this passes by construction — and pins the sharing,
+// which would fail the day module files got a decoder of their own.
+func TestProviderSurvivesInAModuleFile(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "module.yml"), []byte(`
+resources:
+  inner:
+    type: test.network
+    cidr: 10.0.0.0/16
+    provider: acct2
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f, err := LoadModule(dir)
+	if err != nil {
+		t.Fatalf("LoadModule: %v", err)
+	}
+	mod, ds := DecodeModule(f)
+	if ds.HasErrors() {
+		t.Fatalf("unexpected diagnostics:\n%s", render(t, ds))
+	}
+	if got, _ := mod.Resources[0].Provider.Value.AsString(); got != "acct2" {
+		t.Errorf("the module's resource did not record its provider: %q", got)
+	}
+}
+
+// TestANonScalarProviderIsRefused. An instance name is one name; a list would
+// silently pick one, and which resources went where would depend on that.
+func TestANonScalarProviderIsRefused(t *testing.T) {
+	_, out := providersIn(t, `
+project: p
+providers:
+  - plugin: test
+resources:
+  a:
+    type: test.network
+    cidr: 10.0.0.0/16
+    provider: [test, other]
+`)
+	if out == "" {
+		t.Fatal("a list-valued `provider` must be refused")
 	}
 }

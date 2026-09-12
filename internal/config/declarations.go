@@ -79,8 +79,16 @@ type ResourceDecl struct {
 	// against the resource. And HasExpressions survives, which is what makes
 	// `only: ${replica_in}` work — a module written with parts its caller can
 	// switch off. A bare slice loses both and cannot hold an expression at all.
-	Skip      AttributeDecl
-	Only      AttributeDecl
+	Skip AttributeDecl
+	Only AttributeDecl
+	// Provider names the provider INSTANCE this resource belongs to (PLAN.md
+	// §12.1), or is unset for the default one. A name, never a plugin.
+	//
+	// AttributeDecl for the same reasons Skip and Only are: the Origin travels, so
+	// "no such instance" points at the line that chose it. Expressions are
+	// possible in the shape but not yet resolved — see resolveProviderName, which
+	// records why.
+	Provider  AttributeDecl
 	DependsOn []string
 	Lifecycle LifecycleDecl
 	Origin    value.Origin
