@@ -29,7 +29,7 @@ func scopeFor(t *testing.T, opts Options) variables.Scope {
 	if ds.HasErrors() {
 		t.Fatalf("fixture scope: %+v", ds)
 	}
-	seedProcessVariables(&scope, opts)
+	seedProcessVariables(&scope, "fixture", opts)
 	return scope
 }
 
