@@ -131,7 +131,7 @@ func TestTheShopExampleTeachesTheLayout(t *testing.T) {
 
 	routed := run(t, both, "plan", "dev")
 	requireContains(t, routed.combined(), `undefined variable "db_password"`)
-	requireContains(t, routed.combined(), "modules/app-stack/module.yml:13:5")
+	requireContains(t, routed.combined(), "modules/app-stack/module.yml:16:5")
 }
 
 func readFile(t *testing.T, path string) string {

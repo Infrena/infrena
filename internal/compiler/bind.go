@@ -205,28 +205,55 @@ func bindAttribute(
 		return attr.Value
 	}
 
+	// A COMPOSITE carrying interpolations is walked leaf by leaf (PLAN.md
+	// §10.1). Until M10 this was refused, and the refusal was right for the code
+	// that existed: HasExpressions is set whenever any leaf holds "${" while the
+	// leaf itself was never parsed, so returning the composite would have put
+	// raw "${...}" text into a plan as though it were a literal.
+	//
+	// The per-leaf work below is unchanged and is what the walk calls, so a leaf
+	// inside a map gets exactly the same treatment a bare string does: the same
+	// module-output edges, the same reference checks, the same evaluation. That
+	// is the point of sharing only the WALK.
 	src, ok := attr.Value.AsString()
 	if !ok {
-		// A composite carrying an interpolation is not supported: the
-		// language interpolates strings, not structures. HasExpressions is
-		// set whenever any leaf of a list or map contains "${", but the leaf
-		// itself was never parsed as an expression — it is still raw text.
-		// Silently returning the composite here would let that raw,
-		// unevaluated "${...}" text reach the plan as if it were a literal
-		// value, so this must be reported rather than passed through.
-		ds.Add(diag.Diagnostic{
-			Severity: diag.SeverityError,
-			Summary:  "interpolation inside a " + attr.Value.Kind.String() + " is not supported",
-			Detail:   "Expressions may appear in string values only.",
-			Origin:   attr.Origin,
+		walked := expressions.WalkLeaves(attr.Value, func(leafSrc string, leafOrigin value.Origin) value.Value {
+			return bindOneExpression(inst, leafSrc, leafOrigin, environment, declared, edges, ds)
 		})
-		return attr.Value
+		// A composite one of whose leaves did not resolve is itself UNKNOWN
+		// (PLAN.md §10.1). Left Known, the planner would diff a placeholder leaf
+		// against the real value a previous apply recorded and report a change
+		// every run — invariant 2 gone — and the executor would never revisit it,
+		// so state could not even be written. Both were observed before this
+		// line existed.
+		if expressions.HasUnknownLeaf(walked) {
+			walked.Known = false
+		}
+		return walked
 	}
 
-	e, parseDiags := expressions.Parse(src, attr.Origin)
+	return bindOneExpression(inst, src, attr.Origin, environment, declared, edges, ds)
+}
+
+// bindOneExpression is everything that happens to ONE interpolated string: parse,
+// record module-output edges, qualify, check every reference, evaluate.
+//
+// Extracted from bindAttribute so a leaf inside a map goes through the identical
+// path a bare attribute does. Two copies would mean a reference inside a map
+// eventually being checked differently from the same reference outside one.
+func bindOneExpression(
+	inst modules.Instance,
+	src string,
+	origin value.Origin,
+	environment string,
+	declared map[string]refTarget,
+	edges map[string]value.Origin,
+	ds *diag.Diagnostics,
+) value.Value {
+	e, parseDiags := expressions.Parse(src, origin)
 	ds.Extend(parseDiags)
 	if parseDiags.HasErrors() {
-		return value.Unknown(attr.Value.Kind, value.SourceComputed).WithOrigin(attr.Origin)
+		return value.Unknown(value.KindString, value.SourceComputed).WithOrigin(origin)
 	}
 
 	// Qualify BEFORE walking the references. A reference written inside a
@@ -253,7 +280,7 @@ func bindAttribute(
 			continue
 		}
 		for _, a := range b.Addresses {
-			recordEdge(edges, a.String(), attr.Origin)
+			recordEdge(edges, a.String(), origin)
 		}
 	}
 
@@ -278,7 +305,7 @@ func bindAttribute(
 					Detail: "${" + ref.String() + "} reads an output the module does not publish.\nOutputs it declares:\n  " +
 						strings.Join(outs, "\n  "),
 					Action: "Reference one of those, or add " + strconv.Quote(ref.Attribute) + " to the module's `outputs:`.",
-					Origin: attr.Origin,
+					Origin: origin,
 				})
 				break
 			}
@@ -291,7 +318,7 @@ func bindAttribute(
 				// it, is worse than saying nothing: it names a typo that is not
 				// there, on a resource that is not being built.
 				if !inst.Skipped {
-					ds.Add(skippedTargetDiag(ref.Target.Name, environment, origin, attr.Origin,
+					ds.Add(skippedTargetDiag(ref.Target.Name, environment, origin, origin,
 						"${"+ref.String()+"} reads"))
 				}
 				break
@@ -302,14 +329,14 @@ func bindAttribute(
 				Detail: "${" + ref.String() + "} names no resource and no module call that exists.\nKnown here:\n  " +
 					strings.Join(inst.Scope.Names(), "\n  "),
 				Action: "Correct the reference, or declare " + strconv.Quote(target) + ".",
-				Origin: attr.Origin,
+				Origin: origin,
 			})
 		case target == self:
 			ds.Add(diag.Diagnostic{
 				Severity: diag.SeverityError,
 				Summary:  "resource " + strconv.Quote(inst.Decl.Name) + " refers to itself",
 				Detail:   "${" + ref.String() + "} cannot be resolved: its own value would be required to compute it.",
-				Origin:   attr.Origin,
+				Origin:   origin,
 			})
 		case len(t.names) > 0 && !t.has(ref.Attribute):
 			// The attribute axis. Nothing checked this before M5: a typo here
@@ -322,10 +349,10 @@ func bindAttribute(
 				Detail: "${" + ref.String() + "} reads an attribute that does not exist.\nAttributes of " +
 					t.typeName + ":\n  " + strings.Join(t.names, "\n  "),
 				Action: "Correct the attribute name.",
-				Origin: attr.Origin,
+				Origin: origin,
 			})
 		default:
-			recordEdge(edges, target, attr.Origin)
+			recordEdge(edges, target, origin)
 		}
 	}
 

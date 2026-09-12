@@ -301,12 +301,16 @@ resources:
 	}
 }
 
-// HasExpressions is set whenever any leaf of a list or map contains "${", but
-// that leaf was never parsed as an expression — it is still raw, unevaluated
-// text. bindAttribute must report this rather than pass the composite through
-// unchanged, which would let unparsed "${...}" text reach the plan looking
-// like a literal value.
-func TestBindRejectsInterpolationInsideAList(t *testing.T) {
+// TestBindRejectsInterpolationInsideAList was here until M10 implemented
+// PLAN.md §10.1. It asserted that an expression nested inside a list was
+// REFUSED, which was correct for the code that existed: the leaf was never
+// parsed, so passing the composite through would have put raw "${...}" text into
+// a plan looking like a literal.
+//
+// Its replacement asserts the opposite, and the direction that matters is the
+// one it kept from the original: the leaf must be RESOLVED, never passed through
+// as text.
+func TestBindResolvesInterpolationInsideAList(t *testing.T) {
 	p := decl(t, `
 project: myapp
 resources:
@@ -319,9 +323,36 @@ resources:
     tags:
       - "${network.id}"
 `)
-	_, ds := bindReferences(rootOnly(t, p, Options{Environment: "dev"}), Options{Environment: "dev"}, testRegistry(t))
-	if !ds.HasErrors() {
-		t.Fatal("an expression nested inside a list is not supported and must be reported, not silently dropped or passed through unparsed")
+	cfg, ds := bindReferences(rootOnly(t, p, Options{Environment: "dev"}), Options{Environment: "dev"}, testRegistry(t))
+	if ds.HasErrors() {
+		var sb strings.Builder
+		ds.Render(&sb)
+		t.Fatalf("an interpolation inside a list is resolved, not refused:\n%s", sb.String())
+	}
+
+	tags := cfg.Resources["database"].Attrs["tags"]
+	items, ok := tags.Raw.([]value.Value)
+	if !ok || len(items) != 1 {
+		t.Fatalf("tags did not survive as a one-element list: %#v", tags.Raw)
+	}
+	// Raw text reaching the plan is the failure the original refusal existed to
+	// prevent, and it stays prevented: the leaf is an UNKNOWN carrying its
+	// expression, because network.id does not exist until apply.
+	if s, _ := items[0].AsString(); s == "${network.id}" {
+		t.Error("the leaf reached the plan as unparsed text")
+	}
+	if items[0].Known {
+		t.Error("a reference to a not-yet-created resource must be unknown")
+	}
+	// And the EDGE was recorded from inside the list. Without it the plan reads
+	// correctly and the apply fails waiting for a value nothing produced — the
+	// defect M5's integration suite found twice.
+	var deps []string
+	for _, d := range cfg.Resources["database"].DependsOn {
+		deps = append(deps, d.String())
+	}
+	if strings.Join(deps, ",") != "network" {
+		t.Errorf("database depends on %v, want [network] — the edge inside the list went missing", deps)
 	}
 }
 

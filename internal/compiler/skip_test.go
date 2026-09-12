@@ -279,3 +279,15 @@ resources:
 			rendered(ds))
 	}
 }
+
+// A per-leaf REDACTION test lived here briefly and was removed, because its
+// premise does not hold at compile time: sensitivity comes from the provider
+// schema (compiler/schema.go's markSensitive), and a reference to a sensitive
+// attribute evaluates to a plain unknown — bind.go does not mention Sensitive at
+// all. The secret only arrives at APPLY, which is where M3's propagated-
+// sensitivity fix lives.
+//
+// So the rule is covered where it is reachable: the walk preserving a sensitive
+// leaf is TestTheWalkPreservesLeafSensitivity in internal/expressions, and the
+// end-to-end "a secret in a tag is redacted in a plan" belongs to M10 Task 6's
+// integration test, through a real apply.

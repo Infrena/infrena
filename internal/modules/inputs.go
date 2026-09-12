@@ -252,8 +252,29 @@ func (w *walker) evaluateCall(
 		}
 		e, ok := exprs[name]
 		if !ok {
-			// parseCall already reported the syntax error or the
-			// composite-carrying-interpolation refusal; nothing to evaluate.
+			// A COMPOSITE input: parseCall holds one expression tree per
+			// attribute and a composite has none of its own, so its leaves are
+			// walked here instead (PLAN.md §10.1).
+			//
+			// Silently dropping it is what this did when the composite walk
+			// landed — a comment promised the leaves were evaluated "where the
+			// call's inputs are evaluated" and nothing did it, so a caller's
+			// interpolated map vanished and the module's own default won. The
+			// shop example caught it.
+			if attr.Value.Kind == value.KindList || attr.Value.Kind == value.KindMap {
+				out[name] = expressions.WalkLeaves(attr.Value, func(src string, origin value.Origin) value.Value {
+					leaf, parseDiags := expressions.Parse(src, origin)
+					w.ds.Extend(parseDiags)
+					if leaf == nil {
+						return value.Unknown(value.KindString, value.SourceModule).WithOrigin(origin)
+					}
+					v, evalDiags := expressions.Evaluate(caller.Qualify(leaf), caller)
+					w.ds.Extend(evalDiags)
+					return v
+				})
+				continue
+			}
+			// Otherwise parseCall already reported the syntax error.
 			continue
 		}
 		v, evalDiags := expressions.Evaluate(caller.Qualify(e), caller)

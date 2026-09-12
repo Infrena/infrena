@@ -210,22 +210,16 @@ func (w *walker) collectOutput(o config.OutputDecl, scope *Scope) value.Value {
 
 	src, ok := o.Value.AsString()
 	if !ok {
-		w.ds.Add(diag.Diagnostic{
-			Severity: diag.SeverityError,
-			Summary:  "interpolation inside a " + o.Value.Kind.String() + " is not supported",
-			Detail:   "Expressions may appear in string values only.",
-			Origin:   o.Origin,
-		})
-		return o.Value
+		// A composite output is walked leaf by leaf (PLAN.md §10.1), through the
+		// same walk compiler stage 6 uses. Three sites used to refuse this with
+		// three copies of the refusal; sharing the walk is what stops a module
+		// output and a resource attribute coming to disagree about the same YAML.
+		return expressions.WalkLeaves(o.Value, func(leafSrc string, leafOrigin value.Origin) value.Value {
+			return w.evaluateOutputExpression(leafSrc, leafOrigin, scope)
+		}).WithSource(value.SourceModule)
 	}
 
-	e, parseDiags := expressions.Parse(src, o.Origin)
-	w.ds.Extend(parseDiags)
-	if parseDiags.HasErrors() {
-		return o.Value
-	}
-	v, evalDiags := expressions.Evaluate(scope.Qualify(e), scope)
-	w.ds.Extend(evalDiags)
+	v := w.evaluateOutputExpression(src, o.Origin, scope)
 
 	// SourceModule says what KIND of thing this is at the call site: a value
 	// that came out of a module.
@@ -243,6 +237,23 @@ func (w *walker) collectOutput(o config.OutputDecl, scope *Scope) value.Value {
 	// SourceVariable/SourceDefault) mislabeled as something other than what a
 	// module boundary actually is.
 	return v.WithSource(value.SourceModule)
+}
+
+// evaluateOutputExpression resolves ONE interpolated string in an output's value.
+//
+// Extracted so a leaf inside a composite output goes through the identical path
+// a bare output does — the same qualification, the same diagnostics. Two copies
+// would mean an output inside a map eventually resolving differently from the
+// same expression outside one.
+func (w *walker) evaluateOutputExpression(src string, origin value.Origin, scope *Scope) value.Value {
+	e, parseDiags := expressions.Parse(src, origin)
+	w.ds.Extend(parseDiags)
+	if parseDiags.HasErrors() {
+		return value.Unknown(value.KindString, value.SourceModule).WithOrigin(origin)
+	}
+	v, evalDiags := expressions.Evaluate(scope.Qualify(e), scope)
+	w.ds.Extend(evalDiags)
+	return v
 }
 
 // sortedValueKeys lists a value map's keys for a diagnostic.
@@ -270,16 +281,11 @@ func (w *walker) parseCall(r *config.ResourceDecl) map[string]*value.Expr {
 		}
 		src, ok := attr.Value.AsString()
 		if !ok {
-			// The same refusal bind.go makes for a composite carrying an
-			// interpolation: the language interpolates strings, not structures,
-			// and passing the composite through would put raw "${…}" text into
-			// a plan as though it were a literal.
-			w.ds.Add(diag.Diagnostic{
-				Severity: diag.SeverityError,
-				Summary:  "interpolation inside a " + attr.Value.Kind.String() + " is not supported",
-				Detail:   "Expressions may appear in string values only.",
-				Origin:   attr.Origin,
-			})
+			// A composite call INPUT is not parsed into a single expression tree
+			// here, because this map is keyed by attribute and holds one tree
+			// each. The leaves are evaluated where the call's inputs are
+			// evaluated instead — see evaluateCall — so nothing is refused and
+			// nothing is parsed twice.
 			continue
 		}
 		e, parseDiags := expressions.Parse(src, attr.Origin)

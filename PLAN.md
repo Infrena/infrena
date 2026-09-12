@@ -671,6 +671,109 @@ Do not initially build a Terraform/HCL-like programming language.
 
 Expressions should remain intentionally constrained.
 
+## 10.1 Interpolation inside a composite value
+
+An interpolation may appear in a string leaf of a list or a map, not only in a
+bare string:
+
+```yaml
+tags:
+  environment: ${environment}
+  project: ${project}
+  team: payments
+```
+
+Until M10 this was refused — "interpolation inside a map is not supported" —
+because `HasExpressions` was set whenever any leaf held `${` while the leaves
+themselves were never parsed, so passing the composite through would have put
+raw `${...}` text into a plan as though it were a literal. The refusal was
+correct for the code that existed; what M10 adds is the walk that makes it
+unnecessary.
+
+Rules:
+
+- Each STRING leaf is parsed and evaluated independently. A leaf with no `${` is
+  untouched.
+- A key is never interpolated. `${x}: y` is not a thing; keys are literal, so a
+  configuration's shape never depends on a value.
+- Sensitivity and provenance are per leaf, as everywhere else (§43). A map one
+  leaf of which resolves to a secret is a map with one sensitive leaf, not a
+  wholly sensitive map — `pkg/value` already models this and
+  `value.Format` already redacts at that granularity.
+- An unknown leaf makes the composite unknown for dependency purposes, because
+  the resource genuinely cannot be created until it resolves. The EDGE is
+  recorded from the leaf, exactly as it would be from a bare string.
+- Nesting is allowed to whatever depth YAML produced, because refusing depth two
+  while allowing depth one would be a rule nobody could predict.
+
+Three places refuse this today — `internal/compiler/bind.go` and two in
+`internal/modules/outputs.go`. They must end up calling ONE walk. Three copies
+of a rule about where expressions may appear is three chances for a module
+output and a resource attribute to disagree about the same YAML.
+
+## 10.2 Functions
+
+The set is FIXED and enumerated. Adding one is a configuration-language change
+requiring an amendment to this section — `internal/expressions/funcs.go` says so
+and must keep saying so.
+
+```text
+lower(s)            upper(s)            trim(s)
+replace(s, old, new)                    join(list, sep)
+default(v, fallback)                    merge(a, b, ...)
+```
+
+`merge` is M10's addition. It takes maps and returns their union, with LATER
+arguments winning per key. It exists because §12.1's provider block REPLACES
+rather than merges, which makes merging something the user asks for explicitly
+rather than something that happens to them.
+
+**Every function is pure, total and side-effect free.** No `now()`, no `uuid()`,
+no file or network access, ever. Those three are the ones most often asked for
+next, and each one silently breaks invariant 6: the same configuration and state
+would produce a different plan on a second run, which is the property the whole
+plan/apply split rests on. A function that cannot be evaluated twice with the
+same answer does not belong in this language.
+
+Sensitivity unions across ALL arguments. This is not a detail: `join()` and
+`replace()` each shipped wrong here, and `replace()`'s omission let a secret
+search term reveal its own position through an unclassified result. `merge` is
+the third chance to get it wrong and the one whose result is most likely to be
+written into a tag.
+
+## 10.3 Literals in argument position
+
+A map or list literal may appear as a function ARGUMENT, and nowhere else:
+
+```yaml
+tags: "${merge(tags, {team: payments, project: billing})}"
+```
+
+Not as a value on its own, because YAML already does that job. Bounding it to
+argument position is what keeps this from being the first step toward a
+programming language.
+
+**The quotes are required, and not by us.** YAML itself rejects the unquoted
+form: a plain scalar may not contain `: `, so `tags: ${merge(a, {b: c})}` fails
+with "mapping values are not allowed in this context" before any of this code
+sees it. That message says nothing about quoting, so the loader detects this
+shape and says what to do.
+
+## 10.4 One scanner
+
+`matchBrace` and `splitArgs` both walk a string tracking quote state and nesting
+depth, and they already share `skipEscape` with a comment explaining why:
+
+> when two scanners disagree, input is accepted by one and rejected by the other,
+> which is the class of bug the quote handling was added to fix in the first place
+
+They get away with the remaining duplication only because one counts `{}` and the
+other counts `()`, and those sets do not overlap today. §10.3 makes them overlap:
+a comma inside a map literal is not an argument separator. **The two must become
+one walk before literals are added**, not after, because the alternative is
+editing both in lockstep — which is exactly what that comment predicts will go
+wrong.
+
 ---
 
 # 11. Modules
@@ -876,6 +979,211 @@ provider
 ```
 
 Do not simply merge defaults into user configuration and lose that information.
+
+---
+
+## 12.1 Provider instances
+
+`providers:` is a LIST of provider instances. Each entry names the PLUGIN that
+implements it, an optional NAME, and that instance's own configuration.
+
+```yaml
+# One instance. Every resource uses it.
+providers:
+  - plugin: aws
+    iam-role: some-role-it-assumes
+```
+
+```yaml
+# Two plugins. `aws` is the default because it is first.
+providers:
+  - plugin: aws
+    iam-role: some-role-it-assumes
+  - plugin: azure
+    auth-token: a-token
+```
+
+```yaml
+# Two instances of ONE plugin, so they need names.
+providers:
+  - plugin: aws
+    name: main
+    iam-role: role-for-main
+  - plugin: aws
+    name: acct2
+    iam-role: role-for-acct2
+```
+
+Resources choose one by NAME, and omitting the key means the default:
+
+```yaml
+resources:
+  main-network:
+    type: test.network
+    cidr: 10.0.0.0/16
+    provider: main
+  acct2-network:
+    type: test.network
+    cidr: 10.1.0.0/16
+    provider: acct2
+  web1:
+    type: test.application
+    image: nginx:1.27
+    # no `provider:` — the default instance
+```
+
+### Rules
+
+- **`plugin` is required.** It names an implementation the build offers; an
+  unknown one is an error listing what is available.
+- **`name` defaults to the plugin name.** One `aws` entry with no name is called
+  `aws`.
+- **Names are unique, and a collision is an error.** Two entries that resolve to
+  the same name — two unnamed `aws` entries, or two both named `aws` — are
+  refused. There is no precedence to invent: whichever won, the other instance's
+  resources would silently go to the wrong account.
+- **The default is the FIRST entry** unless one is marked otherwise.
+- **A resource's `provider:` names an INSTANCE, never a plugin.** An unknown name
+  is an error listing the declared instances, for the reason §6.2 gives about
+  `skip`: a filter or selector that quietly matches nothing is worse than none.
+- **Moving a resource between instances is a DESTROY and a CREATE**, not an
+  update. The resource genuinely lives in a different account; the same reasoning
+  as §5.2's module paths, and the planner must say so where a user reads it.
+
+### Variables, so an instance differs per environment
+
+An instance's configuration may interpolate, which is how one project reaches a
+different account per environment:
+
+```yaml
+providers:
+  - plugin: aws
+    iam-role: ${aws_role}
+    region: ${region}
+```
+
+```yaml
+# vars/production.yml
+aws_role: arn:aws:iam::111111111111:role/deploy
+```
+
+```yaml
+# vars/dev.yml
+aws_role: arn:aws:iam::222222222222:role/deploy
+```
+
+**Variables only — never a resource reference.** A provider's configuration is
+needed before any resource exists, so `iam-role: ${some_resource.arn}` cannot be
+satisfied: the provider would have to create the thing its own credentials depend
+on. Resolution therefore happens after stage 4 (variables) and before stage 5,
+and a reference to a resource attribute here is an error saying so rather than an
+unknown that fails later.
+
+That is the same constraint §6.2 puts on `skip`/`only`, and for the same reason:
+both decide something the engine needs before it can plan anything.
+
+The per-leaf walk from §10.1 applies, so a nested value interpolates too:
+
+```yaml
+providers:
+  - plugin: aws
+    tags:
+      environment: ${environment}
+```
+
+### Internal shape
+
+Resolved to a map keyed by instance name, for the lookup resources do:
+
+```text
+aws   -> {plugin: aws, config: {iam-role: aaaa}, default: true}
+acct2 -> {plugin: aws, config: {iam-role: bbbb}}
+```
+
+The list is the AUTHORING shape because order decides the default and because a
+YAML map cannot hold two `aws` keys — which is exactly the collision the rules
+above refuse, and a shape that cannot express it would refuse it silently.
+
+### What this costs, recorded before it is built
+
+Three assumptions in the engine are one-provider-per-type and must change:
+
+- `registry.Registry` is keyed by resource TYPE and `Register` REFUSES a type a
+  second provider already claims. Two instances of one plugin collide there
+  immediately, so lookups become (type, instance) rather than (type).
+- Five call sites do `reg.Provider(someType)`: `executor/apply.go` twice,
+  `refresh/refresh.go` twice, `cli/import.go` once. Each needs the instance the
+  resource belongs to.
+- `resource.ResourceState.Provider` already exists and already holds a provider
+  name, so state needs no new field — but it must come to hold the INSTANCE name,
+  and a state file written before this change names a plugin. That is a migration,
+  and §21's migration path is currently lossy (see the follow-up on
+  `state.Decode`), so this is the change that makes fixing it urgent rather than
+  theoretical.
+
+### Resource-attribute defaults live under `defaults:`
+
+An instance may also default attributes on every resource that uses it:
+
+```yaml
+providers:
+  - plugin: aws
+    iam-role: some-role
+    region: ${region}
+    defaults:
+      tags: ${tags}
+      prevent_destroy: ${protect}
+```
+
+Nested rather than mixed in, because at the top level `tags: ${tags}` and
+`iam-role: x` are indistinguishable while meaning entirely different things — one
+defaults a RESOURCE, the other configures the PROVIDER. The alternative
+considered was letting the plugin declare its own config keys and treating
+anything else as a resource default; it was rejected because a typo in a config
+key (`iam-rol:`) would then silently become a resource default applied to
+everything the provider owns.
+
+Attribute resolution gains one rung, between what the resource says and what the
+plugin's schema says:
+
+```
+explicit on the resource        tags: {team: payments}
+        ↓
+the instance's `defaults:`      defaults: {tags: ${tags}}
+        ↓
+the plugin's schema default     whatever the plugin ships
+```
+
+A user-authored default beats a plugin-authored one; anything written on the
+resource beats both, WHOLE — a map is replaced, not merged, which is why §10.2
+has `merge()`.
+
+**A `defaults:` key must be an attribute some resource type of that plugin
+declares.** One that nothing declares is an error naming what exists, because
+`tag:` for `tags:` would otherwise apply to nothing, in every environment,
+forever, with no output in which its absence is visible.
+
+`prevent_destroy` and `retain` are accepted there too, and every resource accepts
+those — so the lifecycle key names are RESERVED, and a plugin declaring an
+attribute that collides with one is rejected at registration, the same place and
+for the same reason the `module.` type namespace is.
+
+### `default: true` overrides order
+
+Order is the fallback, not the only mechanism:
+
+```yaml
+providers:
+  - plugin: aws
+    name: main
+  - plugin: aws
+    name: acct2
+    default: true      # wins over being second
+```
+
+Two entries both marked is an error, for the same reason two entries with one
+name are: there is no precedence to invent, and either choice sends some
+resources to the wrong account.
 
 ---
 

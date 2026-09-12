@@ -613,3 +613,42 @@ func TestTwoModulesMayEachDeclareTheSameName(t *testing.T) {
 		t.Errorf("the module's own `db` must decode: %+v", ds)
 	}
 }
+
+// TestAnUnquotedInterpolationWithAColonExplainsTheQuoting — PLAN.md §10.3.
+//
+// YAML rejects `tags: ${merge(a, {b: c})}` before any of this project's code sees
+// it, because a plain scalar may not contain ": ". Its own message — "mapping
+// values are not allowed in this context" — says nothing about quoting and sends
+// a reader looking for a mapping they did not write.
+func TestAnUnquotedInterpolationWithAColonExplainsTheQuoting(t *testing.T) {
+	dir := writeTree(t, map[string]string{
+		"infra.yml": "project: p\nresources:\n  n:\n    type: test.network\n    tags: ${merge(a, {b: c})}\n",
+	})
+	_, err := Load(dir)
+	if err == nil {
+		t.Fatal("YAML rejects this shape; Load must surface that")
+	}
+	if !strings.Contains(err.Error(), "quotes") {
+		t.Errorf("the error does not mention quoting, which is the only thing that fixes it:\n%v", err)
+	}
+	// The original message survives, because it names the line.
+	if !strings.Contains(err.Error(), "line 5") {
+		t.Errorf("the error lost the line number:\n%v", err)
+	}
+}
+
+// TestAnOrdinaryMappingErrorIsNotGivenTheQuotingHint. The hint is only right for
+// the interpolation case — attaching it to every mapping error would send readers
+// after quotes that are not the problem.
+func TestAnOrdinaryMappingErrorIsNotGivenTheQuotingHint(t *testing.T) {
+	dir := writeTree(t, map[string]string{
+		"infra.yml": "project: p\nresources:\n  n: a: b\n",
+	})
+	_, err := Load(dir)
+	if err == nil {
+		t.Fatal("this is malformed YAML and must be reported")
+	}
+	if strings.Contains(err.Error(), "quotes") {
+		t.Errorf("an ordinary mapping error was given the interpolation hint:\n%v", err)
+	}
+}

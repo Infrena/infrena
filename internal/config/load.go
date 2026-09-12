@@ -365,7 +365,7 @@ func loadOptionalFile(path string, kind FileKind, environment string) (File, boo
 	}
 	var root yaml.Node
 	if err := yaml.Unmarshal(data, &root); err != nil {
-		return File{}, false, fmt.Errorf("%s: %w", path, err)
+		return File{}, false, fmt.Errorf("%s: %w%s", path, err, quotingHint(err, data))
 	}
 	return File{Path: path, Kind: kind, Environment: environment, Root: &root}, true, nil
 }
@@ -519,4 +519,26 @@ func environmentNameFor(base string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// quotingHint explains the one YAML error a reader cannot act on.
+//
+// An unquoted interpolation holding a map literal — `tags: ${merge(a, {b: c})}` —
+// is rejected by YAML itself, because a plain scalar may not contain ": ". The
+// message it gives is "mapping values are not allowed in this context", which
+// says nothing about quoting and sends a reader looking for a mapping they did
+// not write (PLAN.md §10.3).
+//
+// Appended to the error rather than replacing it: the original names the line,
+// and a reader who has seen this before should still recognise it.
+func quotingHint(err error, data []byte) string {
+	if !strings.Contains(err.Error(), "mapping values are not allowed") {
+		return ""
+	}
+	if !strings.Contains(string(data), "${") {
+		return ""
+	}
+	return "\n\nThis usually means an interpolation containing `: ` was left unquoted. " +
+		"YAML ends a plain scalar at `: `, so wrap the whole value in quotes:\n" +
+		"    tags: \"${merge(tags, {team: payments})}\""
 }

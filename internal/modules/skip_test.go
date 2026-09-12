@@ -257,3 +257,70 @@ resources:
 		t.Fatal("an `only` naming an undefined variable must be reported")
 	}
 }
+
+// TestACompositeModuleInputIsEvaluatedNotDropped — PLAN.md §10.1 at a call site.
+//
+// A module call's attributes are parsed into one expression tree EACH, and a
+// composite has none of its own, so its leaves must be walked separately. When
+// the composite walk first landed this branch silently dropped the attribute and
+// the module's own default won — a comment promised the leaves were evaluated
+// elsewhere and nothing did it. The shop example caught it; this pins it.
+func TestACompositeModuleInputIsEvaluatedNotDropped(t *testing.T) {
+	scope := variables.Scope{}
+	scope.Override("who", stringVal("platform"))
+
+	decl, dir := declIn(t, twoEnvs+`
+modules:
+  - ./modules/tagged
+resources:
+  stack:
+    type: module.tagged
+    tags:
+      owner: ${who}
+      team: storefront
+`, map[string]string{
+		"modules/tagged/module.yml": `
+inputs:
+  tags:
+    type: map
+    default: {}
+resources:
+  db:
+    type: test.database
+    engine: postgres
+    tags: ${tags}
+`,
+	})
+
+	exp, ds := Expand(decl, scope, nil, Env{Name: "dev", Declared: []string{"dev", "production"}}, dir, paths{})
+	if ds.HasErrors() {
+		var sb strings.Builder
+		ds.Render(&sb)
+		t.Fatalf("unexpected diagnostics:\n%s", sb.String())
+	}
+
+	var inner *Instance
+	for i := range exp.Instances {
+		if exp.Instances[i].Address.String() == "module.stack.db" {
+			inner = &exp.Instances[i]
+		}
+	}
+	if inner == nil {
+		t.Fatal("no module.stack.db")
+	}
+	tags, ok := inner.Scope.Vars.Variable("tags")
+	if !ok {
+		t.Fatal("the module did not receive a `tags` input at all")
+	}
+	m, ok := tags.Raw.(map[string]value.Value)
+	if !ok || len(m) != 2 {
+		t.Fatalf("the caller's map did not arrive; the module's default won instead: %#v", tags.Raw)
+	}
+	// The interpolated leaf RESOLVED, in the caller's scope.
+	if got, _ := m["owner"].AsString(); got != "platform" {
+		t.Errorf("owner = %v, want the caller's variable resolved", m["owner"])
+	}
+	if got, _ := m["team"].AsString(); got != "storefront" {
+		t.Errorf("team = %v, want the literal leaf", m["team"])
+	}
+}
