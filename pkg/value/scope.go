@@ -34,6 +34,7 @@ const (
 	ScopeUnset              Scope = iota // provenance not recorded
 	ScopeProviderDefault                 // provider defaults
 	ScopeBaseConfig                      // base configuration
+	ScopeScopedVars                      // resources/<dir>/vars/** (§4.1)
 	ScopeModuleDefault                   // module defaults (M5 populates this)
 	ScopeEnvironmentInherit              // environment inheritance
 	ScopeEnvironmentVar                  // environment variables
@@ -65,6 +66,8 @@ func (s Scope) String() string {
 		return "provider default"
 	case ScopeBaseConfig:
 		return "base config"
+	case ScopeScopedVars:
+		return "directory vars"
 	case ScopeModuleDefault:
 		return "module default"
 	case ScopeEnvironmentInherit:
@@ -104,12 +107,19 @@ func (v Value) WithScope(s Scope) Value {
 // inserts ScopeModuleDefault's population and any future level inserted
 // mid-chain would silently reinterpret every state file ever written.
 //
+// M7 inserted ScopeScopedVars mid-chain and this table is why that was safe:
+// the numbers of every later level shifted, and nothing on disk moved because
+// nothing on disk is a number. Checked before doing it that no code compares
+// two Scopes by ordering — they are only ever compared for equality or looked
+// up here — so the shift is invisible in memory too.
+//
 // ScopeUnset is deliberately ABSENT. It encodes to the empty string and is
 // omitted from the wire entirely, so state files written before M4 stay
 // byte-identical and read back as ScopeUnset.
 var scopeWireNames = map[Scope]string{
 	ScopeProviderDefault:    "provider_default",
 	ScopeBaseConfig:         "base_config",
+	ScopeScopedVars:         "scoped_vars",
 	ScopeModuleDefault:      "module_default",
 	ScopeEnvironmentInherit: "environment_inherit",
 	ScopeEnvironmentVar:     "environment_var",
