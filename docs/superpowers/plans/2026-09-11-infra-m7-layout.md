@@ -139,6 +139,57 @@ func TestADirectoryScopedVariableShadowingAProjectOneIsNOTAnError(t *testing.T) 
 
 ---
 
+## Task 2a: `vars/` files name their environment
+
+**Files:** Modify `internal/config/` (the vars walk from Task 1) and `internal/variables/`;
+tests in both.
+
+§4.1. This is the layer between "the file was loaded" and "the value has a scope".
+
+- [ ] **Step 2a.1: Failing tests**
+
+```go
+// TestDefaultYmlAppliesToEveryEnvironment.
+func TestDefaultYmlAppliesToEveryEnvironment(t *testing.T) { /* vars/default.yml -> dev AND production */ }
+
+// TestAnEnvironmentFileOverridesDefaultPerVALUE. The one that matters: default.yml sets size
+// and region; production.yml sets only size. Production must get production's size and
+// DEFAULT'S REGION -- a file naming an environment is a set of differences, not a
+// replacement. An implementation that swaps whole files passes a test that only checks size.
+func TestAnEnvironmentFileOverridesDefaultPerVALUE(t *testing.T) {
+	// vars/default.yml:    size: 50, region: eu-west-1
+	// vars/production.yml: size: 100
+	// production -> size 100, region eu-west-1
+	// dev        -> size 50,  region eu-west-1
+}
+
+// TestAnEnvironmentFileDoesNotLeakIntoOtherEnvironments.
+func TestAnEnvironmentFileDoesNotLeakIntoOtherEnvironments(t *testing.T) { /* dev must not see production's */ }
+
+// TestADeeperVarFileCarriesItsEnvironmentsInside.
+func TestADeeperVarFileCarriesItsEnvironmentsInside(t *testing.T) {
+	// vars/app/sizes.yml: size: 40 / production: {size: 100}
+	// A bare key is the default; a key naming an environment overrides it there.
+}
+
+// TestAKeyThatIsNotADeclaredEnvironmentIsAVariable is the boundary. A variable whose value is
+// a MAP stays a variable -- a map is an ordinary value in this language, and reinterpreting
+// one as an environment block would make a file's meaning depend on its value's shape.
+func TestAKeyThatIsNotADeclaredEnvironmentIsAVariable(t *testing.T) { /* tags: {team: x} */ }
+
+// TestAVariableCollidingWithAnEnvironmentNameIsAnError. Silently reinterpreting is worse:
+// adding an environment months later would change what an existing file means without anyone
+// touching it. Assert the diagnostic names the variable AND the environment, and that neither
+// reading is silently chosen.
+func TestAVariableCollidingWithAnEnvironmentNameIsAnError(t *testing.T) { /* ... */ }
+```
+
+- [ ] **Steps 2a.2-2a.6.** Sabotage: make an environment file REPLACE default.yml rather than
+  merge over it, and watch the per-value test fail on `region`. Then treat any map-valued key as
+  an environment block and watch the boundary test fail.
+
+---
+
 ## Task 3: directory-scoped variables
 
 **Files:** Modify `internal/variables/`, `internal/compiler/`; tests in both.
