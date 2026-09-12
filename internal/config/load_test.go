@@ -359,3 +359,184 @@ func TestLoadReportsEnvironmentsAsAPlainFile(t *testing.T) {
 		t.Errorf("error does not suggest an action: %v", err)
 	}
 }
+
+// loadedBase reports whether a file with the given base name was loaded.
+func loadedBase(files []File, base string) bool {
+	for _, f := range files {
+		if filepath.Base(f.Path) == base {
+			return true
+		}
+	}
+	return false
+}
+
+// TestResourcesDirectoryIsLoaded. §4.1: a resource declared under resources/ is as real as one
+// in infra.yml, and the two forms coexist — the directory is how a project is ORGANISED, not a
+// replacement for the inline block.
+func TestResourcesDirectoryIsLoaded(t *testing.T) {
+	dir := writeTree(t, map[string]string{
+		"infra.yml":                       "project: p\nresources:\n  inline:\n    type: test.network\n    cidr: 10.0.0.0/16\n",
+		"resources/database/database.yml": "resources:\n  store:\n    type: test.database\n    engine: postgres\n",
+	})
+	files, err := Load(dir)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	// BOTH: a loader that replaced infra.yml's resources rather than adding to them would
+	// pass a test that only looked for database.yml.
+	if !loadedBase(files, "database.yml") {
+		t.Error("resources/** was not loaded")
+	}
+	if !loadedBase(files, "infra.yml") {
+		t.Error("infra.yml stopped being read")
+	}
+
+	// Loading is NOT the feature. A file can be read and then decoded by
+	// nothing, which is how this first shipped: `validate` reported the project
+	// valid because it had validated an empty resource set. Assert the resource
+	// is DECLARED, which is what a plan would act on.
+	decl, ds := Decode(files)
+	if ds.HasErrors() {
+		t.Fatalf("decode: %+v", ds)
+	}
+	var names []string
+	for _, r := range decl.Resources {
+		names = append(names, r.Name)
+	}
+	if strings.Join(names, ",") != "inline,store" {
+		t.Errorf("declared resources = %v, want both inline and store — a file that is loaded "+
+			"and decoded by nothing produces a valid project with nothing in it", names)
+	}
+}
+
+// TestNestedResourceDirectoriesAreLoaded — `resources/**`, not `resources/*`. A project
+// organised by region or team nests, and §4.1 says so.
+func TestNestedResourceDirectoriesAreLoaded(t *testing.T) {
+	dir := writeTree(t, map[string]string{
+		"infra.yml":                 "project: p\n",
+		"resources/eu/west/net.yml": "resources:\n  n:\n    type: test.network\n    cidr: 10.0.0.0/16\n",
+	})
+	files, err := Load(dir)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !loadedBase(files, "net.yml") {
+		t.Error("a nested resource file was not loaded; resources/** must recurse")
+	}
+	decl, ds := Decode(files)
+	if ds.HasErrors() || len(decl.Resources) != 1 {
+		t.Errorf("nested file did not decode: %+v %+v", decl.Resources, ds)
+	}
+}
+
+// TestVarsDirectoryIsLoaded.
+func TestVarsDirectoryIsLoaded(t *testing.T) {
+	dir := writeTree(t, map[string]string{
+		"infra.yml":           "project: p\n",
+		"vars/default.yml":    "size: 50\n",
+		"vars/production.yml": "size: 100\n",
+	})
+	files, err := Load(dir)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	for _, base := range []string{"default.yml", "production.yml"} {
+		if !loadedBase(files, base) {
+			t.Errorf("vars/%s was not loaded", base)
+		}
+	}
+}
+
+// TestDiscoveredDirectoryIsLoaded. §27.1: import adds a resource to state, and a resource in
+// state that no configuration declares is scheduled for destruction by invariant 1 — so the
+// generated file is part of the project from the moment it is written.
+func TestDiscoveredDirectoryIsLoaded(t *testing.T) {
+	dir := writeTree(t, map[string]string{
+		"infra.yml":                "project: p\n",
+		"discovered/databases.yml": "resources:\n  imported:\n    type: test.database\n    engine: postgres\n",
+	})
+	files, err := Load(dir)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !loadedBase(files, "databases.yml") {
+		t.Error("discovered/** was not loaded; an imported resource would be scheduled for destruction")
+	}
+	decl, ds := Decode(files)
+	if ds.HasErrors() {
+		t.Fatalf("decode: %+v", ds)
+	}
+	if len(decl.Resources) != 1 || decl.Resources[0].Name != "imported" {
+		t.Errorf("declared = %+v, want the imported resource; loading it without decoding it "+
+			"leaves state and configuration disagreeing, which invariant 1 resolves by destroying", decl.Resources)
+	}
+}
+
+// TestConventionalDirectoriesAreSortedOnce. The fixture declares zeta before alpha so a
+// missing sort shows rather than passing by luck, and runs 20 times because map and readdir
+// order are not stable.
+func TestConventionalDirectoriesAreSortedOnce(t *testing.T) {
+	dir := writeTree(t, map[string]string{
+		"infra.yml":           "project: p\n",
+		"resources/zeta.yml":  "resources:\n  z:\n    type: test.network\n    cidr: 10.1.0.0/16\n",
+		"resources/alpha.yml": "resources:\n  a:\n    type: test.network\n    cidr: 10.2.0.0/16\n",
+		"resources/mid.yml":   "resources:\n  m:\n    type: test.network\n    cidr: 10.3.0.0/16\n",
+	})
+	var first string
+	for i := 0; i < 20; i++ {
+		files, err := Load(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var names []string
+		for _, f := range files {
+			if f.Kind == FileResources {
+				names = append(names, filepath.Base(f.Path))
+			}
+		}
+		got := strings.Join(names, ",")
+		if i == 0 {
+			first = got
+			continue
+		}
+		if got != first {
+			t.Fatalf("run %d loaded %s, want %s", i, got, first)
+		}
+	}
+	if first != "alpha.yml,mid.yml,zeta.yml" {
+		t.Errorf("conventional files are not sorted: %s", first)
+	}
+}
+
+// TestAMissingConventionalDirectoryIsFine — most projects use none of them.
+func TestAMissingConventionalDirectoryIsFine(t *testing.T) {
+	dir := writeTree(t, map[string]string{"infra.yml": "project: p\n"})
+	if _, err := Load(dir); err != nil {
+		t.Errorf("a project with no conventional directories must load: %v", err)
+	}
+}
+
+// TestANonYamlFileInAConventionalDirectoryIsIgnored. A README, a .gitkeep or an editor backup
+// is an ordinary thing to find in a repository, and refusing to load a project because someone
+// left notes in it is hostile.
+func TestANonYamlFileInAConventionalDirectoryIsIgnored(t *testing.T) {
+	dir := writeTree(t, map[string]string{
+		"infra.yml":             "project: p\n",
+		"resources/README.md":   "# notes\n",
+		"resources/.gitkeep":    "",
+		"resources/net.yml.bak": "resources:\n  bad: {}\n",
+		"resources/net.yml":     "resources:\n  n:\n    type: test.network\n    cidr: 10.0.0.0/16\n",
+	})
+	files, err := Load(dir)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !loadedBase(files, "net.yml") {
+		t.Error("the real file was not loaded")
+	}
+	for _, base := range []string{"README.md", ".gitkeep", "net.yml.bak"} {
+		if loadedBase(files, base) {
+			t.Errorf("%s was loaded; only .yml files are configuration", base)
+		}
+	}
+}

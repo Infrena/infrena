@@ -76,6 +76,15 @@ func Decode(files []File) (*ProjectDecl, diag.Diagnostics) {
 			decodeVariableValues(f, out, &ds)
 		case FileEnvironment:
 			decodeEnvironmentBody(f.Path, f.Environment, doc, out, &ds, seenEnvironments)
+		case FileResources:
+			// A file under resources/** or discovered/** carries a `resources:`
+			// block and means exactly what the same block in infra.yml means
+			// (§4.1). It goes through decodeResources with the SAME seen map, so
+			// a name declared in two files collides exactly as two in one file
+			// would -- globbing makes that easy to do by accident, and two
+			// declarations silently becoming one is what this language refuses
+			// everywhere else.
+			decodeResourcesFile(f.Path, doc, out, &ds, seenResources)
 		}
 	}
 
@@ -105,6 +114,32 @@ func topLevelShapeDetail(f File) string {
 		return "The top level of " + ModuleFileName + " must be a set of keys such as `inputs`, `resources` and `outputs`."
 	default:
 		return "The top level of " + ProjectFileName + " must be a set of keys such as `project` and `resources`."
+	}
+}
+
+// decodeResourcesFile decodes one file from resources/** or discovered/**.
+//
+// Its top level holds `resources:` and nothing else. A `project:` key or an
+// environments block in such a file is a mistake worth naming rather than
+// ignoring: it reads as though it would work, and silently doing nothing is how
+// a user spends an afternoon wondering why their environment has no effect.
+func decodeResourcesFile(path string, doc *yaml.Node, out *ProjectDecl, ds *diag.Diagnostics,
+	seenResources map[string]value.Origin) {
+	for i := 0; i+1 < len(doc.Content); i += 2 {
+		key, val := doc.Content[i], doc.Content[i+1]
+		if key.Value == "resources" {
+			decodeResources(path, val, &out.Resources, ds, seenResources)
+			continue
+		}
+		ds.Add(diag.Diagnostic{
+			Severity: diag.SeverityError,
+			Summary:  "unexpected key " + strconv.Quote(key.Value) + " in a resources file",
+			Detail: "A file under " + ResourcesDirName + "/ or " + DiscoveredDirName +
+				"/ holds `resources:` and nothing else. Variables belong in " + VarsDirName +
+				"/, and environments in " + EnvironmentsDirName + "/.",
+			Action: "Move " + strconv.Quote(key.Value) + " to the file that owns it, or remove it.",
+			Origin: originOf(path, key),
+		})
 	}
 }
 

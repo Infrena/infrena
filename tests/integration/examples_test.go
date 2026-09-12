@@ -73,6 +73,17 @@ func copyTree(t *testing.T, src, dst string) {
 			return err
 		}
 		target := filepath.Join(dst, rel)
+		// Skip anything the example is not: .infra/ is state and a fake cloud,
+		// left behind by anyone who ran the example in place. Copying it made
+		// this test inherit a developer's local run — it failed on
+		// "replicas: 3 -> 1" from a state file that is gitignored and was never
+		// part of the example at all.
+		if strings.HasPrefix(filepath.Base(p), ".") {
+			if info.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
 		if info.IsDir() {
 			return os.MkdirAll(target, 0o755)
 		}
