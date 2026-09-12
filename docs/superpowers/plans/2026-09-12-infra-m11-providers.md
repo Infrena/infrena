@@ -165,6 +165,10 @@ cannot be read without resolving variables is a name `state show` cannot print.
 
 ## Task 3: resolve instances, after variables
 
+**Status: done.** `internal/providers`. Not yet wired into `compile.go` — Task 4 needs the registry
+to accept an instance before there is anything to hand the table to, so wiring it before then would
+add a call whose result nothing reads.
+
 **Files:**
 - Create: `internal/providers/resolve.go`, `internal/providers/resolve_test.go`
 - Modify: `internal/compiler/compile.go`
