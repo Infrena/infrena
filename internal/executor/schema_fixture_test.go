@@ -120,7 +120,7 @@ var _ provider.Provider = (*realisticProvider)(nil)
 func TestApplyOfAPlannedCreateWithComputedAttributes(t *testing.T) {
 	const resourceType = "realistic.thing"
 	reg := registry.New()
-	if err := reg.Register(&realisticProvider{resourceType: resourceType}); err != nil {
+	if err := reg.Register("test", &realisticProvider{resourceType: resourceType}); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 
@@ -129,8 +129,9 @@ func TestApplyOfAPlannedCreateWithComputedAttributes(t *testing.T) {
 		Environment: "dev",
 		Resources: map[string]*resource.ResolvedResource{
 			"net": {
-				Address: addr("net"),
-				Type:    resourceType,
+				Address:  addr("net"),
+				Type:     resourceType,
+				Provider: "test",
 				Attrs: map[string]value.Value{
 					"cidr":     value.String("10.0.0.0/16", value.SourceExplicit),
 					"password": value.String("hunter2", value.SourceExplicit),

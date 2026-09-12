@@ -116,7 +116,7 @@ func runImport(
 
 	imported := 0
 	for _, r := range selected {
-		p, ok := reg.Provider(r.Type)
+		p, ok := reg.ProviderFor(r.Type, r.Provider)
 		if !ok {
 			return fmt.Errorf("no provider offers %s", r.Type)
 		}

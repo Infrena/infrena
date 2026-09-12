@@ -109,9 +109,15 @@ type Operation struct {
 	Address address.Address
 	Type    string
 	Kind    OpKind
-	Before  map[string]value.Value
-	After   map[string]value.Value
-	Reasons []ChangeReason
+	// Provider is the instance this operation runs against (PLAN.md §12.1).
+	//
+	// Taken from the DESIRED resource where there is one, and from STATE where
+	// there is not — a destroy has only state, and dispatching it from
+	// configuration would leave a removed resource with no account to delete from.
+	Provider string
+	Before   map[string]value.Value
+	After    map[string]value.Value
+	Reasons  []ChangeReason
 	// Dependents are the resources that depend on this one, sorted. Destroying
 	// a resource with dependents is the case spec §20 wants called out loudly,
 	// and the count is not recoverable from the plan without it.

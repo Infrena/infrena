@@ -276,6 +276,7 @@ func operationFor(
 		return &Operation{
 			Address:   addr,
 			Type:      rc.Type,
+			Provider:  rc.Provider,
 			Kind:      OpCreate,
 			After:     afterAttributes(def, attrs, nil, OpCreate),
 			Reasons:   reasons,
@@ -324,6 +325,7 @@ func operationFor(
 	return &Operation{
 		Address:   addr,
 		Type:      rc.Type,
+		Provider:  rc.Provider,
 		Kind:      kind,
 		Before:    copyAttrs(actual.Attributes),
 		After:     afterAttributes(def, attrs, actual.Attributes, kind),
@@ -357,11 +359,12 @@ func removalOperation(addr address.Address, rs *resource.ResourceState, actual *
 		// Nothing was observed, so the historical record in state is all
 		// there is left to show.
 		return &Operation{
-			Address: addr,
-			Type:    rs.Type,
-			Kind:    OpForget,
-			Before:  copyAttrs(rs.Attributes),
-			Reasons: []ChangeReason{{Note: "already absent from the provider; only the state entry remains"}},
+			Address:  addr,
+			Type:     rs.Type,
+			Provider: rs.Provider,
+			Kind:     OpForget,
+			Before:   copyAttrs(rs.Attributes),
+			Reasons:  []ChangeReason{{Note: "already absent from the provider; only the state entry remains"}},
 		}, ds
 	}
 
@@ -372,11 +375,12 @@ func removalOperation(addr address.Address, rs *resource.ResourceState, actual *
 	// not refused.
 	if rs.Lifecycle.Retain {
 		return &Operation{
-			Address: addr,
-			Type:    rs.Type,
-			Kind:    OpForget,
-			Before:  before,
-			Reasons: []ChangeReason{{Note: "retained; removed from state without calling the provider"}},
+			Address:  addr,
+			Type:     rs.Type,
+			Provider: rs.Provider,
+			Kind:     OpForget,
+			Before:   before,
+			Reasons:  []ChangeReason{{Note: "retained; removed from state without calling the provider"}},
 		}, ds
 	}
 
@@ -396,8 +400,14 @@ func removalOperation(addr address.Address, rs *resource.ResourceState, actual *
 	return &Operation{
 		Address: addr,
 		Type:    rs.Type,
-		Kind:    OpDestroy,
-		Before:  before,
+		// FROM STATE, and this is the line the milestone turns on. A destroy has
+		// no configuration — the resource was deleted from the file — so state is
+		// the only thing that can say which account to delete it from. Taking it
+		// from anywhere else here means deleting from whichever instance happened
+		// to be consulted.
+		Provider: rs.Provider,
+		Kind:     OpDestroy,
+		Before:   before,
 	}, ds
 }
 

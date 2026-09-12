@@ -23,7 +23,7 @@ import (
 func testRegistry(t *testing.T) *registry.Registry {
 	t.Helper()
 	reg := registry.New()
-	if err := reg.Register(testprovider.New(t.TempDir() + "/fake-cloud.json")); err != nil {
+	if err := reg.Register("test", testprovider.New(t.TempDir()+"/fake-cloud.json")); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	return reg
@@ -53,7 +53,7 @@ func config(resources ...*resource.ResolvedResource) compiler.ResolvedConfig {
 }
 
 func configured(name, typ string, attrs map[string]value.Value) *resource.ResolvedResource {
-	return &resource.ResolvedResource{Address: addr(name), Type: typ, Attrs: attrs}
+	return &resource.ResolvedResource{Address: addr(name), Type: typ, Provider: "test", Attrs: attrs}
 }
 
 // recorded builds a state entry. Its attributes carry SourceProvider so that
@@ -951,6 +951,7 @@ func TestPlanIsDeterministicAcrossTwentyRuns(t *testing.T) {
 			engine = "mysql" // ForceNew: a replacement
 		}
 		desired = append(desired, &resource.ResolvedResource{
+			Provider:  "test",
 			Address:   addr(name),
 			Type:      "test.database",
 			DependsOn: []address.Address{addr("keep-a")},

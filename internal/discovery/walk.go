@@ -45,8 +45,12 @@ func Walk(ctx context.Context, reg *registry.Registry, types []string) ([]Result
 
 	var out []Result
 	var problems []error
-	for _, p := range reg.Providers() {
-		ask := reg.TypesOf(p.Name())
+	// Every INSTANCE, not every plugin. Two instances of one plugin hold different
+	// infrastructure — which is the entire reason they are separate — so asking the
+	// plugin once would find one account's resources and silently miss the other's.
+	for _, inst := range reg.Instances() {
+		p := inst.Provider
+		ask := reg.TypesOf(inst.Name)
 		if len(wanted) > 0 {
 			ask = filterWanted(ask, wanted)
 			if len(ask) == 0 {
@@ -56,14 +60,17 @@ func Walk(ctx context.Context, reg *registry.Registry, types []string) ([]Result
 
 		found, err := p.Discover(ctx, provider.DiscoverRequest{Types: ask})
 		if err != nil {
-			problems = append(problems, fmt.Errorf("provider %s: %w", p.Name(), err))
+			problems = append(problems, fmt.Errorf("provider %s: %w", inst.Name, err))
 			continue
 		}
 		for _, r := range found {
 			out = append(out, Result{
 				Type:       r.Type,
 				ProviderID: r.ProviderID,
-				Provider:   p.Name(),
+				// The INSTANCE name, because that is what a resource's
+				// `provider:` selects and what state must record — a plugin name
+				// cannot tell two accounts apart.
+				Provider:   inst.Name,
 				Attributes: r.Attributes,
 			})
 		}

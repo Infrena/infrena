@@ -114,18 +114,18 @@ func TestApplyIsolatesAFailureEndToEnd(t *testing.T) {
 	}
 
 	reg := registry.New()
-	if err := reg.Register(testprovider.New(cloudPath)); err != nil {
+	if err := reg.Register("test", testprovider.New(cloudPath)); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 
 	p := &planner.Plan{
 		Version: planner.PlanVersion,
 		Operations: []planner.Operation{
-			{Address: address.Address{Name: "a"}, Type: "test.network", Kind: planner.OpCreate,
+			{Provider: "test", Address: address.Address{Name: "a"}, Type: "test.network", Kind: planner.OpCreate,
 				After: map[string]value.Value{"cidr": value.String("10.0.0.0/24", value.SourceExplicit)}},
-			{Address: address.Address{Name: "b"}, Type: "test.network", Kind: planner.OpCreate,
+			{Provider: "test", Address: address.Address{Name: "b"}, Type: "test.network", Kind: planner.OpCreate,
 				After: map[string]value.Value{"cidr": value.String("10.0.1.0/24", value.SourceExplicit)}},
-			{Address: address.Address{Name: "c"}, Type: "test.network", Kind: planner.OpCreate,
+			{Provider: "test", Address: address.Address{Name: "c"}, Type: "test.network", Kind: planner.OpCreate,
 				After: map[string]value.Value{"cidr": value.String("10.0.2.0/24", value.SourceExplicit)}},
 		},
 	}
@@ -367,20 +367,20 @@ func TestApplyEmitsExactlyOneEventSkippedPerStrandedNodeThroughOnEvent(t *testin
 	}
 
 	reg := registry.New()
-	if err := reg.Register(testprovider.New(cloudPath)); err != nil {
+	if err := reg.Register("test", testprovider.New(cloudPath)); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 
 	p := &planner.Plan{
 		Version: planner.PlanVersion,
 		Operations: []planner.Operation{
-			{Address: address.Address{Name: "a"}, Type: "test.network", Kind: planner.OpCreate,
+			{Provider: "test", Address: address.Address{Name: "a"}, Type: "test.network", Kind: planner.OpCreate,
 				After: map[string]value.Value{"cidr": value.String("10.0.0.0/24", value.SourceExplicit)}},
-			{Address: address.Address{Name: "b"}, Type: "test.network", Kind: planner.OpCreate,
+			{Provider: "test", Address: address.Address{Name: "b"}, Type: "test.network", Kind: planner.OpCreate,
 				After: map[string]value.Value{"cidr": value.String("10.0.1.0/24", value.SourceExplicit)}},
-			{Address: address.Address{Name: "c"}, Type: "test.network", Kind: planner.OpCreate,
+			{Provider: "test", Address: address.Address{Name: "c"}, Type: "test.network", Kind: planner.OpCreate,
 				After: map[string]value.Value{"cidr": value.String("10.0.2.0/24", value.SourceExplicit)}},
-			{Address: address.Address{Name: "d"}, Type: "test.network", Kind: planner.OpCreate,
+			{Provider: "test", Address: address.Address{Name: "d"}, Type: "test.network", Kind: planner.OpCreate,
 				After: map[string]value.Value{"cidr": value.String("10.0.3.0/24", value.SourceExplicit)}},
 		},
 	}

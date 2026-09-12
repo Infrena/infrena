@@ -37,7 +37,18 @@ func compilerOptions(opts *GlobalOptions, environment string) (compiler.Options,
 	// `source:` against the project directory. Passing anything but opts.Dir
 	// here makes --chdir silently wrong for modules and right for everything
 	// else, which is the worst combination to debug.
-	return compiler.Options{Dir: opts.Dir, Environment: environment, Vars: vars, FileVars: fileVars}, ds
+	// DefaultProvider is the instance a resource that names none belongs to
+	// (PLAN.md §12.1). Read from the same declarations buildRegistry reads, so the
+	// registry and the compiler cannot disagree about which instance is default —
+	// a disagreement there would create a resource in one account and then fail to
+	// find it in the other.
+	return compiler.Options{
+		Dir:             opts.Dir,
+		Environment:     environment,
+		DefaultProvider: defaultInstance(opts.Dir),
+		Vars:            vars,
+		FileVars:        fileVars,
+	}, ds
 }
 
 // rejectVariableFlags refuses --var and --var-file for the commands that never

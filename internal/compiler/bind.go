@@ -50,8 +50,14 @@ func bindReferences(exp *modules.Expansion, opts Options, reg *registry.Registry
 		self := inst.Address.String()
 
 		resolved := &resource.ResolvedResource{
-			Address:   inst.Address,
-			Type:      decl.Type,
+			Address: inst.Address,
+			Type:    decl.Type,
+			// Stage 5 leaves this empty when nothing named an instance, because it
+			// has no business knowing which instances exist. THIS is where the
+			// default is supplied, once, so a resource reaching the planner always
+			// names the instance it belongs to — and a destroy, which has only
+			// state, inherits that name from the apply that created it.
+			Provider:  providerInstanceFor(inst, opts),
 			Attrs:     make(map[string]value.Value, len(decl.Attributes)),
 			Lifecycle: resource.Lifecycle{PreventDestroy: decl.Lifecycle.PreventDestroy, Retain: decl.Lifecycle.Retain},
 			Origin:    decl.Origin,
@@ -461,4 +467,24 @@ func describeSkipOrigin(o value.Origin) string {
 		return "its own declaration"
 	}
 	return o.String()
+}
+
+// providerInstanceFor settles which instance a resource belongs to.
+//
+// Stage 5 resolved the resource's own `provider:` and the module call it inherited
+// from (modules.providerFor); what is left is the default, which only the compiler
+// knows. Filled HERE rather than at dispatch, because a resource whose instance is
+// decided at dispatch time is one whose state cannot say which account it is in —
+// and a destroy has nothing but state.
+func providerInstanceFor(inst modules.Instance, opts Options) string {
+	if inst.ProviderInstance != "" {
+		return inst.ProviderInstance
+	}
+	if opts.DefaultProvider != "" {
+		return opts.DefaultProvider
+	}
+	// A project with no `providers:` block at all. Every project written before
+	// §12.1 is this one, and the implicit instance is named after the only plugin
+	// there is — which is also what a state file written then already records.
+	return "test"
 }

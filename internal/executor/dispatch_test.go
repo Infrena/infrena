@@ -67,7 +67,7 @@ func mustCreate(t *testing.T, prov *testprovider.Provider, name, resourceType st
 
 func TestDispatchForgetMakesNoProviderCall(t *testing.T) {
 	node := planner.OpNode{Address: address.Address{Name: "old"}, Kind: planner.OpForget, Phase: planner.PhaseDestroy}
-	current := &resource.ResourceState{Address: node.Address, Type: "test.network", ProviderID: "net-1"}
+	current := &resource.ResourceState{Provider: "test", Address: node.Address, Type: "test.network", ProviderID: "net-1"}
 
 	result, err := dispatch(context.Background(), poisonProvider{t: t}, node, current, nil)
 	if err != nil {

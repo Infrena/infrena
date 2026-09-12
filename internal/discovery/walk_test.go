@@ -23,7 +23,7 @@ func cloudWith(t *testing.T, rs map[string]*testprovider.CloudResource) *registr
 		t.Fatal(err)
 	}
 	reg := registry.New()
-	if err := reg.Register(testprovider.New(path)); err != nil {
+	if err := reg.Register("test", testprovider.New(path)); err != nil {
 		t.Fatal(err)
 	}
 	return reg
@@ -118,7 +118,7 @@ func TestWalkSortsWhatAProviderReturns(t *testing.T) {
 		tagged("zeta"), tagged("alpha"), tagged("mid"),
 	}}
 	reg := registry.New()
-	if err := reg.Register(spy); err != nil {
+	if err := reg.Register("spy", spy); err != nil {
 		t.Fatal(err)
 	}
 
@@ -159,7 +159,7 @@ func TestWalkSortsWhatAProviderReturns(t *testing.T) {
 func TestWalkAsksAProviderOnlyAboutItsOwnTypes(t *testing.T) {
 	spy := &recordingProvider{}
 	reg := registry.New()
-	if err := reg.Register(spy); err != nil {
+	if err := reg.Register("spy", spy); err != nil {
 		t.Fatal(err)
 	}
 
@@ -190,7 +190,7 @@ func TestWalkAsksAProviderOnlyAboutItsOwnTypes(t *testing.T) {
 // needs to know which one they got.
 func TestWalkReportsAProviderThatCannotLook(t *testing.T) {
 	reg := registry.New()
-	if err := reg.Register(&recordingProvider{fail: errors.New("credentials expired")}); err != nil {
+	if err := reg.Register("spy", &recordingProvider{fail: errors.New("credentials expired")}); err != nil {
 		t.Fatal(err)
 	}
 

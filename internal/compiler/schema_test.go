@@ -17,7 +17,7 @@ import (
 func testRegistry(t *testing.T) *registry.Registry {
 	t.Helper()
 	reg := registry.New()
-	if err := reg.Register(testprovider.New(t.TempDir() + "/fake-cloud.json")); err != nil {
+	if err := reg.Register("test", testprovider.New(t.TempDir()+"/fake-cloud.json")); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	return reg
@@ -243,7 +243,7 @@ func (wrongKindProvider) ClassifyError(error) provider.Retryability { return pro
 
 func TestSchemaRejectsADefaultThatDoesNotMatchItsDeclaredKind(t *testing.T) {
 	reg := registry.New()
-	if err := reg.Register(wrongKindProvider{}); err != nil {
+	if err := reg.Register("test", wrongKindProvider{}); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	cfg := oneResource("bad.thing", map[string]value.Value{})

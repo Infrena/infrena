@@ -29,7 +29,7 @@ func TestApplyPersistsStateAfterEveryOperationNotJustAtTheEnd(t *testing.T) {
 
 	prov := &countingProvider{resourceType: "test.thing", delay: 40 * time.Millisecond}
 	reg := registry.New()
-	if err := reg.Register(prov); err != nil {
+	if err := reg.Register("test", prov); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 
@@ -140,7 +140,7 @@ func TestApplyStopsSchedulingAfterAPersistFailureButKeepsAccurateState(t *testin
 
 	prov := &countingProvider{resourceType: "test.thing"}
 	reg := registry.New()
-	if err := reg.Register(prov); err != nil {
+	if err := reg.Register("test", prov); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 
@@ -212,7 +212,7 @@ func TestApplyPersistsDestroyRemovalToDisk(t *testing.T) {
 
 	prov := &lifecycleProvider{resourceType: "test.thing"}
 	reg := registry.New()
-	if err := reg.Register(prov); err != nil {
+	if err := reg.Register("test", prov); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 
@@ -264,7 +264,7 @@ func TestApplyPersistsForgetRemovalToDisk(t *testing.T) {
 	}
 
 	reg := registry.New()
-	if err := reg.Register(poisonProvider{t: t, resourceType: "test.thing"}); err != nil {
+	if err := reg.Register("test", poisonProvider{t: t, resourceType: "test.thing"}); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 
@@ -348,7 +348,7 @@ var _ provider.Provider = (*nilStateOnCreateProvider)(nil)
 func TestApplyRecordsAHardErrorWhenAProviderReturnsSuccessWithNoResourceState(t *testing.T) {
 	backend := newLockedBackend(t, "dev")
 	reg := registry.New()
-	if err := reg.Register(&nilStateOnCreateProvider{resourceType: "test.thing"}); err != nil {
+	if err := reg.Register("test", &nilStateOnCreateProvider{resourceType: "test.thing"}); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 
@@ -477,7 +477,7 @@ func TestApplyPersistsAnAlreadyCompletedOperationEvenAfterItsOwnContextIsCancell
 		proceed:      make(chan struct{}),
 	}
 	reg := registry.New()
-	if err := reg.Register(prov); err != nil {
+	if err := reg.Register("test", prov); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 
@@ -560,7 +560,7 @@ func TestRecordHardErrorsOnNilStateForEveryKindThatCanReachIt(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			backend := newLockedBackend(t, "dev")
 			reg := registry.New()
-			if err := reg.Register(&nilStateOnCreateProvider{resourceType: "test.thing"}); err != nil {
+			if err := reg.Register("test", &nilStateOnCreateProvider{resourceType: "test.thing"}); err != nil {
 				t.Fatalf("Register: %v", err)
 			}
 
@@ -569,7 +569,7 @@ func TestRecordHardErrorsOnNilStateForEveryKindThatCanReachIt(t *testing.T) {
 			r := &run{
 				ctx: context.Background(),
 				st:  state.New("proj", "dev"),
-				ops: map[string]*planner.Operation{a.String(): {Address: a, Type: "test.thing", Kind: tc.kind}},
+				ops: map[string]*planner.Operation{a.String(): {Address: a, Type: "test.thing", Kind: tc.kind, Provider: "test"}},
 				opts: Options{
 					Registry: reg, Backend: backend, Environment: "dev",
 				},
@@ -614,10 +614,10 @@ func TestRecordHardErrorsOnNilStateForEveryKindThatCanReachIt(t *testing.T) {
 func TestApplyStopsSchedulingASiblingAfterANilStateReturn(t *testing.T) {
 	backend := newLockedBackend(t, "dev")
 	reg := registry.New()
-	if err := reg.Register(&nilStateOnCreateProvider{resourceType: "test.nilthing"}); err != nil {
+	if err := reg.Register("nilstate", &nilStateOnCreateProvider{resourceType: "test.nilthing"}); err != nil {
 		t.Fatalf("Register nilstate provider: %v", err)
 	}
-	if err := reg.Register(&countingProvider{resourceType: "test.thing"}); err != nil {
+	if err := reg.Register("counting", &countingProvider{resourceType: "test.thing"}); err != nil {
 		t.Fatalf("Register sibling provider: %v", err)
 	}
 
@@ -627,8 +627,8 @@ func TestApplyStopsSchedulingASiblingAfterANilStateReturn(t *testing.T) {
 	// (internal/graph/walk.go): "create:root" sorts before
 	// "create:sibling".
 	plan := planWith(
-		op(addr("root"), "test.nilthing", planner.OpCreate),
-		op(addr("sibling"), "test.thing", planner.OpCreate),
+		opIn(addr("root"), "test.nilthing", planner.OpCreate, "nilstate"),
+		opIn(addr("sibling"), "test.thing", planner.OpCreate, "counting"),
 	)
 	g, err := planner.BuildExecution(plan, noDeps)
 	if err != nil {
