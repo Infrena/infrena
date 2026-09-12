@@ -13,7 +13,7 @@ func TestADirectoryHoldingAModuleFileIsLoadedWithoutAModulesEntry(t *testing.T) 
 		"modules/networking/module.yml": "resources:\n  vpc:\n    type: test.thing\n",
 	})
 
-	exp, ds := Expand(decl, variables.Scope{}, nil, dir, paths{})
+	exp, ds := Expand(decl, variables.Scope{}, nil, Env{Name: "dev"}, dir, paths{})
 	if ds.HasErrors() {
 		t.Fatalf("a module.yml under the project root is loaded automatically: %+v", ds)
 	}
@@ -28,7 +28,7 @@ func TestDiscoveryNormalisesHyphensToUnderscores(t *testing.T) {
 		"modules/app-stack/module.yml": "resources:\n  svc:\n    type: test.thing\n",
 	})
 
-	_, ds := Expand(decl, variables.Scope{}, nil, dir, paths{})
+	_, ds := Expand(decl, variables.Scope{}, nil, Env{Name: "dev"}, dir, paths{})
 	if ds.HasErrors() {
 		t.Fatalf("`app-stack` must be loadable as `module.app_stack`: %+v", ds)
 	}
@@ -50,7 +50,7 @@ resources:
 		"vendor/net/module.yml": "resources:\n  explicit:\n    type: test.thing\n",
 	})
 
-	exp, ds := Expand(decl, variables.Scope{}, nil, dir, paths{})
+	exp, ds := Expand(decl, variables.Scope{}, nil, Env{Name: "dev"}, dir, paths{})
 	if ds.HasErrors() {
 		t.Fatalf("explicit beating implicit is not a collision (§7, §8e): %+v", ds)
 	}
@@ -69,7 +69,7 @@ func TestTwoDiscoveredDirectoriesWithOneNameAreRefused(t *testing.T) {
 		"b/net/module.yml": "resources:\n  two:\n    type: test.thing\n",
 	})
 
-	_, ds := Expand(decl, variables.Scope{}, nil, dir, paths{})
+	_, ds := Expand(decl, variables.Scope{}, nil, Env{Name: "dev"}, dir, paths{})
 	if !hasFragment(ds, "two directories both define a module named \"net\"") {
 		t.Errorf("two discovered modules deriving one name must be refused, never resolved "+
 			"by order; got %+v", ds)
@@ -87,7 +87,7 @@ func TestDiscoverySkipsDotDirectories(t *testing.T) {
 		".git/hooks/net/module.yml":            "resources:\n  bogus:\n    type: test.thing\n",
 	})
 
-	exp, ds := Expand(decl, variables.Scope{}, nil, dir, paths{})
+	exp, ds := Expand(decl, variables.Scope{}, nil, Env{Name: "dev"}, dir, paths{})
 	if ds.HasErrors() {
 		t.Fatalf("unexpected diagnostics: %+v", ds)
 	}
@@ -112,7 +112,7 @@ func TestDiscoveryDoesNotReachInsideAModule(t *testing.T) {
 		"helper/module.yml": "resources:\n  h:\n    type: test.thing\n",
 	})
 
-	_, ds := Expand(decl, variables.Scope{}, nil, dir, paths{})
+	_, ds := Expand(decl, variables.Scope{}, nil, Env{Name: "dev"}, dir, paths{})
 	if !hasFragment(ds, "no module named \"helper\" is loaded") {
 		t.Errorf("a module must declare its own dependencies; got %+v", ds)
 	}

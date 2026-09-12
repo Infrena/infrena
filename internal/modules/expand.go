@@ -91,6 +91,15 @@ type Instance struct {
 	// level the VARIABLES visible to a resource depend on which resources
 	// directory declared it, while the bindings do not.
 	Scope *Scope
+	// Skipped marks a resource excluded from this environment (PLAN.md §6.2).
+	//
+	// MARKED rather than omitted, and dropped at exactly one point — after
+	// reference binding, before the planner. A resource that vanished here would
+	// make a reference to it report "no such resource", which sends a reader
+	// hunting for a typo in a name that is right there in the file.
+	Skipped bool
+	// SkipOrigin is where the `skip`/`only` that excluded it was written.
+	SkipOrigin value.Origin
 	// ExtraDeps are edges that could not be written as a bare name, because the
 	// name they came from expanded away. Separate from Decl.DependsOn, which
 	// holds bare names stage 6 resolves against the level's own scope: one
@@ -199,6 +208,7 @@ type walker struct {
 	// resolved is keyed by source identity, so one source loaded under two
 	// names is one entry.
 	resolved  map[string]Resolved
+	env       Env
 	instances []Instance
 	ds        *diag.Diagnostics
 }
@@ -216,7 +226,7 @@ type walker struct {
 // see Scope.dirVars.
 func Expand(
 	project *config.ProjectDecl, scope variables.Scope,
-	dirScopes map[string]variables.Scope, dir string, resolve Resolver,
+	dirScopes map[string]variables.Scope, env Env, dir string, resolve Resolver,
 ) (*Expansion, diag.Diagnostics) {
 	var ds diag.Diagnostics
 
@@ -231,8 +241,8 @@ func Expand(
 		return &Expansion{}, ds
 	}
 
-	w := &walker{root: abs, resolve: resolve, ds: &ds}
-	w.expand(rootLevel(project), &Scope{Vars: scope, dirVars: dirScopes, names: map[string]Binding{}}, abs, nil)
+	w := &walker{root: abs, resolve: resolve, env: env, ds: &ds}
+	w.expand(rootLevel(project), &Scope{Vars: scope, dirVars: dirScopes, names: map[string]Binding{}, skipped: map[string]value.Origin{}}, abs, nil)
 
 	// ONE sort, here, after everything is collected. The walk is already
 	// deterministic — stage 2 sorts resources by name — but a deterministic
@@ -276,11 +286,21 @@ func (w *walker) expand(lv level, scope *Scope, dir string, module []string) []a
 			continue
 		}
 		addr := addressIn(module, r.Name)
+		skipped, skipOrigin := w.excluded(r, scope.In(r.Dir), w.env)
 		w.instances = append(w.instances, Instance{
-			Address: addr,
-			Decl:    instantiateDecl(r, module),
-			Scope:   scope,
+			Address:    addr,
+			Decl:       instantiateDecl(r, module),
+			Scope:      scope,
+			Skipped:    skipped,
+			SkipOrigin: skipOrigin,
 		})
+		if skipped {
+			// NOT bound as a resource: a reference to it must not produce an
+			// edge to something that is not being created. Recorded as skipped
+			// so stage 6 can say why the name does not resolve.
+			scope.markSkipped(r.Name, skipOrigin)
+			continue
+		}
 		produced = append(produced, addr)
 		// Bound before any call is expanded, because a call's attributes may
 		// read a sibling RESOURCE and resources need no ordering pass — they
@@ -298,6 +318,13 @@ func (w *walker) expand(lv level, scope *Scope, dir string, module []string) []a
 	}
 
 	for _, r := range w.orderCalls(lv, exprs, module) {
+		// A skipped CALL is never entered. Its resources have no addresses to
+		// mark, so unlike a plain resource there is nothing to put in the
+		// expansion — only the name, recorded so stage 6 can report it.
+		if skipped, skipOrigin := w.excluded(r, scope.In(r.Dir), w.env); skipped {
+			scope.markSkipped(r.Name, skipOrigin)
+			continue
+		}
 		supplied := w.evaluateCall(r, scope.In(r.Dir), exprs[r.Name])
 		inner, outputs := w.instantiate(r, loaded, scope, supplied, dir, module)
 		calls[r.Name] = inner

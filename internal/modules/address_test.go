@@ -39,7 +39,7 @@ resources:
 		"deep/module.yml": "resources:\n  route:\n    type: test.thing\n",
 	})
 
-	exp, ds := Expand(decl, variables.Scope{}, nil, dir, paths{})
+	exp, ds := Expand(decl, variables.Scope{}, nil, Env{Name: "dev"}, dir, paths{})
 	if ds.HasErrors() {
 		t.Fatalf("unexpected diagnostics: %+v", ds)
 	}
@@ -73,7 +73,7 @@ resources:
 		"mid/module.yml": "resources:\n  x:\n    type: test.thing\n",
 	})
 
-	exp, ds := Expand(decl, variables.Scope{}, nil, dir, paths{})
+	exp, ds := Expand(decl, variables.Scope{}, nil, Env{Name: "dev"}, dir, paths{})
 	if ds.HasErrors() {
 		t.Fatalf("unexpected diagnostics: %+v", ds)
 	}
@@ -93,7 +93,7 @@ func TestOriginNamesTheInstantiationAResourceCameFrom(t *testing.T) {
 		"net/module.yml": "resources:\n  subnet:\n    type: test.thing\n    tag: production\n",
 	})
 
-	exp, ds := Expand(decl, variables.Scope{}, nil, dir, paths{})
+	exp, ds := Expand(decl, variables.Scope{}, nil, Env{Name: "dev"}, dir, paths{})
 	if ds.HasErrors() {
 		t.Fatalf("unexpected diagnostics: %+v", ds)
 	}
@@ -128,7 +128,7 @@ resources:
 		"m/module.yml": "resources:\n  thing:\n    type: test.thing\n",
 	})
 
-	exp, ds := Expand(decl, variables.Scope{}, nil, dir, paths{})
+	exp, ds := Expand(decl, variables.Scope{}, nil, Env{Name: "dev"}, dir, paths{})
 	if ds.HasErrors() {
 		t.Fatalf("unexpected diagnostics: %+v", ds)
 	}
@@ -167,7 +167,7 @@ resources:
 		"net/module.yml": "resources:\n  subnet:\n    type: test.thing\n  gateway:\n    type: test.thing\n",
 	})
 
-	exp, ds := Expand(decl, variables.Scope{}, nil, dir, paths{})
+	exp, ds := Expand(decl, variables.Scope{}, nil, Env{Name: "dev"}, dir, paths{})
 	if ds.HasErrors() {
 		t.Fatalf("unexpected diagnostics: %+v", ds)
 	}
@@ -205,7 +205,7 @@ resources:
 		"app/module.yml": "resources:\n  server:\n    type: test.thing\n",
 	})
 
-	exp, ds := Expand(decl, variables.Scope{}, nil, dir, paths{})
+	exp, ds := Expand(decl, variables.Scope{}, nil, Env{Name: "dev"}, dir, paths{})
 	if ds.HasErrors() {
 		t.Fatalf("unexpected diagnostics: %+v", ds)
 	}
@@ -252,7 +252,7 @@ resources:
 		"net/module.yml": "resources:\n  subnet:\n    type: test.thing\n",
 	})
 
-	exp, ds := Expand(decl, variables.Scope{}, nil, dir, paths{})
+	exp, ds := Expand(decl, variables.Scope{}, nil, Env{Name: "dev"}, dir, paths{})
 	if ds.HasErrors() {
 		t.Fatalf("unexpected diagnostics: %+v", ds)
 	}
@@ -306,7 +306,7 @@ resources:
 		"db/module.yml": "inputs:\n  network:\n    type: string\nresources:\n  store:\n    type: test.database\n    engine: postgres\n    network: ${network}\n",
 	})
 
-	exp, ds := Expand(decl, variables.Scope{}, nil, dir, paths{})
+	exp, ds := Expand(decl, variables.Scope{}, nil, Env{Name: "dev"}, dir, paths{})
 	if ds.HasErrors() {
 		t.Fatalf("unexpected diagnostics: %+v", ds)
 	}

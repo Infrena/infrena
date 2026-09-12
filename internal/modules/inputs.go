@@ -48,6 +48,34 @@ type Scope struct {
 	// SHARED by every scope In returns for this level — see In for why that
 	// sharing is the point rather than an accident.
 	names map[string]Binding
+	// skipped records names that WERE declared at this level but are excluded
+	// from this environment (PLAN.md §6.2), against the origin of the key that
+	// excluded them.
+	//
+	// Separate from names, and deliberately so: a skipped name must NOT resolve
+	// to an address, or a reference to it would silently produce an edge to a
+	// resource that is not being created. But it must not simply be absent
+	// either, or stage 6 reports "no such resource" and sends a reader hunting
+	// for a typo in a name that is right there in the file. This is the table
+	// that lets it say "skipped" instead.
+	//
+	// Shared by In for the same reason names is.
+	skipped map[string]value.Origin
+}
+
+// Skipped reports whether name was excluded from this environment at this level,
+// and where. Compiler stage 6 consults it before reporting an unbound name.
+func (s *Scope) Skipped(name string) (value.Origin, bool) {
+	o, ok := s.skipped[name]
+	return o, ok
+}
+
+// markSkipped records a name as excluded. See the skipped field.
+func (s *Scope) markSkipped(name string, origin value.Origin) {
+	if s.skipped == nil {
+		s.skipped = map[string]value.Origin{}
+	}
+	s.skipped[name] = origin
 }
 
 // In narrows s to the resources directory dir, which is what a resource
@@ -80,7 +108,7 @@ func (s *Scope) In(dir string) *Scope {
 	if !ok {
 		return s
 	}
-	return &Scope{Module: s.Module, Vars: vars, dirVars: s.dirVars, names: s.names}
+	return &Scope{Module: s.Module, Vars: vars, dirVars: s.dirVars, names: s.names, skipped: s.skipped}
 }
 
 // Variable satisfies half of expressions.Scope.
@@ -106,7 +134,7 @@ func (w *walker) moduleScope(
 	r *config.ResourceDecl, lv level, caller *Scope,
 	supplied map[string]value.Value, module []string,
 ) *Scope {
-	inner := &Scope{Module: module, names: map[string]Binding{}}
+	inner := &Scope{Module: module, names: map[string]Binding{}, skipped: map[string]value.Origin{}}
 
 	// The three facts about the invocation cross every module boundary, each
 	// copied as-is, keeping the provenance the compiler stamped. A module that

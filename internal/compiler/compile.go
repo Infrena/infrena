@@ -120,7 +120,10 @@ func Compile(files []config.File, reg *registry.Registry, opts Options) (Resolve
 		return ResolvedConfig{}, ds
 	}
 
-	expansion, moduleDiags := modules.Expand(project, scope, dirScopes, opts.Dir, source.NewCache(opts.Dir))
+	// The environment, and every environment declared, so stage 5 can resolve
+	// `skip`/`only` and refuse a name nothing declares (PLAN.md §6.2).
+	env := modules.Env{Name: opts.Environment, Declared: declaredEnvironments(project)}
+	expansion, moduleDiags := modules.Expand(project, scope, dirScopes, env, opts.Dir, source.NewCache(opts.Dir))
 	ds.Extend(moduleDiags)
 	if moduleDiags.HasErrors() {
 		// This halt suppresses ALL of stage 6, including diagnostics with
@@ -277,6 +280,17 @@ func directoryScopes(
 func diagKey(d diag.Diagnostic) string {
 	return strconv.Itoa(int(d.Severity)) + "\x00" + d.Summary + "\x00" + d.Detail +
 		"\x00" + d.Action + "\x00" + d.Origin.String()
+}
+
+// declaredEnvironments lists every declared environment, sorted. Empty for a
+// project that declares none, which is the case §6.2 leaves unchecked.
+func declaredEnvironments(p *config.ProjectDecl) []string {
+	out := make([]string, 0, len(p.Environments))
+	for _, e := range p.Environments {
+		out = append(out, e.Name)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func sortedDirs(m map[string]map[string]value.Value) []string {
