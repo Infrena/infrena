@@ -374,6 +374,22 @@ func decodeResources(path string, node *yaml.Node, dst *[]*ResourceDecl, ds *dia
 					}
 					r.DependsOn = append(r.DependsOn, text)
 				}
+			case "skip", "only":
+				// Named keys rather than attributes: everything this switch does
+				// not recognise becomes an ATTRIBUTE, so falling through would
+				// reach stage 7 as "no attribute skip" on every resource using
+				// the feature.
+				//
+				// The VALUE is decoded exactly as an attribute would be, because
+				// it may be an expression (§6.2) and stage 5 evaluates it with
+				// the machinery that already evaluates attributes.
+				v, hasExpr := decodeValue(path, "`"+key.Value+"`", val, ds)
+				d := AttributeDecl{Name: key.Value, Value: v, HasExpressions: hasExpr, Origin: keyOrigin}
+				if key.Value == "skip" {
+					r.Skip = d
+				} else {
+					r.Only = d
+				}
 			case "lifecycle":
 				decodeLifecycle(path, val, r, ds)
 			default:
@@ -385,6 +401,22 @@ func decodeResources(path string, node *yaml.Node, dst *[]*ResourceDecl, ds *dia
 					Origin:         keyOrigin,
 				}
 			}
+		}
+
+		// §6.2: two spellings of one idea, and they can contradict — `skip: [dev]`
+		// with `only: [dev]` means nothing coherent. Refused rather than given a
+		// precedence, because any precedence here is a coin-flip a reader would
+		// have to memorise.
+		if r.Skip.Name != "" && r.Only.Name != "" {
+			ds.Add(diag.Diagnostic{
+				Severity: diag.SeverityError,
+				Summary:  "resource " + strconv.Quote(r.Name) + " sets both `skip` and `only`",
+				Detail: "They are two ways of saying the same thing and can contradict each other: " +
+					"`only` is also set at " + describeOrigin(r.Only.Origin) + ".",
+				Action: "Keep whichever reads better and remove the other. `only` lists the " +
+					"environments the resource belongs to; `skip` lists the ones it does not.",
+				Origin: r.Skip.Origin,
+			})
 		}
 
 		if r.Type == "" && !typeReported {

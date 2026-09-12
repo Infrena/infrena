@@ -545,3 +545,159 @@ func TestAnEnvironmentTypeKeyIsRefused(t *testing.T) {
 		}
 	}
 }
+
+// `skip` and `only` (PLAN.md §6.2) — decoding only. A resource carrying them
+// still appears everywhere until stage 5 resolves them.
+
+// TestSkipAndOnlyAcceptAScalarOrAList. `only: production` and
+// `only: [staging, production]` are the same shape of thing, so both decode.
+func TestSkipAndOnlyAcceptAScalarOrAList(t *testing.T) {
+	files := writeConfig(t, `
+project: p
+resources:
+  a:
+    type: test.network
+    only: production
+  b:
+    type: test.network
+    only: [staging, production]
+  c:
+    type: test.network
+    skip: dev
+  d:
+    type: test.network
+    skip: [dev, staging]
+`)
+	decl, ds := Decode(files)
+	if ds.HasErrors() {
+		t.Fatalf("unexpected diagnostics:\n%s", render(t, ds))
+	}
+	byName := map[string]*ResourceDecl{}
+	for _, r := range decl.Resources {
+		byName[r.Name] = r
+	}
+	for _, tc := range []struct {
+		name  string
+		key   string
+		field func(*ResourceDecl) AttributeDecl
+	}{
+		{"a", "only", func(r *ResourceDecl) AttributeDecl { return r.Only }},
+		{"b", "only", func(r *ResourceDecl) AttributeDecl { return r.Only }},
+		{"c", "skip", func(r *ResourceDecl) AttributeDecl { return r.Skip }},
+		{"d", "skip", func(r *ResourceDecl) AttributeDecl { return r.Skip }},
+	} {
+		got := tc.field(byName[tc.name])
+		if got.Name == "" {
+			t.Errorf("resource %q did not record its %s", tc.name, tc.key)
+			continue
+		}
+		// The Origin travels with it: stage 5 reports an unknown environment
+		// name against the line that wrote it, not against the resource.
+		if got.Origin.File == "" {
+			t.Errorf("resource %q's %s carries no origin, so a diagnostic about it "+
+				"cannot point anywhere", tc.name, tc.key)
+		}
+	}
+	// A list decodes AS a list, not as the string "[staging production]".
+	if byName["b"].Only.Value.Kind != value.KindList {
+		t.Errorf("a list-valued `only` decoded as %v", byName["b"].Only.Value.Kind)
+	}
+	if byName["a"].Only.Value.Kind != value.KindString {
+		t.Errorf("a scalar `only` decoded as %v", byName["a"].Only.Value.Kind)
+	}
+}
+
+// TestSkipAndOnlyTogetherIsAnError. Two spellings of one idea that can
+// contradict: `skip: [dev]` with `only: [dev]` means nothing coherent.
+func TestSkipAndOnlyTogetherIsAnError(t *testing.T) {
+	files := writeConfig(t, `
+project: p
+resources:
+  a:
+    type: test.network
+    skip: [dev]
+    only: [production]
+`)
+	_, ds := Decode(files)
+	if !ds.HasErrors() {
+		t.Fatal("`skip` and `only` on one resource must be refused")
+	}
+	out := render(t, ds)
+	for _, want := range []string{"skip", "only", "a"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the diagnostic does not name %q:\n%s", want, out)
+		}
+	}
+}
+
+// TestSkipIsNotAResourceAttribute keeps the namespace honest.
+//
+// Everything the resource switch does not recognise becomes an ATTRIBUTE, so a
+// `skip` that fell through would reach stage 7 as "test.network has no
+// attribute skip" — on every resource using the feature.
+func TestSkipIsNotAResourceAttribute(t *testing.T) {
+	files := writeConfig(t, `
+project: p
+resources:
+  a:
+    type: test.network
+    cidr: 10.0.0.0/16
+    skip: [dev]
+    only: []
+`)
+	decl, _ := Decode(files)
+	for _, r := range decl.Resources {
+		for _, forbidden := range []string{"skip", "only"} {
+			if _, leaked := r.Attributes[forbidden]; leaked {
+				t.Errorf("%q leaked into Attributes; stage 7 would report it as an unknown "+
+					"attribute on every resource that uses the feature", forbidden)
+			}
+		}
+	}
+}
+
+// TestSkipSurvivesInAModuleFile — §6.2 allows it inside a module, so a module
+// can be written with parts a caller switches off.
+//
+// decodeResources is shared between project files and module files, so this
+// passes by construction. That is the point: it pins the sharing, and would
+// fail the day someone gives module files a decoder of their own.
+func TestSkipSurvivesInAModuleFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "module.yml")
+	body := `
+inputs:
+  replica_in:
+    type: list
+    default: []
+resources:
+  replica:
+    type: test.network
+    cidr: 10.0.0.0/16
+    only: ${replica_in}
+`
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f, err := LoadModule(dir)
+	if err != nil {
+		t.Fatalf("LoadModule: %v", err)
+	}
+	mod, ds := DecodeModule(f)
+	if ds.HasErrors() {
+		t.Fatalf("unexpected diagnostics:\n%s", render(t, ds))
+	}
+	if len(mod.Resources) != 1 {
+		t.Fatalf("want 1 resource, got %d", len(mod.Resources))
+	}
+	only := mod.Resources[0].Only
+	if only.Name == "" {
+		t.Fatal("`only` was not recorded inside a module file")
+	}
+	// And it kept the fact that it is an EXPRESSION, which is what makes the
+	// module-input case work at all.
+	if !only.HasExpressions {
+		t.Error("`only: ${replica_in}` did not record that it holds an expression, so stage 5 " +
+			"would treat it as the literal name \"${replica_in}\"")
+	}
+}

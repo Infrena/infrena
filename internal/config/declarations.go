@@ -41,9 +41,21 @@ type ResourceDecl struct {
 	Dir        string
 	Type       string
 	Attributes map[string]AttributeDecl
-	DependsOn  []string
-	Lifecycle  LifecycleDecl
-	Origin     value.Origin
+	// Skip and Only name the environments this resource does or does not belong
+	// to (PLAN.md §6.2). At most one of the two is set; both together is refused
+	// at decode time.
+	//
+	// AttributeDecl rather than []string, for two reasons that are not
+	// interchangeable. The Origin travels with the value, so stage 5 reports an
+	// unknown environment name against the line that wrote it rather than
+	// against the resource. And HasExpressions survives, which is what makes
+	// `only: ${replica_in}` work — a module written with parts its caller can
+	// switch off. A bare slice loses both and cannot hold an expression at all.
+	Skip      AttributeDecl
+	Only      AttributeDecl
+	DependsOn []string
+	Lifecycle LifecycleDecl
+	Origin    value.Origin
 }
 
 // VariableDecl is one declared variable, from infra.yml's `variables:` block
