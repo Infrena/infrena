@@ -982,71 +982,124 @@ Do not simply merge defaults into user configuration and lose that information.
 
 ---
 
-## 12.1 Provider-wide defaults
+## 12.1 Provider instances
 
-A `provider:` block sets defaults applied to every resource of that provider
-that ACCEPTS them:
-
-```yaml
-provider:
-  test:
-    tags: ${tags}
-    prevent_destroy: ${protect}
-```
-
-Attribute resolution gains one rung, between what the resource says and what the
-provider's schema says:
-
-```
-explicit on the resource        tags: {team: payments}
-        ↓
-provider block                 provider: test: tags: ${tags}
-        ↓
-provider schema default        whatever the provider ships
-```
-
-A user-authored default beats a provider-authored one; anything written on the
-resource beats both.
-
-### REPLACE, not merge
-
-A resource that sets an attribute the block also sets gets ITS OWN value, whole.
-A map is not merged.
-
-That is the owner's ruling, and the reason it is safe is §10.2's `merge`: making
-the union explicit is better than a rule that silently combines structures, where
-the combining is invisible in the configuration and a reader cannot tell which
-keys came from where.
+`providers:` is a LIST of provider instances. Each entry names the PLUGIN that
+implements it, an optional NAME, and that instance's own configuration.
 
 ```yaml
-tags: "${merge(tags, {team: payments})}"
+# One instance. Every resource uses it.
+providers:
+  - plugin: aws
+    iam-role: some-role-it-assumes
 ```
 
-### What "accepts them" means, and why it must fail closed
+```yaml
+# Two plugins. `aws` is the default because it is first.
+providers:
+  - plugin: aws
+    iam-role: some-role-it-assumes
+  - plugin: azure
+    auth-token: a-token
+```
 
-A key applies to a resource type only if that type DECLARES it. A key that no
-resource type of that provider declares is an ERROR naming the ones that exist.
+```yaml
+# Two instances of ONE plugin, so they need names.
+providers:
+  - plugin: aws
+    name: main
+    iam-role: role-for-main
+  - plugin: aws
+    name: acct2
+    iam-role: role-for-acct2
+```
 
-Without that, `tag:` instead of `tags:` applies to nothing, silently, in every
-environment, forever. There is no output in which its absence is visible — which
-makes it strictly worse than having no feature.
+Resources choose one by NAME, and omitting the key means the default:
 
-### Two namespaces in one block
+```yaml
+resources:
+  main-network:
+    type: test.network
+    cidr: 10.0.0.0/16
+    provider: main
+  acct2-network:
+    type: test.network
+    cidr: 10.1.0.0/16
+    provider: acct2
+  web1:
+    type: test.application
+    image: nginx:1.27
+    # no `provider:` — the default instance
+```
 
-`tags` is a schema attribute; `prevent_destroy` is a `lifecycle:` setting. Both
-are accepted here because that is what people want to write, but they resolve
-differently: EVERY resource accepts lifecycle, only some accept a given
-attribute. The lifecycle key names are therefore RESERVED, and a provider
-declaring an attribute that collides with one is rejected at registration — the
-same place and for the same reason the `module.` type namespace is
-(`registry.Register`).
+### Rules
 
-### Provenance
+- **`plugin` is required.** It names an implementation the build offers; an
+  unknown one is an error listing what is available.
+- **`name` defaults to the plugin name.** One `aws` entry with no name is called
+  `aws`.
+- **Names are unique, and a collision is an error.** Two entries that resolve to
+  the same name — two unnamed `aws` entries, or two both named `aws` — are
+  refused. There is no precedence to invent: whichever won, the other instance's
+  resources would silently go to the wrong account.
+- **The default is the FIRST entry** unless one is marked otherwise.
+- **A resource's `provider:` names an INSTANCE, never a plugin.** An unknown name
+  is an error listing the declared instances, for the reason §6.2 gives about
+  `skip`: a filter or selector that quietly matches nothing is worse than none.
+- **Moving a resource between instances is a DESTROY and a CREATE**, not an
+  update. The resource genuinely lives in a different account; the same reasoning
+  as §5.2's module paths, and the planner must say so where a user reads it.
 
-A value from this block carries its own scope label, so a plan says
-`[default, from provider block]` rather than crediting the resource with
-something nobody wrote there. Generation (§27) omits it for the same reason it
-omits a schema default: it is not something the reader has to supply.
+### Internal shape
+
+Resolved to a map keyed by instance name, for the lookup resources do:
+
+```text
+aws   -> {plugin: aws, config: {iam-role: aaaa}, default: true}
+acct2 -> {plugin: aws, config: {iam-role: bbbb}}
+```
+
+The list is the AUTHORING shape because order decides the default and because a
+YAML map cannot hold two `aws` keys — which is exactly the collision the rules
+above refuse, and a shape that cannot express it would refuse it silently.
+
+### What this costs, recorded before it is built
+
+Three assumptions in the engine are one-provider-per-type and must change:
+
+- `registry.Registry` is keyed by resource TYPE and `Register` REFUSES a type a
+  second provider already claims. Two instances of one plugin collide there
+  immediately, so lookups become (type, instance) rather than (type).
+- Five call sites do `reg.Provider(someType)`: `executor/apply.go` twice,
+  `refresh/refresh.go` twice, `cli/import.go` once. Each needs the instance the
+  resource belongs to.
+- `resource.ResourceState.Provider` already exists and already holds a provider
+  name, so state needs no new field — but it must come to hold the INSTANCE name,
+  and a state file written before this change names a plugin. That is a migration,
+  and §21's migration path is currently lossy (see the follow-up on
+  `state.Decode`), so this is the change that makes fixing it urgent rather than
+  theoretical.
+
+### OPEN — resolve before implementing
+
+1. **Where do resource-attribute defaults live?** The earlier design in this
+   section was `provider: aws: {tags: ${tags}}` — defaults applied to every
+   resource of a provider. In the list shape above, `tags: ${tags}` and
+   `iam-role: x` are indistinguishable: one configures the PROVIDER, the other
+   defaults a RESOURCE. A nested key would separate them unambiguously:
+
+   ```yaml
+   providers:
+     - plugin: aws
+       iam-role: some-role
+       defaults:
+         tags: ${tags}
+         prevent_destroy: ${protect}
+   ```
+
+2. **Is the default markable explicitly?** "First entry wins" is settled. Whether
+   there is also a `default: true` key is not — the internal shape above shows
+   `default` as something DERIVED from order.
 
 ---
 
