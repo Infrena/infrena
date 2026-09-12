@@ -255,6 +255,42 @@ to the directory's, per §7 — the more specific statement about the same thing
 Two files silently becoming one is the failure this language refuses everywhere else, and a
 globbed directory makes it easy to do by accident.
 
+### How `vars/` files name their environment
+
+At the TOP LEVEL of `vars/`, the filename does the work:
+
+| File | Applies to |
+|---|---|
+| `vars/default.yml` | every environment |
+| `vars/production.yml` | `production` only |
+| `vars/<env>.yml` | that environment only |
+
+An environment file overrides `default.yml` per VALUE, not per file. If `default.yml` says
+`size: 50` and `production.yml` sets no `size`, production gets 50; if `production.yml` sets
+`size: 100`, production gets 100 and every other environment still gets 50. A file that names an
+environment is a set of differences, not a replacement.
+
+Deeper files cannot lean on a filename, so they carry the environment inside:
+
+```yaml
+size: 40              # the default, for every environment
+region: eu-west-1
+
+production:
+  size: 100           # overrides the default above, for production only
+
+dev:
+  size: 10
+```
+
+A bare key is a default; a key naming an environment is a block of overrides for it.
+
+**A top-level key is an environment block only if it matches a DECLARED environment.** Anything
+else is a variable, whatever shape its value has — a variable whose value is a map stays a
+variable. And a variable that collides with an environment name is an ERROR naming both, never a
+silent reinterpretation: the alternative is that adding an environment months later changes what
+an existing file means, without touching it.
+
 ### `templates/` is reserved, not implemented
 
 It will hold text blobs rendered into attributes — IAM policy documents, lambda sources, unit
