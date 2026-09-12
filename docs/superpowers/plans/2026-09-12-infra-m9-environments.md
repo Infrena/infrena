@@ -56,7 +56,8 @@ resource that simply vanishes makes `${debug_box.url}` report "no such resource"
 user hunting for a typo in a name that is right there in the file.
 
 So skipped instances are MARKED, not removed, and are dropped at exactly one place: after
-reference binding, before the planner. Any task that deletes them earlier is wrong.
+reference binding, before the planner. Any task that deletes them earlier is wrong — see Task 5's
+correction for the real reason, which is not the one written here first.
 
 ---
 
@@ -329,6 +330,17 @@ func TestASkippedResourceIsMarkedNotDropped(t *testing.T) { /* ... */ }
 Discrimination must include: make the marking a drop instead, and confirm
 `TestASkippedResourceIsMarkedNotDropped` is the only failure. If Task 6's tests also fail, they
 are coupled to the representation rather than to the behaviour.
+
+**CORRECTION, found by running that sabotage.** Task 6's tests do NOT fail, and the claim in
+"The rule that governs this milestone" that dropping early "makes Task 6 impossible" is WRONG.
+`Scope.skipped` carries the NAMES, and the names are what the reference rule reads — so dropping
+in stage 5 leaves every Task 6 test passing and fails only the test asserting that the marking
+exists, which is circular.
+
+What the marking actually buys is that a skipped resource's own attributes are STILL BOUND, so a
+mistake inside a `production`-only resource is reported when planning `dev` rather than surviving
+until the production run. `TestASkippedResourceIsStillChecked` is the non-circular reason, and
+the sabotage now fails it.
 
 ---
 
