@@ -178,3 +178,201 @@ func TestAStatelessButDeclaredEnvironmentIsNormal(t *testing.T) {
 		t.Errorf("a fresh environment proposed a destroy:\n%s", p.Stdout)
 	}
 }
+
+// §6.2 through the built binary: one configuration, four environments, four
+// different resource sets, no variables involved beyond the filters themselves.
+
+const filteredModule = `
+inputs:
+  network:
+    type: string
+  replica_in:
+    type: list
+    default: []
+resources:
+  primary:
+    type: test.database
+    engine: postgres
+    network: ${network}
+  replica:
+    type: test.database
+    engine: postgres
+    network: ${network}
+    only: ${replica_in}
+`
+
+const fourEnvProject = `
+project: MainApp
+environments:
+  dev: {}
+  staging: {}
+  sandbox: {}
+  production: {}
+modules:
+  - ./modules/stack
+resources:
+  net:
+    type: test.network
+    cidr: 10.0.0.0/16
+  debug_box:
+    type: test.application
+    image: debug:1
+    database_url: fixed
+    only: [dev, sandbox]
+  audit:
+    type: test.application
+    image: audit:1
+    database_url: fixed
+    skip: [dev]
+  stack:
+    type: module.stack
+    network: ${net.id}
+    replica_in: [production]
+`
+
+// TestOneConfigurationFourEnvironments is the milestone through the binary.
+//
+// Every environment gets `net` and `module.stack.primary`. Beyond that: dev has
+// debug_box, staging has audit, sandbox has both filters' opposite halves, and
+// production alone has the module's replica. The counts differ per environment,
+// which is the whole claim.
+func TestOneConfigurationFourEnvironments(t *testing.T) {
+	dir := projectWithFiles(t, fourEnvProject, map[string]string{
+		"modules/stack/module.yml": filteredModule,
+	})
+
+	want := map[string][]string{
+		// present, absent
+		"dev":        {"test.application.debug_box", "test.application.audit"},
+		"staging":    {"test.application.audit", "test.application.debug_box"},
+		"sandbox":    {"test.application.debug_box", ""},
+		"production": {"test.database.module.stack.replica", "test.application.debug_box"},
+	}
+
+	for _, env := range []string{"dev", "staging", "sandbox", "production"} {
+		p := run(t, dir, "plan", env)
+		if p.ExitCode != 2 {
+			t.Fatalf("plan %s exit = %d:\n%s", env, p.ExitCode, p.combined())
+		}
+		if present := want[env][0]; present != "" && !strings.Contains(p.Stdout, present) {
+			t.Errorf("%s is missing %s:\n%s", env, present, p.Stdout)
+		}
+		// The absence half, per environment. Presence alone passes against a
+		// build that ignores the filters.
+		if absent := want[env][1]; absent != "" && strings.Contains(p.Stdout, absent) {
+			t.Errorf("%s still has %s, which is filtered out of it:\n%s", env, absent, p.Stdout)
+		}
+		// The module's own filter, driven by an input the caller supplied — the
+		// case §6.2 exists for.
+		hasReplica := strings.Contains(p.Stdout, "module.stack.replica")
+		if (env == "production") != hasReplica {
+			t.Errorf("%s: module replica present = %v, want %v", env, hasReplica, env == "production")
+		}
+		// Every environment keeps the unfiltered resources, or the filters are
+		// removing more than they were asked to.
+		for _, always := range []string{"test.network.net", "module.stack.primary"} {
+			if !strings.Contains(p.Stdout, always) {
+				t.Errorf("%s lost %s, which no filter mentions:\n%s", env, always, p.Stdout)
+			}
+		}
+
+		if a := run(t, dir, "apply", env, "--auto-approve"); a.ExitCode != 2 {
+			t.Fatalf("apply %s exit = %d:\n%s", env, a.ExitCode, a.combined())
+		}
+		if again := run(t, dir, "plan", env); again.ExitCode != 0 {
+			t.Errorf("%s does not converge; re-plan exit = %d:\n%s", env, again.ExitCode, again.combined())
+		}
+	}
+
+	// Four independent state files, holding different sets.
+	counts := map[string]int{}
+	for _, env := range []string{"dev", "staging", "sandbox", "production"} {
+		b, err := os.ReadFile(filepath.Join(dir, ".infra", "state", env+".json"))
+		if err != nil {
+			t.Fatalf("no state for %s: %v", env, err)
+		}
+		counts[env] = strings.Count(string(b), `"address"`)
+	}
+	if counts["dev"] == counts["production"] {
+		t.Errorf("dev and production hold the same number of resources (%d); the filters did "+
+			"nothing", counts["dev"])
+	}
+}
+
+// TestAddingSkipToAnAppliedResourceProposesDestroyingIt — the ruling, through
+// the binary. Editing a filter is a destructive act, deliberately.
+func TestAddingSkipToAnAppliedResourceProposesDestroyingIt(t *testing.T) {
+	const body = `
+project: MainApp
+environments:
+  dev: {}
+  staging: {}
+resources:
+  net:
+    type: test.network
+    cidr: 10.0.0.0/16
+  extra:
+    type: test.network
+    cidr: 10.1.0.0/16
+`
+	dir := project(t, body)
+	for _, env := range []string{"dev", "staging"} {
+		if r := run(t, dir, "apply", env, "--auto-approve"); r.ExitCode != 2 {
+			t.Fatalf("apply %s: %s", env, r.combined())
+		}
+	}
+
+	// Now retire `extra` from dev only.
+	patched := strings.Replace(body, `  extra:
+    type: test.network
+    cidr: 10.1.0.0/16
+`, `  extra:
+    type: test.network
+    cidr: 10.1.0.0/16
+    skip: [dev]
+`, 1)
+	if patched == body {
+		t.Fatal("the fixture did not change")
+	}
+	if err := os.WriteFile(filepath.Join(dir, "infra.yml"), []byte(patched), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	devPlan := run(t, dir, "plan", "dev")
+	if devPlan.ExitCode != 2 {
+		t.Fatalf("plan dev exit = %d, want 2 (a destroy):\n%s", devPlan.ExitCode, devPlan.combined())
+	}
+	requireContains(t, devPlan.Stdout, "1 to destroy")
+	requireContains(t, devPlan.Stdout, "test.network.extra")
+
+	// And staging is untouched — the filter named one environment.
+	if stagingPlan := run(t, dir, "plan", "staging"); stagingPlan.ExitCode != 0 {
+		t.Errorf("staging changed too; plan exit = %d, want 0:\n%s",
+			stagingPlan.ExitCode, stagingPlan.combined())
+	}
+}
+
+// TestAnEnvironmentTypeKeyFailsValidate — §13, withdrawn, through the binary.
+func TestAnEnvironmentTypeKeyFailsValidate(t *testing.T) {
+	dir := project(t, `
+project: MainApp
+environments:
+  production:
+    type: production
+resources:
+  net:
+    type: test.network
+    cidr: 10.0.0.0/16
+`)
+	r := run(t, dir, "validate")
+	if r.ExitCode == 0 {
+		t.Fatalf("`type:` in an environment must fail validate:\n%s", r.combined())
+	}
+	// It has to say what to use instead, or someone copying an older example is
+	// stuck (§44).
+	for _, want := range []string{"type", "variables"} {
+		if !strings.Contains(r.combined(), want) {
+			t.Errorf("the diagnostic does not mention %q:\n%s", want, r.combined())
+		}
+	}
+}

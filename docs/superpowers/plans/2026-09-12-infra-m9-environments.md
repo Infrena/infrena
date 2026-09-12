@@ -63,6 +63,8 @@ correction for the real reason, which is not the one written here first.
 
 ## Task 1: `${project}` as a process variable
 
+**Status: done** (`d75ce2d`).
+
 **Files:**
 - Modify: `internal/variables/resolve.go` (`ProcessVariables`), `internal/compiler/compile.go`
   (`seedProcessVariables`)
@@ -115,6 +117,8 @@ func TestAProjectVariableDeclaredByTheUserIsStillRefused(t *testing.T) { /* ... 
 ---
 
 ## Task 2: withdraw environment-class defaults
+
+**Status: done** (`cf4b76b`).
 
 **Files:**
 - Modify: `internal/compiler/schema.go` (delete `EnvironmentType`), `internal/cli/import.go`,
@@ -189,6 +193,9 @@ expects it to do something.
 
 ## Task 3: an environment is reachable if declared OR stateful
 
+**Status: done** (`1f86788`). The rule has THREE arms, not two — a project declaring no
+environments at all still plans with any name. Verifying the plan's own claim found that.
+
 **Files:**
 - Modify: `internal/environments/resolve.go`, `internal/compiler/compile.go`, `internal/cli/`
   (wherever "unknown environment" is produced)
@@ -241,6 +248,8 @@ func TestRefreshReachesARemovedEnvironment(t *testing.T) { /* ... */ }
 
 ## Task 4: decode `skip` and `only`
 
+**Status: done** (`0954839`).
+
 **Files:**
 - Modify: `internal/config/declarations.go`, `internal/config/decode.go`
 - Test: `internal/config/decode_test.go`
@@ -283,6 +292,8 @@ func TestSkipSurvivesInAModuleFile(t *testing.T) { /* ... */ }
 ---
 
 ## Task 5: resolve and mark
+
+**Status: done** (`b20ce39`).
 
 **Files:**
 - Modify: `internal/modules/expand.go`, `internal/modules/inputs.go`
@@ -346,6 +357,8 @@ the sabotage now fails it.
 
 ## Task 6: reference and `depends_on` to a skipped resource
 
+**Status: done** (`713f00c`, with Task 7).
+
 **Files:**
 - Modify: `internal/compiler/bind.go`
 - Test: `internal/compiler/skip_test.go`
@@ -383,6 +396,8 @@ func TestAReferenceToAGenuinelyMissingResourceStillSaysNoSuchResource(t *testing
 
 ## Task 7: drop before the planner, and destroy what was skipped
 
+**Status: done** (`713f00c`).
+
 **Files:**
 - Modify: `internal/compiler/compile.go`
 - Test: `internal/compiler/skip_test.go`, `tests/integration/m9_test.go`
@@ -415,6 +430,8 @@ func TestTheSameConfigurationPlansDifferentlyPerEnvironment(t *testing.T) { /* .
 ---
 
 ## Task 8: the whole thing through the binary
+
+**Status: done.** `tests/integration/m9_test.go`.
 
 **Files:** Create `tests/integration/m9_test.go` (or extend it, if earlier tasks started it).
 
