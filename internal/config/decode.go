@@ -15,7 +15,7 @@ import (
 // rather than stopping at the first.
 func Decode(files []File) (*ProjectDecl, diag.Diagnostics) {
 	var ds diag.Diagnostics
-	out := &ProjectDecl{VariableValues: map[string]value.Value{}}
+	out := &ProjectDecl{VariableValues: map[string]value.Value{}, ScopedValues: map[string]map[string]value.Value{}}
 
 	// Uniqueness is tracked across the whole decode rather than per file: spec
 	// §5.2 requires logical names be unique within a module, and M4 adds more
@@ -86,7 +86,7 @@ func Decode(files []File) (*ProjectDecl, diag.Diagnostics) {
 			// would -- globbing makes that easy to do by accident, and two
 			// declarations silently becoming one is what this language refuses
 			// everywhere else.
-			decodeResourcesFile(f.Path, doc, out, &ds, seenResources)
+			decodeResourcesFile(f.Path, f.Dir, doc, out, &ds, seenResources)
 		}
 	}
 
@@ -135,6 +135,23 @@ func topLevelShapeDetail(f File) string {
 // here, which is why this function chooses a destination instead of computing a
 // result.
 func decodeVarsFile(f File, doc *yaml.Node, out *ProjectDecl, ds *diag.Diagnostics, seenEnv map[string]int) {
+	if f.ScopeDir != "" {
+		// Scoped to one resources directory. No environment convention applies
+		// here — the directory already says who the values are for, and a
+		// filename convention on top would make
+		// resources/db/vars/production.yml ambiguous between "production's
+		// values for db" and "a file named production".
+		if _, ok := out.ScopedValues[f.ScopeDir]; !ok {
+			out.ScopedValues[f.ScopeDir] = map[string]value.Value{}
+		}
+		for i := 0; i+1 < len(doc.Content); i += 2 {
+			key, val := doc.Content[i], doc.Content[i+1]
+			v, _ := decodeValue(f.Path, "variable "+strconv.Quote(key.Value), val, ds)
+			out.ScopedValues[f.ScopeDir][key.Value] = retagSource(v, value.SourceVariable, value.ScopeUnset, "")
+		}
+		return
+	}
+
 	switch {
 	case f.Environment == "default":
 		decodeVariableValues(File{Path: f.Path, Kind: FileVariables, Root: f.Root}, out, ds)
@@ -193,12 +210,19 @@ func declaresEnvironment(out *ProjectDecl, name string) bool {
 // environments block in such a file is a mistake worth naming rather than
 // ignoring: it reads as though it would work, and silently doing nothing is how
 // a user spends an afternoon wondering why their environment has no effect.
-func decodeResourcesFile(path string, doc *yaml.Node, out *ProjectDecl, ds *diag.Diagnostics,
+func decodeResourcesFile(path, dir string, doc *yaml.Node, out *ProjectDecl, ds *diag.Diagnostics,
 	seenResources map[string]value.Origin) {
 	for i := 0; i+1 < len(doc.Content); i += 2 {
 		key, val := doc.Content[i], doc.Content[i+1]
 		if key.Value == "resources" {
+			before := len(out.Resources)
 			decodeResources(path, val, &out.Resources, ds, seenResources)
+			// Stamped here rather than inside decodeResources, which is shared
+			// with infra.yml and with module files and has no directory to
+			// speak of.
+			for i := before; i < len(out.Resources); i++ {
+				out.Resources[i].Dir = dir
+			}
 			continue
 		}
 		ds.Add(diag.Diagnostic{

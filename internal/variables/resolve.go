@@ -75,11 +75,17 @@ func (s *Scope) Override(name string, v value.Value) {
 // The rungs, lowest first — the last writer wins, and the loop never reverses:
 //
 //	ScopeBaseConfig          a schema's `default:`            SourceDefault
-//	ScopeBaseConfig          variables.yml                    SourceVariable
+//	ScopeBaseConfig          variables.yml and vars/**        SourceVariable
+//	ScopeScopedVars          resources/<dir>/vars/**          SourceVariable
 //	ScopeModuleDefault       — M5 fills this in
 //	ScopeEnvironmentInherit  inherited environment layers     SourceEnvironment
 //	ScopeEnvironmentVar      the selected environment         SourceEnvironment
 //	ScopeCLIOverride         --var-file, then --var            SourceVariable
+//
+// scoped is ONE resources directory's own vars/ (PLAN.md §4.1) — never a map of
+// every directory's. Which resources may see them is the caller's business;
+// this function only says what they beat. See the rung 2.5 pass for why they
+// need their own parameter rather than a third bucket inside files.
 //
 // files holds two precedence levels in one map, told apart by each entry's OWN
 // Scope rather than by a second parameter: variables.yml decodes at
@@ -120,14 +126,14 @@ func (s *Scope) Override(name string, v value.Value) {
 // validation keeps its winning value so later stages see a value of the right
 // shape rather than a hole, and the diagnostics are what make the compile fail.
 func Resolve(decls []config.VariableDecl, chain environments.Chain,
-	files map[string]value.Value, cliVars map[string]string,
+	files map[string]value.Value, scoped map[string]value.Value, cliVars map[string]string,
 ) (Scope, diag.Diagnostics) {
 	var ds diag.Diagnostics
 
 	schemas, schemaDiags := Schemas(decls, "variable")
 	ds.Extend(schemaDiags)
 
-	out := Scope{vars: make(map[string]value.Value, len(schemas)+len(files)+len(cliVars))}
+	out := Scope{vars: make(map[string]value.Value, len(schemas)+len(files)+len(scoped)+len(cliVars))}
 
 	// Rung 1: declared defaults.
 	for _, name := range sortedSchemaNames(schemas) {
@@ -152,6 +158,32 @@ func Resolve(decls []config.VariableDecl, chain environments.Chain,
 		out.vars[name] = files[name].
 			WithSource(value.SourceVariable).
 			WithScope(value.ScopeBaseConfig)
+	}
+
+	// Rung 2.5: resources/<dir>/vars/** — the variables one resources directory
+	// declares for itself (PLAN.md §4.1). They sit ABOVE base configuration,
+	// because a directory saying something about its own resources is more
+	// specific than the project saying it about all of them, and BELOW an
+	// environment, because a directory is how the project is ORGANISED while an
+	// environment is where it is DEPLOYED: if a directory outranked an
+	// environment, production could no longer tune a value a directory had set.
+	//
+	// A SEPARATE PARAMETER rather than another Scope-tagged bucket inside files,
+	// unlike the --var-file split below. files is keyed by name, so it holds at
+	// most one rung per name, and last-writer-wins between its two rungs is
+	// correct only because --var-file genuinely outranks variables.yml (see
+	// compiler.fileVars, which merges them in that order). A directory's value
+	// has to beat variables.yml AND lose to --var-file, and no single
+	// name-keyed map can say that about one name.
+	//
+	// Nothing here knows WHICH directory it is resolving: the caller runs stage
+	// 4 once per directory, each run seeing one directory's values. That is what
+	// keeps the scoping — which resources can see these — out of the ladder,
+	// which only ever answers what beats what.
+	for _, name := range sortedValueNames(scoped) {
+		out.vars[name] = scoped[name].
+			WithSource(value.SourceVariable).
+			WithScope(value.ScopeScopedVars)
 	}
 
 	// Rung 3 (ScopeModuleDefault) is M5's. The constant exists so M5 inserts a

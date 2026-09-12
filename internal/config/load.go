@@ -58,6 +58,17 @@ const VarsDirName = "vars"
 // apply destroys what was just adopted, which §26 forbids. §27.1.
 const DiscoveredDirName = "discovered"
 
+// ScopedVarsDirName is the directory inside a resources directory holding
+// variables visible only to the resources declared there (§4.1).
+const ScopedVarsDirName = "vars"
+
+// TemplatesDirName is reserved and unread (§4.1). It will hold text blobs
+// rendered into attributes, which needs a template language — `${}`
+// interpolation is deliberately not one (§10). Named now so the layout does not
+// change when the engine arrives, and skipped by the resources walk so a
+// project that already has one is not an error today.
+const TemplatesDirName = "templates"
+
 // FileKind says which of the three shapes a loaded file has. Stage 1 does not
 // read a file's contents — it is not permitted to touch yaml.Node — so this is
 // derived entirely from the path.
@@ -111,7 +122,16 @@ type File struct {
 	// Environment is the environment a FileEnvironment file configures, taken
 	// from its base name with the extension removed. Empty for other kinds.
 	Environment string
-	Root        *yaml.Node
+	// ScopeDir is the resources directory a scoped vars file belongs to, as a
+	// slash-separated path relative to the project — "database" for
+	// resources/database/vars/sizes.yml. Empty for everything else, which is
+	// what distinguishes a project-wide vars file from a scoped one (§4.1).
+	ScopeDir string
+	// Dir is the resources directory a FileResources file was declared in, in
+	// the same form, so a resource can be given the scope of the directory it
+	// came from. Empty for infra.yml and for discovered/.
+	Dir  string
+	Root *yaml.Node
 }
 
 // Load reads the project file, the optional variables file, and every
@@ -168,7 +188,60 @@ func Load(dir string) ([]File, error) {
 		}
 		files = append(files, found...)
 	}
-	return files, nil
+
+	scoped, err := walkScopedVars(filepath.Join(dir, ResourcesDirName))
+	if err != nil {
+		return nil, err
+	}
+	return append(files, scoped...), nil
+}
+
+// walkScopedVars reads every resources/<dir>/vars/**.yml (§4.1).
+//
+// A separate pass rather than a flag on walkConventionalDir, because these
+// files are a different KIND with a different meaning: the resources walk skips
+// vars/ entirely, and this one reads only vars/. Threading a mode through one
+// walk would make each file's kind depend on where the walk happened to be.
+//
+// The scope is the resources directory that OWNS the vars directory, not the
+// vars directory itself: resources/database/vars/sizes.yml is scoped to
+// "database", which is the string a resource file in that directory records as
+// its own Dir.
+func walkScopedVars(resourcesRoot string) ([]File, error) {
+	var out []File
+	err := filepath.WalkDir(resourcesRoot, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !d.IsDir() || filepath.Base(p) != ScopedVarsDirName || p == resourcesRoot {
+			return nil
+		}
+		owner, err := filepath.Rel(resourcesRoot, filepath.Dir(p))
+		if err != nil {
+			return err
+		}
+		found, err := walkConventionalDir(p, FileVars)
+		if err != nil {
+			return err
+		}
+		for i := range found {
+			// A scoped file's filename never names an environment: the
+			// directory already says who it is for, and a second convention on
+			// top would make resources/db/vars/production.yml ambiguous between
+			// "production's values for db" and "a file called production".
+			found[i].Environment = ""
+			found[i].ScopeDir = filepath.ToSlash(owner)
+			out = append(out, found[i])
+		}
+		return nil
+	})
+	if err != nil {
+		if os.IsNotExist(err) || errors.Is(err, syscall.ENOTDIR) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return out, nil
 }
 
 // walkConventionalDir reads every .yml file under root, recursively.
@@ -192,6 +265,16 @@ func walkConventionalDir(root string, kind FileKind) ([]File, error) {
 			return err
 		}
 		if d.IsDir() {
+			// vars/ and templates/ inside a resources directory are not
+			// resource files. Without this the recursive walk reads
+			// resources/db/vars/sizes.yml as a resources file and rejects
+			// every variable in it — measured, before the skip existed.
+			if p != root {
+				switch filepath.Base(p) {
+				case ScopedVarsDirName, TemplatesDirName:
+					return fs.SkipDir
+				}
+			}
 			return nil
 		}
 		// .yml only. A README, a .gitkeep or an editor backup is an ordinary
@@ -241,9 +324,19 @@ func walkConventionalDir(root string, kind FileKind) ([]File, error) {
 		if err != nil {
 			return nil, err
 		}
-		if found {
-			out = append(out, f)
+		if !found {
+			continue
 		}
+		if kind == FileResources {
+			// The directory this resource was declared in, so stage 4 can give
+			// it that directory's scope. Relative to the resources root and
+			// slash-separated, so it is the same string on every platform and
+			// the same string a scoped vars file computes for itself.
+			if rel, err := filepath.Rel(root, filepath.Dir(p)); err == nil && rel != "." {
+				f.Dir = filepath.ToSlash(rel)
+			}
+		}
+		out = append(out, f)
 	}
 	return out, nil
 }

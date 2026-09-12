@@ -30,12 +30,57 @@ type Scope struct {
 	// three process variables, or the project's whole variable scope at the
 	// root.
 	Vars variables.Scope
+	// dirVars is stage 4's per-directory scopes, keyed by config.ResourceDecl.Dir
+	// — resources/<dir>/vars/** (PLAN.md §4.1). Set on the ROOT scope only: a
+	// module sees its own inputs and the process variables and nothing else
+	// (PLAN.md §11.3), so a directory's variables stop at the module boundary
+	// exactly as the project's do.
+	//
+	// Read through In, never directly. Nil for a project with no scoped
+	// variables, which is every project that does not use the feature.
+	dirVars map[string]variables.Scope
 	// names is what a bare name in ${name.attr} binds to at this level:
 	// either a plain resource or a module call, each addressed once
 	// expansion is done. Filled only while expanding, by bind (outputs.go),
 	// and read through Lookup, Names and Qualify — never touched outside this
 	// package.
+	//
+	// SHARED by every scope In returns for this level — see In for why that
+	// sharing is the point rather than an accident.
 	names map[string]Binding
+}
+
+// In narrows s to the resources directory dir, which is what a resource
+// declared in resources/<dir>/ evaluates its attributes against: the same
+// level, with that directory's own variables (PLAN.md §4.1). dir is
+// config.ResourceDecl.Dir; an empty one, or one with no vars/ of its own,
+// gets s unchanged.
+//
+// The returned scope SHARES s's binding table rather than copying it, and that
+// is the whole reason this is a narrowing rather than a separate scope per
+// directory. Bindings are what `${db.id}` resolves through, and they are
+// level-scoped, not directory-scoped: a resource in resources/app/ referring to
+// one declared in resources/db/ is an ordinary sibling reference, because
+// nothing about a resource's ADDRESS depends on which directory declared it
+// (config.ResourceDecl.Dir is deliberately not part of identity). Give each
+// directory its own table and that reference stops resolving — and it fails as
+// "no such resource", which reads like the resource is missing rather than like
+// the directories were walled off from each other.
+//
+// Sharing a map only works if the map exists, which is why both places that
+// build a level's Scope now allocate names EAGERLY. bind still allocates
+// lazily, for a Scope built by hand in a test, but on the walk's own scopes
+// that guard never fires. Were it the only allocation, a narrowing taken
+// before the first bind — evaluateCall does exactly that, at a level whose
+// resources are all module calls — would capture nil, and every later binding
+// would land on the level's map where the narrowed copy could not see it.
+// TestAResourceCanReferToOneInAnotherDirectory is what notices.
+func (s *Scope) In(dir string) *Scope {
+	vars, ok := s.dirVars[dir]
+	if !ok {
+		return s
+	}
+	return &Scope{Module: s.Module, Vars: vars, dirVars: s.dirVars, names: s.names}
 }
 
 // Variable satisfies half of expressions.Scope.
@@ -61,7 +106,7 @@ func (w *walker) moduleScope(
 	r *config.ResourceDecl, lv level, caller *Scope,
 	supplied map[string]value.Value, module []string,
 ) *Scope {
-	inner := &Scope{Module: module}
+	inner := &Scope{Module: module, names: map[string]Binding{}}
 
 	// The three facts about the invocation cross every module boundary, each
 	// copied as-is, keeping the provenance the compiler stamped. A module that
