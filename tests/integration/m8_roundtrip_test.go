@@ -30,8 +30,7 @@ const preexistingCloud = `{"resources":{
 const emptyProject = `
 project: adopted
 environments:
-  dev:
-    type: development
+  dev: {}
 `
 
 // roundTripProject writes a project with no resources at all and a cloud full

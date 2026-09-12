@@ -29,7 +29,7 @@ func provInt(n int64) value.Value {
 }
 
 func devContext() schema.DefaultContext {
-	return schema.DefaultContext{Environment: "dev", EnvironmentType: "development", Project: "p"}
+	return schema.DefaultContext{Environment: "dev", Project: "p"}
 }
 
 // oneFile renders and returns the single file generated, failing if there is
@@ -53,7 +53,7 @@ func TestGenerationOmitsWhatADefaultAlreadyProvides(t *testing.T) {
 		Name: "orders", Type: "test.database", ProviderID: "db-9",
 		Attributes: map[string]value.Value{
 			"engine": prov("postgres"),
-			// 10 is test.database's default outside production.
+			// 10 is test.database's default.
 			"size": provInt(10),
 		},
 	}}, devContext())
@@ -69,30 +69,15 @@ func TestGenerationOmitsWhatADefaultAlreadyProvides(t *testing.T) {
 	}
 }
 
-// TestADefaultIsJudgedInTheRightEnvironment. test.database's size default is
-// 100 in production and 10 elsewhere, so the same discovered resource generates
-// differently depending on where it was imported from.
+// TestADefaultIsJudgedInTheRightEnvironment was here until M9 withdrew PLAN.md
+// §13. It asserted that the same discovered `size: 100` was omitted when
+// importing into production and emitted elsewhere, because the default differed.
+// A default no longer varies, so the two environments no longer differ and the
+// test has nothing left to distinguish.
 //
-// Both directions, because one alone cannot tell a context-aware comparison
-// from a hard-coded constant.
-func TestADefaultIsJudgedInTheRightEnvironment(t *testing.T) {
-	r := []Resource{{
-		Name: "orders", Type: "test.database", ProviderID: "db-9",
-		Attributes: map[string]value.Value{"engine": prov("postgres"), "size": provInt(100)},
-	}}
-
-	prod := string(oneFile(t, r, schema.DefaultContext{
-		Environment: "production", EnvironmentType: "production", Project: "p",
-	}).Bytes)
-	if strings.Contains(prod, "size:") {
-		t.Errorf("size 100 IS the production default and must be omitted there:\n%s", prod)
-	}
-
-	dev := string(oneFile(t, r, devContext()).Bytes)
-	if !strings.Contains(dev, "size: 100") {
-		t.Errorf("size 100 is not the development default (10) and must be emitted there:\n%s", dev)
-	}
-}
+// What survives is the rung itself, covered by
+// TestGenerationOmitsWhatADefaultAlreadyProvides: a value equal to THE default
+// is omitted.
 
 // TestGenerationOmitsASensitiveAttributeAndSaysSo is THE hazard of this
 // milestone. A generated file is destined for version control, and a secret
@@ -246,7 +231,7 @@ func TestGeneratedConfigurationParsesBackAndPlansClean(t *testing.T) {
 
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "infra.yml"),
-		[]byte("project: p\nenvironments:\n  dev:\n    type: development\n"), 0o644); err != nil {
+		[]byte("project: p\nenvironments:\n  dev: {}\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	discovered := filepath.Join(dir, config.DiscoveredDirName)

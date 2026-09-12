@@ -110,32 +110,21 @@ func section(w io.Writer, title string, names []string, def *schema.ResourceDefi
 
 // describeDefault renders an attribute's default.
 //
-// A default is a FUNCTION of the environment, not a value — test.database's
-// size is 100 in production and 10 everywhere else. Printing one number would
-// be true in one environment and a lie in the other, so this probes both and
-// says so when they differ. §30's example shows a bare `default: 1`, which is
-// only honest for a default that does not vary.
+// ONE value, stated once. Until M9 this probed two DefaultContexts and rendered
+// "default: 10, or 100 in production", because a default was a function of the
+// environment. PLAN.md §13 withdraws that: a provider default is a single value
+// per attribute, and anything that should differ between environments is a
+// variable the reader can see in the configuration. The whole reason this
+// function was complicated is gone with it.
 func describeDefault(a schema.Attribute, typ string) string {
 	if a.Default == nil {
 		return ""
 	}
-	base := schema.DefaultContext{EnvironmentType: "development", Type: typ}
-	prod := schema.DefaultContext{EnvironmentType: "production", Type: typ}
-
-	dv, dok := a.Default(base)
-	pv, pok := a.Default(prod)
-	switch {
-	case !dok && !pok:
+	v, ok := a.Default(schema.DefaultContext{Type: typ})
+	if !ok {
 		return ""
-	case dok && pok && fmt.Sprint(dv) == fmt.Sprint(pv):
-		return fmt.Sprintf("default: %v", dv)
-	case dok && pok:
-		return fmt.Sprintf("default: %v, or %v in production", dv, pv)
-	case pok:
-		return fmt.Sprintf("default: %v in production only", pv)
-	default:
-		return fmt.Sprintf("default: %v outside production", dv)
 	}
+	return fmt.Sprintf("default: %v", v)
 }
 
 func capabilities(c schema.Capabilities) []string {

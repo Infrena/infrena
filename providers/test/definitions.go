@@ -27,12 +27,11 @@ func definitions() []*schema.ResourceDefinition {
 			Description: "A fake database. Requires a network.",
 			Attributes: map[string]schema.Attribute{
 				"engine": {Kind: value.KindString, Required: true, ForceNew: true, Description: "Database engine"},
-				"size": {Kind: value.KindInt, Description: "Storage in GB", Default: func(c schema.DefaultContext) (any, bool) {
-					if c.EnvironmentType == "production" {
-						return int64(100), true
-					}
-					return int64(10), true
-				}},
+				// ONE value, not a function of the environment. PLAN.md §13 is
+				// withdrawn: anything that should differ between environments is
+				// a variable, which a reader can see in the configuration.
+				"size": {Kind: value.KindInt, Description: "Storage in GB",
+					Default: func(schema.DefaultContext) (any, bool) { return int64(10), true }},
 				"password": {Kind: value.KindString, Sensitive: true, Description: "Administrator password"},
 				"network":  {Kind: value.KindString, Description: "Network this database sits in"},
 				// A composite attribute is deliberately present: without one,

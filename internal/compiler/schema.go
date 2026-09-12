@@ -251,43 +251,20 @@ func markSensitive(attrs map[string]value.Value, def *schema.ResourceDefinition)
 // environment, region, account, project and type — never another resource's
 // attributes, so a default can never depend on an unknown.
 //
-// Environment and EnvironmentType come from opts, not cfg. In practice the two
-// agree — bindReferences (stage 6) sets ResolvedConfig.Environment from the
-// same Options.Environment — but opts is the explicit signal bindSchemas was
-// handed for this purpose, and Options is what carries Region and Account too;
-// reading Environment from a different input than its siblings is the kind of
+// Environment comes from opts, not cfg. In practice the two agree —
+// bindReferences (stage 6) sets ResolvedConfig.Environment from the same
+// Options.Environment — but opts is the explicit signal bindSchemas was handed
+// for this purpose, and Options is what carries Region and Account too; reading
+// Environment from a different input than its siblings is the kind of
 // inconsistency that drifts silently.
 func defaultContextFor(cfg *ResolvedConfig, resourceType string, opts Options) schema.DefaultContext {
 	return schema.DefaultContext{
-		Environment:     opts.Environment,
-		EnvironmentType: EnvironmentType(opts.Environment),
-		Region:          opts.Region,
-		Account:         opts.Account,
-		Project:         cfg.Project,
-		Type:            resourceType,
+		Environment: opts.Environment,
+		Region:      opts.Region,
+		Account:     opts.Account,
+		Project:     cfg.Project,
+		Type:        resourceType,
 	}
-}
-
-// EnvironmentType classifies an environment for default resolution.
-//
-// Exported so internal/cli's `import` judges a discovered value against the
-// SAME context the compiler will use when it later reads the generated file. If
-// the two disagreed, generation would omit an attribute as "equal to its
-// default" that the compiler then fills with something else, and the resource
-// would change on the first apply after an import that reported no changes.
-//
-// KNOWN GAP, pre-dating M8: this reads the environment's NAME, and an
-// environment's declared `type:` is not consulted at all. `staging` declared
-// `type: production` gets development defaults, and `production` declared
-// `type: development` gets production ones. The comment here used to say
-// explicit declaration arrives with M4; M4 shipped and this was never wired.
-// Fixing it means threading the declared type through Options, and it changes
-// what existing projects plan — so it is recorded rather than done in passing.
-func EnvironmentType(name string) string {
-	if name == "production" || name == "prod" {
-		return "production"
-	}
-	return name
 }
 
 // attributeNames returns a definition's attribute names in sorted order, for

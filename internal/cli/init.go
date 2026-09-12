@@ -46,16 +46,14 @@ func scaffoldFiles() map[string]string {
 	return map[string]string{
 		config.ProjectFileName: `project: my-project
 
-# Environments are first-class: each has its own state and its own lock.
-# ` + "`type`" + ` drives provider defaults — a production environment gets
-# production-shaped defaults without saying so at every resource.
+# Environments are first-class: each has its own state and its own lock. Add as
+# many as you like — they hold the same infrastructure and differ only in what
+# their variables say.
 environments:
 
-  dev:
-    type: development
+  dev: {}
 
-  production:
-    type: production
+  production: {}
 
 resources:
 

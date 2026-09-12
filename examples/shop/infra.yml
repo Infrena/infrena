@@ -5,10 +5,8 @@ variables:
     type: string
 
 environments:
-  dev:
-    type: development
-  production:
-    type: production
+  dev: {}
+  production: {}
 
 modules:
   - ./modules/app-stack

@@ -513,3 +513,35 @@ resources:
 		}
 	}
 }
+
+// TestAnEnvironmentTypeKeyIsRefused — PLAN.md §13, withdrawn.
+//
+// Refused rather than ignored, and that distinction is the whole point. Every
+// other key in an environment block becomes a variable override, so leaving
+// `type:` alone does not make it inert: it silently declares a VARIABLE named
+// `type`, which is exactly what it did for seven milestones while the scaffold
+// told users it drove provider defaults.
+func TestAnEnvironmentTypeKeyIsRefused(t *testing.T) {
+	files := writeConfig(t, "project: p\nenvironments:\n  production:\n    type: production\n")
+	_, ds := Decode(files)
+	if !ds.HasErrors() {
+		t.Fatal("`type:` in an environment must be refused, not accepted as a variable")
+	}
+	out := render(t, ds)
+	// The message has to say what to do instead, or a user who copied it from an
+	// older example has nowhere to go (§44).
+	for _, want := range []string{"type", "variables", "§38"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the diagnostic does not mention %q:\n%s", want, out)
+		}
+	}
+	// And it must NOT have quietly become a variable as well as being reported.
+	decl, _ := Decode(files)
+	for _, e := range decl.Environments {
+		for _, o := range e.Overrides {
+			if o.Name == "type" {
+				t.Error("`type` was reported AND applied as a variable override")
+			}
+		}
+	}
+}

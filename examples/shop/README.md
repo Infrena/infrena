@@ -92,8 +92,11 @@ Error: undefined variable "size"
 ```
 
 **A production apply.** `infrata plan production` takes `db_password` from
-`vars/production.yml`, and `test.database`'s size default is 100 there rather than 10 —
-`infrata explain test.database` says so.
+`vars/production.yml` and leaves everything else exactly as `dev` has it. That is the point:
+environments hold the same infrastructure and differ only in what their variables say. If you
+want production to differ in some other way, set that value in `vars/production.yml` too —
+there is no second, hidden mechanism that changes behaviour because an environment is called
+"production".
 
 ## What the module boundary refuses
 

@@ -10,7 +10,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/infrata/infrata/internal/compiler"
 	"github.com/infrata/infrata/internal/config"
 	"github.com/infrata/infrata/internal/discovery"
 	"github.com/infrata/infrata/internal/generator"
@@ -191,14 +190,7 @@ func selectForImport(ctx context.Context, reg *registry.Registry, selectors []st
 func writeGenerated(dir string, selected []discovery.Result, reg *registry.Registry, environment string) ([]string, error) {
 	ctx := schema.DefaultContext{
 		Environment: environment,
-		// The compiler's own classifier, not a second opinion. Generation
-		// decides what to OMIT by comparing against a default; the compiler
-		// then fills that default back in when it reads the generated file. Two
-		// rules here would mean omitting an attribute the compiler replaces
-		// with something else — a resource that changes on the first apply
-		// after an import that reported no changes.
-		EnvironmentType: compiler.EnvironmentType(environment),
-		Project:         projectName(dir),
+		Project:     projectName(dir),
 	}
 
 	resources := make([]generator.Resource, 0, len(selected))
