@@ -540,3 +540,76 @@ func TestANonYamlFileInAConventionalDirectoryIsIgnored(t *testing.T) {
 		}
 	}
 }
+
+// TestTheSameResourceInTwoFilesIsAnError. Globbing makes accidental duplication easy in a way a
+// single file does not, and silently taking one is how a user deploys something they did not
+// write. The diagnostic must name BOTH paths: one alone leaves the reader hunting for the other.
+func TestTheSameResourceInTwoFilesIsAnError(t *testing.T) {
+	dir := writeTree(t, map[string]string{
+		"infra.yml":         "project: p\n",
+		"resources/a/x.yml": "resources:\n  store:\n    type: test.network\n    cidr: 10.0.0.0/16\n",
+		"resources/b/y.yml": "resources:\n  store:\n    type: test.network\n    cidr: 10.9.0.0/16\n",
+	})
+	files, err := Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, ds := Decode(files)
+	if !ds.HasErrors() {
+		t.Fatal("the same resource declared in two files must be an error")
+	}
+	var rendered strings.Builder
+	ds.Render(&rendered)
+	got := rendered.String()
+	for _, want := range []string{"x.yml", "y.yml", "store"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("the diagnostic does not name %q; a reader cannot find the other declaration:\n%s", want, got)
+		}
+	}
+}
+
+// TestADuplicateAcrossFilesHaltsCompilation is why "first one wins" is safe here rather than
+// merely tolerable.
+//
+// Decode keeps the FIRST declaration and reports the second, so one survivor reaches
+// ProjectDecl. That is only acceptable because the error stops compilation before anything acts
+// on it — assert that, rather than asserting the survivor count, because the count is an
+// implementation detail and the halt is the property.
+func TestADuplicateAcrossFilesHaltsCompilation(t *testing.T) {
+	dir := writeTree(t, map[string]string{
+		"infra.yml":       "project: p\n",
+		"resources/a.yml": "resources:\n  store:\n    type: test.network\n    cidr: 10.0.0.0/16\n",
+		"resources/b.yml": "resources:\n  store:\n    type: test.network\n    cidr: 10.9.0.0/16\n",
+	})
+	files, _ := Load(dir)
+	_, ds := Decode(files)
+	if !ds.HasErrors() {
+		t.Fatal("a duplicate must be an error, which is what stops a survivor being used")
+	}
+}
+
+// TestTwoModulesMayEachDeclareTheSameName is the boundary, and M5 depends on it: two
+// instantiations of one module, or two different modules each with a `db`, are two resources.
+// The seen map must be per-LEVEL, not global — a global one would make this a collision and
+// break modules entirely.
+func TestTwoModulesMayEachDeclareTheSameName(t *testing.T) {
+	dir := writeTree(t, map[string]string{
+		"infra.yml":         "project: p\n",
+		"resources/top.yml": "resources:\n  db:\n    type: test.network\n    cidr: 10.0.0.0/16\n",
+		"m/module.yml":      "resources:\n  db:\n    type: test.network\n    cidr: 10.1.0.0/16\n",
+	})
+	files, err := Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ds := Decode(files); ds.HasErrors() {
+		t.Errorf("a project resource and a module resource sharing a name must not collide: %+v", ds)
+	}
+	mf, err := LoadModule(filepath.Join(dir, "m"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ds := DecodeModule(mf); ds.HasErrors() {
+		t.Errorf("the module's own `db` must decode: %+v", ds)
+	}
+}
