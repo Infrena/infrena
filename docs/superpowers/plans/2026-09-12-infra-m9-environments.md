@@ -432,3 +432,49 @@ Three things this plan asserts that the implementer should verify rather than tr
    being two code paths. `fanOut` in `internal/modules` is the one to read.
 3. **`seedProcessVariables` does not currently see the project name.** Task 1 says pass it as a
    parameter. If `Options` already carries something equivalent, prefer that and say so.
+
+---
+
+## Found during Task 1 — a blocker for M10, not for M9
+
+M10's `provider:` block was designed around this shape:
+
+```yaml
+# the sketch that was approved
+tags:
+  environment: ${environment}
+  project: ${project}
+```
+
+**It cannot work as written, for two independent reasons, both verified against
+the binary:**
+
+1. **A variable value may not contain an interpolation at all.** Not in
+   `variables.yml`, not in an environment block, not even as a scalar:
+   `Error: variable "tags" contains an interpolation — variables.yml is resolved
+   before any expression scope exists, so ${...} here has nothing to refer to.`
+   That is a layering fact, not an oversight.
+2. **Interpolation inside a map is not supported anywhere**, including in a
+   resource attribute: `Error: interpolation inside a map is not supported —
+   expressions may appear in string values only.`
+
+So M10 needs one new capability before the provider block is writable:
+**interpolation inside a composite value.** With that, and variables staying
+literal, the design works with the interpolation moved into the block itself:
+
+```yaml
+provider:
+  test:
+    tags:
+      environment: ${environment}   # a process variable
+      project: ${project}          # ditto, added by Task 1
+      tier: ${tier}                # an ordinary LITERAL variable, per environment
+```
+
+Per-environment variation then comes from literal variables referenced inside
+the map, which keeps variables literal and needs no change to when they resolve.
+The alternative — allowing interpolation in variable values — means resolving
+variables in dependency order, which is a much larger language change and one
+the existing diagnostic argues against.
+
+None of this blocks M9. Recorded here because it was found here.
