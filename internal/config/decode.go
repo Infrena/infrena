@@ -15,7 +15,7 @@ import (
 // rather than stopping at the first.
 func Decode(files []File) (*ProjectDecl, diag.Diagnostics) {
 	var ds diag.Diagnostics
-	out := &ProjectDecl{VariableValues: map[string]value.Value{}}
+	out := &ProjectDecl{VariableValues: map[string]value.Value{}, ScopedValues: map[string]map[string]value.Value{}}
 
 	// Uniqueness is tracked across the whole decode rather than per file: spec
 	// §5.2 requires logical names be unique within a module, and M4 adds more
@@ -76,6 +76,17 @@ func Decode(files []File) (*ProjectDecl, diag.Diagnostics) {
 			decodeVariableValues(f, out, &ds)
 		case FileEnvironment:
 			decodeEnvironmentBody(f.Path, f.Environment, doc, out, &ds, seenEnvironments)
+		case FileVars:
+			decodeVarsFile(f, doc, out, &ds, seenEnvironments)
+		case FileResources:
+			// A file under resources/** or discovered/** carries a `resources:`
+			// block and means exactly what the same block in infra.yml means
+			// (§4.1). It goes through decodeResources with the SAME seen map, so
+			// a name declared in two files collides exactly as two in one file
+			// would -- globbing makes that easy to do by accident, and two
+			// declarations silently becoming one is what this language refuses
+			// everywhere else.
+			decodeResourcesFile(f.Path, f.Dir, doc, out, &ds, seenResources)
 		}
 	}
 
@@ -105,6 +116,124 @@ func topLevelShapeDetail(f File) string {
 		return "The top level of " + ModuleFileName + " must be a set of keys such as `inputs`, `resources` and `outputs`."
 	default:
 		return "The top level of " + ProjectFileName + " must be a set of keys such as `project` and `resources`."
+	}
+}
+
+// decodeVarsFile decodes one file from vars/** (§4.1).
+//
+// Three shapes, and the filename chooses between them:
+//
+//   - default.yml            every environment; base configuration
+//   - <declared-env>.yml     that environment only
+//   - anything else          bare keys are defaults, keys naming an
+//     environment are that environment's overrides
+//
+// A file naming an environment is a set of DIFFERENCES, not a replacement:
+// default.yml setting size and region while production.yml sets only size
+// leaves production with default's region. That falls out of routing the two
+// into the existing base-config and environment rungs rather than merging them
+// here, which is why this function chooses a destination instead of computing a
+// result.
+func decodeVarsFile(f File, doc *yaml.Node, out *ProjectDecl, ds *diag.Diagnostics, seenEnv map[string]int) {
+	if f.ScopeDir != "" {
+		// Scoped to one resources directory. No environment convention applies
+		// here — the directory already says who the values are for, and a
+		// filename convention on top would make
+		// resources/db/vars/production.yml ambiguous between "production's
+		// values for db" and "a file named production".
+		if _, ok := out.ScopedValues[f.ScopeDir]; !ok {
+			out.ScopedValues[f.ScopeDir] = map[string]value.Value{}
+		}
+		for i := 0; i+1 < len(doc.Content); i += 2 {
+			key, val := doc.Content[i], doc.Content[i+1]
+			v, _ := decodeValue(f.Path, "variable "+strconv.Quote(key.Value), val, ds)
+			out.ScopedValues[f.ScopeDir][key.Value] = retagSource(v, value.SourceVariable, value.ScopeUnset, "")
+		}
+		return
+	}
+
+	switch {
+	case f.Environment == "default":
+		decodeVariableValues(File{Path: f.Path, Kind: FileVariables, Root: f.Root}, out, ds)
+		return
+	case f.Environment != "" && declaresEnvironment(out, f.Environment):
+		decodeEnvironmentBody(f.Path, f.Environment, doc, out, ds, seenEnv)
+		return
+	}
+
+	// The in-file form. A top-level key is an environment block ONLY if it
+	// names a declared environment; anything else is a variable, whatever shape
+	// its value has. Reinterpreting a map-valued variable as a block would make
+	// a file's meaning depend on its value's shape, and a map is an ordinary
+	// variable value here.
+	for i := 0; i+1 < len(doc.Content); i += 2 {
+		key, val := doc.Content[i], doc.Content[i+1]
+		if !declaresEnvironment(out, key.Value) {
+			v, _ := decodeValue(f.Path, "variable "+strconv.Quote(key.Value), val, ds)
+			out.VariableValues[key.Value] = retagSource(v, value.SourceVariable, value.ScopeUnset, "")
+			continue
+		}
+		if val.Kind != yaml.MappingNode {
+			// A variable that happens to share a name with an environment. An
+			// error rather than a guess, because the alternative is that adding
+			// an environment months later silently changes what this file means
+			// without anyone touching it.
+			ds.Add(diag.Diagnostic{
+				Severity: diag.SeverityError,
+				Summary:  "variable " + strconv.Quote(key.Value) + " collides with the environment of that name",
+				Detail: "A top-level key naming a declared environment is that environment's overrides, so " +
+					strconv.Quote(key.Value) + " cannot also be a variable here.",
+				Action: "Rename the variable, or set it under an environment block.",
+				Origin: originOf(f.Path, key),
+			})
+			continue
+		}
+		decodeEnvironmentBody(f.Path, key.Value, val, out, ds, seenEnv)
+	}
+}
+
+// declaresEnvironment reports whether name is an environment the project
+// declares. Vars files are decoded after infra.yml and environments/, so the
+// set is complete by the time this is asked.
+func declaresEnvironment(out *ProjectDecl, name string) bool {
+	for i := range out.Environments {
+		if out.Environments[i].Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+// decodeResourcesFile decodes one file from resources/** or discovered/**.
+//
+// Its top level holds `resources:` and nothing else. A `project:` key or an
+// environments block in such a file is a mistake worth naming rather than
+// ignoring: it reads as though it would work, and silently doing nothing is how
+// a user spends an afternoon wondering why their environment has no effect.
+func decodeResourcesFile(path, dir string, doc *yaml.Node, out *ProjectDecl, ds *diag.Diagnostics,
+	seenResources map[string]value.Origin) {
+	for i := 0; i+1 < len(doc.Content); i += 2 {
+		key, val := doc.Content[i], doc.Content[i+1]
+		if key.Value == "resources" {
+			before := len(out.Resources)
+			decodeResources(path, val, &out.Resources, ds, seenResources)
+			// Stamped here rather than inside decodeResources, which is shared
+			// with infra.yml and with module files and has no directory to
+			// speak of.
+			for i := before; i < len(out.Resources); i++ {
+				out.Resources[i].Dir = dir
+			}
+			continue
+		}
+		ds.Add(diag.Diagnostic{
+			Severity: diag.SeverityError,
+			Summary:  "unexpected key " + strconv.Quote(key.Value) + " in a resources file",
+			Detail: "A file under " + ResourcesDirName + "/ or " + DiscoveredDirName +
+				"/ holds `resources:` and nothing else. Variables belong in " + VarsDirName +
+				"/, and environments in " + EnvironmentsDirName + "/.",
+			Action: "Move " + strconv.Quote(key.Value) + " to the file that owns it, or remove it.",
+			Origin: originOf(path, key),
+		})
 	}
 }
 

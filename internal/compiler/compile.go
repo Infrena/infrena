@@ -1,6 +1,9 @@
 package compiler
 
 import (
+	"sort"
+	"strconv"
+
 	"github.com/infrata/infrata/internal/config"
 	"github.com/infrata/infrata/internal/diag"
 	"github.com/infrata/infrata/internal/environments"
@@ -97,7 +100,8 @@ func Compile(files []config.File, reg *registry.Registry, opts Options) (Resolve
 		return ResolvedConfig{}, ds
 	}
 
-	scope, varDiags := variables.Resolve(project.Variables, chain, fileVars(project, opts), opts.Vars)
+	fileValues := fileVars(project, opts)
+	scope, varDiags := variables.Resolve(project.Variables, chain, fileValues, nil, opts.Vars)
 	ds.Extend(varDiags)
 	seedProcessVariables(&scope, opts)
 	if varDiags.HasErrors() {
@@ -107,7 +111,16 @@ func Compile(files []config.File, reg *registry.Registry, opts Options) (Resolve
 		return ResolvedConfig{}, ds
 	}
 
-	expansion, moduleDiags := modules.Expand(project, scope, opts.Dir, source.NewCache(opts.Dir))
+	dirScopes, dirDiags := directoryScopes(project, chain, opts, fileValues, varDiags)
+	ds.Extend(dirDiags)
+	if dirDiags.HasErrors() {
+		// Same reason as the project-wide run above: a directory whose own
+		// variable is out of bounds would otherwise be reported once here and
+		// again at every use site inside that directory.
+		return ResolvedConfig{}, ds
+	}
+
+	expansion, moduleDiags := modules.Expand(project, scope, dirScopes, opts.Dir, source.NewCache(opts.Dir))
 	ds.Extend(moduleDiags)
 	if moduleDiags.HasErrors() {
 		// This halt suppresses ALL of stage 6, including diagnostics with
@@ -196,6 +209,82 @@ func fileVars(project *config.ProjectDecl, opts Options) map[string]value.Value 
 	for name, v := range opts.FileVars {
 		out[name] = v
 	}
+	return out
+}
+
+// directoryScopes runs stage 4 once more for each resources directory that
+// declares its own vars/ (PLAN.md §4.1), with that directory's values on §7's
+// directory rung.
+//
+// ONE RUN PER DIRECTORY rather than one ladder that branches, because the
+// ladder IS the precedence rule and there must be exactly one of it (spec
+// §7.1). A directory's scope differs from the project's only in what sits on
+// rung 2.5, but every rung ABOVE it has to be re-applied on top: without that,
+// a --var would stop winning inside any directory that happened to set the
+// same name, which is the one rung PLAN.md §7 says no file outranks.
+//
+// baseDiags is what the project-wide run already reported, and it is
+// SUBTRACTED from each directory's run. Every rung but the directory's own is
+// identical between the runs — same declarations, same variables.yml, same
+// environment chain, same command line — so a single project-wide mistake
+// would otherwise be reported once per directory that declares any variable at
+// all. What survives the subtraction is exactly what this directory's own files
+// caused: an identical message is the same mistake told again, and a message
+// that differs (the bound violated by a different value, from a different file)
+// is a different one.
+//
+// Returns nil when no directory declares variables, which is the common case
+// and keeps the whole feature off the path of a project that does not use it.
+func directoryScopes(
+	project *config.ProjectDecl, chain environments.Chain, opts Options,
+	files map[string]value.Value, baseDiags diag.Diagnostics,
+) (map[string]variables.Scope, diag.Diagnostics) {
+	if len(project.ScopedValues) == 0 {
+		return nil, nil
+	}
+
+	reported := make(map[string]bool, len(baseDiags))
+	for _, d := range baseDiags {
+		reported[diagKey(d)] = true
+	}
+
+	var ds diag.Diagnostics
+	out := make(map[string]variables.Scope, len(project.ScopedValues))
+	// Sorted: the diagnostics below are emitted in this order, and Go's map
+	// iteration is randomised. Two runs of one configuration must report the
+	// same problems in the same order (invariant 6).
+	for _, dir := range sortedDirs(project.ScopedValues) {
+		scope, dirDiags := variables.Resolve(project.Variables, chain, files, project.ScopedValues[dir], opts.Vars)
+		for _, d := range dirDiags {
+			if !reported[diagKey(d)] {
+				reported[diagKey(d)] = true
+				ds.Add(d)
+			}
+		}
+		// The three process variables are authoritative in every scope, not
+		// just the project-wide one — a ${environment} that resolved inside
+		// resources/db/ and nowhere else would be worse than one that resolved
+		// nowhere. See seedProcessVariables.
+		seedProcessVariables(&scope, opts)
+		out[dir] = scope
+	}
+	return out, ds
+}
+
+// diagKey identifies a diagnostic by everything a reader would see of it.
+// value.Origin holds a slice, so diag.Diagnostic is not comparable and cannot
+// be a map key itself.
+func diagKey(d diag.Diagnostic) string {
+	return strconv.Itoa(int(d.Severity)) + "\x00" + d.Summary + "\x00" + d.Detail +
+		"\x00" + d.Action + "\x00" + d.Origin.String()
+}
+
+func sortedDirs(m map[string]map[string]value.Value) []string {
+	out := make([]string, 0, len(m))
+	for dir := range m {
+		out = append(out, dir)
+	}
+	sort.Strings(out)
 	return out
 }
 

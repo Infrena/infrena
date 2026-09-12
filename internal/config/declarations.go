@@ -29,7 +29,16 @@ type LifecycleDecl struct {
 
 // ResourceDecl is one declared resource, decoded but not yet resolved.
 type ResourceDecl struct {
-	Name       string
+	Name string
+	// Dir is the resources directory this was declared in, slash-separated and
+	// relative to resources/ — "database" for resources/database/db.yml. Empty
+	// for infra.yml, for discovered/, and for a module file.
+	//
+	// It exists so stage 4 can give the resource the variable scope of the
+	// directory it came from (§4.1). It is NOT part of the resource's identity:
+	// the address is the name alone, so moving a file between directories does
+	// not rename anything.
+	Dir        string
 	Type       string
 	Attributes map[string]AttributeDecl
 	DependsOn  []string
@@ -166,5 +175,14 @@ type ProjectDecl struct {
 	// Iterate it in sorted key order whenever order is observable; Go's map
 	// order is randomised.
 	VariableValues map[string]value.Value
-	Origin         value.Origin
+	// ScopedValues holds resources/<dir>/vars/** — variable values visible only
+	// to the resources declared in that directory, keyed by the same string
+	// ResourceDecl.Dir carries (§4.1). Never nil.
+	//
+	// A separate map rather than merged into VariableValues, because the two sit
+	// on different precedence rungs: §7 puts a directory's values ABOVE base
+	// configuration and BELOW an environment. Merging them would lose that, and
+	// lose the scoping with it.
+	ScopedValues map[string]map[string]value.Value
+	Origin       value.Origin
 }

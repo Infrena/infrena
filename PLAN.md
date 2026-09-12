@@ -219,10 +219,88 @@ infra/
 │   └── networking/
 │       └── module.yml
 │
-└── generated/
+└── discovered/        # written by `infra import --generate`; LOADED like environments/
 ```
 
-Exact structure may evolve during implementation, but environments and modules must be first-class concepts.
+Exact structure may evolve during implementation, but environments and modules must be
+first-class concepts.
+
+## 4.1 Conventional directories, globbed
+
+Three directories are read automatically, in the spirit of Ansible's layout — a project is
+organised by putting files where they belong, not by listing them somewhere:
+
+| Directory | Holds | Notes |
+|---|---|---|
+| `resources/**` | resource declarations | `infra.yml`'s own `resources:` still works and is equivalent |
+| `vars/**` | variable values | the directory form of `variables.yml`; both are base configuration |
+| `modules/**` | modules | a directory containing `module.yml`, already discovered in M5 |
+| `discovered/**` | generated configuration | written by `infra import --generate` (§27.1) |
+
+A resource directory may hold its own scoped material:
+
+```text
+resources/
+  database/
+    database.yml         the resources
+    vars/                variables visible ONLY to resources in this directory
+    templates/           reserved; see below
+```
+
+`resources/<dir>/vars/**` is scoped: those values are visible to the resources declared in that
+directory and nowhere else. A value defined both there and in the project-wide `vars/` resolves
+to the directory's, per §7 — the more specific statement about the same thing wins.
+
+**A name defined twice at the SAME level is an error naming both files**, never last-one-wins.
+Two files silently becoming one is the failure this language refuses everywhere else, and a
+globbed directory makes it easy to do by accident.
+
+### How `vars/` files name their environment
+
+At the TOP LEVEL of `vars/`, the filename does the work:
+
+| File | Applies to |
+|---|---|
+| `vars/default.yml` | every environment |
+| `vars/production.yml` | `production` only |
+| `vars/<env>.yml` | that environment only |
+
+An environment file overrides `default.yml` per VALUE, not per file. If `default.yml` says
+`size: 50` and `production.yml` sets no `size`, production gets 50; if `production.yml` sets
+`size: 100`, production gets 100 and every other environment still gets 50. A file that names an
+environment is a set of differences, not a replacement.
+
+Deeper files cannot lean on a filename, so they carry the environment inside:
+
+```yaml
+size: 40              # the default, for every environment
+region: eu-west-1
+
+production:
+  size: 100           # overrides the default above, for production only
+
+dev:
+  size: 10
+```
+
+A bare key is a default; a key naming an environment is a block of overrides for it.
+
+**A top-level key is an environment block only if it matches a DECLARED environment.** Anything
+else is a variable, whatever shape its value has — a variable whose value is a map stays a
+variable. And a variable that collides with an environment name is an ERROR naming both, never a
+silent reinterpretation: the alternative is that adding an environment months later changes what
+an existing file means, without touching it.
+
+### `templates/` is reserved, not implemented
+
+It will hold text blobs rendered into attributes — IAM policy documents, lambda sources, unit
+files, anything a provider takes as a string. That needs a template language, and choosing one
+is a decision in its own right: `${}` interpolation is deliberately not a programming language
+(§10), and a template engine is.
+
+The directory is named now so the layout does not change when the engine arrives, and so the
+choice is made against a stated purpose rather than in the abstract. Nothing reads it yet, and
+a `templates/` directory present today is not an error.
 
 ---
 
@@ -333,7 +411,9 @@ Recommended precedence:
 ```text
 provider defaults
         ↓
-base configuration
+base configuration          variables.yml and vars/**
+        ↓
+directory-scoped variables  resources/<dir>/vars/**
         ↓
 module defaults
         ↓
@@ -341,10 +421,20 @@ environment inheritance
         ↓
 environment variables
         ↓
-CLI overrides
+CLI overrides               --var, --var-file
 ```
 
 Explicit user configuration always overrides an implicit default.
+
+**More specific file scope wins, and an environment wins over every file.** Those are two
+different axes and conflating them is the mistake to avoid. A directory is how the project is
+ORGANISED; an environment is where it is DEPLOYED. A `resources/db/vars/` value therefore beats
+a project-wide one, because it is the more specific statement about the same thing — but an
+environment beats both, or `production` could no longer tune a value the code happened to set
+locally, and environments being first-class (§6) would mean nothing.
+
+`--var` is above everything, always. It is the operator saying what they want right now, and it
+is the one rung that cannot be outranked by a file someone else wrote.
 
 ---
 
@@ -1151,6 +1241,40 @@ database:
 ```
 
 Do not generate pages of unnecessary configuration.
+
+## 27.1 Where generation writes, and why it is loaded
+
+Generated configuration goes to `discovered/`, in files named for what they hold —
+`databases.yml`, `networks.yml` — rather than one file per import run. A person looking for
+the database they imported last month looks in `databases.yml`.
+
+**`discovered/*.yml` is LOADED by the compiler, exactly as `environments/*.yml` is.** That is
+not a convenience; it is what makes import safe. Import adds a resource to state (§26 step 5),
+and a resource in state that no configuration declares is scheduled for DESTRUCTION by
+invariant 1. If the generated file were a staging area, `infra import` followed by
+`infra apply` would destroy the very infrastructure just adopted — which §26's own rule that
+"import must not blindly destroy or modify infrastructure" forbids.
+
+So the resource is in state and in configuration at the same moment, and the next plan is
+clean. Moving a block out of `discovered/` into a file of your own is then an ordinary edit,
+made when you want to, not a step you must complete before it is safe to run anything.
+
+## 27.2 Naming a discovered resource
+
+§26 step 4 requires a logical identity. It comes from, in order:
+
+1. A `name` attribute or tag, if the resource has one. This is how people actually label cloud
+   resources, and it is the name they will look for.
+2. Otherwise the provider ID, sanitised to an identifier — `net-1` becomes `net_1`.
+
+A collision between two resources claiming the same name is resolved by suffixing the provider
+ID, never by dropping one: two resources silently becoming one is the shape this project
+guards against everywhere else.
+
+Names matter more here than they look. A resource's name is part of its address, and an address
+is what state is keyed by — so renaming an imported resource later is a destroy plus a create.
+Generation should therefore produce the name a person would have chosen, not one they will
+immediately want to change.
 
 ---
 

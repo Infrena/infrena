@@ -56,7 +56,7 @@ func TestResolveWalksTheWholePrecedenceLadder(t *testing.T) {
 		{"declared default is the floor", nil, nil, bare(chain), 50, value.ScopeBaseConfig},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			scope, ds := Resolve(decls, tc.chain, tc.files, tc.cli)
+			scope, ds := Resolve(decls, tc.chain, tc.files, nil, tc.cli)
 			if ds.HasErrors() {
 				t.Fatalf("unexpected diagnostics: %+v", ds)
 			}
@@ -93,11 +93,11 @@ func bare(c environments.Chain) environments.Chain {
 func TestResolveRecordsSourceSeparatelyFromScope(t *testing.T) {
 	decls, chain, _, _ := ladderInputs()
 
-	fromFile, ds := Resolve(decls, bare(chain), map[string]value.Value{"replicas": value.Int(20, value.SourceVariable)}, nil)
+	fromFile, ds := Resolve(decls, bare(chain), map[string]value.Value{"replicas": value.Int(20, value.SourceVariable)}, nil, nil)
 	if ds.HasErrors() {
 		t.Fatalf("file: %+v", ds)
 	}
-	fromFlag, ds := Resolve(decls, bare(chain), nil, map[string]string{"replicas": "20"})
+	fromFlag, ds := Resolve(decls, bare(chain), nil, nil, map[string]string{"replicas": "20"})
 	if ds.HasErrors() {
 		t.Fatalf("flag: %+v", ds)
 	}
@@ -120,7 +120,7 @@ func TestResolveLetsAnExplicitEntryBeatItsOwnDeclaredDefault(t *testing.T) {
 	// PLAN.md §7: "Explicit user configuration always overrides an implicit
 	// default." Both sit at ScopeBaseConfig; Source is what separates them.
 	decls, _, _, _ := ladderInputs()
-	scope, ds := Resolve(decls, environments.Chain{}, map[string]value.Value{"replicas": value.Int(40, value.SourceVariable)}, nil)
+	scope, ds := Resolve(decls, environments.Chain{}, map[string]value.Value{"replicas": value.Int(40, value.SourceVariable)}, nil, nil)
 	if ds.HasErrors() {
 		t.Fatalf("unexpected diagnostics: %+v", ds)
 	}
@@ -137,7 +137,7 @@ func TestResolveStampsTheDeclaredDefaultWhenItWins(t *testing.T) {
 	// Stage 2 leaves Default's provenance unset on purpose; stage 4 is the
 	// only place that says which rung won.
 	decls, _, _, _ := ladderInputs()
-	scope, _ := Resolve(decls, environments.Chain{}, nil, nil)
+	scope, _ := Resolve(decls, environments.Chain{}, nil, nil, nil)
 	got, _ := scope.Variable("replicas")
 	if got.Source != value.SourceDefault || got.Scope != value.ScopeBaseConfig {
 		t.Errorf("Source/Scope = %v/%v, want SourceDefault/ScopeBaseConfig", got.Source, got.Scope)
@@ -152,7 +152,7 @@ func TestResolveReportsAnUnsetVariableWhenAnEnvironmentIsSelected(t *testing.T) 
 	}}
 	chain, _ := environments.Resolve([]config.EnvironmentDecl{{Name: "production"}}, "production")
 
-	_, ds := Resolve(decls, chain, nil, nil)
+	_, ds := Resolve(decls, chain, nil, nil, nil)
 	if !ds.HasErrors() {
 		t.Fatal("`infra plan production` has consulted everything that could set `domain`; nothing did, so this is a definite error")
 	}
@@ -173,7 +173,7 @@ func TestResolveLeavesAnUnsetVariableUnknownWhenNoEnvironmentIsSelected(t *testi
 	// than no validate command.
 	decls := []config.VariableDecl{{Name: "domain", Type: value.KindString}}
 
-	scope, ds := Resolve(decls, environments.Chain{}, nil, nil)
+	scope, ds := Resolve(decls, environments.Chain{}, nil, nil, nil)
 	if ds.HasErrors() {
 		t.Fatalf("validate must not fail on a variable only an environment sets: %+v", ds)
 	}
@@ -201,10 +201,10 @@ func TestResolveValidatesTheWinningValueAgainstItsSchema(t *testing.T) {
 	}}
 	chain, _ := environments.Resolve([]config.EnvironmentDecl{{Name: "dev"}}, "dev")
 
-	if _, ds := Resolve(decls, chain, nil, map[string]string{"replicas": "500"}); !ds.HasErrors() {
+	if _, ds := Resolve(decls, chain, nil, nil, map[string]string{"replicas": "500"}); !ds.HasErrors() {
 		t.Error("--var replicas=500 violates max: 100 and must be reported")
 	}
-	if _, ds := Resolve(decls, chain, nil, map[string]string{"replicas": "50"}); ds.HasErrors() {
+	if _, ds := Resolve(decls, chain, nil, nil, map[string]string{"replicas": "50"}); ds.HasErrors() {
 		t.Errorf("--var replicas=50 is inside the declared range and must be accepted: %+v", ds)
 	}
 }
@@ -221,7 +221,7 @@ func TestResolveValidatesAnEnvironmentOverrideToo(t *testing.T) {
 		{Name: "production", Overrides: []config.OverrideDecl{envOverride("replicas", 500)}},
 	}, "production")
 
-	if _, ds := Resolve(decls, chain, nil, nil); !ds.HasErrors() {
+	if _, ds := Resolve(decls, chain, nil, nil, nil); !ds.HasErrors() {
 		t.Error("an environment override outside the declared range must be reported")
 	}
 }
@@ -240,7 +240,7 @@ func TestResolveDoesNotDoubleReportADefaultsOwnBoundViolation(t *testing.T) {
 		Max: value.Int(100, value.SourceExplicit), HasMax: true,
 		Origin: value.Origin{File: "variables.yml", Line: 2, Column: 3},
 	}}
-	_, ds := Resolve(decls, environments.Chain{}, nil, nil)
+	_, ds := Resolve(decls, environments.Chain{}, nil, nil, nil)
 	if len(ds) != 1 {
 		t.Fatalf("len(ds) = %d, want exactly 1 — the same violation reported twice is not two problems: %+v", len(ds), ds)
 	}
@@ -265,7 +265,7 @@ func TestResolveDoesNotDoubleReportADefaultsOwnBoundViolation(t *testing.T) {
 			Origin: value.Origin{File: "variables.yml", Line: 5, Column: 3},
 		},
 	}
-	_, ds = Resolve(two, environments.Chain{}, nil, nil)
+	_, ds = Resolve(two, environments.Chain{}, nil, nil, nil)
 	if len(ds) != 2 {
 		t.Fatalf("len(ds) = %d, want exactly 2 (one per bad variable, still no duplicates): %+v", len(ds), ds)
 	}
@@ -289,7 +289,7 @@ func TestResolveKeepsAnUndeclaredCLIVariable(t *testing.T) {
 	// names (see reservedNameDiag) and --var refuses it outright since the
 	// M4 final-review fix wave — a genuinely undeclared, non-reserved name
 	// is what this test means to exercise.
-	scope, ds := Resolve(nil, environments.Chain{}, nil, map[string]string{"az": "us-east-1"})
+	scope, ds := Resolve(nil, environments.Chain{}, nil, nil, map[string]string{"az": "us-east-1"})
 	if ds.HasErrors() {
 		t.Fatalf("an undeclared --var is not an error: %+v", ds)
 	}
@@ -339,7 +339,7 @@ func TestOverrideReplacesAVariableOnAnAlreadyPopulatedScope(t *testing.T) {
 		Name: "environment", Type: value.KindString,
 		Default: value.String("dev", value.SourceExplicit), HasDefault: true,
 	}}
-	scope, ds := Resolve(decls, environments.Chain{}, nil, nil)
+	scope, ds := Resolve(decls, environments.Chain{}, nil, nil, nil)
 	if ds.HasErrors() {
 		t.Fatalf("fixture: %+v", ds)
 	}
@@ -362,7 +362,7 @@ func TestScopeVariableReportsFalseForAnUnresolvedName(t *testing.T) {
 	// The other half of Variable's two-result return, exercised nowhere else
 	// in this file: every other test in this package resolves the name it
 	// then looks up.
-	scope, _ := Resolve(nil, environments.Chain{}, nil, nil)
+	scope, _ := Resolve(nil, environments.Chain{}, nil, nil, nil)
 	if _, ok := scope.Variable("never_declared"); ok {
 		t.Error("a name nothing set must report ok=false, not a zero Value mistaken for a real one")
 	}
@@ -378,7 +378,7 @@ func TestScopeNamesListsResolvedVariablesSorted(t *testing.T) {
 		{Name: "alpha", Type: value.KindString, Default: value.String("a", value.SourceExplicit), HasDefault: true},
 		{Name: "mike", Type: value.KindString, Default: value.String("m", value.SourceExplicit), HasDefault: true},
 	}
-	scope, ds := Resolve(decls, environments.Chain{}, nil, nil)
+	scope, ds := Resolve(decls, environments.Chain{}, nil, nil, nil)
 	if ds.HasErrors() {
 		t.Fatalf("unexpected diagnostics: %+v", ds)
 	}
@@ -394,7 +394,7 @@ func TestResolveKeepsAnUndeclaredVariable(t *testing.T) {
 	// OPTIONAL. An undeclared name is untyped and unconstrained.
 	scope, ds := Resolve(nil, environments.Chain{}, map[string]value.Value{
 		"domain": value.String("example.com", value.SourceVariable),
-	}, nil)
+	}, nil, nil)
 	if ds.HasErrors() {
 		t.Fatalf("an undeclared variable is not an error: %+v", ds)
 	}
@@ -419,7 +419,7 @@ func TestResolveCoercesAYamlIntegerToADeclaredFloat(t *testing.T) {
 	// written the only spelling available to them.
 	chain, _ := environments.Resolve([]config.EnvironmentDecl{{Name: "dev"}}, "dev")
 	scope, ds := Resolve(floatSchemaDecls(0.5, 10), chain,
-		map[string]value.Value{"ratio": value.Int(1, value.SourceVariable)}, nil)
+		map[string]value.Value{"ratio": value.Int(1, value.SourceVariable)}, nil, nil)
 	if ds.HasErrors() {
 		t.Fatalf("`ratio: 1` under `type: float` must be accepted: %+v", ds)
 	}
@@ -441,7 +441,7 @@ func TestResolveCoercesBeforeCheckingBounds(t *testing.T) {
 	// which is the failure mode worth pinning.
 	chain, _ := environments.Resolve([]config.EnvironmentDecl{{Name: "dev"}}, "dev")
 	_, ds := Resolve(floatSchemaDecls(2, 10), chain,
-		map[string]value.Value{"ratio": value.Int(1, value.SourceVariable)}, nil)
+		map[string]value.Value{"ratio": value.Int(1, value.SourceVariable)}, nil, nil)
 	if !ds.HasErrors() {
 		t.Fatal("1 is below `min: 2` and must be reported; an uncoerced value skips the bound check entirely rather than failing it")
 	}
@@ -468,7 +468,7 @@ func TestResolveRejectsALossyCoercion(t *testing.T) {
 
 	// 1.5 cannot become an integer without changing what the user wrote.
 	_, ds := Resolve(intDecls, chain,
-		map[string]value.Value{"replicas": value.Float(1.5, value.SourceVariable)}, nil)
+		map[string]value.Value{"replicas": value.Float(1.5, value.SourceVariable)}, nil, nil)
 	if !ds.HasErrors() {
 		t.Error("`replicas: 1.5` under `type: integer` must stay an error — rounding would silently change the value")
 	}
@@ -476,7 +476,7 @@ func TestResolveRejectsALossyCoercion(t *testing.T) {
 	// And an integer too large to survive a float64 keeps its error too.
 	const tooBig = int64(1)<<53 + 1
 	_, ds = Resolve(floatSchemaDecls(0, 1e18), chain,
-		map[string]value.Value{"ratio": value.Int(tooBig, value.SourceVariable)}, nil)
+		map[string]value.Value{"ratio": value.Int(tooBig, value.SourceVariable)}, nil, nil)
 	if !ds.HasErrors() {
 		t.Errorf("%d cannot be stored as a float64 without changing it, so it must be reported rather than coerced", tooBig)
 	}
@@ -488,7 +488,7 @@ func TestResolveLeavesANonNumericMismatchToValidate(t *testing.T) {
 	// owns that message.
 	chain, _ := environments.Resolve([]config.EnvironmentDecl{{Name: "dev"}}, "dev")
 	_, ds := Resolve(floatSchemaDecls(0, 10), chain,
-		map[string]value.Value{"ratio": value.String("half", value.SourceVariable)}, nil)
+		map[string]value.Value{"ratio": value.String("half", value.SourceVariable)}, nil, nil)
 	if !ds.HasErrors() {
 		t.Fatal("a string supplied for a float variable is still an error")
 	}
@@ -512,7 +512,7 @@ func TestResolveCoercionKeepsProvenanceAndSensitivity(t *testing.T) {
 		}}},
 	}, "production")
 
-	scope, ds := Resolve(floatSchemaDecls(0, 10), chain, nil, nil)
+	scope, ds := Resolve(floatSchemaDecls(0, 10), chain, nil, nil, nil)
 	if ds.HasErrors() {
 		t.Fatalf("unexpected diagnostics: %+v", ds)
 	}
@@ -575,7 +575,7 @@ func TestFileEntryAtCLIScopeOutranksEnvironmentConfiguration(t *testing.T) {
 		"az": value.String("eu-west-1", value.SourceVariable).WithScope(value.ScopeCLIOverride),
 	}
 
-	scope, ds := Resolve(nil, chain, files, nil)
+	scope, ds := Resolve(nil, chain, files, nil, nil)
 	if ds.HasErrors() {
 		t.Fatalf("unexpected diagnostics: %v", ds)
 	}
@@ -599,7 +599,7 @@ func TestFileEntryAtBaseScopeLosesToEnvironmentConfiguration(t *testing.T) {
 		"region": value.String("eu-west-1", value.SourceVariable).WithScope(value.ScopeBaseConfig),
 	}
 
-	scope, _ := Resolve(nil, chain, files, nil)
+	scope, _ := Resolve(nil, chain, files, nil, nil)
 	got, _ := scope.Variable("region")
 	if s, _ := got.AsString(); s != "us-east-1" {
 		t.Errorf("region = %q, want us-east-1", s)
@@ -618,7 +618,7 @@ func TestCLIVarOutranksAFileEntryAtTheSameScope(t *testing.T) {
 	files := map[string]value.Value{
 		"az": value.String("eu-west-1", value.SourceVariable).WithScope(value.ScopeCLIOverride),
 	}
-	scope, _ := Resolve(nil, emptyChain(t), files, map[string]string{"az": "ap-south-1"})
+	scope, _ := Resolve(nil, emptyChain(t), files, nil, map[string]string{"az": "ap-south-1"})
 	got, _ := scope.Variable("az")
 	if s, _ := got.AsString(); s != "ap-south-1" {
 		t.Errorf("az = %q, want ap-south-1", s)
@@ -648,7 +648,7 @@ func TestVarFileBoundViolationNamesTheFileNotDashDashVar(t *testing.T) {
 			WithSuppliedBy("conf/big.yml"),
 	}
 
-	_, ds := Resolve(decls, chain, files, nil)
+	_, ds := Resolve(decls, chain, files, nil, nil)
 	if !ds.HasErrors() {
 		t.Fatal("size=9999 violates max:500 and must be reported")
 	}
@@ -674,7 +674,7 @@ func TestVarFileBoundViolationNamesTheFileNotDashDashVar(t *testing.T) {
 // that the flag cannot change the outcome.
 func TestResolveRefusesDashDashVarNamingEnvironment(t *testing.T) {
 	chain := chainWith(t, "dev", nil)
-	scope, ds := Resolve(nil, chain, nil, map[string]string{"environment": "production"})
+	scope, ds := Resolve(nil, chain, nil, nil, map[string]string{"environment": "production"})
 	if !ds.HasErrors() {
 		t.Fatal("--var environment=... must be refused, not silently applied")
 	}
@@ -697,7 +697,7 @@ func TestResolveRefusesVarFileNamingReservedNames(t *testing.T) {
 				WithOrigin(value.Origin{File: "conf/vars.yml", Line: 1, Column: 1}).
 				WithSuppliedBy("conf/vars.yml"),
 		}
-		_, ds := Resolve(nil, chainWith(t, "dev", nil), files, nil)
+		_, ds := Resolve(nil, chainWith(t, "dev", nil), files, nil, nil)
 		if !ds.HasErrors() {
 			t.Errorf("--var-file setting %q must be refused, not silently applied", name)
 		}

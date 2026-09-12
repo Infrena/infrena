@@ -272,7 +272,13 @@ func bindAttribute(
 		}
 	}
 
-	v, evalDiags := expressions.Evaluate(e, inst.Scope)
+	// In(Dir) is the only place a directory's own variables enter stage 6: a
+	// resource declared in resources/db/ sees resources/db/vars/** on top of the
+	// project's (PLAN.md §4.1). It narrows the VARIABLES only — the reference
+	// resolution above deliberately uses inst.Scope, because a resource's
+	// address does not depend on the directory it was declared in and neither
+	// may the names it can refer to.
+	v, evalDiags := expressions.Evaluate(e, inst.Scope.In(inst.Decl.Dir))
 	ds.Extend(evalDiags)
 	return v
 }

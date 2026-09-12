@@ -35,6 +35,23 @@ and refuses to overwrite; `graph` renders the dependency tree from the same comp
 `explain` renders a resource type from the registry, so documentation cannot drift from the
 schemas it describes.
 
+**New in M7 — conventional directories.** Four directory names are read automatically at any
+depth, and nothing lists them: `resources/**` (resources), `vars/**` (variable values),
+`modules/**` (modules), `discovered/**` (generated, and LOADED, which is what makes import
+safe). A resources directory may carry `vars/` of its own, visible only to the resources
+declared there — a new precedence rung above base configuration and below an environment. A
+`vars/` file may be named for an environment (`production.yml`), with `default.yml` applying to
+all of them and an environment file overriding it VALUE BY VALUE, not file by file.
+`templates/` is reserved and deliberately unread, at both the project level and inside a
+resources directory.
+
+Two rules make the layout organisation rather than semantics, and both are load-bearing:
+**a directory scopes variables, never names** (`ResourceDecl.Dir` is not part of a resource's
+identity, so moving a file between directories renames nothing), and **a name declared twice is
+an error naming both files** — never last-one-wins, because globbing makes accidental
+duplication easy in a way a single file does not. `tests/integration/m7_layout_test.go` pins
+that the directory form and the single-file form produce byte-identical plans.
+
 **Absent until Phase 2+:** `discover`, `import`, `export`, reading a saved plan back, remote
 state, AWS. Nothing half-implements one of those.
 

@@ -25,7 +25,7 @@ func scopeFor(t *testing.T, opts Options) variables.Scope {
 	if ds.HasErrors() {
 		t.Fatalf("fixture chain: %+v", ds)
 	}
-	scope, ds := variables.Resolve(nil, chain, nil, opts.Vars)
+	scope, ds := variables.Resolve(nil, chain, nil, nil, opts.Vars)
 	if ds.HasErrors() {
 		t.Fatalf("fixture scope: %+v", ds)
 	}
@@ -405,7 +405,7 @@ resources:
 // of these unit tests an integration test of stage 5.
 func rootOnly(t *testing.T, p *config.ProjectDecl, opts Options) *modules.Expansion {
 	t.Helper()
-	exp, ds := modules.Expand(p, scopeFor(t, opts), t.TempDir(), noRemotes{})
+	exp, ds := modules.Expand(p, scopeFor(t, opts), nil, t.TempDir(), noRemotes{})
 	if ds.HasErrors() {
 		t.Fatalf("rootOnly: expanding a module-free project must not fail: %+v", ds)
 	}

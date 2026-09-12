@@ -1,0 +1,2 @@
+# Scoped to resources/app/. Nothing outside this directory can see `size`.
+size: 50

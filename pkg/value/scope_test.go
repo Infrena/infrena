@@ -140,14 +140,33 @@ func TestScopeRoundTripsAtEveryDepth(t *testing.T) {
 // TestScopeWireNamesAreFrozen pins the persisted spelling of every Scope.
 //
 // Same contract as TestKindWireNamesAreFrozen: these strings are on disk.
-// Scope is a uint8 whose iota ordering M5 will insert into, so persisting the
-// NUMBER would silently reinterpret every state file written before M5. The
+// Scope is a uint8 whose iota ordering M5 and M7 both inserted into, so
+// persisting the NUMBER would silently reinterpret every state file written
+// before them.
+//
+// M7 added scoped_vars and did NOT bump state.CurrentVersion, against this
+// test's original advice, having tried it. Bumping requires a no-op migration
+// from 1 to 2, and Decode routes every non-current file through
+// json.Unmarshal into map[string]any — where a number becomes a float64 and an
+// integer beyond 2^53 comes back WRONG. internal/state's own golden test
+// catches it: 9007199254740993 read back as 9007199254740992.
+//
+// So the bump buys a better message for a version 1 build reading a version 2
+// file ("written by a newer version" rather than "unknown scope"), and costs
+// silent precision loss when THIS build reads any existing file. That trade is
+// the wrong way round for a file whose whole job is fidelity, and the message
+// only matters once more than one build exists in the world.
+//
+// Revisit when the state format changes for a real reason: fixing the
+// migration path to use json.Decoder.UseNumber() removes the cost, and is
+// recorded as a follow-up. The
 // literals below are duplicated deliberately — deriving them from
 // scopeWireNames would assert nothing.
 func TestScopeWireNamesAreFrozen(t *testing.T) {
 	frozen := map[Scope]string{
 		ScopeProviderDefault:    "provider_default",
 		ScopeBaseConfig:         "base_config",
+		ScopeScopedVars:         "scoped_vars",
 		ScopeModuleDefault:      "module_default",
 		ScopeEnvironmentInherit: "environment_inherit",
 		ScopeEnvironmentVar:     "environment_var",

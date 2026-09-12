@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -39,6 +40,35 @@ const EnvironmentsDirName = "environments"
 // "variable not set" errors describing a situation that is not a mistake.
 const ModuleFileName = "module.yml"
 
+// ResourcesDirName holds resource declarations, globbed recursively (§4.1).
+// A file under it carries a `resources:` block and means exactly what the same
+// block in infra.yml means.
+const ResourcesDirName = "resources"
+
+// VarsDirName holds variable values, globbed recursively (§4.1). At its top
+// level the filename names the environment — default.yml for all of them,
+// <env>.yml for one — and deeper files carry the environment inside.
+const VarsDirName = "vars"
+
+// DiscoveredDirName holds configuration written by `infra import --generate`.
+//
+// It is LOADED, not staged. Import adds a resource to state (§26), and a
+// resource in state that no configuration declares is scheduled for
+// destruction by invariant 1 — so a staging area would mean import followed by
+// apply destroys what was just adopted, which §26 forbids. §27.1.
+const DiscoveredDirName = "discovered"
+
+// ScopedVarsDirName is the directory inside a resources directory holding
+// variables visible only to the resources declared there (§4.1).
+const ScopedVarsDirName = "vars"
+
+// TemplatesDirName is reserved and unread (§4.1). It will hold text blobs
+// rendered into attributes, which needs a template language — `${}`
+// interpolation is deliberately not one (§10). Named now so the layout does not
+// change when the engine arrives, and skipped by the resources walk so a
+// project that already has one is not an error today.
+const TemplatesDirName = "templates"
+
 // FileKind says which of the three shapes a loaded file has. Stage 1 does not
 // read a file's contents — it is not permitted to touch yaml.Node — so this is
 // derived entirely from the path.
@@ -55,6 +85,15 @@ const (
 	// FileModule is a module's module.yml: `inputs`, `resources`, `modules`,
 	// `outputs`.
 	FileModule
+	// FileResources is a file under resources/**: a `resources:` block, and
+	// nothing else. Equivalent to infra.yml's own `resources:` key — the
+	// directory is how a project is ORGANISED, not a second way to mean
+	// something (§4.1).
+	FileResources
+	// FileVars is a file under vars/** or resources/<dir>/vars/**. Its shape
+	// depends on where it sits: at the top of vars/ the FILENAME names the
+	// environment, and deeper the environments are named inside (§4.1).
+	FileVars
 )
 
 // String names a file kind for diagnostics. Explicit default, for the reason
@@ -83,7 +122,16 @@ type File struct {
 	// Environment is the environment a FileEnvironment file configures, taken
 	// from its base name with the extension removed. Empty for other kinds.
 	Environment string
-	Root        *yaml.Node
+	// ScopeDir is the resources directory a scoped vars file belongs to, as a
+	// slash-separated path relative to the project — "database" for
+	// resources/database/vars/sizes.yml. Empty for everything else, which is
+	// what distinguishes a project-wide vars file from a scoped one (§4.1).
+	ScopeDir string
+	// Dir is the resources directory a FileResources file was declared in, in
+	// the same form, so a resource can be given the scope of the directory it
+	// came from. Empty for infra.yml and for discovered/.
+	Dir  string
+	Root *yaml.Node
 }
 
 // Load reads the project file, the optional variables file, and every
@@ -122,7 +170,175 @@ func Load(dir string) ([]File, error) {
 	if err != nil {
 		return nil, err
 	}
-	return append(files, envs...), nil
+	files = append(files, envs...)
+
+	// Conventional directories (§4.1), in a fixed order so that stage 2's
+	// duplicate diagnostics name the same file first on every run.
+	for _, c := range []struct {
+		name string
+		kind FileKind
+	}{
+		{ResourcesDirName, FileResources},
+		{VarsDirName, FileVars},
+		{DiscoveredDirName, FileResources},
+	} {
+		found, err := walkConventionalDir(filepath.Join(dir, c.name), c.kind)
+		if err != nil {
+			return nil, err
+		}
+		files = append(files, found...)
+	}
+
+	scoped, err := walkScopedVars(filepath.Join(dir, ResourcesDirName))
+	if err != nil {
+		return nil, err
+	}
+	return append(files, scoped...), nil
+}
+
+// walkScopedVars reads every resources/<dir>/vars/**.yml (§4.1).
+//
+// A separate pass rather than a flag on walkConventionalDir, because these
+// files are a different KIND with a different meaning: the resources walk skips
+// vars/ entirely, and this one reads only vars/. Threading a mode through one
+// walk would make each file's kind depend on where the walk happened to be.
+//
+// The scope is the resources directory that OWNS the vars directory, not the
+// vars directory itself: resources/database/vars/sizes.yml is scoped to
+// "database", which is the string a resource file in that directory records as
+// its own Dir.
+func walkScopedVars(resourcesRoot string) ([]File, error) {
+	var out []File
+	err := filepath.WalkDir(resourcesRoot, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !d.IsDir() || filepath.Base(p) != ScopedVarsDirName || p == resourcesRoot {
+			return nil
+		}
+		owner, err := filepath.Rel(resourcesRoot, filepath.Dir(p))
+		if err != nil {
+			return err
+		}
+		found, err := walkConventionalDir(p, FileVars)
+		if err != nil {
+			return err
+		}
+		for i := range found {
+			// A scoped file's filename never names an environment: the
+			// directory already says who it is for, and a second convention on
+			// top would make resources/db/vars/production.yml ambiguous between
+			// "production's values for db" and "a file called production".
+			found[i].Environment = ""
+			found[i].ScopeDir = filepath.ToSlash(owner)
+			out = append(out, found[i])
+		}
+		return nil
+	})
+	if err != nil {
+		if os.IsNotExist(err) || errors.Is(err, syscall.ENOTDIR) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return out, nil
+}
+
+// walkConventionalDir reads every .yml file under root, recursively.
+//
+// Recursive, unlike loadEnvironmentDir: §4.1's directories are how a project is
+// ORGANISED, so `resources/eu/west/net.yml` is an ordinary thing to write and a
+// directory called `old/` is not a structure the engine has to understand.
+// Environments deliberately do not nest, which is why that walk stays separate
+// rather than growing a flag.
+//
+// Sorted by path, once. The file order decides which of two duplicate
+// declarations a diagnostic names first, and a project whose resource set
+// changes between identical runs breaks invariant 6 before the planner has
+// seen anything.
+//
+// A missing directory is not an error: most projects use none of these.
+func walkConventionalDir(root string, kind FileKind) ([]File, error) {
+	var paths []string
+	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			// vars/ and templates/ inside a resources directory are not
+			// resource files. Without this the recursive walk reads
+			// resources/db/vars/sizes.yml as a resources file and rejects
+			// every variable in it — measured, before the skip existed.
+			if p != root {
+				switch filepath.Base(p) {
+				case ScopedVarsDirName, TemplatesDirName:
+					return fs.SkipDir
+				}
+			}
+			return nil
+		}
+		// .yml only. A README, a .gitkeep or an editor backup is an ordinary
+		// thing to find in a real repository, and refusing to load a project
+		// because someone left notes in it is hostile.
+		if filepath.Ext(p) != ".yml" {
+			return nil
+		}
+		paths = append(paths, p)
+		return nil
+	})
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		if errors.Is(err, syscall.ENOTDIR) {
+			return nil, fmt.Errorf(
+				"%s exists but is not a directory; it must be a directory holding YAML files. "+
+					"Remove the file or move it aside, then create %s as a directory.",
+				root, root)
+		}
+		return nil, err
+	}
+	// filepath.WalkDir already walks in lexical order, so this is belt and
+	// braces rather than the thing that makes the order right — removing it
+	// fails nothing, measured. It is kept because the ORDER is what the tests
+	// pin, and a future replacement of WalkDir with ReadDir would otherwise
+	// change it silently.
+	sort.Strings(paths)
+
+	out := make([]File, 0, len(paths))
+	for _, p := range paths {
+		// A vars file at the TOP LEVEL of vars/ names its environment with its
+		// filename (§4.1): default.yml for every environment, <env>.yml for
+		// one. Deeper files cannot lean on a filename and carry the environment
+		// inside instead, so the candidate is empty for them.
+		//
+		// Only a CANDIDATE: whether it names a real environment is decided at
+		// decode, where the declared environments are known. A top-level
+		// vars/sizes.yml naming no environment is an ordinary file, not an
+		// error.
+		env := ""
+		if kind == FileVars && filepath.Dir(p) == root {
+			env = strings.TrimSuffix(filepath.Base(p), ".yml")
+		}
+		f, found, err := loadOptionalFile(p, kind, env)
+		if err != nil {
+			return nil, err
+		}
+		if !found {
+			continue
+		}
+		if kind == FileResources {
+			// The directory this resource was declared in, so stage 4 can give
+			// it that directory's scope. Relative to the resources root and
+			// slash-separated, so it is the same string on every platform and
+			// the same string a scoped vars file computes for itself.
+			if rel, err := filepath.Rel(root, filepath.Dir(p)); err == nil && rel != "." {
+				f.Dir = filepath.ToSlash(rel)
+			}
+		}
+		out = append(out, f)
+	}
+	return out, nil
 }
 
 func loadProjectFile(dir string) (File, error) {

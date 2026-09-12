@@ -87,7 +87,9 @@ type Instance struct {
 	Decl    *config.ResourceDecl
 	// Scope is the level this resource was instantiated at, shared by every
 	// resource at that level. Compiler stage 6 evaluates the resource's
-	// attributes against it.
+	// attributes against it — through Scope.In(Decl.Dir), because at the root
+	// level the VARIABLES visible to a resource depend on which resources
+	// directory declared it, while the bindings do not.
 	Scope *Scope
 	// ExtraDeps are edges that could not be written as a bare name, because the
 	// name they came from expanded away. Separate from Decl.DependsOn, which
@@ -209,7 +211,13 @@ type walker struct {
 // project's resources — and a subset of desired state diffed against a full
 // state file is exactly what invariant 1 reads as "removed from
 // configuration". Check HasErrors() before touching it.
-func Expand(project *config.ProjectDecl, scope variables.Scope, dir string, resolve Resolver) (*Expansion, diag.Diagnostics) {
+// dirScopes is stage 4's per-directory variable scopes, keyed by
+// config.ResourceDecl.Dir, and may be nil. It applies to the ROOT level only —
+// see Scope.dirVars.
+func Expand(
+	project *config.ProjectDecl, scope variables.Scope,
+	dirScopes map[string]variables.Scope, dir string, resolve Resolver,
+) (*Expansion, diag.Diagnostics) {
 	var ds diag.Diagnostics
 
 	abs, err := filepath.Abs(dir)
@@ -224,7 +232,7 @@ func Expand(project *config.ProjectDecl, scope variables.Scope, dir string, reso
 	}
 
 	w := &walker{root: abs, resolve: resolve, ds: &ds}
-	w.expand(rootLevel(project), &Scope{Vars: scope}, abs, nil)
+	w.expand(rootLevel(project), &Scope{Vars: scope, dirVars: dirScopes, names: map[string]Binding{}}, abs, nil)
 
 	// ONE sort, here, after everything is collected. The walk is already
 	// deterministic — stage 2 sorts resources by name — but a deterministic
@@ -290,7 +298,7 @@ func (w *walker) expand(lv level, scope *Scope, dir string, module []string) []a
 	}
 
 	for _, r := range w.orderCalls(lv, exprs, module) {
-		supplied := w.evaluateCall(r, scope, exprs[r.Name])
+		supplied := w.evaluateCall(r, scope.In(r.Dir), exprs[r.Name])
 		inner, outputs := w.instantiate(r, loaded, scope, supplied, dir, module)
 		calls[r.Name] = inner
 		// A reference in the CALL'S OWN attributes — `network: ${net.id}` — is a
