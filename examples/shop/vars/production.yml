@@ -1,0 +1,3 @@
+# The filename names the environment. Everything production does not mention
+# still comes from default.yml.
+db_password: prod-secret

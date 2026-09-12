@@ -1,0 +1,13 @@
+resources:
+  stack:
+    type: module.app_stack
+    # `network` is declared in resources/network/. A directory scopes
+    # variables, never names.
+    network: ${network.id}
+    size: ${size}
+    password: ${db_password}
+
+  web:
+    type: test.application
+    image: nginx:1.27
+    database_url: ${stack.endpoint}
