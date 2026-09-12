@@ -390,11 +390,21 @@ SEE the teardown first.
 An environment with state but no declaration has an empty desired
 configuration. Invariant 1 then applies exactly as it does to a single removed
 resource: everything in its state is proposed for destruction. `plan` shows
-that, `apply` performs it, and the state file is removed when the last resource
-leaves it.
+that, and `apply` performs it.
 
-An environment that is neither declared NOR holds state stays an error naming
-the declared environments. That is what keeps `infra plan devv` a typo rather
+The state FILE is deliberately left in place afterwards, holding nothing. It is
+not what makes an environment reachable — "has state" means "state lists
+resources", so an emptied environment is already unreachable as an orphan and
+planning it reports the typo case. Removing the file would also discard the
+serial, which is how a stale plan is detected and which `destroy` is required to
+advance on the write that records its own removals.
+
+A project that declares NO environments at all keeps working with any name, as it
+has since M2 — there is nothing for a name to be a typo against until at least
+one environment is declared. §6.1's rule begins to bite only then.
+
+An environment that is neither declared NOR holds state, in a project that does
+declare others, stays an error naming them. That is what keeps `infra plan devv` a typo rather
 than a silent no-op, and it is why the rule is a disjunction rather than
 "anything goes".
 

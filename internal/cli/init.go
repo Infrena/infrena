@@ -48,7 +48,8 @@ func scaffoldFiles() map[string]string {
 
 # Environments are first-class: each has its own state and its own lock. Add as
 # many as you like — they hold the same infrastructure and differ only in what
-# their variables say.
+# their variables say. Removing one from this file proposes tearing it down --
+# plan that environment first to see exactly what it would destroy.
 environments:
 
   dev: {}

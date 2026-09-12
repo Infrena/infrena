@@ -13,6 +13,7 @@ import (
 
 	"github.com/infrata/infrata/internal/compiler"
 	"github.com/infrata/infrata/internal/config"
+	"github.com/infrata/infrata/internal/diag"
 	"github.com/infrata/infrata/internal/executor"
 	"github.com/infrata/infrata/internal/planner"
 	"github.com/infrata/infrata/internal/refresh"
@@ -70,8 +71,34 @@ func newApplyCommand(opts *GlobalOptions) *cobra.Command {
 			// apply is permitted to change the project directory, so it is
 			// where a pin first gets recorded. validate and plan only compare.
 			copts.RecordLocks = true
-			cfg, ds := compiler.Compile(files, reg, copts)
-			ds.Extend(cds)
+
+			// §6.1: reachable if declared OR stateful. State is read here rather
+			// than inside computePlan because the rule decides whether to
+			// compile at all.
+			st0, stErr := backendFor(opts.Dir).Get(cmd.Context(), environment)
+			if stErr != nil {
+				return finishApply(cmd.ErrOrStderr(), rw, report.ApplyResult{}, stErr)
+			}
+
+			var cfg compiler.ResolvedConfig
+			ds := cds
+			teardown := false
+			switch disp, declared := dispositionOf(files, environment, st0); disp {
+			case unknownEnvironment:
+				return finishApply(cmd.ErrOrStderr(), rw, report.ApplyResult{},
+					unknownEnvironmentError(environment, declared))
+			case orphanedEnvironment:
+				// Deliberately NOT compiled — see orphanedEnvironment's doc
+				// comment for what compiling would produce instead.
+				cfg = teardownConfig(st0, environment)
+				teardown = true
+				fmt.Fprint(cmd.OutOrStdout(), teardownNotice(environment, declared))
+			default:
+				var compileDiags diag.Diagnostics
+				cfg, compileDiags = compiler.Compile(files, reg, copts)
+				ds.Extend(compileDiags)
+			}
+
 			// Rendered unconditionally, THEN checked: unlike plan.go, apply
 			// has no later diagnostics pass that would otherwise carry a
 			// --var-file warning (the reserved block-name check in
@@ -99,7 +126,20 @@ func newApplyCommand(opts *GlobalOptions) *cobra.Command {
 			}
 
 			if !opts.AutoApprove {
-				if !confirm(cmd, applyPrompt, "yes") {
+				// A teardown apply deletes everything in the environment, so it
+				// gets `destroy`'s stronger confirmation rather than "yes". The
+				// two commands are doing the same thing at this point, and the
+				// weaker prompt is calibrated for a plan the user chose the
+				// contents of — here the contents are "all of it", and the
+				// reason is a line they may have deleted by accident.
+				prompt, want := applyPrompt, "yes"
+				if teardown {
+					prompt = fmt.Sprintf("\nEnvironment %q is no longer declared, so this will delete "+
+						"every resource infra manages there. This cannot be undone.\n"+
+						"Type the environment name to confirm: ", environment)
+					want = environment
+				}
+				if !confirm(cmd, prompt, want) {
 					return finishApply(cmd.ErrOrStderr(), rw, report.ApplyResult{},
 						errors.New("apply cancelled: you must type \"yes\" to approve"))
 				}
