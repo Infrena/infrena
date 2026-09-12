@@ -9,13 +9,16 @@ import (
 	"github.com/infrata/infrata/internal/diag"
 	"github.com/infrata/infrata/internal/expressions"
 	"github.com/infrata/infrata/internal/modules"
+	"github.com/infrata/infrata/internal/providers"
 	"github.com/infrata/infrata/internal/registry"
 	"github.com/infrata/infrata/pkg/address"
 	"github.com/infrata/infrata/pkg/resource"
 	"github.com/infrata/infrata/pkg/value"
 )
 
-func bindReferences(exp *modules.Expansion, opts Options, reg *registry.Registry) (ResolvedConfig, diag.Diagnostics) {
+func bindReferences(
+	exp *modules.Expansion, opts Options, reg *registry.Registry, table providers.Table,
+) (ResolvedConfig, diag.Diagnostics) {
 	var ds diag.Diagnostics
 
 	out := ResolvedConfig{
@@ -57,7 +60,7 @@ func bindReferences(exp *modules.Expansion, opts Options, reg *registry.Registry
 			// default is supplied, once, so a resource reaching the planner always
 			// names the instance it belongs to — and a destroy, which has only
 			// state, inherits that name from the apply that created it.
-			Provider:  providerInstanceFor(inst, opts),
+			Provider:  providerInstanceFor(inst, table, &ds),
 			Attrs:     make(map[string]value.Value, len(decl.Attributes)),
 			Lifecycle: resource.Lifecycle{PreventDestroy: decl.Lifecycle.PreventDestroy, Retain: decl.Lifecycle.Retain},
 			Origin:    decl.Origin,
@@ -476,15 +479,39 @@ func describeSkipOrigin(o value.Origin) string {
 // knows. Filled HERE rather than at dispatch, because a resource whose instance is
 // decided at dispatch time is one whose state cannot say which account it is in —
 // and a destroy has nothing but state.
-func providerInstanceFor(inst modules.Instance, opts Options) string {
-	if inst.ProviderInstance != "" {
-		return inst.ProviderInstance
+func providerInstanceFor(inst modules.Instance, table providers.Table, ds *diag.Diagnostics) string {
+	named := inst.ProviderInstance
+	if named == "" {
+		// The table's own default, which is the entry marked `default: true` or
+		// the first one declared. Taken from the table rather than from Options so
+		// that the instance a resource defaults to and the instance the registry
+		// built are decided by one thing — a disagreement there creates a resource
+		// in one account and then fails to find it in the other.
+		return table.DefaultName()
 	}
-	if opts.DefaultProvider != "" {
-		return opts.DefaultProvider
+	if _, exists := table[named]; !exists {
+		// Reported HERE, where the `provider:` key is, rather than at dispatch.
+		// The executor's own guard says "no provider instance offers this type",
+		// which is true and useless: the reader's mistake is a name, and the names
+		// available are in a file they can read.
+		ds.Add(diag.Diagnostic{
+			Severity: diag.SeverityError,
+			Summary: inst.Address.String() + " names provider instance " +
+				strconv.Quote(named) + ", which is not declared",
+			Detail: "`provider:` selects one entry of the project's `providers:` list." +
+				declaredInstancesDetail(table),
+			Action: "Correct the name, or add a `providers:` entry with `name: " + named + "`.",
+			Origin: inst.Decl.Origin,
+		})
 	}
-	// A project with no `providers:` block at all. Every project written before
-	// §12.1 is this one, and the implicit instance is named after the only plugin
-	// there is — which is also what a state file written then already records.
-	return "test"
+	return named
+}
+
+// declaredInstancesDetail lists what the user could have meant.
+func declaredInstancesDetail(table providers.Table) string {
+	names := table.Names()
+	if len(names) == 0 {
+		return "\nThis project declares no provider instances."
+	}
+	return "\nDeclared instances:\n  " + strings.Join(names, "\n  ")
 }

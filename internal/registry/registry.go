@@ -10,6 +10,7 @@ import (
 
 	"github.com/infrata/infrata/pkg/provider"
 	"github.com/infrata/infrata/pkg/schema"
+	"github.com/infrata/infrata/pkg/value"
 )
 
 // Registry maps resource types to their definitions, and (type, instance) pairs to
@@ -32,6 +33,15 @@ type Registry struct {
 	instances map[string]map[string]provider.Provider
 	// pluginFor records each instance's plugin, for diagnostics.
 	pluginFor map[string]string
+	// plugins holds each registered plugin by name, and is the FACTORY half of
+	// the split: a plugin here can be asked for a configured instance later.
+	//
+	// A name may map to nil. That is a plugin known only because a caller handed
+	// over an already-constructed provider (Register) rather than a plugin — the
+	// shape every test that builds its own stub uses. Such a name can be reported
+	// and counted but cannot construct anything, which is why RegisterInstance
+	// says so rather than panicking on a nil.
+	plugins map[string]provider.Plugin
 }
 
 // New returns an empty registry.
@@ -41,6 +51,7 @@ func New() *Registry {
 		pluginOf:    map[string]string{},
 		instances:   map[string]map[string]provider.Provider{},
 		pluginFor:   map[string]string{},
+		plugins:     map[string]provider.Plugin{},
 	}
 }
 
@@ -51,10 +62,8 @@ func New() *Registry {
 // milestone — while two different PLUGINS claiming one type is still an error,
 // because nothing could then say which owns it.
 //
-// Validate everything before mutating, so a failed registration leaves the
-// registry untouched. `seen` catches a provider declaring the same type twice in
-// one call, which the registry-state check alone cannot see because the first loop
-// never mutates.
+// Nothing is mutated until checkDefinitions has passed, so a failed registration
+// leaves the registry untouched.
 func (r *Registry) Register(instance string, p provider.Provider) error {
 	if instance == "" {
 		return fmt.Errorf("provider %s: an instance name is required", p.Name())
@@ -64,10 +73,125 @@ func (r *Registry) Register(instance string, p provider.Provider) error {
 	}
 
 	defs := p.Definitions()
+	if err := r.checkDefinitions(p.Name(), defs); err != nil {
+		return err
+	}
+
+	byType := make(map[string]provider.Provider, len(defs))
+	for _, d := range defs {
+		// The definition is written unconditionally. A second instance of one
+		// plugin re-registers an identical schema, so last-write-wins is not a
+		// choice between two things — it is the same thing twice.
+		r.definitions[d.Type] = d
+		r.pluginOf[d.Type] = p.Name()
+		byType[d.Type] = p
+	}
+	r.instances[instance] = byType
+	r.pluginFor[instance] = p.Name()
+	if _, known := r.plugins[p.Name()]; !known {
+		// Known by NAME only: a constructed provider carries no factory, so this
+		// entry can be listed and counted but not asked for another instance.
+		r.plugins[p.Name()] = nil
+	}
+	return nil
+}
+
+// RegisterPlugin adds a plugin's SCHEMAS, and no instance of it.
+//
+// This is the half of registration that needs no configuration, and running it
+// alone is what breaks the cycle §12.1 describes: the compiler can resolve a type
+// against Definition before any provider object exists, and therefore before the
+// variables an instance's configuration interpolates have been resolved.
+//
+// A registry holding only plugins dispatches nothing. RegisterInstance supplies
+// the other half once the configuration is resolved.
+func (r *Registry) RegisterPlugin(p provider.Plugin) error {
+	if existing, taken := r.plugins[p.Name()]; taken && existing != nil {
+		return fmt.Errorf("plugin %s is already registered", p.Name())
+	}
+	if err := r.checkDefinitions(p.Name(), p.Definitions()); err != nil {
+		return err
+	}
+	for _, d := range p.Definitions() {
+		r.definitions[d.Type] = d
+		r.pluginOf[d.Type] = p.Name()
+	}
+	r.plugins[p.Name()] = p
+	return nil
+}
+
+// RegisterInstance constructs one instance of a registered plugin from its
+// RESOLVED configuration, and registers the provider object.
+//
+// This is the call that was impossible before the split: its config argument comes
+// from internal/providers, which resolved it against variables, which needed a
+// compile, which needed the schemas RegisterPlugin had already supplied.
+func (r *Registry) RegisterInstance(instance, plugin string, config map[string]value.Value) error {
+	if instance == "" {
+		return fmt.Errorf("plugin %s: an instance name is required", plugin)
+	}
+	p, known := r.plugins[plugin]
+	if !known {
+		return fmt.Errorf("no plugin named %s is registered; available: %s",
+			plugin, strings.Join(r.PluginNames(), ", "))
+	}
+	if p == nil {
+		return fmt.Errorf("plugin %s was registered as a constructed provider, so it cannot "+
+			"build a further instance", plugin)
+	}
+	built, err := p.New(instance, config)
+	if err != nil {
+		return err
+	}
+	// A duplicate instance name is Register's refusal, not a silent replacement.
+	// Nothing constructs an instance twice — internal/providers.Prepare skips a
+	// name the caller already supplied a provider for — so reaching that refusal
+	// means two things believe they own one name, which is worth hearing about.
+	return r.Register(instance, built)
+}
+
+// HasInstance reports whether an instance is already registered.
+func (r *Registry) HasInstance(instance string) bool {
+	_, ok := r.pluginFor[instance]
+	return ok
+}
+
+// PluginNames lists every registered plugin, sorted — including ones known by name
+// only. Factories reports the subset that can construct an instance.
+func (r *Registry) PluginNames() []string {
+	out := make([]string, 0, len(r.plugins))
+	for name := range r.plugins {
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// Factories lists the plugins that can construct an instance, sorted.
+//
+// The distinction matters to exactly one decision: what the implicit instance of a
+// project with no `providers:` block is called. See internal/providers.Prepare.
+func (r *Registry) Factories() []string {
+	out := make([]string, 0, len(r.plugins))
+	for name, p := range r.plugins {
+		if p != nil {
+			out = append(out, name)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// checkDefinitions validates a set of definitions before anything is mutated, so a
+// failed registration leaves the registry untouched.
+//
+// `seen` catches a plugin declaring the same type twice in one call, which the
+// registry-state check alone cannot: nothing has been written yet.
+func (r *Registry) checkDefinitions(pluginName string, defs []*schema.ResourceDefinition) error {
 	seen := make(map[string]bool, len(defs))
 	for _, d := range defs {
 		if err := d.Validate(); err != nil {
-			return fmt.Errorf("provider %s: %w", p.Name(), err)
+			return fmt.Errorf("provider %s: %w", pluginName, err)
 		}
 		if strings.HasPrefix(d.Type, "module.") {
 			// Compiler stage 5 selects module instantiations by this prefix
@@ -83,29 +207,18 @@ func (r *Registry) Register(instance string, p provider.Provider) error {
 			// In the FIRST loop with the other checks, because this loop is
 			// deliberately validate-before-mutate.
 			return fmt.Errorf("provider %s: resource type %q is reserved: the `module.` namespace "+
-				"is how configuration instantiates a module", p.Name(), d.Type)
+				"is how configuration instantiates a module", pluginName, d.Type)
 		}
-		if owner, claimed := r.pluginOf[d.Type]; claimed && owner != p.Name() {
+		if owner, claimed := r.pluginOf[d.Type]; claimed && owner != pluginName {
 			return fmt.Errorf("provider %s: resource type %q is already declared by plugin %s",
-				p.Name(), d.Type, owner)
+				pluginName, d.Type, owner)
 		}
 		if seen[d.Type] {
-			return fmt.Errorf("provider %s declares resource type %q more than once", p.Name(), d.Type)
+			return fmt.Errorf("provider %s declares resource type %q more than once", pluginName, d.Type)
 		}
 		seen[d.Type] = true
 	}
 
-	byType := make(map[string]provider.Provider, len(defs))
-	for _, d := range defs {
-		// The definition is written unconditionally. A second instance of one
-		// plugin re-registers an identical schema, so last-write-wins is not a
-		// choice between two things — it is the same thing twice.
-		r.definitions[d.Type] = d
-		r.pluginOf[d.Type] = p.Name()
-		byType[d.Type] = p
-	}
-	r.instances[instance] = byType
-	r.pluginFor[instance] = p.Name()
 	return nil
 }
 

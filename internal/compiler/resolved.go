@@ -41,14 +41,10 @@ type Options struct {
 	RecordLocks bool
 
 	Environment string
-	// DefaultProvider is the instance a resource that names none belongs to
-	// (PLAN.md §12.1). Empty means the implicit single instance, which is what
-	// every project written before `providers:` existed has.
-	DefaultProvider string
-	Region          string
-	Account         string
-	Vars            map[string]string      // from --var
-	FileVars        map[string]value.Value // from --var-file
+	Region      string
+	Account     string
+	Vars        map[string]string      // from --var
+	FileVars    map[string]value.Value // from --var-file
 }
 
 // Get returns one resolved resource.

@@ -470,3 +470,10 @@ func fromRaw(raw any) value.Value {
 		return value.String(fmt.Sprint(v), value.SourceProvider)
 	}
 }
+
+// CloudPath is where this instance's world lives.
+//
+// Exported for one reason: it is the only observable consequence of an instance's
+// configuration, so it is what a test asserting "the resolved value reached the
+// provider" has to read. Nothing in the engine calls it.
+func (p *Provider) CloudPath() string { return p.cloudPath }

@@ -58,7 +58,7 @@ resources:
     type: test.network
     cidr: 10.0.0.0/16
 `)
-	cfg, ds := bindReferences(rootOnly(t, p, Options{Environment: "dev"}), Options{Environment: "dev"}, testRegistry(t))
+	cfg, ds := bindReferences(rootOnly(t, p, Options{Environment: "dev"}), Options{Environment: "dev"}, testRegistry(t), testTable())
 	if ds.HasErrors() {
 		t.Fatalf("unexpected diagnostics: %+v", ds)
 	}
@@ -83,7 +83,7 @@ resources:
     engine: postgres
     network: ${network.id}
 `)
-	cfg, ds := bindReferences(rootOnly(t, p, Options{Environment: "dev"}), Options{Environment: "dev"}, testRegistry(t))
+	cfg, ds := bindReferences(rootOnly(t, p, Options{Environment: "dev"}), Options{Environment: "dev"}, testRegistry(t), testTable())
 	if ds.HasErrors() {
 		t.Fatalf("unexpected diagnostics: %+v", ds)
 	}
@@ -112,7 +112,7 @@ resources:
     engine: postgres
     depends_on: [network]
 `)
-	cfg, _ := bindReferences(rootOnly(t, p, Options{Environment: "dev"}), Options{Environment: "dev"}, testRegistry(t))
+	cfg, _ := bindReferences(rootOnly(t, p, Options{Environment: "dev"}), Options{Environment: "dev"}, testRegistry(t), testTable())
 	db := cfg.Resources["database"]
 	if len(db.DependsOn) != 1 || db.DependsOn[0].Name != "network" {
 		t.Errorf("DependsOn = %v", db.DependsOn)
@@ -133,7 +133,7 @@ resources:
     network: ${network.id}
     depends_on: [network]
 `)
-	cfg, _ := bindReferences(rootOnly(t, p, Options{Environment: "dev"}), Options{Environment: "dev"}, testRegistry(t))
+	cfg, _ := bindReferences(rootOnly(t, p, Options{Environment: "dev"}), Options{Environment: "dev"}, testRegistry(t), testTable())
 	if got := cfg.Resources["database"].DependsOn; len(got) != 1 {
 		t.Errorf("DependsOn = %v, want one edge", got)
 	}
@@ -148,7 +148,7 @@ resources:
     engine: postgres
     network: ${nonexistent.id}
 `)
-	_, ds := bindReferences(rootOnly(t, p, Options{Environment: "dev"}), Options{Environment: "dev"}, testRegistry(t))
+	_, ds := bindReferences(rootOnly(t, p, Options{Environment: "dev"}), Options{Environment: "dev"}, testRegistry(t), testTable())
 	if !ds.HasErrors() {
 		t.Fatal("a reference to a resource nobody declared can never become knowable and must be an error")
 	}
@@ -168,7 +168,7 @@ resources:
     engine: postgres
     depends_on: [nonexistent]
 `)
-	if _, ds := bindReferences(rootOnly(t, p, Options{Environment: "dev"}), Options{Environment: "dev"}, testRegistry(t)); !ds.HasErrors() {
+	if _, ds := bindReferences(rootOnly(t, p, Options{Environment: "dev"}), Options{Environment: "dev"}, testRegistry(t), testTable()); !ds.HasErrors() {
 		t.Error("depends_on naming an undeclared resource must be an error")
 	}
 }
@@ -181,7 +181,7 @@ resources:
     type: test.database
     engine: ${database.engine}
 `)
-	if _, ds := bindReferences(rootOnly(t, p, Options{Environment: "dev"}), Options{Environment: "dev"}, testRegistry(t)); !ds.HasErrors() {
+	if _, ds := bindReferences(rootOnly(t, p, Options{Environment: "dev"}), Options{Environment: "dev"}, testRegistry(t), testTable()); !ds.HasErrors() {
 		t.Error("a resource referring to itself is a cycle of one and must be rejected")
 	}
 }
@@ -196,7 +196,7 @@ resources:
     lifecycle:
       prevent_destroy: true
 `)
-	cfg, _ := bindReferences(rootOnly(t, p, Options{Environment: "dev"}), Options{Environment: "dev"}, testRegistry(t))
+	cfg, _ := bindReferences(rootOnly(t, p, Options{Environment: "dev"}), Options{Environment: "dev"}, testRegistry(t), testTable())
 	db := cfg.Resources["database"]
 	if !db.Lifecycle.PreventDestroy {
 		t.Error("lifecycle must survive binding")
@@ -215,7 +215,7 @@ resources:
     cidr: ${cidr_block}
 `)
 	opts := Options{Environment: "dev", Vars: map[string]string{"cidr_block": "10.9.0.0/16"}}
-	cfg, ds := bindReferences(rootOnly(t, p, opts), opts, testRegistry(t))
+	cfg, ds := bindReferences(rootOnly(t, p, opts), opts, testRegistry(t), testTable())
 	if ds.HasErrors() {
 		t.Fatalf("unexpected diagnostics: %+v", ds)
 	}
@@ -235,7 +235,7 @@ resources:
     type: test.network
     cidr: ${missing_two.id}
 `)
-	_, ds := bindReferences(rootOnly(t, p, Options{Environment: "dev"}), Options{Environment: "dev"}, testRegistry(t))
+	_, ds := bindReferences(rootOnly(t, p, Options{Environment: "dev"}), Options{Environment: "dev"}, testRegistry(t), testTable())
 	if len(ds) < 2 {
 		t.Errorf("got %d diagnostics, want at least 2 — one bad reference must not mask the next", len(ds))
 	}
@@ -257,7 +257,7 @@ resources:
 		Environment: "dev",
 		Vars:        map[string]string{"secret_value": "hunter2"},
 	}
-	cfg, ds := bindReferences(rootOnly(t, p, opts), opts, testRegistry(t))
+	cfg, ds := bindReferences(rootOnly(t, p, opts), opts, testRegistry(t), testTable())
 	if ds.HasErrors() {
 		t.Fatalf("unexpected diagnostics: %+v", ds)
 	}
@@ -289,7 +289,7 @@ resources:
     engine: postgres
     network: ${db.id}
 `)
-	cfg, ds := bindReferences(rootOnly(t, p, Options{Environment: "dev"}), Options{Environment: "dev"}, testRegistry(t))
+	cfg, ds := bindReferences(rootOnly(t, p, Options{Environment: "dev"}), Options{Environment: "dev"}, testRegistry(t), testTable())
 	if ds.HasErrors() {
 		t.Fatalf("a reference to a different resource whose name is a prefix of the referrer's own name must not be rejected: %+v", ds)
 	}
@@ -323,7 +323,7 @@ resources:
     tags:
       - "${network.id}"
 `)
-	cfg, ds := bindReferences(rootOnly(t, p, Options{Environment: "dev"}), Options{Environment: "dev"}, testRegistry(t))
+	cfg, ds := bindReferences(rootOnly(t, p, Options{Environment: "dev"}), Options{Environment: "dev"}, testRegistry(t), testTable())
 	if ds.HasErrors() {
 		var sb strings.Builder
 		ds.Render(&sb)

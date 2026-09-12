@@ -1110,7 +1110,8 @@ above refuse, and a shape that cannot express it would refuse it silently.
 
 ### What this costs, recorded before it is built
 
-Three assumptions in the engine are one-provider-per-type and must change:
+Three assumptions in the engine are one-provider-per-type and must change (all three
+are now discharged; the state migration remains a recorded follow-up):
 
 - `registry.Registry` is keyed by resource TYPE and `Register` REFUSES a type a
   second provider already claims. Two instances of one plugin collide there
@@ -1124,6 +1125,57 @@ Three assumptions in the engine are one-provider-per-type and must change:
   and §21's migration path is currently lossy (see the follow-up on
   `state.Decode`), so this is the change that makes fixing it urgent rather than
   theoretical.
+
+### A plugin is not a provider: the factory split
+
+An instance's configuration may interpolate a variable — that is the whole point of
+`region: ${region}` — and that creates a cycle. Constructing a provider needs its
+configuration; resolving the configuration needs variables; resolving variables needs
+a compile; and a compile needs the provider's SCHEMAS. Something has to come first.
+
+What breaks it is that **schemas need no configuration**. `aws.instance` is described
+the same way whichever account it would be created in. So the provider interface
+splits in two:
+
+- `provider.Plugin` — `Name()`, `Definitions()`, and `New(instance, config)`. The
+  first two answer before anything is configured; the third is the factory.
+- `provider.Provider` — one configured instance, unchanged from §31.
+
+The registry holds both halves, and registration happens in two steps at two
+different times:
+
+1. `RegisterPlugin(p)` records the SCHEMAS. The CLI does this before it reads
+   anything, so `Definition(type)` answers throughout the compile.
+2. `RegisterInstance(instance, plugin, config)` builds the provider OBJECT. Compiler
+   stage 4.5 (`internal/providers.Prepare`) does this — after variables, before module
+   expansion — from configuration it has just resolved.
+
+Between the two the registry dispatches nothing, and that is not a hazard to design
+around: the only production caller is `internal/cli`, and every command either
+compiles (so stage 4.5 runs) or is a state-only command that registers its instances
+explicitly.
+
+**The two state-only paths are the honest cost.** `destroy` and `refresh` never
+compile: one synthesises an empty desired configuration from state and the other
+reads state and calls `Provider.Read`. `discover` and `import` do not compile either.
+None of them has a variable scope, so none can resolve an instance's configuration —
+they read `providers:` and take LITERAL values only, reporting an instance whose
+configuration interpolates anything rather than guessing at it. `plan` and `apply` on
+an ORPHANED environment (§6.1) are the same path for the same reason. What saves this
+is that the instance NAME is recorded in state, so a resource still reaches the right
+account whenever that account's own configuration does not depend on an environment.
+An instance configured per environment cannot be destroyed by `infra destroy`, and
+the diagnostic says so rather than reaching for a default.
+
+**Fail-closed is the engine's guarantee, not each plugin's.** Stage 4.5 refuses to
+construct anything when any instance's configuration did not resolve. A plugin that
+read a missing value as "use the default" would otherwise turn a broken interpolation
+into a silently different account, and a resource created in a place nobody named is
+not a problem anyone gets to read about.
+
+A plugin also refuses configuration keys it does not declare. A misspelled `clowd:`
+that is quietly ignored means an instance silently sharing another's account, and the
+first sign of it is a plan proposing to destroy resources somebody else owns.
 
 ### Resource-attribute defaults live under `defaults:`
 

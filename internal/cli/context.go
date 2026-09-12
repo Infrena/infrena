@@ -1,12 +1,16 @@
 package cli
 
 import (
+	"errors"
 	"path/filepath"
 	"sort"
 
 	"github.com/infrata/infrata/internal/config"
+	"github.com/infrata/infrata/internal/diag"
+	"github.com/infrata/infrata/internal/providers"
 	"github.com/infrata/infrata/internal/registry"
 	"github.com/infrata/infrata/internal/state"
+	"github.com/infrata/infrata/internal/variables"
 	"github.com/infrata/infrata/pkg/value"
 	"github.com/infrata/infrata/providers/test"
 )
@@ -15,103 +19,93 @@ import (
 // test provider, the fake cloud.
 const StateDirName = ".infra"
 
-// ImplicitInstance is the instance name a project with no `providers:` block gets.
+// buildRegistry constructs the provider registry for a project directory.
 //
-// Every project written before §12.1 existed has no such block, and every one of
-// them must keep working — so the absence of the block means one implicit instance
-// named after the only plugin there is. That also makes a state file written before
-// instances existed already correct: it records "test", which IS this instance.
-const ImplicitInstance = "test"
-
-// buildRegistry constructs the provider registry for a project directory, one
-// provider per declared instance (PLAN.md §12.1).
+// SCHEMAS ONLY. No provider object exists yet, and cannot: an instance's
+// configuration may interpolate a variable, resolving that variable needs a
+// compile, and a compile needs these schemas. compiler.Compile supplies the other
+// half — internal/providers.Prepare constructs each instance from the values it has
+// by then resolved and registers it here (PLAN.md §12.1).
 //
-// It reads `providers:` itself rather than taking a resolved table, and that is a
-// KNOWN LIMITATION rather than a preference: constructing a provider needs its
-// configuration, resolved configuration needs variables, and variables need a
-// compile — which needs the registry for its schemas. The cycle is real. Today only
-// LITERAL configuration reaches construction, so `cloud: ${path}` resolves (see
-// internal/providers) but does not yet choose the file a provider opens.
-//
-// Breaking it properly means separating a plugin's SCHEMAS, which need no
-// configuration, from its provider OBJECT, which does — a factory in the registry
-// rather than a constructed provider. That is the next task's work and is recorded
-// in the M11 plan.
+// So a command that compiles gets a registry that dispatches; a command that does
+// not — and there are two, `destroy` and `refresh`, which work from state alone —
+// must build its instances some other way. That is registerStateInstances.
 func buildRegistry(dir string) *registry.Registry {
 	reg := registry.New()
-	for _, inst := range declaredInstances(dir) {
-		if err := reg.Register(inst.name, test.New(inst.cloud)); err != nil {
-			// A malformed built-in schema is a programming error. A DUPLICATE
-			// instance name is not — config.decodeProviders reports that — so this
-			// panic is unreachable through configuration.
-			panic("registering provider instance " + inst.name + ": " + err.Error())
-		}
+	if err := reg.RegisterPlugin(test.NewPlugin(dir)); err != nil {
+		// A malformed built-in schema is a programming error, caught by the
+		// provider's own tests long before here. Nothing a user writes reaches it:
+		// this call reads no configuration at all.
+		panic("registering the test plugin: " + err.Error())
 	}
 	return reg
 }
 
-// defaultInstance names the instance a resource with no `provider:` belongs to.
-//
-// From the same declarations buildRegistry reads, and there is one function doing
-// the reading precisely so the two cannot come to disagree: a compiler that
-// defaulted to one instance while the registry offered another would create a
-// resource in one account and fail to find it in the other.
-func defaultInstance(dir string) string {
-	specs := declaredInstances(dir)
-	for _, s := range specs {
-		if s.isDefault {
-			return s.name
-		}
-	}
-	if len(specs) > 0 {
-		return specs[0].name
-	}
-	return ImplicitInstance
+// stateOnlyRegistry is buildRegistry plus the instances a command that never
+// compiles still has to dispatch to.
+func stateOnlyRegistry(dir string) (*registry.Registry, diag.Diagnostics) {
+	reg := buildRegistry(dir)
+	return reg, registerStateInstances(reg, dir)
 }
 
-type instanceSpec struct {
-	name      string
-	cloud     string
-	isDefault bool
-}
-
-// declaredInstances reads `providers:` for the instances to construct, falling back
-// to one implicit instance when the project declares none.
+// registerStateInstances builds the provider instances a state-only command needs.
 //
-// Decoding errors are IGNORED here and reported by the caller's own compile. This
-// function runs before any diagnostic can be rendered, and reporting the same
-// malformed file twice — once as "cannot build the registry" and once properly —
-// gives a reader two problems to reconcile instead of one.
-func declaredInstances(dir string) []instanceSpec {
-	defaultCloud := filepath.Join(dir, test.DefaultCloudPath)
+// `destroy` and `refresh` never compile: one synthesises an empty desired state and
+// the other reads state and calls Provider.Read. Neither can therefore go through
+// Prepare, and neither has a variable scope to resolve an instance's configuration
+// against — so this reads `providers:` and takes only LITERAL configuration,
+// reporting an instance whose configuration interpolates anything rather than
+// guessing at it.
+//
+// The asymmetry is real and is the honest shape of the problem: a command that
+// works from state alone has no environment, and an instance configured per
+// environment has no single answer for it. What saves it is that the instance NAME
+// is recorded in state, so the resource still reaches the right account whenever
+// that account's configuration does not itself depend on an environment.
+func registerStateInstances(reg *registry.Registry, dir string) diag.Diagnostics {
+	var ds diag.Diagnostics
 
 	files, err := config.Load(dir)
 	if err != nil {
-		return []instanceSpec{{name: ImplicitInstance, cloud: defaultCloud, isDefault: true}}
+		// No readable configuration at all. `destroy` is explicitly allowed to run
+		// against a project whose files are gone (that is half of what it is for),
+		// so this is not an error — it leaves the implicit instance below.
+		return registerImplicit(reg, ds)
 	}
-	decl, ds := config.Decode(files)
-	if ds.HasErrors() || len(decl.Providers) == 0 {
-		return []instanceSpec{{name: ImplicitInstance, cloud: defaultCloud, isDefault: true}}
+	decl, decodeDS := config.Decode(files)
+	if decodeDS.HasErrors() {
+		// Reported by nothing here on purpose: a state-only command is not the
+		// place a user learns their configuration is malformed, and saying so
+		// twice — once as "cannot build the registry", once properly on the next
+		// `validate` — gives a reader two problems to reconcile instead of one.
+		return registerImplicit(reg, ds)
+	}
+	if len(decl.Providers) == 0 {
+		return registerImplicit(reg, ds)
 	}
 
-	out := make([]instanceSpec, 0, len(decl.Providers))
-	for _, d := range decl.Providers {
-		spec := instanceSpec{name: d.Name, cloud: defaultCloud, isDefault: d.Default}
-		// `cloud:` is the fake provider's own configuration — where its JSON
-		// "cloud" lives. Two instances pointing at one file would be two names for
-		// one account, which is the opposite of what §12.1 is for, so each
-		// instance gets its own by default.
-		if c, ok := d.Config["cloud"]; ok {
-			if text, ok := c.Value.AsString(); ok && text != "" {
-				spec.cloud = filepath.Join(dir, text)
-			}
-		} else if d.Name != ImplicitInstance {
-			spec.cloud = filepath.Join(dir, StateDirName, "fake-cloud-"+d.Name+".json")
-		}
-		out = append(out, spec)
+	table, resolveDS := providers.Resolve(decl.Providers, literalOnlyScope())
+	ds.Extend(resolveDS)
+	if resolveDS.HasErrors() {
+		return ds
 	}
-	return out
+	ds.Extend(providers.Register(table, reg))
+	return ds
 }
+
+// registerImplicit registers the single implicit instance of a project that
+// declares no `providers:` block.
+func registerImplicit(reg *registry.Registry, ds diag.Diagnostics) diag.Diagnostics {
+	ds.Extend(providers.Register(providers.Implicit(reg), reg))
+	return ds
+}
+
+// literalOnlyScope is an empty variable scope.
+//
+// An instance configured with `${...}` is therefore reported as an undefined
+// variable rather than silently resolved to something. That diagnostic is the point
+// — see registerStateInstances.
+func literalOnlyScope() variables.Scope { return variables.Scope{} }
 
 // backendFor constructs the state backend for a project directory.
 func backendFor(dir string) *state.Local {
@@ -137,3 +131,10 @@ func sortedAttributeKeys(attrs map[string]value.Value) []string {
 	sort.Strings(names)
 	return names
 }
+
+// errProviderInstances ends a command whose provider instances could not be built.
+//
+// The diagnostics have already been rendered, so this carries no detail of its own:
+// a second telling of the same problem, in a different shape, is what makes a reader
+// go looking for two.
+var errProviderInstances = errors.New("provider instances could not be configured")

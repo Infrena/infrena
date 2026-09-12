@@ -39,6 +39,42 @@ type DiscoveredResource struct {
 	Attributes map[string]value.Value
 }
 
+// Plugin is a provider IMPLEMENTATION: the resource types it offers, and how to
+// construct one configured instance of itself.
+//
+// It exists to break a cycle. Constructing a provider needs its configuration;
+// resolved configuration needs variables; variables need a compile; and a compile
+// needs the schemas. Splitting the two halves resolves it, because SCHEMAS NEED NO
+// CONFIGURATION — `aws.instance` is described the same way whichever account it
+// would be created in — so the compiler can have them before any provider object
+// exists (PLAN.md §12.1).
+//
+// One plugin serves many instances. `New` is called once per instance, with that
+// instance's own resolved configuration.
+type Plugin interface {
+	// Name is the plugin's own name, which is what `plugin:` names in a
+	// `providers:` entry. Never an instance name.
+	Name() string
+	// Definitions are the resource types it offers. Static: the same for every
+	// instance, and available before any is configured.
+	Definitions() []*schema.ResourceDefinition
+	// New constructs one instance from its resolved configuration.
+	//
+	// instance is the name the configuration gave this instance, which the engine
+	// otherwise keeps to itself — a provider object has never needed to know
+	// which instance of itself it is, and still does not for any operation. It is
+	// passed because a plugin whose configuration is entirely optional must still
+	// keep two instances APART: the fake provider's `cloud:` defaults to a file
+	// named after the instance, so two undeclared instances are two accounts
+	// rather than two names for one. A plugin with required configuration can
+	// ignore it.
+	//
+	// An error here is a configuration error the user can act on — a missing
+	// credential, an unreadable path, a key the plugin does not accept — not a
+	// programming error.
+	New(instance string, config map[string]value.Value) (Provider, error)
+}
+
 // Provider is the boundary between the infra core and external systems it manages.
 type Provider interface {
 	// Name returns the provider name.

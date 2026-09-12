@@ -1,0 +1,111 @@
+package test
+
+import (
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/infrata/infrata/pkg/value"
+)
+
+// cloudPathOf builds an instance and reports which file it opens, which is the only
+// thing this plugin's configuration decides.
+func cloudPathOf(t *testing.T, dir, instance string, config map[string]value.Value) string {
+	t.Helper()
+	p, err := NewPlugin(dir).New(instance, config)
+	if err != nil {
+		t.Fatalf("New(%q): %v", instance, err)
+	}
+	return p.(*Provider).cloudPath
+}
+
+// TestAnExplicitCloudPathIsResolvedAgainstTheProjectDirectory. Against the PROJECT,
+// not the process's working directory, which --chdir moves out from under us.
+func TestAnExplicitCloudPathIsResolvedAgainstTheProjectDirectory(t *testing.T) {
+	dir := t.TempDir()
+	got := cloudPathOf(t, dir, "main", map[string]value.Value{
+		"cloud": value.String("clouds/one.json", value.SourceVariable),
+	})
+	if want := filepath.Join(dir, "clouds", "one.json"); got != want {
+		t.Errorf("cloudPath = %q, want %q", got, want)
+	}
+}
+
+// TestTwoInstancesNamingNoCloudGetDifferentFiles.
+//
+// The default IS the behaviour: `cloud:` is this provider's stand-in for an account,
+// so two instances sharing one file would be the same mistake as two AWS instances
+// sharing one set of credentials. A sabotage collapsing this to one path broke nothing
+// in the suite when it was written, which is why it is asserted here as well as
+// end to end.
+func TestTwoInstancesNamingNoCloudGetDifferentFiles(t *testing.T) {
+	dir := t.TempDir()
+	main := cloudPathOf(t, dir, "main", nil)
+	acct2 := cloudPathOf(t, dir, "acct2", nil)
+	if main == acct2 {
+		t.Fatalf("both instances opened %q, so they are two names for one account", main)
+	}
+	for _, tc := range []struct{ instance, path string }{{"main", main}, {"acct2", acct2}} {
+		if !strings.Contains(tc.path, tc.instance) {
+			t.Errorf("%s opened %q, which does not identify it", tc.instance, tc.path)
+		}
+	}
+}
+
+// TestTheImplicitInstanceKeepsTheHistoricalPath. Every project written before
+// `providers:` existed has one instance called `test`, and its cloud file is already on
+// disk at .infra/fake-cloud.json. Renaming it would lose that infrastructure.
+func TestTheImplicitInstanceKeepsTheHistoricalPath(t *testing.T) {
+	dir := t.TempDir()
+	if got, want := cloudPathOf(t, dir, "test", nil), filepath.Join(dir, DefaultCloudPath); got != want {
+		t.Errorf("cloudPath = %q, want the historical %q", got, want)
+	}
+}
+
+// TestAnUnknownConfigurationKeyIsRefused — fail closed. A misspelled `clowd:` quietly
+// ignored means an instance silently sharing another's account, and the first sign of
+// it is a plan proposing to destroy resources somebody else owns.
+func TestAnUnknownConfigurationKeyIsRefused(t *testing.T) {
+	_, err := NewPlugin(t.TempDir()).New("main", map[string]value.Value{
+		"clowd": value.String("other.json", value.SourceExplicit),
+	})
+	if err == nil {
+		t.Fatal("an unknown configuration key must be refused")
+	}
+	for _, want := range []string{"clowd", "cloud"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the error does not mention %q — the reader needs the key they wrote and "+
+				"the one they meant: %v", want, err)
+		}
+	}
+}
+
+// TestACloudPathOfTheWrongKindIsRefused, rather than silently formatted into one.
+func TestACloudPathOfTheWrongKindIsRefused(t *testing.T) {
+	_, err := NewPlugin(t.TempDir()).New("main", map[string]value.Value{
+		"cloud": value.Int(7, value.SourceExplicit),
+	})
+	if err == nil {
+		t.Fatal("`cloud: 7` must be refused")
+	}
+	if !strings.Contains(err.Error(), "cloud") {
+		t.Errorf("the error does not name the key: %v", err)
+	}
+}
+
+// TestAnEmptyCloudPathIsRefused. filepath.Join with "" silently yields the project
+// directory, so the instance would open a DIRECTORY and report an unhelpful I/O error
+// much later.
+func TestAnEmptyCloudPathIsRefused(t *testing.T) {
+	_, err := NewPlugin(t.TempDir()).New("main", map[string]value.Value{
+		"cloud": value.String("", value.SourceExplicit),
+	})
+	if err == nil {
+		t.Fatal("an empty `cloud:` must be refused")
+	}
+	// And it says what omitting the key would have given, which is what the user
+	// probably wanted.
+	if !strings.Contains(err.Error(), "fake-cloud-main.json") {
+		t.Errorf("the error does not name the default it would otherwise have used: %v", err)
+	}
+}

@@ -46,7 +46,11 @@ func newImportCommand(opts *GlobalOptions) *cobra.Command {
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			environment := args[0]
-			reg := buildRegistry(opts.Dir)
+			reg, regDiags := stateOnlyRegistry(opts.Dir)
+			if regDiags.HasErrors() {
+				regDiags.Render(cmd.ErrOrStderr())
+				return errProviderInstances
+			}
 			backend := backendFor(opts.Dir)
 
 			return withLockedEnvironment(environment, "import", backend, cmd.ErrOrStderr(),

@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/infrata/infrata/internal/providers"
 	"github.com/infrata/infrata/internal/registry"
 	"github.com/infrata/infrata/pkg/address"
 	"github.com/infrata/infrata/pkg/provider"
@@ -21,6 +22,16 @@ func testRegistry(t *testing.T) *registry.Registry {
 		t.Fatalf("Register: %v", err)
 	}
 	return reg
+}
+
+// testTable is the instance table a project with no `providers:` block gets: one
+// implicit instance, default, named after the only plugin there is.
+//
+// bindReferences takes it as an argument rather than deriving it, because the
+// derivation belongs to stage 4.5 (internal/providers.Prepare) and a stage that
+// re-derived it could come to disagree with the one that built the providers.
+func testTable() providers.Table {
+	return providers.Table{"test": providers.Instance{Name: "test", Plugin: "test", Default: true}}
 }
 
 func oneResource(typ string, attrs map[string]value.Value) *ResolvedConfig {
