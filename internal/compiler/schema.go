@@ -203,27 +203,6 @@ func applyDefaults(attrs map[string]value.Value, def *schema.ResourceDefinition,
 // The matching Scope — ScopeProviderDefault, the floor of PLAN.md §7's
 // precedence chain — is stamped once by checkedDefault rather than in each arm
 // here, so it cannot be applied to six kinds and missed on the seventh.
-func fromDefault(raw any, kind value.Kind) (value.Value, bool) {
-	switch v := raw.(type) {
-	case string:
-		return value.String(v, value.SourceDefault), true
-	case int64:
-		return value.Int(v, value.SourceDefault), true
-	case int:
-		return value.Int(int64(v), value.SourceDefault), true
-	case float64:
-		return value.Float(v, value.SourceDefault), true
-	case bool:
-		return value.Bool(v, value.SourceDefault), true
-	case []value.Value:
-		return value.List(v, value.SourceDefault), true
-	case map[string]value.Value:
-		return value.Map(v, value.SourceDefault), true
-	default:
-		return value.Value{}, false
-	}
-}
-
 // checkedDefault converts a resolver's datum and confirms it produced the kind
 // the attribute declares.
 //
@@ -234,8 +213,8 @@ func fromDefault(raw any, kind value.Kind) (value.Value, bool) {
 // ever filled in, not on the default itself. The declared kind is the
 // contract; the Go type is only how it happens to arrive.
 func checkedDefault(raw any, kind value.Kind) (value.Value, bool) {
-	v, ok := fromDefault(raw, kind)
-	if !ok || v.Kind != kind {
+	v, ok := schema.DatumValue(raw, kind)
+	if !ok {
 		return value.Value{}, false
 	}
 	return v.WithScope(value.ScopeProviderDefault), true
