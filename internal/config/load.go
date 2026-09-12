@@ -224,7 +224,20 @@ func walkConventionalDir(root string, kind FileKind) ([]File, error) {
 
 	out := make([]File, 0, len(paths))
 	for _, p := range paths {
-		f, found, err := loadOptionalFile(p, kind, "")
+		// A vars file at the TOP LEVEL of vars/ names its environment with its
+		// filename (§4.1): default.yml for every environment, <env>.yml for
+		// one. Deeper files cannot lean on a filename and carry the environment
+		// inside instead, so the candidate is empty for them.
+		//
+		// Only a CANDIDATE: whether it names a real environment is decided at
+		// decode, where the declared environments are known. A top-level
+		// vars/sizes.yml naming no environment is an ordinary file, not an
+		// error.
+		env := ""
+		if kind == FileVars && filepath.Dir(p) == root {
+			env = strings.TrimSuffix(filepath.Base(p), ".yml")
+		}
+		f, found, err := loadOptionalFile(p, kind, env)
 		if err != nil {
 			return nil, err
 		}

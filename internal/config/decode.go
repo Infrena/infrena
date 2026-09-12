@@ -76,6 +76,8 @@ func Decode(files []File) (*ProjectDecl, diag.Diagnostics) {
 			decodeVariableValues(f, out, &ds)
 		case FileEnvironment:
 			decodeEnvironmentBody(f.Path, f.Environment, doc, out, &ds, seenEnvironments)
+		case FileVars:
+			decodeVarsFile(f, doc, out, &ds, seenEnvironments)
 		case FileResources:
 			// A file under resources/** or discovered/** carries a `resources:`
 			// block and means exactly what the same block in infra.yml means
@@ -115,6 +117,74 @@ func topLevelShapeDetail(f File) string {
 	default:
 		return "The top level of " + ProjectFileName + " must be a set of keys such as `project` and `resources`."
 	}
+}
+
+// decodeVarsFile decodes one file from vars/** (§4.1).
+//
+// Three shapes, and the filename chooses between them:
+//
+//   - default.yml            every environment; base configuration
+//   - <declared-env>.yml     that environment only
+//   - anything else          bare keys are defaults, keys naming an
+//     environment are that environment's overrides
+//
+// A file naming an environment is a set of DIFFERENCES, not a replacement:
+// default.yml setting size and region while production.yml sets only size
+// leaves production with default's region. That falls out of routing the two
+// into the existing base-config and environment rungs rather than merging them
+// here, which is why this function chooses a destination instead of computing a
+// result.
+func decodeVarsFile(f File, doc *yaml.Node, out *ProjectDecl, ds *diag.Diagnostics, seenEnv map[string]int) {
+	switch {
+	case f.Environment == "default":
+		decodeVariableValues(File{Path: f.Path, Kind: FileVariables, Root: f.Root}, out, ds)
+		return
+	case f.Environment != "" && declaresEnvironment(out, f.Environment):
+		decodeEnvironmentBody(f.Path, f.Environment, doc, out, ds, seenEnv)
+		return
+	}
+
+	// The in-file form. A top-level key is an environment block ONLY if it
+	// names a declared environment; anything else is a variable, whatever shape
+	// its value has. Reinterpreting a map-valued variable as a block would make
+	// a file's meaning depend on its value's shape, and a map is an ordinary
+	// variable value here.
+	for i := 0; i+1 < len(doc.Content); i += 2 {
+		key, val := doc.Content[i], doc.Content[i+1]
+		if !declaresEnvironment(out, key.Value) {
+			v, _ := decodeValue(f.Path, "variable "+strconv.Quote(key.Value), val, ds)
+			out.VariableValues[key.Value] = retagSource(v, value.SourceVariable, value.ScopeUnset, "")
+			continue
+		}
+		if val.Kind != yaml.MappingNode {
+			// A variable that happens to share a name with an environment. An
+			// error rather than a guess, because the alternative is that adding
+			// an environment months later silently changes what this file means
+			// without anyone touching it.
+			ds.Add(diag.Diagnostic{
+				Severity: diag.SeverityError,
+				Summary:  "variable " + strconv.Quote(key.Value) + " collides with the environment of that name",
+				Detail: "A top-level key naming a declared environment is that environment's overrides, so " +
+					strconv.Quote(key.Value) + " cannot also be a variable here.",
+				Action: "Rename the variable, or set it under an environment block.",
+				Origin: originOf(f.Path, key),
+			})
+			continue
+		}
+		decodeEnvironmentBody(f.Path, key.Value, val, out, ds, seenEnv)
+	}
+}
+
+// declaresEnvironment reports whether name is an environment the project
+// declares. Vars files are decoded after infra.yml and environments/, so the
+// set is complete by the time this is asked.
+func declaresEnvironment(out *ProjectDecl, name string) bool {
+	for i := range out.Environments {
+		if out.Environments[i].Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 // decodeResourcesFile decodes one file from resources/** or discovered/**.
