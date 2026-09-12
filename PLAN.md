@@ -671,6 +671,109 @@ Do not initially build a Terraform/HCL-like programming language.
 
 Expressions should remain intentionally constrained.
 
+## 10.1 Interpolation inside a composite value
+
+An interpolation may appear in a string leaf of a list or a map, not only in a
+bare string:
+
+```yaml
+tags:
+  environment: ${environment}
+  project: ${project}
+  team: payments
+```
+
+Until M10 this was refused — "interpolation inside a map is not supported" —
+because `HasExpressions` was set whenever any leaf held `${` while the leaves
+themselves were never parsed, so passing the composite through would have put
+raw `${...}` text into a plan as though it were a literal. The refusal was
+correct for the code that existed; what M10 adds is the walk that makes it
+unnecessary.
+
+Rules:
+
+- Each STRING leaf is parsed and evaluated independently. A leaf with no `${` is
+  untouched.
+- A key is never interpolated. `${x}: y` is not a thing; keys are literal, so a
+  configuration's shape never depends on a value.
+- Sensitivity and provenance are per leaf, as everywhere else (§43). A map one
+  leaf of which resolves to a secret is a map with one sensitive leaf, not a
+  wholly sensitive map — `pkg/value` already models this and
+  `value.Format` already redacts at that granularity.
+- An unknown leaf makes the composite unknown for dependency purposes, because
+  the resource genuinely cannot be created until it resolves. The EDGE is
+  recorded from the leaf, exactly as it would be from a bare string.
+- Nesting is allowed to whatever depth YAML produced, because refusing depth two
+  while allowing depth one would be a rule nobody could predict.
+
+Three places refuse this today — `internal/compiler/bind.go` and two in
+`internal/modules/outputs.go`. They must end up calling ONE walk. Three copies
+of a rule about where expressions may appear is three chances for a module
+output and a resource attribute to disagree about the same YAML.
+
+## 10.2 Functions
+
+The set is FIXED and enumerated. Adding one is a configuration-language change
+requiring an amendment to this section — `internal/expressions/funcs.go` says so
+and must keep saying so.
+
+```text
+lower(s)            upper(s)            trim(s)
+replace(s, old, new)                    join(list, sep)
+default(v, fallback)                    merge(a, b, ...)
+```
+
+`merge` is M10's addition. It takes maps and returns their union, with LATER
+arguments winning per key. It exists because §12.1's provider block REPLACES
+rather than merges, which makes merging something the user asks for explicitly
+rather than something that happens to them.
+
+**Every function is pure, total and side-effect free.** No `now()`, no `uuid()`,
+no file or network access, ever. Those three are the ones most often asked for
+next, and each one silently breaks invariant 6: the same configuration and state
+would produce a different plan on a second run, which is the property the whole
+plan/apply split rests on. A function that cannot be evaluated twice with the
+same answer does not belong in this language.
+
+Sensitivity unions across ALL arguments. This is not a detail: `join()` and
+`replace()` each shipped wrong here, and `replace()`'s omission let a secret
+search term reveal its own position through an unclassified result. `merge` is
+the third chance to get it wrong and the one whose result is most likely to be
+written into a tag.
+
+## 10.3 Literals in argument position
+
+A map or list literal may appear as a function ARGUMENT, and nowhere else:
+
+```yaml
+tags: "${merge(tags, {team: payments, project: billing})}"
+```
+
+Not as a value on its own, because YAML already does that job. Bounding it to
+argument position is what keeps this from being the first step toward a
+programming language.
+
+**The quotes are required, and not by us.** YAML itself rejects the unquoted
+form: a plain scalar may not contain `: `, so `tags: ${merge(a, {b: c})}` fails
+with "mapping values are not allowed in this context" before any of this code
+sees it. That message says nothing about quoting, so the loader detects this
+shape and says what to do.
+
+## 10.4 One scanner
+
+`matchBrace` and `splitArgs` both walk a string tracking quote state and nesting
+depth, and they already share `skipEscape` with a comment explaining why:
+
+> when two scanners disagree, input is accepted by one and rejected by the other,
+> which is the class of bug the quote handling was added to fix in the first place
+
+They get away with the remaining duplication only because one counts `{}` and the
+other counts `()`, and those sets do not overlap today. §10.3 makes them overlap:
+a comma inside a map literal is not an argument separator. **The two must become
+one walk before literals are added**, not after, because the alternative is
+editing both in lockstep — which is exactly what that comment predicts will go
+wrong.
+
 ---
 
 # 11. Modules
@@ -876,6 +979,74 @@ provider
 ```
 
 Do not simply merge defaults into user configuration and lose that information.
+
+---
+
+## 12.1 Provider-wide defaults
+
+A `provider:` block sets defaults applied to every resource of that provider
+that ACCEPTS them:
+
+```yaml
+provider:
+  test:
+    tags: ${tags}
+    prevent_destroy: ${protect}
+```
+
+Attribute resolution gains one rung, between what the resource says and what the
+provider's schema says:
+
+```
+explicit on the resource        tags: {team: payments}
+        ↓
+provider block                 provider: test: tags: ${tags}
+        ↓
+provider schema default        whatever the provider ships
+```
+
+A user-authored default beats a provider-authored one; anything written on the
+resource beats both.
+
+### REPLACE, not merge
+
+A resource that sets an attribute the block also sets gets ITS OWN value, whole.
+A map is not merged.
+
+That is the owner's ruling, and the reason it is safe is §10.2's `merge`: making
+the union explicit is better than a rule that silently combines structures, where
+the combining is invisible in the configuration and a reader cannot tell which
+keys came from where.
+
+```yaml
+tags: "${merge(tags, {team: payments})}"
+```
+
+### What "accepts them" means, and why it must fail closed
+
+A key applies to a resource type only if that type DECLARES it. A key that no
+resource type of that provider declares is an ERROR naming the ones that exist.
+
+Without that, `tag:` instead of `tags:` applies to nothing, silently, in every
+environment, forever. There is no output in which its absence is visible — which
+makes it strictly worse than having no feature.
+
+### Two namespaces in one block
+
+`tags` is a schema attribute; `prevent_destroy` is a `lifecycle:` setting. Both
+are accepted here because that is what people want to write, but they resolve
+differently: EVERY resource accepts lifecycle, only some accept a given
+attribute. The lifecycle key names are therefore RESERVED, and a provider
+declaring an attribute that collides with one is rejected at registration — the
+same place and for the same reason the `module.` type namespace is
+(`registry.Register`).
+
+### Provenance
+
+A value from this block carries its own scope label, so a plan says
+`[default, from provider block]` rather than crediting the resource with
+something nobody wrote there. Generation (§27) omits it for the same reason it
+omits a schema default: it is not something the reader has to supply.
 
 ---
 
