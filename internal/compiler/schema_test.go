@@ -117,20 +117,41 @@ func TestSchemaFillsDefaults(t *testing.T) {
 		t.Errorf("Source = %v, want SourceDefault — a plan must be able to print [default]", size.Source)
 	}
 	if n, _ := size.AsInt(); n != 10 {
-		t.Errorf("size = %d, want the dev default of 10", n)
+		t.Errorf("size = %d, want the default of 10", n)
 	}
 }
 
-func TestSchemaDefaultsAreEnvironmentAware(t *testing.T) {
-	cfg := oneResource("test.database", map[string]value.Value{
-		"engine": value.String("postgres", value.SourceExplicit),
-	})
-	bindSchemas(cfg, testRegistry(t), Options{Environment: "production"})
-
-	// The fake provider's size default is 100 when EnvironmentType is
-	// production, 10 otherwise.
-	if n, _ := cfg.Resources["r"].Attrs["size"].AsInt(); n != 100 {
-		t.Errorf("size = %d in production, want 100 — defaults may vary by environment", n)
+// TestSchemaDefaultsAreEnvironmentAware was here until M9 withdrew PLAN.md §13.
+// It asserted that test.database's size default was 100 in production and 10
+// elsewhere. There is now one default per attribute, so there is nothing left
+// for it to assert — the environment-varying behaviour it pinned is the feature
+// that was removed, not a regression to guard against.
+//
+// TestSchemaDefaultsFillUnsetAttributes above still covers the rung itself.
+func TestADefaultDoesNotVaryByEnvironment(t *testing.T) {
+	// The replacement, and the direction that matters now: the SAME value in
+	// every environment. A default that quietly differed would be the second,
+	// invisible mechanism for environment variation that §13 exists to refuse.
+	var seen []int64
+	for _, env := range []string{"dev", "staging", "production", "prod"} {
+		cfg := oneResource("test.database", map[string]value.Value{
+			"engine": value.String("postgres", value.SourceExplicit),
+		})
+		bindSchemas(cfg, testRegistry(t), Options{Environment: env})
+		n, _ := cfg.Resources["r"].Attrs["size"].AsInt()
+		seen = append(seen, n)
+	}
+	for i, n := range seen {
+		if n != seen[0] {
+			t.Fatalf("the default differs by environment: %v — §13 is withdrawn, and "+
+				"environment %d got %d rather than %d", seen, i, n, seen[0])
+		}
+	}
+	// "production" and "prod" are in that list deliberately: they are the two
+	// names the deleted classifier matched on, so they are where a surviving
+	// copy of it would show.
+	if seen[0] != 10 {
+		t.Errorf("default = %d, want 10", seen[0])
 	}
 }
 
@@ -249,7 +270,7 @@ func TestSchemaReportsEveryProblemAtOnce(t *testing.T) {
 
 func TestSchemaStampsProviderDefaultsWithTheirScope(t *testing.T) {
 	// test.database's `size` is optional with a default (providers/test's
-	// definitions.go): 10 outside production. Filling it is the only rung of
+	// definitions.go): 10, in every environment. Filling it is the only rung of
 	// PLAN.md §7's chain that stages 3 and 4 never see.
 	cfg := oneResource("test.database", map[string]value.Value{
 		"engine": value.String("postgres", value.SourceExplicit),

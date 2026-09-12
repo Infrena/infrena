@@ -63,7 +63,7 @@ func TestCompileExpandsAModule(t *testing.T) {
 		"modules/app-stack/module.yml": appStack,
 		"infra.yml": `
 project: demo
-environments: {dev: {type: development}}
+environments: {dev: {}}
 modules:
   - ./modules/app-stack
 resources:
@@ -122,7 +122,7 @@ func TestCompileStopsAfterModuleErrors(t *testing.T) {
 		"b/module.yml": "modules:\n  - ../a\nresources:\n  y:\n    type: module.a\n",
 		"infra.yml": `
 project: demo
-environments: {dev: {type: development}}
+environments: {dev: {}}
 modules:
   - ./a
 resources:
@@ -153,7 +153,7 @@ func TestTwoModulesEachDeclaringADbResolveSeparately(t *testing.T) {
 		"m/module.yml": "resources:\n  db:\n    type: test.network\n    cidr: 10.0.0.0/16\n  user:\n    type: test.database\n    engine: postgres\n    network: ${db.id}\n",
 		"infra.yml": `
 project: demo
-environments: {dev: {type: development}}
+environments: {dev: {}}
 modules:
   - ./m
 resources:
@@ -193,7 +193,7 @@ func TestAReferenceToAnAttributeThatDoesNotExistIsRefused(t *testing.T) {
 	files, dir := moduleFixture(t, map[string]string{
 		"infra.yml": `
 project: demo
-environments: {dev: {type: development}}
+environments: {dev: {}}
 resources:
   store:
     type: test.network
@@ -225,7 +225,7 @@ func TestAReferenceToAComputedAttributeIsStillFine(t *testing.T) {
 	files, dir := moduleFixture(t, map[string]string{
 		"infra.yml": `
 project: demo
-environments: {dev: {type: development}}
+environments: {dev: {}}
 resources:
   store:
     type: test.network
@@ -249,7 +249,7 @@ func TestAnUnboundNameNamesBothPossibilities(t *testing.T) {
 	files, dir := moduleFixture(t, map[string]string{
 		"infra.yml": `
 project: demo
-environments: {dev: {type: development}}
+environments: {dev: {}}
 resources:
   db:
     type: test.database
@@ -275,7 +275,7 @@ func TestAMisspelledModuleOutputIsDistinguishedFromAnUnboundName(t *testing.T) {
 		"modules/app-stack/module.yml": appStack,
 		"infra.yml": `
 project: demo
-environments: {dev: {type: development}}
+environments: {dev: {}}
 modules:
   - ./modules/app-stack
 resources:

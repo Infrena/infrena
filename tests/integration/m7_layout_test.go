@@ -53,10 +53,8 @@ variables:
   db_password:
     type: string
 environments:
-  dev:
-    type: development
-  production:
-    type: production
+  dev: {}
+  production: {}
 modules:
   - ./modules/app-stack
 `, map[string]string{
@@ -153,8 +151,7 @@ variables:
   db_password:
     type: string
 environments:
-  dev:
-    type: development
+  dev: {}
 modules:
   - ./modules/app-stack
 `
@@ -255,8 +252,7 @@ func TestATemplatesDirectoryIsReservedAndUnread(t *testing.T) {
 	dir := projectWithFiles(t, `
 project: shop
 environments:
-  dev:
-    type: development
+  dev: {}
 `, map[string]string{
 		"templates/policy.yml": "role_name: ${project}-policy\n",
 		"resources/net/net.yml": `

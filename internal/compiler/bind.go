@@ -33,6 +33,15 @@ func bindReferences(exp *modules.Expansion, opts Options, reg *registry.Registry
 	// reference to this target can be checked against.
 	declared := make(map[string]refTarget, len(exp.Instances))
 	for _, inst := range exp.Instances {
+		// A SKIPPED instance is not a reference target (PLAN.md §6.2). Leaving
+		// it here resolves the reference silently and records an edge to a
+		// resource that is never created: the plan reads correctly and the apply
+		// fails waiting for a value nothing will produce. That is the failure
+		// mode this whole rule exists to prevent, and it is why skipped
+		// instances are marked rather than trusted to be harmless.
+		if inst.Skipped {
+			continue
+		}
 		declared[inst.Address.String()] = targetFor(inst, reg)
 	}
 
@@ -56,7 +65,7 @@ func bindReferences(exp *modules.Expansion, opts Options, reg *registry.Registry
 		// change from run to run of the same configuration.
 		for _, name := range sortedAttributeNames(decl.Attributes) {
 			attr := decl.Attributes[name]
-			resolved.Attrs[name] = bindAttribute(inst, attr, declared, edges, &ds)
+			resolved.Attrs[name] = bindAttribute(inst, attr, opts.Environment, declared, edges, &ds)
 		}
 
 		for _, target := range decl.DependsOn {
@@ -73,6 +82,21 @@ func bindReferences(exp *modules.Expansion, opts Options, reg *registry.Registry
 			}
 			key := address.Address{Module: inst.Address.Module, Name: target}.String()
 			if _, ok := declared[key]; !ok {
+				// Skipped BEFORE undeclared: the name is in the file, so
+				// "undeclared" would send the reader after a typo that is not
+				// there. Only a resource that SURVIVES may complain — a skipped
+				// one depending on another skipped one is two things leaving
+				// together, which is fine.
+				if origin, wasSkipped := inst.Scope.Skipped(target); wasSkipped {
+					// See the matching branch in bindAttribute: a skipped
+					// resource depending on a skipped resource reports nothing,
+					// and must not fall through to "undeclared".
+					if !inst.Skipped {
+						ds.Add(skippedTargetDiag(target, opts.Environment, origin, decl.Origin,
+							"depends_on names"))
+					}
+					continue
+				}
 				ds.Add(diag.Diagnostic{
 					Severity: diag.SeverityError,
 					Summary:  "depends_on names an undeclared resource " + strconv.Quote(target),
@@ -102,6 +126,24 @@ func bindReferences(exp *modules.Expansion, opts Options, reg *registry.Registry
 		}
 
 		resolved.DependsOn = sortedAddresses(edges)
+
+		// THE ONE DROP POINT for a skipped resource (PLAN.md §6.2): after
+		// reference binding, before anything downstream.
+		//
+		// After, because binding is what reports a surviving resource depending
+		// on this one — drop it earlier and that diagnostic becomes "no such
+		// resource". Before anything downstream, because from here on a skipped
+		// resource is indistinguishable from one the user deleted, which is
+		// exactly what invariant 1 should make of it: in state, absent from
+		// configuration, therefore destroyed. That is not a side effect of the
+		// feature, it IS the feature.
+		//
+		// Its own attributes were still bound above, and deliberately: a skipped
+		// resource referring to a live one must not report anything, and the only
+		// way to know the reference was legitimate is to resolve it.
+		if inst.Skipped {
+			continue
+		}
 		out.Resources[self] = resolved
 	}
 
@@ -154,6 +196,7 @@ func sortedTargets(set map[string]refTarget) []string {
 func bindAttribute(
 	inst modules.Instance,
 	attr config.AttributeDecl,
+	environment string,
 	declared map[string]refTarget,
 	edges map[string]value.Origin,
 	ds *diag.Diagnostics,
@@ -237,6 +280,20 @@ func bindAttribute(
 					Action: "Reference one of those, or add " + strconv.Quote(ref.Attribute) + " to the module's `outputs:`.",
 					Origin: attr.Origin,
 				})
+				break
+			}
+			if origin, wasSkipped := inst.Scope.Skipped(ref.Target.Name); wasSkipped {
+				// Only a resource that SURVIVES may complain. Two resources
+				// excluded from the same environment referring to each other are
+				// leaving together, which is nothing to report — and falling
+				// through to "undeclared" for that case, which is what this did
+				// before TestASkippedResourceMayReferToAnotherSkippedOne caught
+				// it, is worse than saying nothing: it names a typo that is not
+				// there, on a resource that is not being built.
+				if !inst.Skipped {
+					ds.Add(skippedTargetDiag(ref.Target.Name, environment, origin, attr.Origin,
+						"${"+ref.String()+"} reads"))
+				}
 				break
 			}
 			ds.Add(diag.Diagnostic{
@@ -345,4 +402,36 @@ func sortedAddresses(edges map[string]value.Origin) []address.Address {
 	}
 	address.Sort(out)
 	return out
+}
+
+// skippedTargetDiag reports a surviving resource depending on one that `skip` or
+// `only` removed from this environment (PLAN.md §6.2).
+//
+// NOT "no such resource", which is what this used to be and what the cheapest
+// implementation still produces: the name is in the file, usually a few lines
+// away, so that message sends a reader hunting for a typo that does not exist.
+//
+// It names three things, and each is needed. The TARGET, so the reader knows
+// which name. The ENVIRONMENT, because the same configuration is correct
+// elsewhere and that is the whole point of the feature. And the ORIGIN OF THE
+// FILTER — finding the reference is trivial, finding the `only:` three resources
+// away is the part that costs time.
+func skippedTargetDiag(target, environment string, filter, at value.Origin, lead string) diag.Diagnostic {
+	return diag.Diagnostic{
+		Severity: diag.SeverityError,
+		Summary: lead + " " + strconv.Quote(target) + ", which is skipped in environment " +
+			strconv.Quote(environment),
+		Detail: strconv.Quote(target) + " is excluded from this environment by the `skip`/`only` at " +
+			describeSkipOrigin(filter) + ", so the value this needs will never exist here.",
+		Action: "Skip this resource in the same environments, or widen the filter on " +
+			strconv.Quote(target) + ".",
+		Origin: at,
+	}
+}
+
+func describeSkipOrigin(o value.Origin) string {
+	if o.File == "" {
+		return "its own declaration"
+	}
+	return o.String()
 }

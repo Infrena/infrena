@@ -376,6 +376,133 @@ Each environment must have independent state.
 
 Never require users to manually manipulate Terraform-style workspaces.
 
+Environments are cheap and numerous on purpose. A project may have `dev`,
+`staging`, `sandbox`, `preview-471` and three more nobody remembers creating.
+They hold the SAME infrastructure and differ only in what their variables say —
+that is the whole mechanism for environment variation, and there must not be a
+second one.
+
+## 6.1 An environment is reachable if it is declared OR it has state
+
+Removing an environment from configuration must tear it down, and must let you
+SEE the teardown first.
+
+An environment with state but no declaration has an empty desired
+configuration. Invariant 1 then applies exactly as it does to a single removed
+resource: everything in its state is proposed for destruction. `plan` shows
+that, and `apply` performs it.
+
+The state FILE is deliberately left in place afterwards, holding nothing. It is
+not what makes an environment reachable — "has state" means "state lists
+resources", so an emptied environment is already unreachable as an orphan and
+planning it reports the typo case. Removing the file would also discard the
+serial, which is how a stale plan is detected and which `destroy` is required to
+advance on the write that records its own removals.
+
+A project that declares NO environments at all keeps working with any name, as it
+has since M2 — there is nothing for a name to be a typo against until at least
+one environment is declared. §6.1's rule begins to bite only then.
+
+An environment that is neither declared NOR holds state, in a project that does
+declare others, stays an error naming them. That is what keeps `infra plan devv` a typo rather
+than a silent no-op, and it is why the rule is a disjunction rather than
+"anything goes".
+
+The plan for an undeclared environment must say WHY everything is being
+destroyed — "no environment named X is declared; its state lists N resources"
+— because a total destruction that looks like an ordinary plan is the single
+most alarming output this tool can produce.
+
+## 6.2 Restricting a resource to environments: `skip` and `only`
+
+Any resource may name the environments it belongs to:
+
+```yaml
+resources:
+
+  debug_box:
+    type: test.application
+    skip: [dev, staging]
+
+  replica:
+    type: test.database
+    only: production
+
+  canary:
+    type: test.application
+    only: [staging, production]
+```
+
+Rules:
+
+- **A scalar or a list.** `only: production` and `only: [staging, production]`
+  mean the same shape of thing.
+- **Both keys on one resource is an error.** They are two spellings of one idea
+  and can contradict each other.
+- **An environment named that no environment declares is an error**, naming the
+  ones that exist. A filter that quietly matches nothing is worse than no
+  filter — `skip: [prod]` against an environment called `production` would
+  otherwise do nothing, forever, silently.
+- **A skipped resource is exactly as if it were not declared** in that
+  environment. It follows that adding `skip:` to something already applied
+  PROPOSES DESTROYING IT there. That is the feature, not a side effect, and
+  `lifecycle.prevent_destroy` still refuses it.
+- **A reference to a skipped resource is an error** — `${debug_box.url}` from a
+  live resource reports that `debug_box` is skipped in this environment, NOT
+  "no such resource". The same applies to `depends_on`. The consequence is
+  real: skipping a resource forces you to skip what depends on it. Silently
+  dropping the edge is the alternative, and it produces a plan that applies and
+  then fails partway.
+- **The value may be an expression.** `only: ${replica_environments}` resolving
+  to a string or a list. This is what lets a MODULE be written with parts that
+  the caller can switch off:
+
+  ```yaml
+  # modules/app-stack/module.yml
+  inputs:
+    replica_in:
+      type: list
+      default: []
+  resources:
+    replica:
+      type: test.database
+      only: ${replica_in}
+  ```
+  ```yaml
+  # the caller
+  resources:
+    stack:
+      type: module.app_stack
+      replica_in: [production]
+  ```
+
+- **On a module call**, `skip`/`only` are evaluated in the CALLER's scope,
+  before expansion — a skipped module never expands at all. **Inside a module**
+  they are evaluated in the module's own scope, so they can read its inputs.
+- The names are checked after the expression resolves, so a variable supplying
+  a nonexistent environment is caught too.
+
+A skipped resource cannot simply vanish during expansion, or a reference to it
+reports "no such resource" and the rule above is unimplementable. It stays in
+the expansion marked as skipped, reference binding reports it, and it is
+dropped before the planner sees it.
+
+## 6.3 The process variables
+
+Four values come from the invocation rather than from any file, and are
+available in every scope including inside modules:
+
+| Variable | Source |
+|---|---|
+| `environment` | the environment argument |
+| `project` | `project:` |
+| `region` | `--region`, when supplied |
+| `account` | `--account`, when supplied |
+
+`project` is here because a resource name or a tag almost always wants it, and
+threading it through as an ordinary variable makes every project declare the
+same line.
+
 ---
 
 # 7. Environment Inheritance
@@ -752,40 +879,53 @@ Do not simply merge defaults into user configuration and lose that information.
 
 ---
 
-# 13. Environment-Aware Defaults
+# 13. Environment-Aware Defaults — WITHDRAWN
 
-Defaults may depend on environment.
+**This section described a feature that has been removed. It is kept, rather
+than deleted, because the reasoning is the useful part and because the code
+carried it for seven milestones.**
 
-Example:
+The original idea was that a provider default could vary by environment class:
+a `production` environment would get a larger instance, multi-AZ, stronger
+backups, without anyone writing that at each resource. `schema.DefaultContext`
+carried an `EnvironmentType`, and `environments: { x: { type: production } }`
+looked like the way to set it.
 
-```text
-dev:
-    smaller instance
-    single AZ
-    minimal backups
+It is withdrawn for three reasons, in increasing order of weight.
 
-staging:
-    moderate instance
-    single AZ
-    normal backups
+**It never worked as documented.** `type:` was never a reserved key. The
+environment decoder handles `extends` and `variables`; everything else becomes
+a variable override — so `type: production` silently declared a VARIABLE named
+`type`, reachable as `${type}`, and classified nothing. Classification was done
+by matching the environment's NAME against `"production"` and `"prod"`.
 
-production:
-    larger instance
-    multi-AZ
-    stronger backup defaults
-```
+**Name-matching is wrong exactly where it matters.** §6 says environments are
+cheap and numerous. `prod-eu`, `production-canary` and `staging` all classify
+as non-production and silently receive development-shaped defaults — a quietly
+wrong value in the environment least able to absorb one.
 
-Provider default calculation may consider:
+**It competes with variables, and loses.** §6 fixes ONE mechanism for
+environment variation: what the environment's variables say. A provider default
+that changes with environment class is a second mechanism for the same job,
+invisible in the configuration, discoverable only by reading a plan annotation
+or running `explain`. Two mechanisms for one concept is the defect this project
+refuses everywhere else.
 
-* Environment
-* Region
-* Account
-* Resource type
-* Project
+So: **a provider default is a single value per attribute.** Anything that
+should differ between environments is a variable, which is visible in the
+configuration, carries provenance, and is already built.
 
-Defaults should remain conservative and predictable.
+`DefaultContext` keeps `Environment`, `Region`, `Account`, `Project` and
+`Type` — facts about the invocation, not a classification of it. `type:` in an
+environment block is an ERROR naming what to use instead, because leaving it to
+become a silent variable is the trap rather than the fix.
 
-Do not silently choose expensive production infrastructure without clearly showing it in the plan.
+## 13.1 What this does not remove
+
+Production PROTECTION is a separate concern and survives (§20, §38). When it is
+built it is declared on the environment directly — `require_approval: true` —
+rather than implied by a class. A protection you can read on the environment
+beats one inferred from its name.
 
 ---
 
@@ -1611,13 +1751,21 @@ Useful options:
 Environment configuration should support:
 
 ```yaml
-environment:
-  type: production
-
-  protections:
+environments:
+  production:
     require_approval: true
     prevent_destroy: true
 ```
+
+**Declared on the environment, not implied by a class.** An earlier draft of
+this section wrote `type: production` and let the protections follow from it.
+§13 withdraws that: environment classification by name or by a `type:` key is
+gone, and a protection you can read on the environment beats one inferred from
+what it is called. `prod-eu` protects itself by saying so.
+
+Neither key is implemented yet. `lifecycle.prevent_destroy` on a RESOURCE is
+built and works; this is its environment-wide sibling, and `require_approval`
+has no implementation at all.
 
 Desired behavior:
 

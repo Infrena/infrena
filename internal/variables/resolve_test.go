@@ -690,7 +690,10 @@ func TestResolveRefusesDashDashVarNamingEnvironment(t *testing.T) {
 // covers region/account too — nothing else in this file exercises a
 // --var-file entry naming any of the three reserved names.
 func TestResolveRefusesVarFileNamingReservedNames(t *testing.T) {
-	for _, name := range []string{"environment", "region", "account"} {
+	// All FOUR reserved names, because rung 5 (--var-file) and rung 6 (--var)
+	// each consult processReservedNames separately. A name refused on one path
+	// and applied on the other is the shape M4 fixed for `environment`.
+	for _, name := range []string{"environment", "region", "account", "project"} {
 		files := map[string]value.Value{
 			name: value.String("nope", value.SourceVariable).
 				WithScope(value.ScopeCLIOverride).
@@ -704,8 +707,12 @@ func TestResolveRefusesVarFileNamingReservedNames(t *testing.T) {
 	}
 }
 
+// TestProcessVariablesMatchesWhatOverrideDocuments pins the SET, so that adding
+// or removing one is a deliberate configuration-language change rather than a
+// side effect. It caught M9 adding `project` (PLAN.md §6.3), which is what it is
+// for — update it only alongside a spec amendment.
 func TestProcessVariablesMatchesWhatOverrideDocuments(t *testing.T) {
-	want := []string{"account", "environment", "region"}
+	want := []string{"account", "environment", "project", "region"}
 	if len(ProcessVariables) != len(want) {
 		t.Fatalf("ProcessVariables = %v, want %v", ProcessVariables, want)
 	}

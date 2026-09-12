@@ -76,6 +76,28 @@ alternatives (writing it to disk, or dropping it from state) are both worse. Min
 asserted SEPARATELY from the round trip, because a generator emitting every attribute would
 also plan clean.
 
+**New in M9 — environments do what §6 says.** `skip` and `only` on any resource name the
+environments it belongs to, as a scalar, a list, or an expression — which is what lets a module
+be written with parts a caller switches off. An environment is reachable if it is DECLARED or it
+HAS STATE, so removing one from configuration proposes tearing it down and lets you see the
+teardown first. `${project}` is a fourth process variable.
+
+Three rules to know before touching any of it:
+
+- **A skipped resource is exactly as if never declared, EXCEPT that something still knows it was
+  skipped.** It is marked in stage 5, reported by stage 6, and dropped at ONE place in
+  `bindReferences` — after reference binding, before anything downstream. Drop it earlier and a
+  reference to it reports "no such resource", sending a reader after a typo that is not there.
+  The marking also means its own attributes are still bound, so a mistake inside a
+  production-only resource surfaces when you plan dev.
+- **The teardown configuration is SUPPLIED, never compiled.** `resources:` is global, so
+  compiling an undeclared environment yields every resource and plans a full CREATE against one
+  that already holds them. `internal/cli/environment.go` owns the rule.
+- **Environment-class defaults are WITHDRAWN** (§13). A provider default is one value per
+  attribute; anything that differs between environments is a variable. `type:` in an environment
+  is an error, because leaving it alone was never inert — it silently declared a variable named
+  `type`.
+
 **Absent until Phase 3+:** reading a saved plan back, remote state, AWS. Nothing half-implements
 one of those.
 

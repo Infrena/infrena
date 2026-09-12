@@ -12,6 +12,7 @@ import (
 
 	"github.com/infrata/infrata/internal/compiler"
 	"github.com/infrata/infrata/internal/config"
+	"github.com/infrata/infrata/internal/diag"
 	"github.com/infrata/infrata/internal/planner"
 	"github.com/infrata/infrata/internal/refresh"
 )
@@ -57,16 +58,32 @@ func newPlanCommand(opts *GlobalOptions) *cobra.Command {
 			}
 
 			reg := buildRegistry(opts.Dir)
-			cfg, ds := compiler.Compile(files, reg, copts)
-			ds.Extend(cds)
-			if ds.HasErrors() {
-				ds.Render(cmd.ErrOrStderr())
-				return errors.New("configuration is not valid")
-			}
 
+			// State is read BEFORE compiling, because §6.1's rule needs it: an
+			// environment is reachable if it is declared OR it has state.
 			st, err := backendFor(opts.Dir).Get(cmd.Context(), environment)
 			if err != nil {
 				return err
+			}
+
+			var cfg compiler.ResolvedConfig
+			ds := cds
+			switch disp, declared := dispositionOf(files, environment, st); disp {
+			case unknownEnvironment:
+				return unknownEnvironmentError(environment, declared)
+			case orphanedEnvironment:
+				// Deliberately NOT compiled — see orphanedEnvironment's doc
+				// comment for what compiling would produce instead.
+				cfg = teardownConfig(st, environment)
+				fmt.Fprint(cmd.OutOrStdout(), teardownNotice(environment, declared))
+			default:
+				var compileDiags diag.Diagnostics
+				cfg, compileDiags = compiler.Compile(files, reg, copts)
+				ds.Extend(compileDiags)
+			}
+			if ds.HasErrors() {
+				ds.Render(cmd.ErrOrStderr())
+				return errors.New("configuration is not valid")
 			}
 
 			obs, refreshDiags := refresh.Refresh(cmd.Context(), st, reg, opts.Parallelism, perProviderParallelism, nil)

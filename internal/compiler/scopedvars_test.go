@@ -37,9 +37,8 @@ variables:
   size:
     type: integer
 environments:
-  dev: {type: development}
+  dev: {}
   production:
-    type: production
     size: 100
 `,
 		"variables.yml": "size: 10\n",

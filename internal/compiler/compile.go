@@ -103,7 +103,7 @@ func Compile(files []config.File, reg *registry.Registry, opts Options) (Resolve
 	fileValues := fileVars(project, opts)
 	scope, varDiags := variables.Resolve(project.Variables, chain, fileValues, nil, opts.Vars)
 	ds.Extend(varDiags)
-	seedProcessVariables(&scope, opts)
+	seedProcessVariables(&scope, project.Project, opts)
 	if varDiags.HasErrors() {
 		// Stage 6 would report `undefined variable` for each of the same
 		// names at each use site — the same problem told twice, with the
@@ -120,7 +120,10 @@ func Compile(files []config.File, reg *registry.Registry, opts Options) (Resolve
 		return ResolvedConfig{}, ds
 	}
 
-	expansion, moduleDiags := modules.Expand(project, scope, dirScopes, opts.Dir, source.NewCache(opts.Dir))
+	// The environment, and every environment declared, so stage 5 can resolve
+	// `skip`/`only` and refuse a name nothing declares (PLAN.md §6.2).
+	env := modules.Env{Name: opts.Environment, Declared: declaredEnvironments(project)}
+	expansion, moduleDiags := modules.Expand(project, scope, dirScopes, env, opts.Dir, source.NewCache(opts.Dir))
 	ds.Extend(moduleDiags)
 	if moduleDiags.HasErrors() {
 		// This halt suppresses ALL of stage 6, including diagnostics with
@@ -265,7 +268,7 @@ func directoryScopes(
 		// just the project-wide one — a ${environment} that resolved inside
 		// resources/db/ and nowhere else would be worse than one that resolved
 		// nowhere. See seedProcessVariables.
-		seedProcessVariables(&scope, opts)
+		seedProcessVariables(&scope, project.Project, opts)
 		out[dir] = scope
 	}
 	return out, ds
@@ -279,6 +282,17 @@ func diagKey(d diag.Diagnostic) string {
 		"\x00" + d.Action + "\x00" + d.Origin.String()
 }
 
+// declaredEnvironments lists every declared environment, sorted. Empty for a
+// project that declares none, which is the case §6.2 leaves unchecked.
+func declaredEnvironments(p *config.ProjectDecl) []string {
+	out := make([]string, 0, len(p.Environments))
+	for _, e := range p.Environments {
+		out = append(out, e.Name)
+	}
+	sort.Strings(out)
+	return out
+}
+
 func sortedDirs(m map[string]map[string]value.Value) []string {
 	out := make([]string, 0, len(m))
 	for dir := range m {
@@ -288,13 +302,20 @@ func sortedDirs(m map[string]map[string]value.Value) []string {
 	return out
 }
 
-// seedProcessVariables adds the three variables that come from the process
+// seedProcessVariables adds the four variables that come from the process
 // invocation rather than from any file.
 //
 // `environment` is unconditional and authoritative: configuration names its
 // own environment (PLAN.md §10's example is `name: ${project_name}-${environment}`),
 // and a --var that could change it would produce resource names claiming one
 // environment while the plan changed another.
+//
+// `project` is unconditional for the same reason and from the same place the
+// plan header reads it: PLAN.md §6.3. It is the one of the four that comes
+// from CONFIGURATION rather than from the command line, which is why it is
+// passed in rather than read off Options — Options is the invocation, and
+// widening it with a value decoded from a file would make two things the
+// source of one fact.
 //
 // `region` and `account` are added only when supplied. Injecting an empty
 // string instead would interpolate silently into a resource name; leaving
@@ -316,13 +337,14 @@ func sortedDirs(m map[string]map[string]value.Value) []string {
 // actually supplied the value: the environment argument to the command
 // itself, not a flag. Region and account get the parallel, honest answer —
 // they are read from the invocation's own Options, not from any flag either.
-func seedProcessVariables(scope *variables.Scope, opts Options) {
+func seedProcessVariables(scope *variables.Scope, project string, opts Options) {
 	origin := value.Origin{File: "<command line>"}
 	set := func(name, text, suppliedBy string) {
 		scope.Override(name, value.String(text, value.SourceEnvironment).
 			WithScope(value.ScopeCLIOverride).WithOrigin(origin).WithSuppliedBy(suppliedBy))
 	}
 	set("environment", opts.Environment, "the environment argument")
+	set("project", project, "the project name")
 	if opts.Region != "" {
 		set("region", opts.Region, "the invocation's region")
 	}

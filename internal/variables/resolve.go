@@ -49,7 +49,7 @@ func (s Scope) Names() []string {
 // inputs, and nothing else — PLAN.md §11.3). Override's doc comment below has
 // always named exactly these three; this is that sentence made readable by a
 // caller.
-var ProcessVariables = []string{"account", "environment", "region"}
+var ProcessVariables = []string{"account", "environment", "project", "region"}
 
 // Override records a value that comes from the process invocation rather than
 // from any configuration file.
@@ -415,7 +415,7 @@ func checkAgainstSchemas(schemas map[string]Schema, out *Scope, chain environmen
 	return ds
 }
 
-// processReservedNames are the three variable names the process invocation
+// processReservedNames are the four variable names the process invocation
 // itself supplies rather than any configuration file — see
 // compiler.seedProcessVariables, the only caller of Scope.Override, and its
 // doc comment for exactly which of the three are unconditional. Declaring one
@@ -425,10 +425,15 @@ var processReservedNames = map[string]bool{
 	"environment": true,
 	"region":      true,
 	"account":     true,
+	// `project` joins them for the same reason `environment` is here: it is
+	// declared in configuration and recorded in state, so a --var that changed
+	// it would make a resource claim one project while its state recorded
+	// another.
+	"project": true,
 }
 
 // reservedNameDiag refuses a --var or --var-file entry naming one of the
-// three process-reserved names (M4 final review, MAJOR 3).
+// four process-reserved names (M4 final review, MAJOR 3).
 //
 // Before this, Resolve applied the entry like any other variable and
 // compiler.seedProcessVariables silently overwrote it moments later with no
@@ -438,7 +443,7 @@ var processReservedNames = map[string]bool{
 // failure this project refuses everywhere else: destroy and refresh already
 // REFUSE --var/--var-file outright for the parallel reason that neither
 // command interpolates a variable into anything (varopts.go's
-// rejectVariableFlags). This is that same refusal, narrowed to the three
+// rejectVariableFlags). This is that same refusal, narrowed to the four
 // names it actually applies to — --var otherwise works normally for
 // validate/plan/apply.
 //
@@ -453,12 +458,40 @@ func reservedNameDiag(name, flag string, origin value.Origin) diag.Diagnostic {
 	return diag.Diagnostic{
 		Severity: diag.SeverityError,
 		Summary:  flag + " cannot set " + strconv.Quote(name),
-		Detail: strconv.Quote(name) + " is one of the three names the process invocation supplies " +
-			"itself, not configuration: it is the environment being planned or applied, or comes " +
-			"from the invocation's own region/account, never from a variable. Supplying it through " +
-			flag + " would be silently discarded in favour of the process's own value.",
+		// Says which ONE of the four this is, rather than describing the set.
+		// The previous wording enumerated three sources and was left behind by
+		// M9 adding `project` — a message that lists the wrong set is worse than
+		// one that lists none, because a reader checks their case against it.
+		// "set by the engine, not by a variable" is the one framing true of all
+		// four. An earlier draft of this said "comes from the invocation rather
+		// than from configuration", which is right for three of them and
+		// self-contradictory for `project` — it comes from `project:`, which IS
+		// configuration.
+		Detail: strconv.Quote(name) + " is set by the engine, not by a variable: " +
+			reservedNameSource(name) + ". Supplying it through " + flag +
+			" would be silently discarded in favour of the engine's own value.",
 		Action: reservedNameAction(name, flag),
 		Origin: origin,
+	}
+}
+
+// reservedNameSource says where the value actually comes from, one clause per
+// name. A shared sentence describing "the process invocation" would leave a
+// reader guessing which part of it they had collided with.
+func reservedNameSource(name string) string {
+	switch name {
+	case "environment":
+		return "it is the environment being planned or applied, named as the command's own argument, " +
+			"and it decides which state file this run writes"
+	case "project":
+		return "it comes from `project:` in the configuration, and every resource name and state " +
+			"entry is written against it"
+	case "region":
+		return "it comes from the invocation's own region"
+	case "account":
+		return "it comes from the invocation's own account"
+	default:
+		return "it is supplied by the process"
 	}
 }
 

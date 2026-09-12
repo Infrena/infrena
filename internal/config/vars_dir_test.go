@@ -35,7 +35,7 @@ func isInt(o OverrideDecl, want int64) bool {
 	return ok && n == want
 }
 
-const varsBase = "project: p\nenvironments:\n  dev: {type: development}\n  production: {type: production}\n"
+const varsBase = "project: p\nenvironments:\n  dev: {}\n  production: {}\n"
 
 // TestDefaultYmlIsBaseConfiguration — it applies to every environment, so it lands on the base
 // configuration rung rather than on any one environment.

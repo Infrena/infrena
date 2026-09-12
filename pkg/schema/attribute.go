@@ -9,16 +9,22 @@ import "github.com/infrata/infrata/pkg/value"
 
 // DefaultContext is everything a default resolver is allowed to see.
 //
+// It carries FACTS about the invocation, never a classification of it.
+// `EnvironmentType` was removed in M9 (PLAN.md §13, withdrawn): a provider
+// default is one value per attribute, and anything that should differ between
+// environments is a variable, which is visible in the configuration and carries
+// provenance. Re-adding a classification field would reintroduce a second,
+// invisible mechanism for something variables already do.
+//
 // It deliberately excludes other resources' attributes: defaults must never
 // depend on unknown values, so that they are always computable at plan time.
 // Spec §7.3.
 type DefaultContext struct {
-	Environment     string
-	EnvironmentType string // e.g. "production"
-	Region          string
-	Account         string
-	Project         string
-	Type            string
+	Environment string
+	Region      string
+	Account     string
+	Project     string
+	Type        string
 }
 
 // DefaultFunc returns a default datum and whether one applies. Returning false

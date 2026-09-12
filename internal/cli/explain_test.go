@@ -44,19 +44,21 @@ func TestExplainRendersEveryGroup(t *testing.T) {
 	}
 }
 
-// TestExplainStatesAnEnvironmentDependentDefaultAsBoth is the honest half.
+// TestExplainStatesADefaultOnce replaces
+// TestExplainStatesAnEnvironmentDependentDefaultAsBoth, which asserted that
+// `explain` printed "default: 10, or 100 in production". M9 withdrew PLAN.md
+// §13, so a default no longer varies and there is one number to print.
 //
-// A default is a FUNCTION of the environment: test.database's size is 100 in
-// production and 10 elsewhere. Printing one number is true in one environment
-// and a lie in the other, and a user reading `default: 10` before a production
-// apply is being actively misled.
-func TestExplainStatesAnEnvironmentDependentDefaultAsBoth(t *testing.T) {
+// The absence assertion is the load-bearing half: if a classifier survived
+// anywhere, this output is where it would surface first, because `explain`
+// reads the schema directly rather than through a compile.
+func TestExplainStatesADefaultOnce(t *testing.T) {
 	out, _ := explainOut(t, "explain", "test.database")
-	if !strings.Contains(out, "10") || !strings.Contains(out, "100") {
-		t.Errorf("both values of a varying default must appear:\n%s", out)
+	if !strings.Contains(out, "default: 10") {
+		t.Errorf("the default must be stated:\n%s", out)
 	}
-	if !strings.Contains(out, "production") {
-		t.Errorf("the output must say WHICH environment differs, or the two numbers are noise:\n%s", out)
+	if strings.Contains(out, "in production") || strings.Contains(out, "100") {
+		t.Errorf("`explain` still renders an environment-varying default:\n%s", out)
 	}
 }
 

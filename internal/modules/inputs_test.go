@@ -54,7 +54,7 @@ resources:
 		"m/module.yml": moduleWithReplicas,
 	})
 
-	exp, ds := Expand(decl, variables.Scope{}, nil, dir, paths{})
+	exp, ds := Expand(decl, variables.Scope{}, nil, Env{Name: "dev"}, dir, paths{})
 	if ds.HasErrors() {
 		t.Fatalf("unexpected diagnostics: %+v", ds)
 	}
@@ -79,7 +79,7 @@ func TestUnsuppliedInputTakesTheDeclaredDefaultAtScopeModuleDefault(t *testing.T
 		"m/module.yml": moduleWithReplicas,
 	})
 
-	exp, ds := Expand(decl, variables.Scope{}, nil, dir, paths{})
+	exp, ds := Expand(decl, variables.Scope{}, nil, Env{Name: "dev"}, dir, paths{})
 	if ds.HasErrors() {
 		t.Fatalf("unexpected diagnostics: %+v", ds)
 	}
@@ -120,7 +120,7 @@ resources:
 	vars := callerVars("count", value.Int(9, value.SourceVariable).
 		WithScope(value.ScopeCLIOverride).WithSuppliedBy("--var"))
 
-	exp, ds := Expand(decl, vars, nil, dir, paths{})
+	exp, ds := Expand(decl, vars, nil, Env{Name: "dev"}, dir, paths{})
 	if ds.HasErrors() {
 		t.Fatalf("unexpected diagnostics: %+v", ds)
 	}
@@ -170,7 +170,7 @@ resources:
 	vars := callerVars("size", value.String("from-the-caller", value.SourceVariable).
 		WithScope(value.ScopeBaseConfig))
 
-	exp, ds := Expand(decl, vars, nil, dir, paths{})
+	exp, ds := Expand(decl, vars, nil, Env{Name: "dev"}, dir, paths{})
 	if ds.HasErrors() {
 		t.Fatalf("unexpected diagnostics: %+v", ds)
 	}
@@ -194,7 +194,7 @@ func TestModuleDoesNotSeeTheCallersVariables(t *testing.T) {
 
 	vars := callerVars("caller_only", value.String("x", value.SourceVariable))
 
-	exp, ds := Expand(decl, vars, nil, dir, paths{})
+	exp, ds := Expand(decl, vars, nil, Env{Name: "dev"}, dir, paths{})
 	if ds.HasErrors() {
 		t.Fatalf("unexpected diagnostics: %+v", ds)
 	}
@@ -224,7 +224,7 @@ resources:
 		"m/module.yml": moduleWithReplicas,
 	})
 
-	_, ds := Expand(decl, variables.Scope{}, nil, dir, paths{})
+	_, ds := Expand(decl, variables.Scope{}, nil, Env{Name: "dev"}, dir, paths{})
 	if !hasFragment(ds, "module \"m\" has no input \"replicase\"") {
 		t.Errorf("a typo'd input must be refused, not silently dropped in favour of the "+
 			"default; got %+v", ds)
@@ -247,7 +247,7 @@ resources:
 `,
 	})
 
-	exp, ds := Expand(decl, variables.Scope{}, nil, dir, paths{})
+	exp, ds := Expand(decl, variables.Scope{}, nil, Env{Name: "dev"}, dir, paths{})
 	if !hasFragment(ds, "module \"app\" requires input \"image\"") {
 		t.Errorf("an input with no default and no value must be refused; got %+v", ds)
 	}
@@ -283,7 +283,7 @@ resources:
 `,
 	})
 
-	exp, _ := Expand(decl, variables.Scope{}, nil, dir, paths{})
+	exp, _ := Expand(decl, variables.Scope{}, nil, Env{Name: "dev"}, dir, paths{})
 	got, ok := scopeOf(t, exp, "worker").Variable("count")
 	if !ok {
 		t.Fatal("count is not in scope")
@@ -313,7 +313,7 @@ resources:
 		"m/module.yml": moduleWithReplicas,
 	})
 
-	_, ds := Expand(decl, variables.Scope{}, nil, dir, paths{})
+	_, ds := Expand(decl, variables.Scope{}, nil, Env{Name: "dev"}, dir, paths{})
 	if !ds.HasErrors() {
 		t.Fatal("a string supplied for an integer input must be refused")
 	}

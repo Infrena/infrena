@@ -374,6 +374,22 @@ func decodeResources(path string, node *yaml.Node, dst *[]*ResourceDecl, ds *dia
 					}
 					r.DependsOn = append(r.DependsOn, text)
 				}
+			case "skip", "only":
+				// Named keys rather than attributes: everything this switch does
+				// not recognise becomes an ATTRIBUTE, so falling through would
+				// reach stage 7 as "no attribute skip" on every resource using
+				// the feature.
+				//
+				// The VALUE is decoded exactly as an attribute would be, because
+				// it may be an expression (§6.2) and stage 5 evaluates it with
+				// the machinery that already evaluates attributes.
+				v, hasExpr := decodeValue(path, "`"+key.Value+"`", val, ds)
+				d := AttributeDecl{Name: key.Value, Value: v, HasExpressions: hasExpr, Origin: keyOrigin}
+				if key.Value == "skip" {
+					r.Skip = d
+				} else {
+					r.Only = d
+				}
 			case "lifecycle":
 				decodeLifecycle(path, val, r, ds)
 			default:
@@ -385,6 +401,22 @@ func decodeResources(path string, node *yaml.Node, dst *[]*ResourceDecl, ds *dia
 					Origin:         keyOrigin,
 				}
 			}
+		}
+
+		// §6.2: two spellings of one idea, and they can contradict — `skip: [dev]`
+		// with `only: [dev]` means nothing coherent. Refused rather than given a
+		// precedence, because any precedence here is a coin-flip a reader would
+		// have to memorise.
+		if r.Skip.Name != "" && r.Only.Name != "" {
+			ds.Add(diag.Diagnostic{
+				Severity: diag.SeverityError,
+				Summary:  "resource " + strconv.Quote(r.Name) + " sets both `skip` and `only`",
+				Detail: "They are two ways of saying the same thing and can contradict each other: " +
+					"`only` is also set at " + describeOrigin(r.Only.Origin) + ".",
+				Action: "Keep whichever reads better and remove the other. `only` lists the " +
+					"environments the resource belongs to; `skip` lists the ones it does not.",
+				Origin: r.Skip.Origin,
+			})
 		}
 
 		if r.Type == "" && !typeReported {
@@ -1203,6 +1235,25 @@ func decodeEnvironmentBody(path, name string, body *yaml.Node, out *ProjectDecl,
 			for j := 0; j+1 < len(val.Content); j += 2 {
 				addOverride(path, env, val.Content[j], val.Content[j+1], ds)
 			}
+
+		case "type":
+			// PLAN.md §13, withdrawn. Refused rather than left alone, because
+			// "left alone" is not inert: every other key in this block becomes a
+			// variable override, so `type: production` silently declared a
+			// VARIABLE named `type` and classified nothing. Someone writing it
+			// expects it to do something, and a key that quietly does something
+			// else is worse than one that is rejected.
+			ds.Add(diag.Diagnostic{
+				Severity: diag.SeverityError,
+				Summary:  "environment " + strconv.Quote(name) + " sets `type`, which no longer means anything",
+				Detail: "Environment classification was withdrawn (PLAN.md §13): a provider default is one " +
+					"value per attribute, and anything that differs between environments is a variable. " +
+					"Left in place, `type:` would declare a variable named \"type\" — which is what it did " +
+					"before this became an error.",
+				Action: "Remove it. To vary a value by environment, set that value in this environment's " +
+					"variables. For production protections, see PLAN.md §38.",
+				Origin: keyOrigin,
+			})
 
 		default:
 			// PLAN.md §7's spelling: any other key is an override.
