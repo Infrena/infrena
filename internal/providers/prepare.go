@@ -89,20 +89,24 @@ func Register(table Table, reg *registry.Registry) diag.Diagnostics {
 				Severity: diag.SeverityError,
 				Summary:  "provider instance " + strconv.Quote(name) + " could not be configured",
 				Detail:   err.Error(),
-				Action: "Correct the `providers:` entry for " + strconv.Quote(name) +
-					", which " + describeOrigin(inst.Origin) + ".",
-				Origin: inst.Origin,
+				Action:   correctionFor(name, inst.Origin),
+				Origin:   inst.Origin,
 			})
 		}
 	}
 	return ds
 }
 
-// describeOrigin says where an instance was declared, for an instance that has no
-// declaration to point at — the implicit one.
-func describeOrigin(o value.Origin) string {
+// correctionFor says what to fix, without repeating the location the diagnostic
+// already renders above it.
+//
+// The implicit instance is the case worth spelling out: there is no `providers:` entry
+// to correct, so a reader told to correct one goes looking for a block that is not
+// there.
+func correctionFor(name string, o value.Origin) string {
 	if o.File == "" {
-		return "this project does not declare, so it is implicit"
+		return "This project declares no `providers:` block, so it has one implicit instance " +
+			"named " + strconv.Quote(name) + ". Declare the block to configure it."
 	}
-	return "is declared at " + o.String()
+	return "Correct the `providers:` entry for " + strconv.Quote(name) + "."
 }
