@@ -17,14 +17,13 @@ their own and are what M10 now is.
 **Architecture:** Four capabilities, strictly ordered because each is load-bearing for the next.
 One scanner replaces two. Composite values learn to carry interpolations, in ONE walk that three
 existing refusal sites call. `merge()` joins the fixed function set, with literals permitted in
-argument position. Then the `provider:` block, which is a new rung in attribute resolution and
-needs all three.
+argument position.
 
 **Tech Stack:** Go 1.24, Cobra, `gopkg.in/yaml.v3`. No new dependency.
 
 **Spec:** `PLAN.md` §10.1 (composite interpolation), §10.2 (functions, purity, sensitivity),
-§10.3 (argument-position literals), §10.4 (one scanner), §12.1 (the provider block), §43
-(provenance), §36 (redaction).
+§10.3 (argument-position literals), §10.4 (one scanner), §43 (provenance), §36 (redaction).
+§12.1 moved to M11.
 
 ## Global Constraints
 
@@ -55,9 +54,10 @@ needs all three.
 **Sensitivity is per leaf, and every new path that touches a composite is a new chance to lose
 it.**
 
-M10 adds three of them: the walk that evaluates leaves inside a map, `merge()` combining two
-maps, and the provider block supplying a map to every resource. A secret is most likely to reach
-a TAG, and a tag is the value most likely to be printed, exported, and committed.
+M10 adds two of them: the walk that evaluates leaves inside a map, and `merge()` combining two
+maps. (The third, a provider supplying a map to every resource, moved to M11 with §12.1.) A
+secret is most likely to reach a TAG, and a tag is the value most likely to be printed, exported,
+and committed.
 
 `pkg/value` already models per-leaf sensitivity and `value.Format` already redacts at that
 granularity. Every task below must use them rather than deciding again — and `join()` and
@@ -65,8 +65,8 @@ granularity. Every task below must use them rather than deciding again — and `
 secret search term reveal its position through an unclassified result.
 
 **Ordering is not negotiable.** Task 1 before Task 3, because adding literals to two scanners
-means editing both in lockstep. Task 2 before Task 5, because the provider block's whole purpose
-is supplying a map whose leaves interpolate.
+means editing both in lockstep — verified retrospectively: Task 3's first sabotage narrows the
+shared scanner back to parens only and fails every map-literal test.
 
 ---
 
