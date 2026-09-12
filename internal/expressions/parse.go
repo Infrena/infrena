@@ -223,10 +223,152 @@ func parseExpr(src string, origin value.Origin, ds *diag.Diagnostics) *value.Exp
 		return &value.Expr{Op: value.OpLiteral, Literal: value.String(unquoted, value.SourceExplicit), Origin: origin}
 	}
 
+	// A literal is only an ARGUMENT (PLAN.md §10.3). Refused here rather than
+	// left to parseReference, which would report "malformed reference" and send
+	// the reader after a name they did not write.
+	if src[0] == '{' || src[0] == '[' {
+		ds.Add(diag.Diagnostic{
+			Severity: diag.SeverityError,
+			Summary:  "a literal may only appear as a function argument",
+			Detail: "`" + src + "` is written where a variable, a resource attribute or a " +
+				"function call is expected. YAML already expresses maps and lists, so the " +
+				"language does not.",
+			Action: "Write the value as YAML, or pass it to a function: " +
+				"`${merge(tags, " + src + ")}`.",
+			Origin: origin,
+		})
+		return nil
+	}
+
 	if open := strings.Index(src, "("); open >= 0 {
 		return parseCall(src, open, origin, ds)
 	}
 	return parseReference(src, origin, ds)
+}
+
+// parseArgument parses one argument of a call, which is the ONLY position a map
+// or list literal may appear in (PLAN.md §10.3).
+//
+// Bounding literals to this position is what keeps them from being the first step
+// toward a programming language: YAML already expresses a map everywhere else.
+func parseArgument(src string, origin value.Origin, ds *diag.Diagnostics) *value.Expr {
+	switch {
+	case strings.HasPrefix(src, "{"):
+		return parseMapLiteral(src, origin, ds)
+	case strings.HasPrefix(src, "["):
+		return parseListLiteral(src, origin, ds)
+	default:
+		return parseExpr(src, origin, ds)
+	}
+}
+
+// parseMapLiteral parses `{key: value, key: value}`.
+//
+// INSIDE A LITERAL, A BARE WORD IS A STRING, not a variable. `{team: payments}`
+// means the string "payments", which is what the YAML around it would mean and
+// what anyone writing it expects. Treating it as a reference would make the
+// obvious spelling silently resolve to something else — and there is no need
+// for it, because a variable belongs in another argument: `merge(tags, {...})`.
+//
+// Keys are text, unquoted and uninterpolated, for the reason §10.1 gives: a
+// configuration's shape must not depend on a value.
+func parseMapLiteral(src string, origin value.Origin, ds *diag.Diagnostics) *value.Expr {
+	if !strings.HasSuffix(src, "}") {
+		ds.Add(literalDiag("map", src, "}", origin))
+		return nil
+	}
+	items := map[string]value.Value{}
+	for _, raw := range splitArgs(src[1 : len(src)-1]) {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			continue
+		}
+		colon := strings.Index(raw, ":")
+		if colon < 0 {
+			ds.Add(diag.Diagnostic{
+				Severity: diag.SeverityError,
+				Summary:  "map literal entry " + strconv.Quote(raw) + " has no `:`",
+				Detail:   "Each entry of a map literal is `key: value`.",
+				Action:   "Write `" + raw + ": <value>`, or use a list literal if order is what you meant.",
+				Origin:   origin,
+			})
+			continue
+		}
+		key := strings.TrimSpace(raw[:colon])
+		if key == "" {
+			ds.Add(diag.Diagnostic{
+				Severity: diag.SeverityError,
+				Summary:  "map literal entry " + strconv.Quote(raw) + " has an empty key",
+				Origin:   origin,
+			})
+			continue
+		}
+		items[key] = literalScalar(strings.TrimSpace(raw[colon+1:]), origin)
+	}
+	return &value.Expr{
+		Op:      value.OpLiteral,
+		Literal: value.Map(items, value.SourceExplicit).WithOrigin(origin),
+		Origin:  origin,
+	}
+}
+
+// parseListLiteral parses `[a, b, c]`, with the same scalar rules as a map's
+// values.
+func parseListLiteral(src string, origin value.Origin, ds *diag.Diagnostics) *value.Expr {
+	if !strings.HasSuffix(src, "]") {
+		ds.Add(literalDiag("list", src, "]", origin))
+		return nil
+	}
+	var items []value.Value
+	for _, raw := range splitArgs(src[1 : len(src)-1]) {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			continue
+		}
+		items = append(items, literalScalar(raw, origin))
+	}
+	return &value.Expr{
+		Op:      value.OpLiteral,
+		Literal: value.List(items, value.SourceExplicit).WithOrigin(origin),
+		Origin:  origin,
+	}
+}
+
+func literalDiag(kind, src, closer string, origin value.Origin) diag.Diagnostic {
+	return diag.Diagnostic{
+		Severity: diag.SeverityError,
+		Summary:  "unclosed " + kind + " literal " + strconv.Quote(src),
+		Action:   "Add the missing " + closer + ".",
+		Origin:   origin,
+	}
+}
+
+// literalScalar reads one scalar inside a literal.
+//
+// Quoted text is a string with the quotes removed. Otherwise the shapes YAML
+// itself reads specially are read the same way — true/false, an integer, a float
+// — and everything else is a string. Deliberately small: this is not a YAML
+// parser, and anything it cannot read unambiguously stays text, which is the
+// answer that cannot silently change a value's meaning.
+func literalScalar(src string, origin value.Origin) value.Value {
+	if len(src) >= 2 && src[0] == '"' && src[len(src)-1] == '"' {
+		if unquoted, err := strconv.Unquote(src); err == nil {
+			return value.String(unquoted, value.SourceExplicit).WithOrigin(origin)
+		}
+	}
+	switch src {
+	case "true":
+		return value.Bool(true, value.SourceExplicit).WithOrigin(origin)
+	case "false":
+		return value.Bool(false, value.SourceExplicit).WithOrigin(origin)
+	}
+	if n, err := strconv.ParseInt(src, 10, 64); err == nil {
+		return value.Int(n, value.SourceExplicit).WithOrigin(origin)
+	}
+	if f, err := strconv.ParseFloat(src, 64); err == nil {
+		return value.Float(f, value.SourceExplicit).WithOrigin(origin)
+	}
+	return value.String(src, value.SourceExplicit).WithOrigin(origin)
 }
 
 func parseCall(src string, open int, origin value.Origin, ds *diag.Diagnostics) *value.Expr {
@@ -256,7 +398,7 @@ func parseCall(src string, open int, origin value.Origin, ds *diag.Diagnostics) 
 		if raw == "" {
 			continue
 		}
-		if a := parseExpr(raw, origin, ds); a != nil {
+		if a := parseArgument(raw, origin, ds); a != nil {
 			args = append(args, a)
 		}
 	}
