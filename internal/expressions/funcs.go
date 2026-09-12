@@ -34,8 +34,14 @@ func Names() []string {
 	return out
 }
 
-// builtins is the complete set. Spec §6 fixes it at six; adding one is a
-// configuration-language change requiring a spec amendment.
+// builtins is the complete set. PLAN.md §10.2 fixes it at SEVEN; adding one is a
+// configuration-language change requiring an amendment to that section.
+//
+// Every one is pure, total and side-effect free, and that is a hard rule rather
+// than a coincidence: `now()`, `uuid()` and reading a file are the three most
+// often asked for next, and each silently breaks invariant 6 — the same
+// configuration and state would plan differently on a second run, which is the
+// property the whole plan/apply split rests on.
 var builtins = map[string]builtin{
 	"lower":   {arity: 1, fn: stringFunc(strings.ToLower)},
 	"upper":   {arity: 1, fn: stringFunc(strings.ToUpper)},
@@ -43,6 +49,7 @@ var builtins = map[string]builtin{
 	"replace": {arity: 3, fn: replaceFunc},
 	"join":    {arity: 2, fn: joinFunc},
 	"default": {arity: 2, fn: defaultFunc},
+	"merge":   {arity: -1, fn: mergeFunc},
 }
 
 // sensitiveAnywhere reports whether a value, or any leaf inside it, is
@@ -173,4 +180,53 @@ func defaultFunc(args []value.Value) (value.Value, error) {
 		return args[1], nil
 	}
 	return args[0], nil
+}
+
+// mergeFunc unions maps, with LATER arguments winning per key (PLAN.md §10.2).
+//
+// It exists because §12.1's provider block REPLACES rather than merges: making
+// the union explicit is better than a rule that silently combines structures,
+// where the combining is invisible in the configuration and a reader cannot tell
+// which keys came from where.
+//
+// SENSITIVITY IS PER LEAF HERE, and this is the one built-in that does NOT wrap
+// its result in WithSensitive(anySensitive(args...)). Every other one returns a
+// STRING, where the whole result is the only thing there is to classify. A map is
+// different: marking the whole thing sensitive because one leaf is would redact
+// every key, hiding the ones a reader needs in order to act — and it is
+// unnecessary, because each leaf arrives carrying its own flag and value.Format
+// redacts at that granularity.
+//
+// A source map whose OWN flag is set has that classification pushed down onto the
+// entries it contributes, rather than onto the result. That keeps the granularity
+// where it is actionable and means no secret can arrive unclassified: a leaf is
+// either marked itself or marked on the way in.
+//
+// This is the THIRD time this codebase has had to get a sensitivity union right.
+// join() omitted its separator and replace() omitted its search string, and the
+// second of those let a secret search term reveal its own position through an
+// unclassified result. merge()'s result is the one most likely to be written into
+// a tag, printed in a plan, and committed.
+func mergeFunc(args []value.Value) (value.Value, error) {
+	if len(args) < 2 {
+		return value.Value{}, fmt.Errorf("expected at least 2 maps, got %d", len(args))
+	}
+
+	out := map[string]value.Value{}
+	for i, a := range args {
+		m, ok := a.Raw.(map[string]value.Value)
+		if !ok || a.Kind != value.KindMap {
+			return value.Value{}, fmt.Errorf("argument %d must be a map, got %s", i+1, a.Kind)
+		}
+		for k, v := range m {
+			if a.Sensitive {
+				v = v.WithSensitive(true)
+			}
+			// Later arguments win. Written as an unconditional assignment over
+			// arguments in order, rather than a "does it exist" check, so which
+			// side wins cannot depend on map iteration.
+			out[k] = v
+		}
+	}
+	return value.Map(out, value.SourceComputed).WithOrigin(args[0].Origin), nil
 }

@@ -1,6 +1,7 @@
 package expressions
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/infrata/infrata/pkg/value"
@@ -138,8 +139,12 @@ func TestUnknownFunctionIsNotFound(t *testing.T) {
 	}
 }
 
+// TestNamesIsSortedAndComplete pins the SET, so adding a function is a
+// deliberate configuration-language change rather than a side effect. It caught
+// M10 adding `merge`, which is what it is for — update it only alongside an
+// amendment to PLAN.md §10.2.
 func TestNamesIsSortedAndComplete(t *testing.T) {
-	want := []string{"default", "join", "lower", "replace", "trim", "upper"}
+	want := []string{"default", "join", "lower", "merge", "replace", "trim", "upper"}
 	got := Names()
 	if len(got) != len(want) {
 		t.Fatalf("Names() = %v, want %v", got, want)
@@ -210,5 +215,164 @@ func TestSensitivityIsPerLeafNotWholeCollection(t *testing.T) {
 	tainted := value.List([]value.Value{plain, secret}, value.SourceExplicit)
 	if got := call(t, "join", str("-"), tainted); !got.Sensitive {
 		t.Error("a list with one sensitive element must classify the joined result")
+	}
+}
+
+// merge (PLAN.md §10.2).
+
+func mapOf(pairs map[string]string) value.Value {
+	m := map[string]value.Value{}
+	for k, v := range pairs {
+		m[k] = value.String(v, value.SourceExplicit)
+	}
+	return value.Map(m, value.SourceExplicit)
+}
+
+func mergedStrings(t *testing.T, v value.Value) map[string]string {
+	t.Helper()
+	m, ok := v.Raw.(map[string]value.Value)
+	if !ok {
+		t.Fatalf("merge returned %v, not a map", v.Kind)
+	}
+	out := map[string]string{}
+	for k, item := range m {
+		s, _ := item.AsString()
+		out[k] = s
+	}
+	return out
+}
+
+// TestMergeUnionsMapsWithLaterArgumentsWinning. The fixture has a key in BOTH
+// maps with DIFFERENT values, or it could not tell a union from a concatenation
+// nor which side wins.
+func TestMergeUnionsMapsWithLaterArgumentsWinning(t *testing.T) {
+	fn, _, _ := Lookup("merge")
+	got, err := fn([]value.Value{
+		mapOf(map[string]string{"environment": "dev", "team": "platform"}),
+		mapOf(map[string]string{"team": "payments"}),
+	})
+	if err != nil {
+		t.Fatalf("merge: %v", err)
+	}
+	m := mergedStrings(t, got)
+	if m["environment"] != "dev" {
+		t.Errorf("a key only the first map has was lost: %v", m)
+	}
+	if m["team"] != "payments" {
+		t.Errorf("team = %q, want the LATER argument to win", m["team"])
+	}
+	if len(m) != 2 {
+		t.Errorf("merge produced %d keys, want 2: %v", len(m), m)
+	}
+}
+
+// TestMergeIsVariadic — three maps, because two cannot distinguish "folds left"
+// from "takes exactly two".
+func TestMergeIsVariadic(t *testing.T) {
+	fn, arity, _ := Lookup("merge")
+	if arity != -1 {
+		t.Errorf("merge arity = %d, want -1 (variadic)", arity)
+	}
+	got, err := fn([]value.Value{
+		mapOf(map[string]string{"a": "1", "keep": "first"}),
+		mapOf(map[string]string{"b": "2"}),
+		mapOf(map[string]string{"c": "3", "keep": "last"}),
+	})
+	if err != nil {
+		t.Fatalf("merge: %v", err)
+	}
+	m := mergedStrings(t, got)
+	if len(m) != 4 {
+		t.Fatalf("merge of three maps produced %v", m)
+	}
+	if m["keep"] != "last" {
+		t.Errorf("keep = %q, want the last argument to win across three", m["keep"])
+	}
+}
+
+// TestMergeRefusesANonMap and names WHICH argument, because with three of them a
+// reader otherwise has to guess.
+func TestMergeRefusesANonMap(t *testing.T) {
+	fn, _, _ := Lookup("merge")
+	_, err := fn([]value.Value{
+		mapOf(map[string]string{"a": "1"}),
+		value.String("x", value.SourceExplicit),
+	})
+	if err == nil {
+		t.Fatal("merging a string must be an error, not an empty result")
+	}
+	if !strings.Contains(err.Error(), "2") {
+		t.Errorf("the error does not say which argument was wrong: %v", err)
+	}
+
+	if _, err := fn([]value.Value{mapOf(map[string]string{"a": "1"})}); err == nil {
+		t.Error("merge with one argument must be an error")
+	}
+}
+
+// TestMergeKeepsSensitivityPerLeaf is this milestone's governing rule, and the
+// THIRD time this package has had to get a sensitivity union right: join()
+// omitted its separator and replace() omitted its search string.
+//
+// Both halves. A wholly-redacted result hides the keys a reader needs to act on;
+// an unclassified one puts a password in a tag.
+func TestMergeKeepsSensitivityPerLeaf(t *testing.T) {
+	fn, _, _ := Lookup("merge")
+	secret := value.String("hunter2", value.SourceExplicit).WithSensitive(true)
+	got, err := fn([]value.Value{
+		mapOf(map[string]string{"team": "payments"}),
+		value.Map(map[string]value.Value{"password": secret}, value.SourceExplicit),
+	})
+	if err != nil {
+		t.Fatalf("merge: %v", err)
+	}
+
+	out := value.Format(got, value.FormatOptions{})
+	if strings.Contains(out, "hunter2") {
+		t.Fatalf("the secret survived into the merged map: %s", out)
+	}
+	if !strings.Contains(out, "payments") {
+		t.Errorf("the whole map was redacted, hiding a key the reader needs: %s", out)
+	}
+	if !strings.Contains(out, value.Redacted) {
+		t.Errorf("nothing was redacted: %s", out)
+	}
+}
+
+// TestMergePushesAMapsOwnSensitivityOntoItsEntries. A map flagged sensitive as a
+// WHOLE contributes entries that are each sensitive — so no leaf can arrive
+// unclassified, while the granularity stays where it can be acted on.
+func TestMergePushesAMapsOwnSensitivityOntoItsEntries(t *testing.T) {
+	fn, _, _ := Lookup("merge")
+	wholeSecret := mapOf(map[string]string{"token": "abc123"}).WithSensitive(true)
+	got, err := fn([]value.Value{mapOf(map[string]string{"team": "payments"}), wholeSecret})
+	if err != nil {
+		t.Fatalf("merge: %v", err)
+	}
+	m, _ := got.Raw.(map[string]value.Value)
+	if !m["token"].Sensitive {
+		t.Error("an entry from a wholly-sensitive map arrived unclassified")
+	}
+	if m["team"].Sensitive {
+		t.Error("the other map's entry was classified by association")
+	}
+	if strings.Contains(value.Format(got, value.FormatOptions{}), "abc123") {
+		t.Error("the secret renders in clear")
+	}
+}
+
+// TestMergeDoesNotMutateItsArguments. A scope's map is shared, so mutating it
+// would make a later reference to the same variable see the merged result — a
+// value that depended on evaluation order.
+func TestMergeDoesNotMutateItsArguments(t *testing.T) {
+	fn, _, _ := Lookup("merge")
+	first := map[string]value.Value{"a": value.String("1", value.SourceExplicit)}
+	arg := value.Map(first, value.SourceExplicit)
+
+	if _, err := fn([]value.Value{arg, mapOf(map[string]string{"b": "2"})}); err != nil {
+		t.Fatal(err)
+	}
+	if len(first) != 1 {
+		t.Errorf("the first argument's map was mutated: %v", first)
 	}
 }
