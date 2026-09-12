@@ -72,6 +72,19 @@ configuration is scheduled for destruction by invariant 1, which is why §27.1 l
 
 ## Task 1: the compiler loads `discovered/*.yml`
 
+**Status: verified, not implemented.** M7's Task 1 subsumed this, exactly as the sequencing
+note anticipated. `config.DiscoveredDirName` exists, `discovered/**` is walked by the shared
+`walkConventionalDir` (so it cannot acquire an ordering of its own), and
+`TestDiscoveredDirectoryIsLoaded` covers it — with a STRONGER assertion than the version below:
+it decodes as well as loads, and asserts the resource is DECLARED. That difference matters,
+because M7 shipped a walk that loaded files and decoded them with nothing, and `validate`
+reported an empty resource set as valid.
+
+`TestConventionalDirectoriesAreSortedOnce` and `TestAMissingConventionalDirectoryIsFine` cover
+the other two cases below, over the one walk all four directories share. Verified through the
+binary: a resource declared only in `discovered/` plans as a create alongside one from
+`infra.yml`, and may refer to it.
+
 **Files:**
 - Modify: `internal/config/load.go` (`Load`, beside `loadEnvironmentDir`)
 - Test: `internal/config/load_test.go`
