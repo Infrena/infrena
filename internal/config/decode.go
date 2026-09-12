@@ -253,6 +253,8 @@ func decodeDocument(path string, doc *yaml.Node, out *ProjectDecl, ds *diag.Diag
 			decodeVariables(path, val, out, ds, seenVariables)
 		case "environments":
 			decodeEnvironments(path, val, out, ds, seenEnvironments)
+		case "providers":
+			decodeProviders(path, val, out, ds)
 		case "modules":
 			decodeModuleLoads(path, val, &out.Modules, ds, seenModules)
 		default:

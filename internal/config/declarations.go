@@ -21,6 +21,34 @@ type AttributeDecl struct {
 	Origin         value.Origin
 }
 
+// ProviderDecl is one declared provider instance (PLAN.md §12.1).
+//
+// Plugin is the implementation; Name is what resources refer to, defaulting to
+// the plugin name. Config is handed to the plugin; Defaults are attribute
+// defaults for every resource that uses this instance. They are separate maps
+// because at the top level of the block `iam-role: x` and `tags: ${tags}` are
+// indistinguishable while meaning entirely different things — one configures the
+// PROVIDER, the other defaults a RESOURCE.
+type ProviderDecl struct {
+	Plugin string
+	Name   string
+	// Default marks the instance resources get when they name none. Set from
+	// `default: true`, or from being first when nothing is marked.
+	Default bool
+	// DefaultExplicit records whether `default: true` was WRITTEN, which is what
+	// lets two of them be refused without also refusing the derived-from-order
+	// case.
+	DefaultExplicit bool
+	Config          map[string]AttributeDecl
+	Defaults        map[string]AttributeDecl
+	Origin          value.Origin
+	// NameOrigin is where the name came from — the `name:` line, or the `plugin:`
+	// line when it was derived. A collision diagnostic points at both entries, and
+	// pointing at the line that CHOSE the name is more useful than pointing at the
+	// entry as a whole.
+	NameOrigin value.Origin
+}
+
 // LifecycleDecl configures how a resource is created and destroyed.
 type LifecycleDecl struct {
 	PreventDestroy bool
@@ -196,5 +224,14 @@ type ProjectDecl struct {
 	// configuration and BELOW an environment. Merging them would lose that, and
 	// lose the scoping with it.
 	ScopedValues map[string]map[string]value.Value
-	Origin       value.Origin
+	// Providers holds `providers:` — the provider INSTANCES this project uses
+	// (PLAN.md §12.1), in DECLARATION ORDER.
+	//
+	// A slice, never a map, for two reasons that both matter. Order decides which
+	// instance is the default. And a YAML map cannot hold two `aws` keys, which is
+	// exactly the collision §12.1 refuses — a shape unable to express it would
+	// refuse it silently by losing one, and silence is what sends a resource to the
+	// wrong account.
+	Providers []ProviderDecl
+	Origin    value.Origin
 }
