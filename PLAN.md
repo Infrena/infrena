@@ -1050,6 +1050,47 @@ resources:
   update. The resource genuinely lives in a different account; the same reasoning
   as §5.2's module paths, and the planner must say so where a user reads it.
 
+### Variables, so an instance differs per environment
+
+An instance's configuration may interpolate, which is how one project reaches a
+different account per environment:
+
+```yaml
+providers:
+  - plugin: aws
+    iam-role: ${aws_role}
+    region: ${region}
+```
+
+```yaml
+# vars/production.yml
+aws_role: arn:aws:iam::111111111111:role/deploy
+```
+
+```yaml
+# vars/dev.yml
+aws_role: arn:aws:iam::222222222222:role/deploy
+```
+
+**Variables only — never a resource reference.** A provider's configuration is
+needed before any resource exists, so `iam-role: ${some_resource.arn}` cannot be
+satisfied: the provider would have to create the thing its own credentials depend
+on. Resolution therefore happens after stage 4 (variables) and before stage 5,
+and a reference to a resource attribute here is an error saying so rather than an
+unknown that fails later.
+
+That is the same constraint §6.2 puts on `skip`/`only`, and for the same reason:
+both decide something the engine needs before it can plan anything.
+
+The per-leaf walk from §10.1 applies, so a nested value interpolates too:
+
+```yaml
+providers:
+  - plugin: aws
+    tags:
+      environment: ${environment}
+```
+
 ### Internal shape
 
 Resolved to a map keyed by instance name, for the lookup resources do:
