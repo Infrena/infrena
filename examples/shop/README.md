@@ -64,6 +64,12 @@ production still gets everything else from `default.yml`.
   which is what `plan` prints and what `explain` explains. The middle one is how you know to
   look in `resources/app/vars/` rather than `vars/`.
 - `size: 50` is `resources/app/vars/sizes.yml` overriding the module's own `default: 10`.
+- `tags:` is a map whose values interpolate, crossing the module boundary as one input.
+  `${environment}` and `${project}` come from the invocation, so `plan production` shows
+  different values with no second copy of the map anywhere. It cannot live in a variables file:
+  a variable is resolved before any expression scope exists, so `${...}` there has nothing to
+  refer to. To combine it with another map, `${merge(a, {team: storefront})}` — quoted, because
+  YAML ends a plain scalar at `: `.
 
 Precedence runs: provider default → `vars/**` and `variables.yml` → `resources/<dir>/vars/**` →
 module defaults → environment → `--var`. More specific file scope wins, an environment beats
@@ -108,7 +114,7 @@ inside the module:
 
 ```
 Error: undefined variable "db_password"
-  at modules/app-stack/module.yml:13:5, in module.stack
+  at modules/app-stack/module.yml:16:5, in module.stack
 ```
 
 (Leave the `password:` line on the call and you get the other half of the boundary first:

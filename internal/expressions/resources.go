@@ -136,6 +136,44 @@ func ResolveDeferred(attrs map[string]value.Value, scope Scope) (map[string]valu
 	out := make(map[string]value.Value, len(attrs))
 	for _, name := range names {
 		v := attrs[name]
+
+		// A COMPOSITE carries no expression of its own — its leaves do — so it
+		// must be walked rather than evaluated. Without this branch the map falls
+		// into the pass-through below and its unresolved leaves reach the state
+		// file, which cannot encode them.
+		if v.Kind == value.KindList || v.Kind == value.KindMap {
+			if !HasUnknownLeaf(v) {
+				out[name] = v
+				continue
+			}
+			// leafErrors is THIS attribute's, not the accumulated set. Checking
+			// ds.HasErrors() would mean an earlier attribute's failure silently
+			// suppressed this one's "still unknown" report — the same
+			// accept-and-say-nothing shape the scalar branch below avoids by
+			// checking its own evalDS.
+			var leafErrors diag.Diagnostics
+			walked := WalkDeferred(v, func(leaf value.Value) value.Value {
+				resolved, evalDS := Evaluate(leaf.Expr, scope)
+				leafErrors.Extend(evalDS)
+				if !resolved.Known {
+					return leaf
+				}
+				return resolved
+			})
+			ds.Extend(leafErrors)
+			if HasUnknownLeaf(walked) {
+				out[name] = v
+				if !leafErrors.HasErrors() {
+					unresolved = append(unresolved, name)
+				}
+				continue
+			}
+			// Every leaf resolved, so the composite is whole again.
+			walked.Known = true
+			out[name] = walked
+			continue
+		}
+
 		if v.Known || v.Expr == nil {
 			out[name] = v
 			continue

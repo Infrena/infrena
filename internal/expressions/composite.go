@@ -87,3 +87,77 @@ func withRaw(v value.Value, raw any) value.Value {
 	out.Raw = raw
 	return out
 }
+
+// HasUnknownLeaf reports whether v, or any leaf inside it, is unknown.
+//
+// A composite whose leaves are not all resolved is not usable, and the two
+// places that need to know are far apart: compiler stage 6 marks the composite
+// unknown so the planner defers it rather than diffing a placeholder against a
+// real value, and the executor re-resolves it after its dependencies exist. Said
+// once here so those two cannot come to disagree about what "resolved" means.
+func HasUnknownLeaf(v value.Value) bool {
+	switch v.Kind {
+	case value.KindList:
+		items, ok := v.Raw.([]value.Value)
+		if !ok {
+			return false
+		}
+		for _, item := range items {
+			if HasUnknownLeaf(item) {
+				return true
+			}
+		}
+		return false
+	case value.KindMap:
+		m, ok := v.Raw.(map[string]value.Value)
+		if !ok {
+			return false
+		}
+		for _, item := range m {
+			if HasUnknownLeaf(item) {
+				return true
+			}
+		}
+		return false
+	default:
+		return !v.Known
+	}
+}
+
+// WalkDeferred returns a copy of v with every unknown leaf that carries an
+// expression replaced by what resolve returns for it.
+//
+// The counterpart to WalkLeaves, for the other end of the pipeline: WalkLeaves
+// runs at compile time over leaves that still hold "${...}" TEXT, this runs at
+// apply time over leaves that hold an unresolved EXPRESSION. Separate because the
+// predicate differs, shaped alike so the structure handling is recognisably the
+// same problem.
+func WalkDeferred(v value.Value, resolve func(value.Value) value.Value) value.Value {
+	switch v.Kind {
+	case value.KindList:
+		items, ok := v.Raw.([]value.Value)
+		if !ok {
+			return v
+		}
+		out := make([]value.Value, len(items))
+		for i, item := range items {
+			out[i] = WalkDeferred(item, resolve)
+		}
+		return withRaw(v, out)
+	case value.KindMap:
+		m, ok := v.Raw.(map[string]value.Value)
+		if !ok {
+			return v
+		}
+		out := make(map[string]value.Value, len(m))
+		for k, item := range m {
+			out[k] = WalkDeferred(item, resolve)
+		}
+		return withRaw(v, out)
+	default:
+		if !v.Known && v.Expr != nil {
+			return resolve(v)
+		}
+		return v
+	}
+}

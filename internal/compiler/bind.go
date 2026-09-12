@@ -217,9 +217,19 @@ func bindAttribute(
 	// is the point of sharing only the WALK.
 	src, ok := attr.Value.AsString()
 	if !ok {
-		return expressions.WalkLeaves(attr.Value, func(leafSrc string, leafOrigin value.Origin) value.Value {
+		walked := expressions.WalkLeaves(attr.Value, func(leafSrc string, leafOrigin value.Origin) value.Value {
 			return bindOneExpression(inst, leafSrc, leafOrigin, environment, declared, edges, ds)
 		})
+		// A composite one of whose leaves did not resolve is itself UNKNOWN
+		// (PLAN.md §10.1). Left Known, the planner would diff a placeholder leaf
+		// against the real value a previous apply recorded and report a change
+		// every run — invariant 2 gone — and the executor would never revisit it,
+		// so state could not even be written. Both were observed before this
+		// line existed.
+		if expressions.HasUnknownLeaf(walked) {
+			walked.Known = false
+		}
+		return walked
 	}
 
 	return bindOneExpression(inst, src, attr.Origin, environment, declared, edges, ds)

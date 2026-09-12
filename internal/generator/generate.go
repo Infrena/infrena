@@ -19,6 +19,7 @@ import (
 	"bytes"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -224,8 +225,17 @@ func renderResource(r Resource, reg *registry.Registry, ctx schema.DefaultContex
 			}
 		}
 
+		// Converted to plain Go data first. v.Raw for a composite is
+		// map[string]value.Value, and encoding THAT writes the internal struct
+		// — kind, known, source, sensitive, and the secret in clear. An export
+		// did exactly that until M10's integration test caught it.
+		plain, hidden, keep := plainValue(v)
+		omittedSecrets = append(omittedSecrets, prefixed(name, hidden)...)
+		if !keep {
+			continue
+		}
 		scalar := &yaml.Node{}
-		if err := scalar.Encode(v.Raw); err != nil {
+		if err := scalar.Encode(plain); err != nil {
 			return nil, nil, fmt.Errorf("rendering %s.%s: %w", r.Name, name, err)
 		}
 		node.Content = append(node.Content,
@@ -322,4 +332,105 @@ func plural(n int, one, many string) string {
 		return one
 	}
 	return many
+}
+
+// plainValue converts a Value into plain Go data for YAML encoding, omitting
+// every SENSITIVE leaf and naming what it omitted.
+//
+// Two things make this necessary rather than a convenience.
+//
+// A composite's Raw is map[string]value.Value or []value.Value, so encoding it
+// directly writes the ENGINE'S STRUCT — kind, known, source, sensitive, origin,
+// and the value itself. An export did precisely that, printing a secret in clear
+// beside the flag saying it was secret, until M10's integration test caught it.
+//
+// And sensitivity is PER LEAF. renderResource checks the schema, which classifies
+// an ATTRIBUTE; a leaf inside an unclassified map can still be a secret, because
+// it came from somewhere that was. Checking only the attribute is how the secret
+// got out.
+//
+// keep is false when nothing survives — a wholly sensitive value, or an unknown
+// one, neither of which has anything to write.
+func plainValue(v value.Value) (plain any, omitted []string, keep bool) {
+	if v.Sensitive {
+		return nil, []string{""}, false
+	}
+	if !v.Known {
+		// Nothing to write. Not an omission worth reporting: an unresolved value
+		// is not something the reader must supply, it is something the provider
+		// will.
+		return nil, nil, false
+	}
+
+	switch v.Kind {
+	case value.KindMap:
+		m, ok := v.Raw.(map[string]value.Value)
+		if !ok {
+			return nil, nil, false
+		}
+		out := map[string]any{}
+		var hidden []string
+		// Sorted, because YAML encoding of a Go map is ordered by key but the
+		// OMISSION list is user-visible and must not depend on iteration order.
+		for _, k := range sortedValueKeys(m) {
+			p, h, keep := plainValue(m[k])
+			hidden = append(hidden, prefixed(k, h)...)
+			if keep {
+				out[k] = p
+			}
+		}
+		if len(out) == 0 {
+			return nil, hidden, false
+		}
+		return out, hidden, true
+
+	case value.KindList:
+		items, ok := v.Raw.([]value.Value)
+		if !ok {
+			return nil, nil, false
+		}
+		var out []any
+		var hidden []string
+		for i, item := range items {
+			p, h, keep := plainValue(item)
+			hidden = append(hidden, prefixed(strconv.Itoa(i), h)...)
+			if keep {
+				out = append(out, p)
+			}
+		}
+		if len(out) == 0 {
+			return nil, hidden, false
+		}
+		return out, hidden, true
+
+	default:
+		return v.Raw, nil, true
+	}
+}
+
+// prefixed qualifies omitted leaf paths with the key they sit under, so a note
+// says `tags.password` rather than `password` — which is the difference between
+// a reader knowing where to put the value and guessing.
+func prefixed(key string, paths []string) []string {
+	if len(paths) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(paths))
+	for _, p := range paths {
+		if p == "" {
+			out = append(out, key)
+			continue
+		}
+		out = append(out, key+"."+p)
+	}
+	return out
+}
+
+func sortedValueKeys(m map[string]value.Value) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }

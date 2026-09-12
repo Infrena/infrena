@@ -6,6 +6,9 @@ inputs:
     default: 10
   password:
     type: string
+  tags:
+    type: map
+    default: {}
 resources:
   db:
     type: test.database
@@ -13,6 +16,7 @@ resources:
     network: ${network}
     size: ${size}
     password: ${password}
+    tags: ${tags}
 outputs:
   endpoint:
     value: ${db.endpoint}

@@ -6,6 +6,16 @@ resources:
     network: ${network.id}
     size: ${size}
     password: ${db_password}
+    # A map whose values interpolate, crossing the module boundary as ONE input.
+    # `environment` and `project` come from the invocation, so production gets
+    # different values here and the module needs no knowledge of that.
+    #
+    # It cannot live in a variables file: a variable is resolved before any
+    # expression scope exists, so `${...}` there has nothing to refer to.
+    tags:
+      environment: ${environment}
+      project: ${project}
+      team: storefront
 
   web:
     type: test.application
