@@ -286,6 +286,14 @@ func defaultedName(name string) string {
 //
 // Shared by module names, which become half of a resource type, and by Task 3's
 // bare-reference detection. One rule for what a name looks like, in one place.
+// ValidResourceName reports whether s may be used as a resource's logical name.
+//
+// Exported so internal/discovery can generate names that this package will
+// accept, by asking rather than by restating the rule. A generator with its own
+// copy of the predicate produces configuration that loads until the two copies
+// drift, and the failure lands on a user who wrote none of it.
+func ValidResourceName(s string) bool { return identifierSegment(s) }
+
 func identifierSegment(s string) bool {
 	if s == "" {
 		return false

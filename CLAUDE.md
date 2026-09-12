@@ -6,7 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Current state
 
-**PHASE 1 IS COMPLETE.** M1-M6 are merged to `main` (tags `m1`-`m6`). Every one of `PLAN.md`
+**PHASE 1 IS COMPLETE; PHASE 2 IS UNDER WAY.** M1-M7 are merged to `main` (tags `m1`-`m7`),
+and M8 (discovery and import) is on `m8-discovery`. Every one of `PLAN.md`
 §49's nineteen components exists, the last being the module system (M5) and the Phase-1 CLI
 surface (M6).
 
@@ -52,8 +53,31 @@ an error naming both files** — never last-one-wins, because globbing makes acc
 duplication easy in a way a single file does not. `tests/integration/m7_layout_test.go` pins
 that the directory form and the single-file form produce byte-identical plans.
 
-**Absent until Phase 2+:** `discover`, `import`, `export`, reading a saved plan back, remote
-state, AWS. Nothing half-implements one of those.
+**New in M8 — discovery and import.** `discover` lists what exists without writing anything,
+showing the name each resource WOULD be given so a collision is visible before it happens.
+`import <env> [--generate]` adopts resources into state and writes the configuration declaring
+them, under `discovered/`. `export <env>` dumps state in full for auditing.
+
+Three rules carry most of the weight, and each is a hazard rather than a nicety:
+
+- **A generated file must never hold a secret.** A sensitive attribute is OMITTED and the file
+  says so at the point of omission. A secret committed to git is a secret rotated, not deleted.
+- **Configuration is written BEFORE state.** A resource in state that no configuration declares
+  is what invariant 1 schedules for destruction, so failing between the two writes must leave
+  the harmless half done: configuration-without-state plans a CREATE, which is visible and
+  refusable; state-without-configuration plans a DESTROY.
+- **Computed attributes are omitted because they cannot be set**, not for tidiness. Emitting one
+  produces "is computed and cannot be set" — a file that does not load, pointing at a file the
+  user never wrote.
+
+Invariant 3 (the round trip) now has its test, the last of the six to get one. Its guarantee is
+qualified — see §29.1: a deliberately omitted secret shows as one pending change, and the two
+alternatives (writing it to disk, or dropping it from state) are both worse. Minimality is
+asserted SEPARATELY from the round trip, because a generator emitting every attribute would
+also plan clean.
+
+**Absent until Phase 3+:** reading a saved plan back, remote state, AWS. Nothing half-implements
+one of those.
 
 ## Name
 

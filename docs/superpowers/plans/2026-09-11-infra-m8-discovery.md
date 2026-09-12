@@ -72,6 +72,19 @@ configuration is scheduled for destruction by invariant 1, which is why §27.1 l
 
 ## Task 1: the compiler loads `discovered/*.yml`
 
+**Status: verified, not implemented.** M7's Task 1 subsumed this, exactly as the sequencing
+note anticipated. `config.DiscoveredDirName` exists, `discovered/**` is walked by the shared
+`walkConventionalDir` (so it cannot acquire an ordering of its own), and
+`TestDiscoveredDirectoryIsLoaded` covers it — with a STRONGER assertion than the version below:
+it decodes as well as loads, and asserts the resource is DECLARED. That difference matters,
+because M7 shipped a walk that loaded files and decoded them with nothing, and `validate`
+reported an empty resource set as valid.
+
+`TestConventionalDirectoriesAreSortedOnce` and `TestAMissingConventionalDirectoryIsFine` cover
+the other two cases below, over the one walk all four directories share. Verified through the
+binary: a resource declared only in `discovered/` plans as a create alongside one from
+`infra.yml`, and may refer to it.
+
 **Files:**
 - Modify: `internal/config/load.go` (`Load`, beside `loadEnvironmentDir`)
 - Test: `internal/config/load_test.go`
@@ -198,6 +211,8 @@ git commit -m "config: load discovered/*.yml as part of the project" -- internal
 
 ## Task 2: the fake provider discovers and imports
 
+**Status: done** (`035523a`).
+
 **Files:**
 - Modify: `providers/test/provider.go` (`Discover`, `Import` — both currently `ErrNotImplemented`)
 - Test: `providers/test/provider_test.go`
@@ -271,6 +286,12 @@ Delete the two "arrives in Phase 2" comments.
 
 ## Task 3: naming a discovered resource
 
+**Status: done** (`7de15c1`). RULING against the plan text: hyphens SURVIVE. The plan
+specified `net-1 -> net_1` because "a hyphen is not an identifier character" — which is false;
+`config.identifierSegment` accepts hyphens after the first character. Only what the name rule
+actually refuses is rewritten, and the rule is now asked for (`config.ValidResourceName`) rather
+than restated.
+
 **Files:**
 - Create: `internal/discovery/name.go`, `internal/discovery/name_test.go`
 
@@ -306,6 +327,10 @@ func TestAnEmptyOrUnusableNameTagFallsBack(t *testing.T) { /* ... */ }
 ---
 
 ## Task 4: minimal, default-aware generation
+
+**Status: done** (`ad6a50d`). The plan lists two omissions; there are THREE, and the one it
+omits is the only one that is correctness rather than tidiness — a COMPUTED attribute cannot be
+set at all, so emitting one produces configuration that does not load.
 
 **Files:**
 - Create: `internal/generator/generate.go`, `internal/generator/generate_test.go`
@@ -351,6 +376,8 @@ func TestGenerationOmitsASensitiveAttributeAndSaysSo(t *testing.T) {
 
 ## Task 5: `infra discover`
 
+**Status: done** (`c63c510`).
+
 **Files:** Create `internal/cli/discover.go`, `internal/cli/discover_test.go`; modify `root.go`.
 
 §25. `infra discover` lists everything; `infra discover <type>` narrows. Output is a table a
@@ -362,6 +389,8 @@ Nothing is written and nothing is adopted: discover is read-only, and says so in
 ---
 
 ## Task 6: `infra import`
+
+**Status: done** (`9c6eaac`).
 
 **Files:** Create `internal/cli/import.go`, `internal/cli/import_test.go`; modify `root.go`.
 
@@ -380,6 +409,8 @@ imports one. `--generate` additionally writes `discovered/<group>.yml`.
 
 ## Task 7: `infra export`
 
+**Status: done** (`916182f`).
+
 **Files:** Create `internal/cli/export.go`, `internal/cli/export_test.go`; modify `root.go`.
 
 §28. `infra export <environment>` dumps every known configurable attribute of everything in
@@ -390,6 +421,18 @@ renderer.
 ---
 
 ## Task 8: the round trip — invariant 3
+
+**Status: done.** File named `m8_roundtrip_test.go`, not `m7_...` as the plan says — M7 is a
+different milestone.
+
+The plan's last bullet was right and is now demonstrated: disabling the default-omission rule
+leaves the round trip CLEAN and fails only the separate minimality test.
+
+What the plan did not anticipate: **the round trip is not clean when a discovered resource has a
+sensitive attribute.** §27 forbids writing the secret and state must keep it, so they genuinely
+disagree about one attribute. Both alternatives are worse. Recorded as PLAN.md §29.1 and pinned
+by `TestTheRoundTripLeavesExactlyTheOmittedSecret`, which asserts the SHAPE: one resource, one
+attribute, it is the sensitive one, and supplying it makes the plan clean.
 
 **Files:** Create `tests/integration/m7_roundtrip_test.go`.
 

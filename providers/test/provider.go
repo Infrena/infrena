@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -245,14 +246,95 @@ func (p *Provider) Delete(ctx context.Context, current *resource.ResourceState) 
 	return c.Save(p.cloudPath)
 }
 
-// Discover is not implemented until Phase 2.
-func (p *Provider) Discover(context.Context, provider.DiscoverRequest) ([]provider.DiscoveredResource, error) {
-	return nil, fmt.Errorf("test provider: discovery arrives in Phase 2: %w", provider.ErrNotImplemented)
+// Discover enumerates the fake cloud (spec §25).
+//
+// It reports every resource the cloud file holds, INCLUDING ones this project
+// never created — a CloudResource's `address` is empty for anything written by
+// hand, and discovery deliberately does not care. Infrastructure that predates
+// the tool is the only reason discovery exists.
+//
+// req.Types filters when non-empty. The filter is applied here rather than by
+// the caller because a real provider answers `infra discover aws.rds` with one
+// API call per type asked for; a core that fetched everything and discarded
+// most would make discovery too slow to use against a large account, and the
+// fake provider must not model a cheaper contract than the real one.
+//
+// Results are sorted by ProviderID. They are printed to a user and diffed by
+// scripts, and Go's map iteration is randomised — invariant 6 is about the
+// plan, but a discovery listing that reorders itself between identical runs is
+// the same defect one stage earlier.
+func (p *Provider) Discover(ctx context.Context, req provider.DiscoverRequest) ([]provider.DiscoveredResource, error) {
+	if err := p.delay(ctx); err != nil {
+		return nil, err
+	}
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	// "discover" is an op name a failure rule can match, so §18's injected
+	// failures reach this path like every other. begin also persists the rule
+	// bookkeeping, which is why it is used rather than LoadCloud directly.
+	c, err := p.begin(ctx, "discover", "")
+	if err != nil {
+		return nil, err
+	}
+
+	wanted := map[string]bool{}
+	for _, t := range req.Types {
+		wanted[t] = true
+	}
+
+	out := make([]provider.DiscoveredResource, 0, len(c.Resources))
+	for id, obj := range c.Resources {
+		if len(wanted) > 0 && !wanted[obj.Type] {
+			continue
+		}
+		// toState applies the schema's sensitivity and stamps SourceProvider.
+		// Reused rather than re-derived: a discovered secret that arrives
+		// unmarked is one a generator will write into a file destined for
+		// version control, and sensitivity must be decided in exactly one
+		// place (spec §36).
+		st := p.toState("", obj.Type, id, obj.Attributes)
+		out = append(out, provider.DiscoveredResource{
+			Type:       obj.Type,
+			ProviderID: id,
+			Attributes: st.Attributes,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ProviderID < out[j].ProviderID })
+	return out, nil
 }
 
-// Import is not implemented until Phase 2.
-func (p *Provider) Import(context.Context, string, string) (*resource.ResourceState, error) {
-	return nil, fmt.Errorf("test provider: import arrives in Phase 2: %w", provider.ErrNotImplemented)
+// Import adopts one existing resource by provider ID (spec §26).
+//
+// The type is CHECKED against what the cloud actually holds rather than
+// trusted. `import test.network db-9` naming a real database would otherwise
+// write state claiming a database is a network, and the next plan would propose
+// replacing real infrastructure to resolve a disagreement the tool invented.
+//
+// No address is assigned here: naming is the caller's job (spec §27.1), and a
+// provider that invented one would be deciding what the user's configuration
+// calls things.
+func (p *Provider) Import(ctx context.Context, resourceType, id string) (*resource.ResourceState, error) {
+	if err := p.delay(ctx); err != nil {
+		return nil, err
+	}
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	c, err := p.begin(ctx, "import", id)
+	if err != nil {
+		return nil, err
+	}
+	obj, ok := c.Resources[id]
+	if !ok {
+		return nil, fmt.Errorf("test provider: no resource with ID %q exists", id)
+	}
+	if obj.Type != resourceType {
+		return nil, fmt.Errorf("test provider: %q is a %s, not a %s", id, obj.Type, resourceType)
+	}
+	return p.toState("", obj.Type, id, obj.Attributes), nil
 }
 
 // toState converts cloud JSON back into typed, provenance-carrying state. Every
