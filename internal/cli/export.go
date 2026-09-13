@@ -7,7 +7,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/infrata/infrata/internal/generator"
-	"github.com/infrata/infrata/pkg/schema"
 )
 
 // newExportCommand builds `infrata export <environment>` (spec §28).
@@ -68,10 +67,7 @@ func newExportCommand(opts *GlobalOptions) *cobra.Command {
 				})
 			}
 
-			files, err := generator.Generate(resources, reg, schema.DefaultContext{
-				Environment: environment,
-				Project:     projectName(opts.Dir),
-			}, generator.Options{
+			files, err := generator.Generate(resources, reg, generator.Options{
 				Minimal: false,
 				Header: "infrata export of environment " + environment + "\n" +
 					"Every configurable attribute, including ones equal to a provider default.\n" +

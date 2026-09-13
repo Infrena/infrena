@@ -1,6 +1,7 @@
 package schema
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/infrata/infrata/pkg/value"
@@ -12,7 +13,7 @@ func sampleDefinition() *ResourceDefinition {
 		Description: "A fake database",
 		Attributes: map[string]Attribute{
 			"engine":   {Kind: value.KindString, Required: true, ForceNew: true},
-			"size":     {Kind: value.KindInt, Default: func(DefaultContext) (any, bool) { return int64(10), true }},
+			"size":     {Kind: value.KindInt, Default: int64(10)},
 			"password": {Kind: value.KindString, Sensitive: true},
 			"endpoint": {Kind: value.KindString, Computed: true},
 		},
@@ -45,12 +46,41 @@ func TestRequiredAndForceNewAreSortedForDeterminism(t *testing.T) {
 	}
 }
 
-func TestDefaultResolverSeesOnlyItsContext(t *testing.T) {
+// TestASchemaHoldsNoFunctions is §31.1's requirement on this package, and the
+// reason the three function fields are gone: a provider is a separate process, so
+// a schema has to survive a pipe.
+//
+// Asserted through encoding/json rather than by reading the struct definition,
+// because that is the property that matters and the only one a future field
+// cannot quietly break. json.Marshal fails outright on a func value, so a field
+// holding one — or a field whose value holds one — fails here.
+func TestASchemaHoldsNoFunctions(t *testing.T) {
 	d := sampleDefinition()
+	if _, err := json.Marshal(d); err != nil {
+		t.Fatalf("a schema must survive a pipe, and this one cannot be encoded: %v\n"+
+			"A function field cannot cross a process boundary; see PLAN.md §31.1.", err)
+	}
+	// And a default, which is the field that used to hold one, is a plain datum
+	// convertible against its declared kind.
 	attr, _ := d.Attribute("size")
-	got, ok := attr.Default(DefaultContext{Environment: "dev", Type: "test.database"})
-	if !ok || got != int64(10) {
-		t.Errorf("default = %v, %v; want 10, true", got, ok)
+	v, ok := DatumValue(attr.Default, attr.Kind)
+	if !ok {
+		t.Fatalf("the default %v (%T) is not a %s", attr.Default, attr.Default, attr.Kind)
+	}
+	if got, _ := v.AsInt(); got != 10 {
+		t.Errorf("default = %v, want 10", v)
+	}
+}
+
+// TestADefaultOfTheWrongKindIsRejected. Nothing checks a datum at authoring time —
+// `Default: "10"` on an integer attribute compiles — so the conversion is what
+// catches it, and the compiler reports it as a provider bug.
+func TestADefaultOfTheWrongKindIsRejected(t *testing.T) {
+	if _, ok := DatumValue("10", value.KindInt); ok {
+		t.Error("a string default for an integer attribute was accepted")
+	}
+	if _, ok := DatumValue(nil, value.KindInt); ok {
+		t.Error("a nil default was accepted; nil means no default at all")
 	}
 }
 
@@ -67,7 +97,7 @@ func TestValidateRejectsComputedWithDefault(t *testing.T) {
 	d.Attributes["broken"] = Attribute{
 		Kind:     value.KindString,
 		Computed: true,
-		Default:  func(DefaultContext) (any, bool) { return "x", true },
+		Default:  "x",
 	}
 	if err := d.Validate(); err == nil {
 		t.Error("a computed attribute cannot carry a default — the provider supplies it")

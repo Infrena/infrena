@@ -9,7 +9,6 @@ import (
 	"github.com/infrata/infrata/internal/compiler"
 	"github.com/infrata/infrata/internal/config"
 	"github.com/infrata/infrata/internal/registry"
-	"github.com/infrata/infrata/pkg/schema"
 	"github.com/infrata/infrata/pkg/value"
 	testprovider "github.com/infrata/infrata/providers/test"
 )
@@ -28,15 +27,11 @@ func provInt(n int64) value.Value {
 	return value.Int(n, value.SourceProvider)
 }
 
-func devContext() schema.DefaultContext {
-	return schema.DefaultContext{Environment: "dev", Project: "p"}
-}
-
 // oneFile renders and returns the single file generated, failing if there is
 // not exactly one.
-func oneFile(t *testing.T, rs []Resource, ctx schema.DefaultContext) File {
+func oneFile(t *testing.T, rs []Resource) File {
 	t.Helper()
-	files, err := Generate(rs, testRegistry(t), ctx, MinimalOptions())
+	files, err := Generate(rs, testRegistry(t), MinimalOptions())
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
 	}
@@ -56,7 +51,7 @@ func TestGenerationOmitsWhatADefaultAlreadyProvides(t *testing.T) {
 			// 10 is test.database's default.
 			"size": provInt(10),
 		},
-	}}, devContext())
+	}})
 
 	out := string(f.Bytes)
 	if !strings.Contains(out, "engine: postgres") {
@@ -90,7 +85,7 @@ func TestGenerationOmitsASensitiveAttributeAndSaysSo(t *testing.T) {
 			"engine":   prov("postgres"),
 			"password": prov(secret).WithSensitive(true),
 		},
-	}}, devContext())
+	}})
 
 	out := string(f.Bytes)
 	// The value appears NOWHERE in the bytes — not as a value, not in a
@@ -123,7 +118,7 @@ func TestGenerationOmitsComputedAttributes(t *testing.T) {
 			"id":       prov("db-9"),
 			"endpoint": prov("db-9.example.internal"),
 		},
-	}}, devContext())
+	}})
 
 	out := string(f.Bytes)
 	for _, computed := range []string{"id:", "endpoint:"} {
@@ -153,7 +148,7 @@ func TestGenerationIsDeterministic(t *testing.T) {
 
 	var first string
 	for i := 0; i < 20; i++ {
-		files, err := Generate(rs, testRegistry(t), devContext(), MinimalOptions())
+		files, err := Generate(rs, testRegistry(t), MinimalOptions())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -224,7 +219,7 @@ func TestGeneratedConfigurationParsesBackAndPlansClean(t *testing.T) {
 			"cidr": prov("10.0.0.0/16"),
 			"id":   prov("vpc-0a1b"),
 		}},
-	}, testRegistry(t), devContext(), MinimalOptions())
+	}, testRegistry(t), MinimalOptions())
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
 	}
@@ -302,7 +297,7 @@ func TestExportModeKeepsDefaultsButStillOmitsSecrets(t *testing.T) {
 		},
 	}}
 
-	full, err := Generate(rs, testRegistry(t), devContext(), Options{Minimal: false})
+	full, err := Generate(rs, testRegistry(t), Options{Minimal: false})
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
 	}
@@ -323,7 +318,7 @@ func TestExportModeKeepsDefaultsButStillOmitsSecrets(t *testing.T) {
 
 	// And minimal mode, from the same input, still omits the default — so the
 	// difference is the flag rather than the fixture.
-	min := string(oneFile(t, rs, devContext()).Bytes)
+	min := string(oneFile(t, rs).Bytes)
 	if strings.Contains(min, "size:") {
 		t.Errorf("minimal mode emitted the default:\n%s", min)
 	}
@@ -341,8 +336,8 @@ func TestTheOmissionNoteSuitsItsReader(t *testing.T) {
 		},
 	}}
 
-	min := string(oneFile(t, rs, devContext()).Bytes)
-	full, err := Generate(rs, testRegistry(t), devContext(), Options{Minimal: false})
+	min := string(oneFile(t, rs).Bytes)
+	full, err := Generate(rs, testRegistry(t), Options{Minimal: false})
 	if err != nil {
 		t.Fatal(err)
 	}

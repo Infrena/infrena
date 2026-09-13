@@ -22,12 +22,16 @@ type Capabilities struct {
 	Create, Read, Update, Delete, Import bool
 }
 
-// ImportSpec describes the provider ID form for a resource type. M1 uses
-// Description only, to render `infra explain`. Parse is declared now so the
-// field does not change shape in Phase 2, and may be nil until then.
+// ImportSpec describes the provider ID form for a resource type, for `infra
+// explain` to render.
+//
+// It once also declared `Parse func(id string) (map[string]value.Value, error)`,
+// "so the field does not change shape in Phase 2". Phase 2 came and went without
+// anything setting it or calling it, and §31.1 made it impossible: a function
+// cannot cross a pipe. A plugin that needs to interpret an import ID does so
+// inside its own `import` implementation, where it already has the ID.
 type ImportSpec struct {
 	Description string
-	Parse       func(id string) (map[string]value.Value, error)
 }
 
 // ResourceDefinition describes a provider resource type.

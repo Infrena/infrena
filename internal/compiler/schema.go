@@ -40,7 +40,7 @@ func bindSchemas(
 		// instance's `defaults:` beating them: whichever runs first wins, since
 		// neither overwrites a value already present.
 		applyInstanceDefaults(r.Attrs, def, table[r.Provider])
-		applyDefaults(r.Attrs, def, defaultContextFor(cfg, r.Type, opts), r.Origin, &ds)
+		applyDefaults(r.Attrs, def, r.Origin, &ds)
 		checkRequired(r.Attrs, def, r.Origin, &ds)
 		markSensitive(r.Attrs, def)
 	}
@@ -115,50 +115,35 @@ func checkConfiguredAttributes(attrs map[string]value.Value, def *schema.Resourc
 			continue
 		}
 
-		if attr.Validate != nil {
-			if err := attr.Validate(v); err != nil {
-				// A validator is handed the whole Value and the natural way
-				// to write one is fmt.Errorf("... got %q", s). For an
-				// attribute the schema declares Sensitive — two fields away
-				// from the Validate func being called — that message would
-				// carry the secret onto stderr verbatim. The provider is not
-				// doing anything wrong; this is the only place that knows
-				// both the message and the sensitivity, so it is the only
-				// place that can hold them apart.
-				summary := strconv.Quote(name) + " is not valid"
-				if !attr.Sensitive {
-					summary += ": " + err.Error()
-				}
-				d := diag.Diagnostic{
-					Severity: diag.SeverityError,
-					Summary:  summary,
-					Origin:   v.Origin,
-				}
-				if attr.Sensitive {
-					d.Detail = "The provider rejected this value. Its message is withheld " +
-						"because the attribute is sensitive and the message may quote it."
-					d.Action = "Check the value against the provider's documented constraints for " +
-						strconv.Quote(name) + "."
-				}
-				ds.Add(d)
-			}
-		}
+		// WHERE DECLARATIVE VALIDATION WILL GO, and one thing to keep when it
+		// does. A per-attribute `Validate func(value.Value) error` lived here and
+		// is gone with §31.1: a function cannot cross a pipe, and nothing ever set
+		// it. Its replacement is declarative — an enum, a range, a pattern — added
+		// when the first real attribute needs one.
+		//
+		// The rule that cost something to learn: a validator's message must not be
+		// printed for an attribute the schema declares Sensitive. The natural way
+		// to write one is fmt.Errorf("... got %q", s), which puts the secret on
+		// stderr verbatim. This is the only place that knows both the message and
+		// the sensitivity, so it is the only place that can hold them apart —
+		// report that the value was rejected, say the message is withheld because
+		// the attribute is sensitive, and point at the provider's documented
+		// constraints instead.
 	}
 }
 
 // applyDefaults fills absent optional attributes, marking each SourceDefault.
 // It never overwrites a value configuration supplied: an explicit value always
-// wins over an implicit one. A default resolver returning a datum the value
-// model cannot express, or one that does not match its attribute's declared
-// kind, is a provider bug and is reported rather than silently filled in —
-// see checkedDefault.
+// wins over an implicit one. A default the value model cannot express, or one
+// that does not match its attribute's declared kind, is a provider bug and is
+// reported rather than silently filled in — see checkedDefault.
 //
 // Redundancy note (measured): removing the sort below fails nothing. Filling
 // defaults is order-independent — each attribute is independent of the
-// others — so the sort exists only so that any DIAGNOSTICS a bad default
-// resolver produces come out in a stable order. No fixture has two bad
-// defaults on one resource, which is the only way to observe it.
-func applyDefaults(attrs map[string]value.Value, def *schema.ResourceDefinition, ctx schema.DefaultContext, origin value.Origin, ds *diag.Diagnostics) {
+// others — so the sort exists only so that any DIAGNOSTICS a malformed default
+// produces come out in a stable order. No fixture has two bad defaults on one
+// resource, which is the only way to observe it.
+func applyDefaults(attrs map[string]value.Value, def *schema.ResourceDefinition, origin value.Origin, ds *diag.Diagnostics) {
 	names := make([]string, 0, len(def.Attributes))
 	for name := range def.Attributes {
 		names = append(names, name)
@@ -173,19 +158,16 @@ func applyDefaults(attrs map[string]value.Value, def *schema.ResourceDefinition,
 		if _, present := attrs[name]; present {
 			continue
 		}
-		raw, ok := attr.Default(ctx)
-		if !ok {
-			continue
-		}
+		raw := attr.Default
 		v, ok := checkedDefault(raw, attr.Kind)
 		if !ok {
 			ds.Add(diag.Diagnostic{
 				Severity: diag.SeverityError,
 				Summary:  def.Type + ": the default for " + strconv.Quote(name) + " is not a " + attr.Kind.String(),
 				Detail: fmt.Sprintf(
-					"The default resolver returned a %T, which is not a %s. "+
-						"A provider default must produce the kind its attribute declares. "+
-						"This is a provider bug, not a configuration error.",
+					"The default is a %T, which is not a %s. A provider default must be the "+
+						"kind its attribute declares. This is a provider bug, not a "+
+						"configuration error.",
 					raw, attr.Kind,
 				),
 				Action: "This is a defect in the provider; please report it.",
@@ -244,7 +226,7 @@ func sortedDefaultKeys(defaults map[string]value.Value) []string {
 	return out
 }
 
-// fromDefault wraps a resolver's datum as a value marked SourceDefault, which
+// fromDefault wraps a default datum as a value marked SourceDefault, which
 // is what lets a plan print [default] and import generate minimal config. It
 // reports ok=false when raw is a type the value model cannot express.
 //
@@ -257,11 +239,11 @@ func sortedDefaultKeys(defaults map[string]value.Value) []string {
 // The matching Scope — ScopeProviderDefault, the floor of PLAN.md §7's
 // precedence chain — is stamped once by checkedDefault rather than in each arm
 // here, so it cannot be applied to six kinds and missed on the seventh.
-// checkedDefault converts a resolver's datum and confirms it produced the kind
-// the attribute declares.
+// checkedDefault converts a default datum and confirms it is the kind the
+// attribute declares.
 //
-// Matching a Go type is not the same as matching the declared kind: a resolver
-// for a float attribute that returns int64 builds a perfectly valid KindInt
+// Matching a Go type is not the same as matching the declared kind: a datum for
+// a float attribute written as int64 builds a perfectly valid KindInt
 // value, which would then sail past the kind check that exists to catch
 // exactly this — because that check runs on configuration, before a default is
 // ever filled in, not on the default itself. The declared kind is the
@@ -298,26 +280,6 @@ func markSensitive(attrs map[string]value.Value, def *schema.ResourceDefinition)
 		if attr, ok := def.Attribute(name); ok && attr.Sensitive {
 			attrs[name] = v.WithSensitive(true)
 		}
-	}
-}
-
-// defaultContextFor builds the context a default resolver is allowed to see:
-// environment, region, account, project and type — never another resource's
-// attributes, so a default can never depend on an unknown.
-//
-// Environment comes from opts, not cfg. In practice the two agree —
-// bindReferences (stage 6) sets ResolvedConfig.Environment from the same
-// Options.Environment — but opts is the explicit signal bindSchemas was handed
-// for this purpose, and Options is what carries Region and Account too; reading
-// Environment from a different input than its siblings is the kind of
-// inconsistency that drifts silently.
-func defaultContextFor(cfg *ResolvedConfig, resourceType string, opts Options) schema.DefaultContext {
-	return schema.DefaultContext{
-		Environment: opts.Environment,
-		Region:      opts.Region,
-		Account:     opts.Account,
-		Project:     cfg.Project,
-		Type:        resourceType,
 	}
 }
 

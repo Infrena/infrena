@@ -4,7 +4,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/infrata/infrata/pkg/schema"
 	"github.com/infrata/infrata/pkg/value"
 )
 
@@ -17,7 +16,7 @@ func renderWith(t *testing.T, rs []Resource, defaults map[string]map[string]valu
 	t.Helper()
 	opts := MinimalOptions()
 	opts.InstanceDefaults = defaults
-	files, err := Generate(rs, testRegistry(t), schema.DefaultContext{Environment: "dev", Project: "p"}, opts)
+	files, err := Generate(rs, testRegistry(t), opts)
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
 	}
@@ -113,7 +112,7 @@ func TestExportWritesAValueItsInstanceDefaults(t *testing.T) {
 	files, err := Generate([]Resource{database("main", map[string]value.Value{
 		"engine": prov("postgres"),
 		"size":   provInt(200),
-	})}, testRegistry(t), schema.DefaultContext{Environment: "dev", Project: "p"}, opts)
+	})}, testRegistry(t), opts)
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
 	}

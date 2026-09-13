@@ -27,11 +27,11 @@ func definitions() []*schema.ResourceDefinition {
 			Description: "A fake database. Requires a network.",
 			Attributes: map[string]schema.Attribute{
 				"engine": {Kind: value.KindString, Required: true, ForceNew: true, Description: "Database engine"},
-				// ONE value, not a function of the environment. PLAN.md §13 is
-				// withdrawn: anything that should differ between environments is
-				// a variable, which a reader can see in the configuration.
-				"size": {Kind: value.KindInt, Description: "Storage in GB",
-					Default: func(schema.DefaultContext) (any, bool) { return int64(10), true }},
+				// ONE value. PLAN.md §13 is withdrawn — anything that should
+				// differ between environments is a variable, which a reader can
+				// see in the configuration — and §31.1 made a default a datum,
+				// because a function cannot cross a pipe.
+				"size":     {Kind: value.KindInt, Description: "Storage in GB", Default: int64(10)},
 				"password": {Kind: value.KindString, Sensitive: true, Description: "Administrator password"},
 				"network":  {Kind: value.KindString, Description: "Network this database sits in"},
 				// A composite attribute is deliberately present: without one,
@@ -53,7 +53,7 @@ func definitions() []*schema.ResourceDefinition {
 			Description: "A fake application. Requires a database.",
 			Attributes: map[string]schema.Attribute{
 				"image":        {Kind: value.KindString, Required: true, Description: "Container image"},
-				"replicas":     {Kind: value.KindInt, Description: "Instance count", Default: func(schema.DefaultContext) (any, bool) { return int64(1), true }},
+				"replicas":     {Kind: value.KindInt, Description: "Instance count", Default: int64(1)},
 				"database_url": {Kind: value.KindString, Description: "Connection string"},
 				"url":          {Kind: value.KindString, Computed: true, Description: "Public URL"},
 			},

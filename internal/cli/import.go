@@ -17,7 +17,6 @@ import (
 	"github.com/infrata/infrata/internal/registry"
 	"github.com/infrata/infrata/internal/state"
 	"github.com/infrata/infrata/pkg/address"
-	"github.com/infrata/infrata/pkg/schema"
 )
 
 // newImportCommand builds `infrata import <environment> [type.id...]` (spec §26).
@@ -196,11 +195,6 @@ func writeGenerated(
 	dir string, selected []discovery.Result, reg *registry.Registry,
 	table providers.Table, environment string,
 ) ([]string, error) {
-	ctx := schema.DefaultContext{
-		Environment: environment,
-		Project:     projectName(dir),
-	}
-
 	resources := make([]generator.Resource, 0, len(selected))
 	for _, r := range selected {
 		resources = append(resources, generator.Resource{
@@ -218,7 +212,7 @@ func writeGenerated(
 	gopts := generator.MinimalOptions()
 	gopts.InstanceDefaults = defaultsByInstance(table)
 
-	files, err := generator.Generate(resources, reg, ctx, gopts)
+	files, err := generator.Generate(resources, reg, gopts)
 	if err != nil {
 		return nil, err
 	}

@@ -95,7 +95,7 @@ func section(w io.Writer, title string, names []string, def *schema.ResourceDefi
 		if a.ForceNew {
 			notes = append(notes, "replaces on change")
 		}
-		if d := describeDefault(a, def.Type); d != "" {
+		if d := describeDefault(a); d != "" {
 			notes = append(notes, d)
 		}
 		if a.Description != "" {
@@ -116,15 +116,11 @@ func section(w io.Writer, title string, names []string, def *schema.ResourceDefi
 // per attribute, and anything that should differ between environments is a
 // variable the reader can see in the configuration. The whole reason this
 // function was complicated is gone with it.
-func describeDefault(a schema.Attribute, typ string) string {
+func describeDefault(a schema.Attribute) string {
 	if a.Default == nil {
 		return ""
 	}
-	v, ok := a.Default(schema.DefaultContext{Type: typ})
-	if !ok {
-		return ""
-	}
-	return fmt.Sprintf("default: %v", v)
+	return fmt.Sprintf("default: %v", a.Default)
 }
 
 func capabilities(c schema.Capabilities) []string {

@@ -94,7 +94,7 @@ func MinimalOptions() Options {
 // Files and the resources inside them are sorted. Generated configuration is
 // read in diffs — a file whose lines reorder between two runs against unchanged
 // infrastructure is a file nobody can review.
-func Generate(resources []Resource, reg *registry.Registry, ctx schema.DefaultContext, opts Options) ([]File, error) {
+func Generate(resources []Resource, reg *registry.Registry, opts Options) ([]File, error) {
 	grouped := map[string][]Resource{}
 	for _, r := range resources {
 		name := FileName(r.Type)
@@ -109,7 +109,7 @@ func Generate(resources []Resource, reg *registry.Registry, ctx schema.DefaultCo
 
 	out := make([]File, 0, len(names))
 	for _, name := range names {
-		b, err := renderFile(grouped[name], reg, ctx, opts)
+		b, err := renderFile(grouped[name], reg, opts)
 		if err != nil {
 			return nil, err
 		}
@@ -119,7 +119,7 @@ func Generate(resources []Resource, reg *registry.Registry, ctx schema.DefaultCo
 }
 
 // renderFile writes one `resources:` document.
-func renderFile(resources []Resource, reg *registry.Registry, ctx schema.DefaultContext, opts Options) ([]byte, error) {
+func renderFile(resources []Resource, reg *registry.Registry, opts Options) ([]byte, error) {
 	sorted := append([]Resource(nil), resources...)
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Name < sorted[j].Name })
 
@@ -133,7 +133,7 @@ func renderFile(resources []Resource, reg *registry.Registry, ctx schema.Default
 			// without becoming something the compiler has to reject.
 			key.HeadComment = "imported from " + r.ProviderID
 		}
-		node, notes, err := renderResource(r, reg, ctx, opts)
+		node, notes, err := renderResource(r, reg, opts)
 		if err != nil {
 			return nil, err
 		}
@@ -186,7 +186,7 @@ func renderFile(resources []Resource, reg *registry.Registry, ctx schema.Default
 //
 // The first two say so in a comment. A silent omission tells a reader the
 // resource has no password, rather than that they must supply one.
-func renderResource(r Resource, reg *registry.Registry, ctx schema.DefaultContext, opts Options) (*yaml.Node, []string, error) {
+func renderResource(r Resource, reg *registry.Registry, opts Options) (*yaml.Node, []string, error) {
 	def, known := reg.Definition(r.Type)
 
 	node := &yaml.Node{Kind: yaml.MappingNode}
@@ -232,7 +232,7 @@ func renderResource(r Resource, reg *registry.Registry, ctx schema.DefaultContex
 				omittedSecrets = append(omittedSecrets, name)
 				continue
 			}
-			if opts.Minimal && equalsDefault(attr, v, ctx) {
+			if opts.Minimal && equalsDefault(attr, v) {
 				continue
 			}
 			// The INSTANCE's default, which outranks the schema's (§12.1) and is
@@ -301,19 +301,21 @@ func equalsInstanceDefault(opts Options, instance, name string, v value.Value) b
 // equalsDefault reports whether v is exactly what this attribute would have
 // been given anyway.
 //
-// It uses the SAME schema.DefaultContext the compiler uses. A default may
-// depend on the environment — test.database's size is 100 in production and 10
-// elsewhere — so comparing against a zero context would emit `size: 100` for a
-// production import (noise) and omit it for a development one (wrong).
-func equalsDefault(attr schema.Attribute, v value.Value, ctx schema.DefaultContext) bool {
+// Through schema.DatumValue, which is the SAME conversion the compiler fills a
+// default in with — that is why DatumValue lives in pkg/schema rather than in
+// either caller. If the two ever disagreed, generation would omit an attribute
+// the compiler then filled with something else, and the resource would change on
+// the first apply after an import that reported no changes (invariant 3).
+//
+// This comment used to explain that the comparison needed the compiler's
+// DefaultContext, because a default could vary by environment. It could not, even
+// then: PLAN.md §13 withdrew environment-class defaults in M9, and §31.1 has
+// since made a default a plain datum.
+func equalsDefault(attr schema.Attribute, v value.Value) bool {
 	if attr.Default == nil {
 		return false
 	}
-	raw, ok := attr.Default(ctx)
-	if !ok {
-		return false
-	}
-	def, ok := schema.DatumValue(raw, attr.Kind)
+	def, ok := schema.DatumValue(attr.Default, attr.Kind)
 	if !ok {
 		// A malformed default is a provider bug. The compiler reports it; here
 		// it simply means nothing can be compared, so the value is emitted

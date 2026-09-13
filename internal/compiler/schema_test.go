@@ -218,10 +218,8 @@ func (wrongKindProvider) Definitions() []*schema.ResourceDefinition {
 		Type: "bad.thing",
 		Attributes: map[string]schema.Attribute{
 			"ratio": {
-				Kind: value.KindFloat,
-				Default: func(schema.DefaultContext) (any, bool) {
-					return int64(1), true // wrong: declares KindFloat, returns an int64
-				},
+				Kind:        value.KindFloat,
+				Default:     int64(1), // wrong: declares KindFloat, holds an int64
 				Description: "A ratio that should be a float",
 			},
 		},
