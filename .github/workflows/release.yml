@@ -22,6 +22,13 @@ jobs:
   # "the tests were green last week" is not good enough.
   check:
     uses: ./.github/workflows/ci.yml
+    # A called workflow gets NO secrets unless they are passed. Without this,
+    # ci.yml's PLUGIN_REPO_TOKEN is empty, its checkout of the private
+    # infrata-provider-fake fails, and because INFRATA_REQUIRE_PLUGIN turns a
+    # skipped integration suite into a failure, the release stops here — on its
+    # first tag, with nothing built. `inherit` rather than naming the one secret,
+    # so adding a second to ci.yml does not silently break releases again.
+    secrets: inherit
 
   build:
     needs: check
