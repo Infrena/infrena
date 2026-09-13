@@ -12,6 +12,18 @@ import (
 	"github.com/infrata/infrata/pkg/value"
 )
 
+// ConfigKeyProjectDir is the configuration key carrying the project directory.
+//
+// A plugin is a separate process started before any configuration is read, so it
+// cannot be handed the directory at construction the way an in-process provider
+// was. A relative path in a plugin's own configuration — the fake provider's
+// `cloud:`, say — has to resolve against the PROJECT, not against whatever working
+// directory the plugin happened to inherit, so the host supplies it here.
+//
+// Reserved: a plugin must not accept a configuration key of this name from a
+// user, and the host overwrites it if one appears.
+const ConfigKeyProjectDir = "infrata:project_dir"
+
 // ErrNotImplemented is returned by capabilities a provider does not offer.
 var ErrNotImplemented = errors.New("not implemented")
 

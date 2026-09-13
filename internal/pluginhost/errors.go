@@ -1,0 +1,123 @@
+package pluginhost
+
+import (
+	"fmt"
+	"strconv"
+	"strings"
+	"sync"
+)
+
+// The errors a user actually meets when a plugin is wrong. Each follows §44:
+// what is wrong, where, what was expected, and what to do about it.
+
+// IncompatibleError is a plugin speaking a protocol version this build does not.
+type IncompatibleError struct {
+	Plugin    string
+	Path      string
+	Theirs    int
+	Supported []int
+}
+
+func (e *IncompatibleError) Error() string {
+	versions := make([]string, len(e.Supported))
+	for i, v := range e.Supported {
+		versions[i] = strconv.Itoa(v)
+	}
+	// Which side to upgrade, said plainly: a user reading "protocol 2 vs 1" has to
+	// work out which of two programs is behind, and will guess wrong half the time.
+	advice := "Upgrade infrata."
+	newest := 0
+	for _, v := range e.Supported {
+		if v > newest {
+			newest = v
+		}
+	}
+	if e.Theirs < newest {
+		advice = "Upgrade the plugin."
+	}
+	return fmt.Sprintf(
+		"the %s plugin speaks protocol version %d, which this build of infrata does not understand\n"+
+			"  loaded from: %s\n"+
+			"  infrata speaks: %s\n"+
+			"%s",
+		e.Plugin, e.Theirs, e.pathOrUnknown(), strings.Join(versions, ", "), advice)
+}
+
+func (e *IncompatibleError) pathOrUnknown() string {
+	if e.Path == "" {
+		return "(in process)"
+	}
+	return e.Path
+}
+
+// WrongPluginError is a binary that is not the plugin its name says it is.
+type WrongPluginError struct {
+	Expected, Actual, Path string
+}
+
+func (e *WrongPluginError) Error() string {
+	return fmt.Sprintf(
+		"the binary for plugin %q says it is %q\n"+
+			"  loaded from: %s\n"+
+			"A renamed or mis-copied binary serves the wrong schemas, and the first sign of that "+
+			"is a plan proposing something nobody asked for.\n"+
+			"Either rename the binary to infrata-plugin-%s, or write `plugin: %s` in your "+
+			"`providers:` block.",
+		e.Expected, e.Actual, e.Path, e.Expected, e.Actual)
+}
+
+// stderrTail keeps the last few lines a plugin logged, for a crash message.
+//
+// Bounded, because a plugin that logs enthusiastically before dying would
+// otherwise put its whole session into one error. The LAST lines rather than the
+// first: what a process says immediately before exiting is what explains it.
+type stderrTail struct {
+	mu    sync.Mutex
+	lines []string
+	max   int
+}
+
+func newStderrTail(max int) *stderrTail { return &stderrTail{max: max} }
+
+func (t *stderrTail) add(line string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.lines = append(t.lines, line)
+	if len(t.lines) > t.max {
+		t.lines = t.lines[len(t.lines)-t.max:]
+	}
+}
+
+func (t *stderrTail) String() string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return strings.Join(t.lines, "\n")
+}
+
+// exitMessage explains a connection that ended, quoting the plugin's own last
+// words.
+//
+// Without the stderr tail, a plugin that died of a missing credential reports as
+// "EOF" — true, and useless. The plugin already said what was wrong; it said it on
+// the stream the host was told to treat as a log.
+func (c *Client) exitMessage(err error) string {
+	msg := "the plugin stopped responding"
+	if err != nil && err.Error() != "EOF" {
+		msg = err.Error()
+	}
+	if c.stderr == nil {
+		return msg
+	}
+	if tail := c.stderr.String(); tail != "" {
+		return msg + "\nIts last output was:\n" + indent(tail)
+	}
+	return msg
+}
+
+func indent(s string) string {
+	lines := strings.Split(s, "\n")
+	for i, l := range lines {
+		lines[i] = "  " + l
+	}
+	return strings.Join(lines, "\n")
+}
