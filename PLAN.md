@@ -1598,6 +1598,35 @@ Later:
 
 State locking is mandatory for remote operation.
 
+## 21.1 Migrating `test.*` state to `fake.*`
+
+**Open, with a recommendation.** Renaming the fake provider from `test` to `fake`
+renames every resource type it serves, and a state file recording `test.network` names
+a type no loaded plugin offers. Today that is refused with "no provider registers that
+type" — correct, and a dead end for anyone holding such a file.
+
+**Recommendation: write the migration.** It was the wrong trade twice before and is the
+right one now, for a reason that changed underneath it.
+
+`state.Decode` used to route every non-current file through `map[string]any`, rounding
+any integer past 2^53 — so M7 and M11 each added a `Scope` without bumping
+`CurrentVersion`, because bumping cost silent precision loss on every existing file.
+That defect is fixed (`json.Decoder.UseNumber()`), and a version bump is an ordinary
+change again. This is the first real reason to make one.
+
+The migration is small: version 1 → 2, rewriting each resource's `type` prefix from
+`test.` to `fake.`, and its `provider` from `test` to `fake` where it says `test`. It
+is exactly the shape `Migration.Apply` exists for, and it is the case that proves the
+mechanism — which has never run in production, since no migration has ever been
+registered.
+
+**What argues against it**, recorded because it is not nothing: the fake provider
+manages nothing real, so a user who cannot load their state loses a file describing
+imaginary infrastructure. Deleting `.infra/state/` costs them nothing. Against that:
+the fake provider is what every test suite and every tutorial uses, so the file exists
+on many machines, and "delete your state" is a bad first experience of an upgrade —
+and the mechanism needs its first real exercise somewhere less frightening than AWS.
+
 ---
 
 # 22. State Locking
@@ -2159,32 +2188,55 @@ schemas, not pipes.
 
 ```text
 pkg/pluginproto/        message types, protocol version: the contract
-pkg/pluginsdk/          Serve(provider.Plugin): what plugin authors import
+pkg/pluginsdk/          Main(p): what a plugin's main() calls
+pkg/plugintest/         the in-process harness a plugin's OWN tests use
 internal/pluginhost/    launch, handshake, client, the trust rules above
-cmd/infrata-plugin-test/  the fake provider as a binary
-providers/test/         unchanged package; a plugin like any other
+providers/test/         the fake provider, in-process and TRANSITIONAL
 providers/aws/          its own Go module (Phase 3)
 ```
 
-- **`providers/aws` gets its own `go.mod`**, so AWS SDK v2 never enters the core module's
-  dependency graph. It stays in this repository while the protocol is young, so a change to
-  both lands in one commit. Moving it to a repository of its own later changes nothing a
-  user sees.
-- `pkg/provider`, `pkg/schema`, `pkg/resource` and `pkg/value` become importable API for
-  plugin authors through the SDK. Their JSON wire forms, not their Go shapes, are what
-  compatibility is promised on.
-- `internal/cli` stops importing `providers/test`.
+**Amended 2026-09-13.** This section previously said `cmd/infrata-plugin-test/` — the
+fake provider as a binary inside this repository — and `providers/test/` unchanged.
+Neither is what happened, and the difference is deliberate.
+
+**The fake provider gets its OWN REPOSITORY**, `infrata-provider-fake`, building
+`infrata-plugin-fake`. It has two jobs, and the second is why it moved out: it is the
+only plugin whose source anyone can read, so it is also the reference implementation
+every plugin author copies. A plugin living inside the engine's module can quietly
+depend on something an external author cannot have — an internal package, a shared
+test fixture — and nobody would find out until the first third-party plugin failed.
+Outside, if it compiles, the dependency is one an outside author has too.
+
+That is not a hypothetical: the first thing the port found was that
+`internal/pluginhost.InProcess` is unreachable from another module, while the
+authoring guide recommended testing against it. `pkg/plugintest` exists because of it.
+
+**`providers/test` stays, as a BUILTIN, until that binary ships.** The loader prefers a
+binary on the search path and falls back to a builtin, and a builtin is served over
+`pluginhost.InProcess` — the same handshake, protocol and trust rules a subprocess
+gets. So it is a fallback, not a second code path, and deleting it is a one-line
+change plus the `init` scaffold and `examples/shop` moving to `fake.*`.
+
+**Nothing names a plugin outside configuration.** A `providers:` entry's `plugin:`, a
+resource type's prefix, or a type recorded in state: those are the three things that
+cause a plugin to load, because they are the three ways a project says it uses one.
+`explain <type>` therefore works with no project at all, and `discover` — the one
+command whose scope configuration does not set — asks every plugin available.
 
 ### Testing
 
 **One code path, two ways to connect it.** `pluginhost.InProcess(p)` runs
 `pluginsdk.Serve(p)` on one end of an in-memory pipe and the host client on the other.
+`pkg/plugintest` is the same thing with a public door, for a plugin's own tests in its
+own module.
 
 - Unit tests and the fast integration suite register the fake provider that way. Every
   call is encoded, decoded and passed through the trust rules without starting a process.
 - Launching a subprocess is the only thing a separate, smaller suite adds. That suite
-  builds `cmd/infrata-plugin-test` in `TestMain` and runs §48's workflow against the
-  binary.
+  builds `infrata-plugin-fake` from its own repository in `TestMain` and runs §48's
+  workflow against the binary. Still outstanding: it is the only place the SDK's
+  `os.Stdout` redirect is observable, because in process `Serve` writes to the pipe it
+  is given and a plugin's `fmt.Println` goes somewhere else entirely.
 - There is deliberately no path that skips the host adapter. A second path is where the
   trust rules would silently stop applying.
 
@@ -2206,8 +2258,9 @@ Tests this section requires, each with a sabotage proving it can fail:
   with an expensive startup, like AWS SDK credential resolution, pays it on each run. The
   fix is caching schemas keyed by the binary's SHA-256, and it is deferred until someone
   measures it being slow.
-- **`init` scaffolds a project that uses the fake provider**, so a fresh install needs
-  `infrata-plugin-test` next to `infrata`. Releases ship both.
+- **`init` scaffolds a project that uses the fake provider**, so once the builtin is
+  deleted a fresh install needs `infrata-plugin-fake` next to `infrata`. Releases ship
+  both. Until then the builtin means a fresh install needs nothing.
 - **`pkg/*` becomes something other people compile against.** Changing those packages now
   has users outside this repository, even though the wire protocol is the real contract.
 - **Debugging crosses a process boundary.** `--verbose` plugin logs and the stderr tail on
@@ -2222,7 +2275,10 @@ Tests this section requires, each with a sabotage proving it can fail:
    registry registers every plugin through the host.
 4. Subprocess launch, cookie, handshake, search path, `plugins:` constraints, stderr
    forwarding, crash and cancel handling.
-5. `cmd/infrata-plugin-test`; the subprocess suite; `internal/cli` drops its direct import.
+5. `infrata-provider-fake` builds `infrata-plugin-fake`; the subprocess suite; the
+   `init` scaffold and `examples/shop` move to `fake.*`; the builtin `test` plugin and
+   `providers/test` are deleted. Whether existing `test.*` STATE gets a migration is
+   open — see §21's note, now that the migration path is no longer lossy.
 6. Documentation: `explain` and `validate` errors for a missing or incompatible plugin, and
    an authoring guide for the SDK.
 
@@ -2542,7 +2598,8 @@ Keep the core engine independent of AWS.
 Provider plugins run as separate processes (§31.1), which adds `pkg/pluginproto`
 (the wire contract), `pkg/pluginsdk` (what plugin authors import),
 `internal/pluginhost` (launch, handshake, and the rules the engine no longer trusts a
-plugin with) and `cmd/infrata-plugin-test` (the fake provider as a binary).
+plugin with), `pkg/plugintest` (the harness a plugin's own tests use), and
+`infrata-provider-fake` — a separate repository — for the fake provider as a binary.
 
 ---
 

@@ -1,0 +1,81 @@
+// Package plugintest lets a provider plugin's own tests run it the way infrata does.
+//
+// A plugin is a separate binary, so the interesting question for its author is not
+// "does my Provider return the right thing" — that is an ordinary unit test — but
+// "does it still behave once it has been through the protocol". Encoding, decoding,
+// schema validation and every rule the host enforces sit between a plugin and the
+// engine, and none of them are exercised by calling a method directly.
+//
+//	host, err := plugintest.Open(ctx, myplugin.New(), t.TempDir())
+//	if err != nil { t.Fatal(err) }        // schemas failed validation
+//	defer host.Close()
+//
+//	prov, err := host.Configure(provider.Config{Instance: "main"})
+//	if err != nil { t.Fatal(err) }
+//	got, err := prov.Read(ctx, existing)  // through the real protocol
+//
+// No process is started: one end of an in-memory pipe runs pluginsdk.Serve, the other
+// runs infrata's own host. It is the SAME host code a subprocess talks to — this
+// package adds no second implementation, because a second one would drift and the
+// drift would be invisible, each side still agreeing with itself.
+//
+// PLAN.md §31.1. This package exists because the host is internal/ and therefore
+// unreachable from another module, while the authoring guide recommends testing
+// against it: a recommendation nobody could follow.
+package plugintest
+
+import (
+	"context"
+
+	"github.com/infrata/infrata/internal/pluginhost"
+	"github.com/infrata/infrata/pkg/provider"
+	"github.com/infrata/infrata/pkg/schema"
+)
+
+// Host is a connected plugin, as infrata sees it.
+type Host struct {
+	plugin *pluginhost.Plugin
+}
+
+// Open connects a plugin and fetches its schemas.
+//
+// It FAILS if the schemas do not pass the checks infrata applies on load — a type
+// outside the plugin's own name prefix, an attribute named after a lifecycle option,
+// a malformed definition, a default that is not the kind its attribute declares.
+// Which makes `Open` worth a test of its own: it is the cheapest possible check that
+// a plugin is loadable at all.
+//
+// dir is the project directory a configured instance is given, for resolving a
+// relative path a user wrote. t.TempDir() is the usual answer.
+func Open(ctx context.Context, p provider.Plugin, dir string) (*Host, error) {
+	host, err := pluginhost.InProcess(ctx, p, dir)
+	if err != nil {
+		return nil, err
+	}
+	return &Host{plugin: host}, nil
+}
+
+// Configure returns one configured instance, reached through the protocol.
+//
+// The returned Provider is the host's own adapter, so every rule the engine applies
+// to a plugin's answers applies here: bookkeeping re-attached, sensitivity forced
+// from the schema, provenance overwritten, an undeclared attribute refused, and a
+// (nil, nil) from Create or Update turned into an error.
+func (h *Host) Configure(cfg provider.Config) (provider.Provider, error) {
+	return h.plugin.New(cfg)
+}
+
+// Definitions are the schemas the plugin sent, after validation.
+//
+// Worth asserting against directly: these are what `infrata explain` renders and what
+// the compiler checks configuration against, and they have been through JSON, so a
+// default that does not survive the round trip shows up here.
+func (h *Host) Definitions() []*schema.ResourceDefinition {
+	return h.plugin.Definitions()
+}
+
+// Version is what the plugin reported in its handshake.
+func (h *Host) Version() string { return h.plugin.Version() }
+
+// Close shuts the plugin down.
+func (h *Host) Close() error { return h.plugin.Close() }

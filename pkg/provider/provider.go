@@ -111,22 +111,24 @@ type Provider interface {
 	// Read returns the current state of a managed resource. A nil state with a
 	// nil error means the resource no longer exists.
 	//
-	// The returned ResourceState MUST carry forward every field the
-	// provider itself does not own — at minimum Dependencies, Lifecycle and
-	// CreatedAt — from current. Read reports what the remote system says
-	// about the attributes it manages; it is not the source of truth for
-	// bookkeeping infra attaches to a resource, and current is what already
-	// holds that bookkeeping correctly. `infra refresh` (spec §10) persists
-	// whatever Read returns verbatim via state.Set, so any field silently
-	// dropped here is not a stale read, it is a destructive write: losing
-	// Dependencies corrupts the next plan's destroy ordering (spec §14 —
-	// Dependencies is the only source of destroy-ordering edges once a
-	// resource leaves configuration), and losing Lifecycle makes a
-	// configured prevent_destroy or retain guard vanish with no error at
-	// all, which is the worst failure mode this product has. A provider
-	// that reads current's bookkeeping fields back unchanged onto its
-	// result satisfies this; providers/test's carryForward is the pattern
-	// to follow.
+	// RETURN ONLY WHAT YOU OWN: the provider ID and the attributes. Bookkeeping
+	// infra attaches to a resource — Address, Provider, Dependencies, Lifecycle,
+	// CreatedAt, UpdatedAt — is re-attached by the host from what it already holds,
+	// and whatever is set on the returned value is ignored.
+	//
+	// This USED to be the opposite: a provider had to carry every such field
+	// forward from current, and a paragraph here explained that dropping one was
+	// not a stale read but a destructive write — losing Dependencies corrupts the
+	// next plan's destroy ordering, losing Lifecycle makes a prevent_destroy guard
+	// vanish with no error at all, which is the worst failure mode this product
+	// has. All of that is still true, which is exactly why it is no longer a
+	// plugin's job: a provider is a separate binary somebody else built, and a
+	// guarantee that important cannot rest on its author having read a comment.
+	// internal/pluginhost enforces it for every provider (PLAN.md §31.1), and
+	// never sends the fields at all, so they cannot be dropped.
+	//
+	// current is given to you so you can USE it — the ID to look the resource up,
+	// the attributes to diff against — not so you can copy it back.
 	Read(ctx context.Context, current *resource.ResourceState) (*resource.ResourceState, error)
 	// Create creates a resource. On success it MUST return the created
 	// resource's state, never (nil, nil): the executor persists exactly
@@ -138,12 +140,9 @@ type Provider interface {
 	// failure through the error return instead if the created state cannot
 	// be determined.
 	//
-	// It need not set Lifecycle. The executor stamps that onto the returned
-	// state from the plan, because lifecycle is bookkeeping infra attaches to
-	// a resource rather than anything the remote system knows about, and a
-	// provider that forgot it would silently lose a prevent_destroy or retain
-	// guard. Read is the exception, above: no executor is involved in a
-	// refresh, so Read must carry it forward itself.
+	// Return only the provider ID and the attributes, as with Read: every
+	// bookkeeping field is the host's, including Lifecycle, which is what the
+	// configuration asked for rather than anything the remote system knows about.
 	Create(ctx context.Context, desired *resource.DesiredResource) (*resource.ResourceState, error)
 	// Update updates a resource. Same non-nil-on-success requirement as
 	// Create, for the same reason.
