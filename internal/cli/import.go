@@ -13,6 +13,7 @@ import (
 	"github.com/infrata/infrata/internal/config"
 	"github.com/infrata/infrata/internal/discovery"
 	"github.com/infrata/infrata/internal/generator"
+	"github.com/infrata/infrata/internal/providers"
 	"github.com/infrata/infrata/internal/registry"
 	"github.com/infrata/infrata/internal/state"
 	"github.com/infrata/infrata/pkg/address"
@@ -46,12 +47,16 @@ func newImportCommand(opts *GlobalOptions) *cobra.Command {
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			environment := args[0]
-			reg := buildRegistry(opts.Dir)
+			reg, tbl, regDiags := stateOnlyRegistry(opts.Dir)
+			if regDiags.HasErrors() {
+				regDiags.Render(cmd.ErrOrStderr())
+				return errProviderInstances
+			}
 			backend := backendFor(opts.Dir)
 
 			return withLockedEnvironment(environment, "import", backend, cmd.ErrOrStderr(),
 				func(ctx context.Context) error {
-					return runImport(ctx, cmd, opts, reg, backend, environment, args[1:], generate)
+					return runImport(ctx, cmd, opts, reg, tbl, backend, environment, args[1:], generate)
 				})
 		},
 	}
@@ -62,7 +67,7 @@ func newImportCommand(opts *GlobalOptions) *cobra.Command {
 
 func runImport(
 	ctx context.Context, cmd *cobra.Command, opts *GlobalOptions,
-	reg *registry.Registry, backend *state.Local,
+	reg *registry.Registry, table providers.Table, backend *state.Local,
 	environment string, selectors []string, generate bool,
 ) error {
 	selected, problems, err := selectForImport(ctx, reg, selectors)
@@ -105,7 +110,7 @@ func runImport(
 	// managed, which the next plan proposes CREATING — visible and refusable.
 	// The other order leaves one it proposes DESTROYING.
 	if generate {
-		written, err := writeGenerated(opts.Dir, selected, reg, environment)
+		written, err := writeGenerated(opts.Dir, selected, reg, table, environment)
 		if err != nil {
 			return fmt.Errorf("writing configuration: %w (nothing has been imported)", err)
 		}
@@ -116,7 +121,7 @@ func runImport(
 
 	imported := 0
 	for _, r := range selected {
-		p, ok := reg.Provider(r.Type)
+		p, ok := reg.ProviderFor(r.Type, r.Provider)
 		if !ok {
 			return fmt.Errorf("no provider offers %s", r.Type)
 		}
@@ -187,7 +192,10 @@ func selectForImport(ctx context.Context, reg *registry.Registry, selectors []st
 // NEVER OVERWRITES. An existing file is read, and only resources it does not
 // already declare are appended. Re-running import must be safe, because it is
 // the command people run when they are unsure what happened the first time.
-func writeGenerated(dir string, selected []discovery.Result, reg *registry.Registry, environment string) ([]string, error) {
+func writeGenerated(
+	dir string, selected []discovery.Result, reg *registry.Registry,
+	table providers.Table, environment string,
+) ([]string, error) {
 	ctx := schema.DefaultContext{
 		Environment: environment,
 		Project:     projectName(dir),
@@ -199,11 +207,18 @@ func writeGenerated(dir string, selected []discovery.Result, reg *registry.Regis
 			Name:       r.Name,
 			Type:       r.Type,
 			ProviderID: r.ProviderID,
+			Provider:   r.Provider,
 			Attributes: r.Attributes,
 		})
 	}
 
-	files, err := generator.Generate(resources, reg, ctx, generator.MinimalOptions())
+	// The instance an imported resource belongs to decides which `defaults:` block
+	// minimality measures against, so a value an instance already supplies is not
+	// written back out for the user to maintain (PLAN.md §12.1, §27).
+	gopts := generator.MinimalOptions()
+	gopts.InstanceDefaults = defaultsByInstance(table)
+
+	files, err := generator.Generate(resources, reg, ctx, gopts)
 	if err != nil {
 		return nil, err
 	}

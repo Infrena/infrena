@@ -221,6 +221,12 @@ func (p *Provider) Update(ctx context.Context, current *resource.ResourceState, 
 // there is no previous state, and the executor knows the edges from
 // configuration.
 func carryForward(next, current *resource.ResourceState) {
+	// The provider INSTANCE (PLAN.md §12.1) is carried from the state that was
+	// loaded, not re-derived: toState writes p.Name(), which is this PLUGIN, and a
+	// plugin cannot know which of several instances of itself it is. A refresh that
+	// re-derived it would overwrite the instance name with the plugin name and take
+	// the destroy path's only clue with it.
+	next.Provider = current.Provider
 	next.CreatedAt = current.CreatedAt
 	next.UpdatedAt = current.UpdatedAt
 	next.Lifecycle = current.Lifecycle
@@ -464,3 +470,10 @@ func fromRaw(raw any) value.Value {
 		return value.String(fmt.Sprint(v), value.SourceProvider)
 	}
 }
+
+// CloudPath is where this instance's world lives.
+//
+// Exported for one reason: it is the only observable consequence of an instance's
+// configuration, so it is what a test asserting "the resolved value reached the
+// provider" has to read. Nothing in the engine calls it.
+func (p *Provider) CloudPath() string { return p.cloudPath }

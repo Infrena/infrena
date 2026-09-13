@@ -50,8 +50,9 @@ func deferredValue(t *testing.T, src string) value.Value {
 
 func TestResolveAfterFillsUnknownFromDependency(t *testing.T) {
 	op := &planner.Operation{
-		Address: address.Address{Name: "app"},
-		Type:    "test.application",
+		Provider: "test",
+		Address:  address.Address{Name: "app"},
+		Type:     "test.application",
 		After: map[string]value.Value{
 			"network_id": deferredValue(t, "${net.id}"),
 		},
@@ -78,7 +79,8 @@ func TestResolveAfterFillsUnknownFromDependency(t *testing.T) {
 
 func TestResolveAfterLeavesKnownValuesUntouched(t *testing.T) {
 	op := &planner.Operation{
-		Address: address.Address{Name: "app"},
+		Provider: "test",
+		Address:  address.Address{Name: "app"},
 		After: map[string]value.Value{
 			"name": value.String("fixed", value.SourceExplicit),
 		},
@@ -112,8 +114,9 @@ func TestResolveAfterLeavesKnownValuesUntouched(t *testing.T) {
 // computedFor entries) independent of whatever the caller's Attrs holds.
 func TestResolveAfterOmitsUnsetComputedAttributeWithNoExpression(t *testing.T) {
 	op := &planner.Operation{
-		Address: address.Address{Name: "net"},
-		Type:    "test.network",
+		Provider: "test",
+		Address:  address.Address{Name: "net"},
+		Type:     "test.network",
 		After: map[string]value.Value{
 			"cidr": value.String("10.0.0.0/16", value.SourceExplicit),
 			"id":   value.Unknown(value.KindString, value.SourceProvider),
@@ -134,7 +137,8 @@ func TestResolveAfterOmitsUnsetComputedAttributeWithNoExpression(t *testing.T) {
 
 func TestResolveAfterReportsUnresolvedDependencyAsDiagnostic(t *testing.T) {
 	op := &planner.Operation{
-		Address: address.Address{Name: "app"},
+		Provider: "test",
+		Address:  address.Address{Name: "app"},
 		After: map[string]value.Value{
 			"network_id": deferredValue(t, "${net.id}"),
 		},
@@ -171,7 +175,8 @@ func TestResolveAfterMixesVariableAndResourceReference(t *testing.T) {
 	// TestResolveAfterTreatsResidualVarRefAsCompilerBug for the test that
 	// exercises runtimeScope.Variable itself.
 	op := &planner.Operation{
-		Address: address.Address{Name: "app"},
+		Provider: "test",
+		Address:  address.Address{Name: "app"},
 		After: map[string]value.Value{
 			"name": deferredValue(t, "${environment}-${net.id}"),
 		},
@@ -198,7 +203,8 @@ func TestResolveAfterUsesLiveSnapshotNotPlanTimeBefore(t *testing.T) {
 	// expression) and the live snapshot (the dependency's real, post-apply
 	// attributes) may determine the resolved value.
 	op := &planner.Operation{
-		Address: address.Address{Name: "app"},
+		Provider: "test",
+		Address:  address.Address{Name: "app"},
 		Before: map[string]value.Value{
 			"network_id": value.String("stale-would-be-wrong", value.SourceComputed),
 		},
@@ -243,7 +249,8 @@ func TestResolveAfterTreatsResidualVarRefAsCompilerBug(t *testing.T) {
 		Origin: value.Origin{File: "infra.yml", Line: 1},
 	}
 	op := &planner.Operation{
-		Address: address.Address{Name: "app"},
+		Provider: "test",
+		Address:  address.Address{Name: "app"},
 		After: map[string]value.Value{
 			"name": {
 				Kind:   value.KindString,

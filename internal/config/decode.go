@@ -253,6 +253,8 @@ func decodeDocument(path string, doc *yaml.Node, out *ProjectDecl, ds *diag.Diag
 			decodeVariables(path, val, out, ds, seenVariables)
 		case "environments":
 			decodeEnvironments(path, val, out, ds, seenEnvironments)
+		case "providers":
+			decodeProviders(path, val, out, ds)
 		case "modules":
 			decodeModuleLoads(path, val, &out.Modules, ds, seenModules)
 		default:
@@ -374,6 +376,20 @@ func decodeResources(path string, node *yaml.Node, dst *[]*ResourceDecl, ds *dia
 					}
 					r.DependsOn = append(r.DependsOn, text)
 				}
+			case "provider":
+				// A named key, not an attribute, for the reason `skip` and `only`
+				// are: everything this switch does not recognise BECOMES an
+				// attribute, so falling through would reach stage 7 as "no
+				// attribute provider" on every resource that names one.
+				text, ok := requireScalar(path, "`provider`", val, ds)
+				if !ok {
+					break
+				}
+				r.Provider = AttributeDecl{
+					Name:   "provider",
+					Value:  value.String(text, value.SourceExplicit).WithOrigin(originOf(path, val)),
+					Origin: keyOrigin,
+				}
 			case "skip", "only":
 				// Named keys rather than attributes: everything this switch does
 				// not recognise becomes an ATTRIBUTE, so falling through would
@@ -447,10 +463,12 @@ func decodeLifecycle(path string, node *yaml.Node, r *ResourceDecl, ds *diag.Dia
 		case "prevent_destroy":
 			if b, ok := decodeLifecycleBool(path, key, val, ds); ok {
 				r.Lifecycle.PreventDestroy = b
+				r.Lifecycle.PreventDestroySet = true
 			}
 		case "retain":
 			if b, ok := decodeLifecycleBool(path, key, val, ds); ok {
 				r.Lifecycle.Retain = b
+				r.Lifecycle.RetainSet = true
 			}
 		default:
 			ds.Add(diag.Diagnostic{

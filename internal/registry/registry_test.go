@@ -49,13 +49,13 @@ func def(t string) *schema.ResourceDefinition {
 
 func TestRegisterAndLookup(t *testing.T) {
 	r := New()
-	if err := r.Register(stubProvider{name: "test", defs: []*schema.ResourceDefinition{def("test.database")}}); err != nil {
+	if err := r.Register("test", stubProvider{name: "test", defs: []*schema.ResourceDefinition{def("test.database")}}); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	if _, ok := r.Definition("test.database"); !ok {
 		t.Error("definition not found after registration")
 	}
-	p, ok := r.Provider("test.database")
+	p, ok := r.ProviderFor("test.database", "test")
 	if !ok || p.Name() != "test" {
 		t.Error("provider not found after registration")
 	}
@@ -67,10 +67,10 @@ func TestRegisterAndLookup(t *testing.T) {
 func TestRegisterRejectsDuplicateType(t *testing.T) {
 	r := New()
 	p := stubProvider{name: "test", defs: []*schema.ResourceDefinition{def("test.database")}}
-	if err := r.Register(p); err != nil {
+	if err := r.Register("test", p); err != nil {
 		t.Fatalf("first Register: %v", err)
 	}
-	err := r.Register(stubProvider{name: "other", defs: []*schema.ResourceDefinition{def("test.database")}})
+	err := r.Register("other", stubProvider{name: "other", defs: []*schema.ResourceDefinition{def("test.database")}})
 	if err == nil || !strings.Contains(err.Error(), "test.database") {
 		t.Errorf("duplicate registration error = %v; want one naming the type", err)
 	}
@@ -78,7 +78,7 @@ func TestRegisterRejectsDuplicateType(t *testing.T) {
 
 func TestRegisterRejectsDuplicateTypeWithinOneProvider(t *testing.T) {
 	r := New()
-	err := r.Register(stubProvider{name: "test", defs: []*schema.ResourceDefinition{
+	err := r.Register("test", stubProvider{name: "test", defs: []*schema.ResourceDefinition{
 		def("test.database"), def("test.database"),
 	}})
 	if err == nil {
@@ -95,14 +95,14 @@ func TestRegisterValidatesDefinitions(t *testing.T) {
 		Type:       "test.broken",
 		Attributes: map[string]schema.Attribute{"x": {Kind: value.KindString, Required: true, Computed: true}},
 	}
-	if err := r.Register(stubProvider{name: "test", defs: []*schema.ResourceDefinition{broken}}); err == nil {
+	if err := r.Register("test", stubProvider{name: "test", defs: []*schema.ResourceDefinition{broken}}); err == nil {
 		t.Error("a malformed schema must fail at registration, not during a plan")
 	}
 }
 
 func TestRegisterRefusesTheModuleNamespace(t *testing.T) {
 	r := New()
-	err := r.Register(stubProvider{name: "rogue", defs: []*schema.ResourceDefinition{
+	err := r.Register("rogue", stubProvider{name: "rogue", defs: []*schema.ResourceDefinition{
 		def("module.app_stack"),
 	}})
 	if err == nil {
@@ -129,7 +129,7 @@ func TestRegisterRefusesTheModuleNamespace(t *testing.T) {
 func TestRegisterAcceptsATypeMerelyContainingModule(t *testing.T) {
 	for _, typ := range []string{"test.module_group", "aws.module", "modulearium.thing"} {
 		r := New()
-		if err := r.Register(stubProvider{name: "legit", defs: []*schema.ResourceDefinition{
+		if err := r.Register("legit", stubProvider{name: "legit", defs: []*schema.ResourceDefinition{
 			def(typ),
 		}}); err != nil {
 			t.Errorf("Register(%q) = %v, want it accepted: the guard reserves the `module.` prefix, not the word", typ, err)
@@ -142,7 +142,7 @@ func TestRegisterAcceptsATypeMerelyContainingModule(t *testing.T) {
 
 func TestTypesIsSorted(t *testing.T) {
 	r := New()
-	_ = r.Register(stubProvider{name: "test", defs: []*schema.ResourceDefinition{
+	_ = r.Register("test", stubProvider{name: "test", defs: []*schema.ResourceDefinition{
 		def("test.network"), def("test.application"), def("test.database"),
 	}})
 	got := r.Types()

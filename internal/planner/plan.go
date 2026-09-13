@@ -109,9 +109,15 @@ type Operation struct {
 	Address address.Address
 	Type    string
 	Kind    OpKind
-	Before  map[string]value.Value
-	After   map[string]value.Value
-	Reasons []ChangeReason
+	// Provider is the instance this operation runs against (PLAN.md §12.1).
+	//
+	// Taken from the DESIRED resource where there is one, and from STATE where
+	// there is not — a destroy has only state, and dispatching it from
+	// configuration would leave a removed resource with no account to delete from.
+	Provider string
+	Before   map[string]value.Value
+	After    map[string]value.Value
+	Reasons  []ChangeReason
 	// Dependents are the resources that depend on this one, sorted. Destroying
 	// a resource with dependents is the case spec §20 wants called out loudly,
 	// and the count is not recoverable from the plan without it.
@@ -236,8 +242,25 @@ type planWire struct {
 }
 
 type operationWire struct {
-	Address    string                 `json:"address"`
-	Type       string                 `json:"type"`
+	Address string `json:"address"`
+	Type    string `json:"type"`
+	// Provider is the instance the operation acts on (PLAN.md §12.1).
+	//
+	// It is here because the artifact is the format a saved plan is read back FROM,
+	// and a destroy read back without its instance would be dispatched to whichever
+	// account happened to be consulted. Reading a plan back is not implemented yet
+	// (§50); writing the field now is what keeps it possible.
+	//
+	// Unlike Lifecycle's omitzero, this changes the bytes of essentially every plan
+	// artifact: every operation names an instance, the implicit one included, so the
+	// key is always written. That does not touch invariant 6 — determinism is "same
+	// inputs, equivalent plan", not byte-stability across builds of infra — and
+	// version exists so the format can gain a field. A consumer decoding into a
+	// struct ignores one it does not know.
+	//
+	// omitempty only for the case where no instance exists at all, which is a
+	// registry serving nothing and a plan with no operations to speak of.
+	Provider   string                 `json:"provider,omitempty"`
 	Kind       OpKind                 `json:"kind"`
 	Before     map[string]value.Value `json:"before,omitempty"`
 	After      map[string]value.Value `json:"after,omitempty"`
@@ -298,6 +321,7 @@ func (p *Plan) encode(withTimestamp bool) ([]byte, error) {
 		entry := operationWire{
 			Address:   op.Address.String(),
 			Type:      op.Type,
+			Provider:  op.Provider,
 			Kind:      op.Kind,
 			Before:    op.Before,
 			After:     op.After,

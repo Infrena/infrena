@@ -91,6 +91,19 @@ type Instance struct {
 	// level the VARIABLES visible to a resource depend on which resources
 	// directory declared it, while the bindings do not.
 	Scope *Scope
+	// ProviderInstance is the provider instance this resource belongs to (PLAN.md
+	// §12.1), or "" when nothing named one — stage 6 fills that with the default.
+	//
+	// Resolved HERE because inheritance needs the module path: a call's
+	// `provider:` passes to everything it expands into, so deploying one stack
+	// into two accounts is two calls differing by one line. An inner resource
+	// naming its own still wins. Stage 5 is the only stage that knows which call a
+	// resource came from.
+	//
+	// Left EMPTY rather than defaulted, so stage 5 needs no knowledge of which
+	// instances exist — that is the provider table's business, and stage 5 has no
+	// business reading it.
+	ProviderInstance string
 	// Skipped marks a resource excluded from this environment (PLAN.md §6.2).
 	//
 	// MARKED rather than omitted, and dropped at exactly one point — after
@@ -242,7 +255,7 @@ func Expand(
 	}
 
 	w := &walker{root: abs, resolve: resolve, env: env, ds: &ds}
-	w.expand(rootLevel(project), &Scope{Vars: scope, dirVars: dirScopes, names: map[string]Binding{}, skipped: map[string]value.Origin{}}, abs, nil)
+	w.expand(rootLevel(project), &Scope{Vars: scope, dirVars: dirScopes, names: map[string]Binding{}, skipped: map[string]value.Origin{}}, abs, nil, "")
 
 	// ONE sort, here, after everything is collected. The walk is already
 	// deterministic — stage 2 sorts resources by name — but a deterministic
@@ -268,7 +281,9 @@ func Expand(
 // module is the instantiation path to this level, outermost first, empty at the
 // root. It returns the addresses this level produced, so a caller instantiating
 // a module can fan its own depends_on out to them.
-func (w *walker) expand(lv level, scope *Scope, dir string, module []string) []address.Address {
+// inherited is the provider instance passed down from the module call that
+// entered this level, or "" at the root. See Instance.ProviderInstance.
+func (w *walker) expand(lv level, scope *Scope, dir string, module []string, inherited string) []address.Address {
 	loaded := w.loadModules(lv, dir, module)
 
 	var produced []address.Address
@@ -288,11 +303,12 @@ func (w *walker) expand(lv level, scope *Scope, dir string, module []string) []a
 		addr := addressIn(module, r.Name)
 		skipped, skipOrigin := w.excluded(r, scope.In(r.Dir), w.env)
 		w.instances = append(w.instances, Instance{
-			Address:    addr,
-			Decl:       instantiateDecl(r, module),
-			Scope:      scope,
-			Skipped:    skipped,
-			SkipOrigin: skipOrigin,
+			Address:          addr,
+			Decl:             instantiateDecl(r, module),
+			Scope:            scope,
+			ProviderInstance: providerFor(r, inherited),
+			Skipped:          skipped,
+			SkipOrigin:       skipOrigin,
 		})
 		if skipped {
 			// NOT bound as a resource: a reference to it must not produce an
@@ -326,7 +342,7 @@ func (w *walker) expand(lv level, scope *Scope, dir string, module []string) []a
 			continue
 		}
 		supplied := w.evaluateCall(r, scope.In(r.Dir), exprs[r.Name])
-		inner, outputs := w.instantiate(r, loaded, scope, supplied, dir, module)
+		inner, outputs := w.instantiate(r, loaded, scope, supplied, dir, module, inherited)
 		calls[r.Name] = inner
 		// A reference in the CALL'S OWN attributes — `network: ${net.id}` — is a
 		// dependency of everything the call expanded into, and NOTHING ELSE
@@ -526,6 +542,7 @@ func (w *walker) loadModules(lv level, dir string, module []string) map[string]l
 func (w *walker) instantiate(
 	r *config.ResourceDecl, loaded map[string]loadedModule,
 	caller *Scope, supplied map[string]value.Value, dir string, module []string,
+	inherited string,
 ) ([]address.Address, map[string]value.Value) {
 	lm, ok := w.resolveCall(r, loaded, module)
 	if !ok {
@@ -600,7 +617,11 @@ func (w *walker) instantiate(
 
 	childLevel := moduleLevel(child)
 	innerScope := w.moduleScope(r, childLevel, caller, supplied, inner)
-	addrs := w.expand(childLevel, innerScope, lm.Dir, inner)
+	// The CALL's provider is inherited by everything inside (PLAN.md §12.1). An
+	// inner resource naming its own still wins — see providerFor — and a call that
+	// names none passes down whatever it inherited itself, so a nested module
+	// three levels deep still lands in the account the outermost call chose.
+	addrs := w.expand(childLevel, innerScope, lm.Dir, inner, providerFor(r, inherited))
 	// Collected AFTER expanding, so the module's own names are all bound and an
 	// output reading ${service.endpoint} resolves to module.<call>.service.
 	return addrs, w.collectOutputs(childLevel, innerScope)
@@ -792,4 +813,17 @@ func where(module []string) string {
 		return "the project"
 	}
 	return "module " + strings.Join(module, ".")
+}
+
+// providerFor resolves which instance a resource belongs to, at this level.
+//
+// The resource's own `provider:` wins; otherwise it inherits from the module call
+// that entered this level; otherwise "" and stage 6 supplies the default. Written
+// as one expression so the precedence cannot drift between the resource case and
+// the call case.
+func providerFor(r *config.ResourceDecl, inherited string) string {
+	if name, ok := r.Provider.Value.AsString(); ok && name != "" {
+		return name
+	}
+	return inherited
 }

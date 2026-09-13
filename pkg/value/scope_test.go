@@ -157,6 +157,12 @@ func TestScopeRoundTripsAtEveryDepth(t *testing.T) {
 // the wrong way round for a file whose whole job is fidelity, and the message
 // only matters once more than one build exists in the world.
 //
+// M11 added instance_default on the same reasoning, having re-read the above.
+// The trade has not changed: the migration path is still lossy (the
+// UseNumber() fix is still a follow-up), so the cost of bumping is still
+// silent precision loss on every existing file and the benefit is still only
+// a better message for a build that does not exist yet.
+//
 // Revisit when the state format changes for a real reason: fixing the
 // migration path to use json.Decoder.UseNumber() removes the cost, and is
 // recorded as a follow-up. The
@@ -165,6 +171,7 @@ func TestScopeRoundTripsAtEveryDepth(t *testing.T) {
 func TestScopeWireNamesAreFrozen(t *testing.T) {
 	frozen := map[Scope]string{
 		ScopeProviderDefault:    "provider_default",
+		ScopeInstanceDefault:    "instance_default",
 		ScopeBaseConfig:         "base_config",
 		ScopeScopedVars:         "scoped_vars",
 		ScopeModuleDefault:      "module_default",

@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/infrata/infrata/internal/providers"
 	"github.com/infrata/infrata/internal/registry"
 	"github.com/infrata/infrata/pkg/address"
 	"github.com/infrata/infrata/pkg/provider"
@@ -17,10 +18,20 @@ import (
 func testRegistry(t *testing.T) *registry.Registry {
 	t.Helper()
 	reg := registry.New()
-	if err := reg.Register(testprovider.New(t.TempDir() + "/fake-cloud.json")); err != nil {
+	if err := reg.Register("test", testprovider.New(t.TempDir()+"/fake-cloud.json")); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	return reg
+}
+
+// testTable is the instance table a project with no `providers:` block gets: one
+// implicit instance, default, named after the only plugin there is.
+//
+// bindReferences takes it as an argument rather than deriving it, because the
+// derivation belongs to stage 4.5 (internal/providers.Prepare) and a stage that
+// re-derived it could come to disagree with the one that built the providers.
+func testTable() providers.Table {
+	return providers.Table{"test": providers.Instance{Name: "test", Plugin: "test", Default: true}}
 }
 
 func oneResource(typ string, attrs map[string]value.Value) *ResolvedConfig {
@@ -35,7 +46,7 @@ func oneResource(typ string, attrs map[string]value.Value) *ResolvedConfig {
 
 func TestSchemaRejectsUnknownType(t *testing.T) {
 	cfg := oneResource("aws.rds", nil)
-	ds := bindSchemas(cfg, testRegistry(t), Options{Environment: "dev"})
+	ds := bindSchemas(cfg, testRegistry(t), Options{Environment: "dev"}, testTable())
 	if !ds.HasErrors() {
 		t.Fatal("an unregistered type must be an error")
 	}
@@ -51,7 +62,7 @@ func TestSchemaRejectsUnknownAttribute(t *testing.T) {
 		"cidr":     value.String("10.0.0.0/16", value.SourceExplicit),
 		"nonsense": value.Bool(true, value.SourceExplicit),
 	})
-	if ds := bindSchemas(cfg, testRegistry(t), Options{Environment: "dev"}); !ds.HasErrors() {
+	if ds := bindSchemas(cfg, testRegistry(t), Options{Environment: "dev"}, testTable()); !ds.HasErrors() {
 		t.Error("an attribute the schema does not define must be an error")
 	}
 }
@@ -61,14 +72,14 @@ func TestSchemaRejectsSettingAComputedAttribute(t *testing.T) {
 		"cidr": value.String("10.0.0.0/16", value.SourceExplicit),
 		"id":   value.String("net-1", value.SourceExplicit),
 	})
-	if ds := bindSchemas(cfg, testRegistry(t), Options{Environment: "dev"}); !ds.HasErrors() {
+	if ds := bindSchemas(cfg, testRegistry(t), Options{Environment: "dev"}, testTable()); !ds.HasErrors() {
 		t.Error("configuration must not set a computed attribute")
 	}
 }
 
 func TestSchemaRejectsAMissingRequiredAttribute(t *testing.T) {
 	cfg := oneResource("test.network", nil) // cidr is required
-	if ds := bindSchemas(cfg, testRegistry(t), Options{Environment: "dev"}); !ds.HasErrors() {
+	if ds := bindSchemas(cfg, testRegistry(t), Options{Environment: "dev"}, testTable()); !ds.HasErrors() {
 		t.Error("a missing required attribute must be an error")
 	}
 }
@@ -78,7 +89,7 @@ func TestSchemaRejectsAWrongKind(t *testing.T) {
 		"engine": value.String("postgres", value.SourceExplicit),
 		"size":   value.String("large", value.SourceExplicit), // size is an integer
 	})
-	ds := bindSchemas(cfg, testRegistry(t), Options{Environment: "dev"})
+	ds := bindSchemas(cfg, testRegistry(t), Options{Environment: "dev"}, testTable())
 	if !ds.HasErrors() {
 		t.Fatal("a string where an integer is required must be an error")
 	}
@@ -96,7 +107,7 @@ func TestSchemaSkipsKindCheckOnUnknowns(t *testing.T) {
 		"engine": value.String("postgres", value.SourceExplicit),
 		"size":   value.Unknown(value.KindString, value.SourceComputed),
 	})
-	if ds := bindSchemas(cfg, testRegistry(t), Options{Environment: "dev"}); ds.HasErrors() {
+	if ds := bindSchemas(cfg, testRegistry(t), Options{Environment: "dev"}, testTable()); ds.HasErrors() {
 		t.Errorf("an unknown must not trip kind checking: %+v", ds)
 	}
 }
@@ -105,7 +116,7 @@ func TestSchemaFillsDefaults(t *testing.T) {
 	cfg := oneResource("test.database", map[string]value.Value{
 		"engine": value.String("postgres", value.SourceExplicit),
 	})
-	if ds := bindSchemas(cfg, testRegistry(t), Options{Environment: "dev"}); ds.HasErrors() {
+	if ds := bindSchemas(cfg, testRegistry(t), Options{Environment: "dev"}, testTable()); ds.HasErrors() {
 		t.Fatalf("unexpected diagnostics: %+v", ds)
 	}
 
@@ -137,7 +148,7 @@ func TestADefaultDoesNotVaryByEnvironment(t *testing.T) {
 		cfg := oneResource("test.database", map[string]value.Value{
 			"engine": value.String("postgres", value.SourceExplicit),
 		})
-		bindSchemas(cfg, testRegistry(t), Options{Environment: env})
+		bindSchemas(cfg, testRegistry(t), Options{Environment: env}, testTable())
 		n, _ := cfg.Resources["r"].Attrs["size"].AsInt()
 		seen = append(seen, n)
 	}
@@ -160,7 +171,7 @@ func TestSchemaDefaultNeverOverwritesAnExplicitValue(t *testing.T) {
 		"engine": value.String("postgres", value.SourceExplicit),
 		"size":   value.Int(50, value.SourceExplicit),
 	})
-	bindSchemas(cfg, testRegistry(t), Options{Environment: "dev"})
+	bindSchemas(cfg, testRegistry(t), Options{Environment: "dev"}, testTable())
 
 	size := cfg.Resources["r"].Attrs["size"]
 	if n, _ := size.AsInt(); n != 50 {
@@ -176,7 +187,7 @@ func TestSchemaMarksSensitiveAttributes(t *testing.T) {
 		"engine":   value.String("postgres", value.SourceExplicit),
 		"password": value.String("hunter2", value.SourceExplicit),
 	})
-	bindSchemas(cfg, testRegistry(t), Options{Environment: "dev"})
+	bindSchemas(cfg, testRegistry(t), Options{Environment: "dev"}, testTable())
 
 	if !cfg.Resources["r"].Attrs["password"].Sensitive {
 		t.Error("an attribute the schema marks Sensitive must come out sensitive")
@@ -187,7 +198,7 @@ func TestSchemaDoesNotDeclassifyAnAlreadySensitiveValue(t *testing.T) {
 	cfg := oneResource("test.database", map[string]value.Value{
 		"engine": value.String("postgres", value.SourceExplicit).WithSensitive(true),
 	})
-	bindSchemas(cfg, testRegistry(t), Options{Environment: "dev"})
+	bindSchemas(cfg, testRegistry(t), Options{Environment: "dev"}, testTable())
 
 	if !cfg.Resources["r"].Attrs["engine"].Sensitive {
 		t.Error("schema binding must add sensitivity, never clear it — engine is not a sensitive attribute but this value arrived classified")
@@ -243,12 +254,12 @@ func (wrongKindProvider) ClassifyError(error) provider.Retryability { return pro
 
 func TestSchemaRejectsADefaultThatDoesNotMatchItsDeclaredKind(t *testing.T) {
 	reg := registry.New()
-	if err := reg.Register(wrongKindProvider{}); err != nil {
+	if err := reg.Register("test", wrongKindProvider{}); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	cfg := oneResource("bad.thing", map[string]value.Value{})
 
-	ds := bindSchemas(cfg, reg, Options{Environment: "dev"})
+	ds := bindSchemas(cfg, reg, Options{Environment: "dev"}, testTable())
 	if !ds.HasErrors() {
 		t.Fatal("a default that does not match its attribute's declared kind must be an error")
 	}
@@ -262,7 +273,7 @@ func TestSchemaReportsEveryProblemAtOnce(t *testing.T) {
 		"nonsense_one": value.Bool(true, value.SourceExplicit),
 		"nonsense_two": value.Bool(true, value.SourceExplicit),
 	})
-	ds := bindSchemas(cfg, testRegistry(t), Options{Environment: "dev"})
+	ds := bindSchemas(cfg, testRegistry(t), Options{Environment: "dev"}, testTable())
 	if len(ds) < 3 {
 		t.Errorf("got %d diagnostics, want at least 3 (two unknown attributes and one missing required)", len(ds))
 	}
@@ -275,7 +286,7 @@ func TestSchemaStampsProviderDefaultsWithTheirScope(t *testing.T) {
 	cfg := oneResource("test.database", map[string]value.Value{
 		"engine": value.String("postgres", value.SourceExplicit),
 	})
-	ds := bindSchemas(cfg, testRegistry(t), Options{Environment: "dev"})
+	ds := bindSchemas(cfg, testRegistry(t), Options{Environment: "dev"}, testTable())
 	if ds.HasErrors() {
 		t.Fatalf("unexpected diagnostics: %+v", ds)
 	}
@@ -303,7 +314,7 @@ func TestSchemaDoesNotStampValuesConfigurationSupplied(t *testing.T) {
 		"engine": value.String("postgres", value.SourceExplicit),
 		"size":   value.Int(50, value.SourceExplicit),
 	})
-	ds := bindSchemas(cfg, testRegistry(t), Options{Environment: "dev"})
+	ds := bindSchemas(cfg, testRegistry(t), Options{Environment: "dev"}, testTable())
 	if ds.HasErrors() {
 		t.Fatalf("unexpected diagnostics: %+v", ds)
 	}
@@ -325,7 +336,7 @@ func TestSchemaStampingADefaultDoesNotMakeItCompareUnequal(t *testing.T) {
 	cfg := oneResource("test.database", map[string]value.Value{
 		"engine": value.String("postgres", value.SourceExplicit),
 	})
-	if ds := bindSchemas(cfg, testRegistry(t), Options{Environment: "dev"}); ds.HasErrors() {
+	if ds := bindSchemas(cfg, testRegistry(t), Options{Environment: "dev"}, testTable()); ds.HasErrors() {
 		t.Fatalf("unexpected diagnostics: %+v", ds)
 	}
 

@@ -27,8 +27,15 @@ type Lifecycle struct {
 
 // ResolvedResource is a resource after the planner has resolved it.
 type ResolvedResource struct {
-	Address   address.Address
-	Type      string
+	Address address.Address
+	Type    string
+	// Provider is the provider INSTANCE this resource belongs to (PLAN.md §12.1)
+	// — a name, never a plugin. Resolved from the resource's own `provider:`, or
+	// the module call it came from, or the default instance.
+	//
+	// It reaches ResourceState so that a DESTROY, which has no configuration at
+	// all, still knows which account to delete from.
+	Provider  string
 	Attrs     map[string]value.Value
 	DependsOn []address.Address
 	Lifecycle Lifecycle

@@ -20,6 +20,11 @@ import (
 // and every Value read back from a state file written before M4 — then stays
 // valid rather than claiming a precedence level it never had.
 //
+// WHERE AN INSTANCE'S `defaults:` SITS: ScopeInstanceDefault, one rung above
+// the plugin's schema default and below everything else, which is exactly what
+// §12.1's three-rung ladder says — explicit on the resource beats the
+// instance's `defaults:` beats whatever the plugin ships.
+//
 // WHERE A VARIABLE'S `default:` SITS: ScopeBaseConfig, with Source
 // SourceDefault. Ruled 2026-09-10; binding. A default written in infra.yml's
 // `variables:` block IS base configuration — it lives in the base
@@ -32,7 +37,8 @@ type Scope uint8
 
 const (
 	ScopeUnset              Scope = iota // provenance not recorded
-	ScopeProviderDefault                 // provider defaults
+	ScopeProviderDefault                 // a plugin's own schema default
+	ScopeInstanceDefault                 // a provider instance's `defaults:` (§12.1)
 	ScopeBaseConfig                      // base configuration
 	ScopeScopedVars                      // resources/<dir>/vars/** (§4.1)
 	ScopeModuleDefault                   // module defaults (M5 populates this)
@@ -64,6 +70,8 @@ func (s Scope) String() string {
 		return "unset"
 	case ScopeProviderDefault:
 		return "provider default"
+	case ScopeInstanceDefault:
+		return "provider instance default"
 	case ScopeBaseConfig:
 		return "base config"
 	case ScopeScopedVars:
@@ -107,6 +115,12 @@ func (v Value) WithScope(s Scope) Value {
 // inserts ScopeModuleDefault's population and any future level inserted
 // mid-chain would silently reinterpret every state file ever written.
 //
+// M11 inserted ScopeInstanceDefault the same way, and for the same reason it is
+// separate from ScopeProviderDefault at all: a plugin's schema default is
+// something a user cannot change, and an instance's `defaults:` is something
+// they wrote and can edit. A plan that called both "provider default" would
+// send a reader looking in the wrong file.
+//
 // M7 inserted ScopeScopedVars mid-chain and this table is why that was safe:
 // the numbers of every later level shifted, and nothing on disk moved because
 // nothing on disk is a number. Checked before doing it that no code compares
@@ -118,6 +132,7 @@ func (v Value) WithScope(s Scope) Value {
 // byte-identical and read back as ScopeUnset.
 var scopeWireNames = map[Scope]string{
 	ScopeProviderDefault:    "provider_default",
+	ScopeInstanceDefault:    "instance_default",
 	ScopeBaseConfig:         "base_config",
 	ScopeScopedVars:         "scoped_vars",
 	ScopeModuleDefault:      "module_default",

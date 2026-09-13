@@ -124,7 +124,7 @@ func (stubProvider) Import(context.Context, string, string) (*resource.ResourceS
 
 func TestValidateGraphSkipsOptionalRequirement(t *testing.T) {
 	reg := registry.New()
-	if err := reg.Register(stubProvider{}); err != nil {
+	if err := reg.Register("test", stubProvider{}); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 

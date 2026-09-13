@@ -1,0 +1,171 @@
+package providers
+
+import (
+	"strings"
+	"testing"
+
+	"github.com/infrata/infrata/internal/variables"
+	"github.com/infrata/infrata/pkg/value"
+)
+
+// PLAN.md §12.1's `defaults:` block, and the rule that governs it: FAIL CLOSED.
+//
+// A key nothing accepts applies to nothing, in every environment, forever, and there
+// is no output in which its absence is visible. A plan looks right, an apply succeeds,
+// and the value is simply never there.
+
+func defaultsDiags(t *testing.T, body string) string {
+	t.Helper()
+	_, out := rendered(t, body, pluginRegistry(t, t.TempDir()), variables.Scope{})
+	return out
+}
+
+// TestAKeyNoResourceTypeAcceptsIsRefused — `tag:` for `tags:`.
+func TestAKeyNoResourceTypeAcceptsIsRefused(t *testing.T) {
+	out := defaultsDiags(t, `
+project: p
+providers:
+  - plugin: test
+    defaults:
+      tag:
+        team: payments
+`)
+	if out == "" {
+		t.Fatal("a `defaults:` key no resource type declares must be refused")
+	}
+	if !strings.Contains(out, "tag") {
+		t.Errorf("the diagnostic does not name the key:\n%s", out)
+	}
+	// And it lists what exists, because the reader's next move is to pick the right
+	// name and nothing else in the output tells them what the names are.
+	if !strings.Contains(out, "tags") {
+		t.Errorf("the diagnostic does not list the attribute they meant:\n%s", out)
+	}
+}
+
+// TestAKeyOnlySomeResourceTypesDeclareIsAccepted is the boundary, and the half that
+// keeps the rule above from making `defaults:` unusable.
+//
+// `tags` is declared by test.database and by neither of its siblings. A check demanding
+// every type accept a key would refuse the single most obvious thing anyone would
+// write here.
+func TestAKeyOnlySomeResourceTypesDeclareIsAccepted(t *testing.T) {
+	out := defaultsDiags(t, `
+project: p
+providers:
+  - plugin: test
+    defaults:
+      tags:
+        team: payments
+`)
+	if out != "" {
+		t.Errorf("`tags` is declared by one of the plugin's three types, which is the "+
+			"ordinary case:\n%s", out)
+	}
+}
+
+// TestALifecycleOptionIsAcceptedThoughNoSchemaDeclaresIt. The engine owns
+// prevent_destroy and retain, so they belong to no plugin's schema and must still be
+// accepted here — §12.1 names them explicitly.
+func TestALifecycleOptionIsAcceptedThoughNoSchemaDeclaresIt(t *testing.T) {
+	out := defaultsDiags(t, `
+project: p
+providers:
+  - plugin: test
+    defaults:
+      prevent_destroy: true
+      retain: false
+`)
+	if out != "" {
+		t.Errorf("the lifecycle options must be accepted in `defaults:`:\n%s", out)
+	}
+}
+
+// TestANonBooleanLifecycleOptionIsRefused. `prevent_destroy: yes-please` is a string,
+// and silently treating a non-empty string as true is how a destroy gets refused for a
+// reason nobody wrote down.
+func TestANonBooleanLifecycleOptionIsRefused(t *testing.T) {
+	out := defaultsDiags(t, `
+project: p
+providers:
+  - plugin: test
+    defaults:
+      prevent_destroy: "sometimes"
+`)
+	if out == "" {
+		t.Fatal("a non-boolean lifecycle default must be refused")
+	}
+	for _, want := range []string{"prevent_destroy", "boolean"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the diagnostic does not mention %q:\n%s", want, out)
+		}
+	}
+}
+
+// TestDefaultingAComputedAttributeIsRefused. A computed attribute is reported by the
+// provider after the resource exists, so nothing can supply it in advance — emitting it
+// into a resource would produce "is computed and cannot be set" at every use site.
+func TestDefaultingAComputedAttributeIsRefused(t *testing.T) {
+	out := defaultsDiags(t, `
+project: p
+providers:
+  - plugin: test
+    defaults:
+      endpoint: db.example.com
+`)
+	if out == "" {
+		t.Fatal("defaulting a computed attribute must be refused")
+	}
+	for _, want := range []string{"endpoint", "computed"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the diagnostic does not mention %q:\n%s", want, out)
+		}
+	}
+}
+
+// TestADefaultOfTheWrongKindIsRefused. `size` is an integer everywhere it is declared.
+func TestADefaultOfTheWrongKindIsRefused(t *testing.T) {
+	out := defaultsDiags(t, `
+project: p
+providers:
+  - plugin: test
+    defaults:
+      size: enormous
+`)
+	if out == "" {
+		t.Fatal("`size: enormous` against an integer attribute must be refused")
+	}
+	for _, want := range []string{"size", "integer"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the diagnostic does not mention %q:\n%s", want, out)
+		}
+	}
+}
+
+// TestADefaultMayInterpolateAVariable — the reason the block is resolved after stage 4
+// at all. Per-environment tags is the example §12.1 opens with.
+func TestADefaultMayInterpolateAVariable(t *testing.T) {
+	reg := pluginRegistry(t, t.TempDir())
+	table, out := rendered(t, `
+project: p
+providers:
+  - plugin: test
+    defaults:
+      tags:
+        environment: ${environment}
+`, reg, scopeWith(map[string]string{"environment": "production"}))
+	if out != "" {
+		t.Fatalf("unexpected diagnostics:\n%s", out)
+	}
+	tags, ok := table["test"].Defaults["tags"]
+	if !ok {
+		t.Fatal("the instance has no `tags` default")
+	}
+	m, ok := tags.Raw.(map[string]value.Value)
+	if !ok {
+		t.Fatalf("tags Raw is %T", tags.Raw)
+	}
+	if got, _ := m["environment"].AsString(); got != "production" {
+		t.Errorf("environment = %v, want the variable resolved", m["environment"])
+	}
+}

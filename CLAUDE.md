@@ -98,6 +98,33 @@ Three rules to know before touching any of it:
   is an error, because leaving it alone was never inert — it silently declared a variable named
   `type`.
 
+**New in M11 — provider instances.** `providers:` is a LIST of instances, each naming a
+`plugin:` and optionally a `name:` (defaulting to the plugin name), so one project can reach
+two accounts of one cloud. A resource picks one with `provider:`; a module call's `provider:`
+is inherited by everything it expands into; the first entry is the default unless one is marked
+`default: true`. An instance's configuration may interpolate variables, so it differs per
+environment.
+
+Three things to know:
+
+- **A plugin is not a provider.** `provider.Plugin` holds the SCHEMAS and a factory;
+  `provider.Provider` is one configured instance. The split breaks a real cycle — constructing a
+  provider needs configuration, which needs variables, which needs a compile, which needs the
+  schemas. `RegisterPlugin` runs before anything is read; compiler stage 4.5
+  (`internal/providers.Prepare`) constructs each instance from resolved values.
+- **State records the INSTANCE, and the engine stamps it.** A plugin cannot know which instance
+  of itself it is, so `executor.stampInstance` writes it after every dispatch. Without it two
+  accounts are indistinguishable and removing a resource proposes nothing at all.
+- **`destroy`, `refresh`, `discover` and `import` never compile**, so they read `providers:` for
+  LITERAL values only and refuse an instance whose configuration interpolates anything. Same for
+  `plan`/`apply` on an orphaned environment. The instance name in state is what still gets each
+  resource to the right account.
+
+An instance may also carry `defaults:` — attribute defaults for every resource it serves, plus
+the lifecycle options, sitting between what the resource writes and what the plugin ships. A
+key no resource type of that plugin declares is an ERROR: it would otherwise apply to nothing,
+in every environment, forever, with no output in which its absence is visible.
+
 **Absent until Phase 3+:** reading a saved plan back, remote state, AWS. Nothing half-implements
 one of those.
 

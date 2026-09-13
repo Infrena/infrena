@@ -1046,6 +1046,10 @@ resources:
 - **A resource's `provider:` names an INSTANCE, never a plugin.** An unknown name
   is an error listing the declared instances, for the reason §6.2 gives about
   `skip`: a filter or selector that quietly matches nothing is worse than none.
+- **A module CALL's `provider:` is inherited by everything it expands into**, unless an inner
+  resource names one itself. Deploying one stack into two accounts is then two calls differing by
+  one line, rather than a provider threaded through a module input onto every resource inside.
+  `depends_on` on a call already fans out the same way, for the same reason.
 - **Moving a resource between instances is a DESTROY and a CREATE**, not an
   update. The resource genuinely lives in a different account; the same reasoning
   as §5.2's module paths, and the planner must say so where a user reads it.
@@ -1106,7 +1110,8 @@ above refuse, and a shape that cannot express it would refuse it silently.
 
 ### What this costs, recorded before it is built
 
-Three assumptions in the engine are one-provider-per-type and must change:
+Three assumptions in the engine are one-provider-per-type and must change (all three
+are now discharged; the state migration remains a recorded follow-up):
 
 - `registry.Registry` is keyed by resource TYPE and `Register` REFUSES a type a
   second provider already claims. Two instances of one plugin collide there
@@ -1120,6 +1125,57 @@ Three assumptions in the engine are one-provider-per-type and must change:
   and §21's migration path is currently lossy (see the follow-up on
   `state.Decode`), so this is the change that makes fixing it urgent rather than
   theoretical.
+
+### A plugin is not a provider: the factory split
+
+An instance's configuration may interpolate a variable — that is the whole point of
+`region: ${region}` — and that creates a cycle. Constructing a provider needs its
+configuration; resolving the configuration needs variables; resolving variables needs
+a compile; and a compile needs the provider's SCHEMAS. Something has to come first.
+
+What breaks it is that **schemas need no configuration**. `aws.instance` is described
+the same way whichever account it would be created in. So the provider interface
+splits in two:
+
+- `provider.Plugin` — `Name()`, `Definitions()`, and `New(instance, config)`. The
+  first two answer before anything is configured; the third is the factory.
+- `provider.Provider` — one configured instance, unchanged from §31.
+
+The registry holds both halves, and registration happens in two steps at two
+different times:
+
+1. `RegisterPlugin(p)` records the SCHEMAS. The CLI does this before it reads
+   anything, so `Definition(type)` answers throughout the compile.
+2. `RegisterInstance(instance, plugin, config)` builds the provider OBJECT. Compiler
+   stage 4.5 (`internal/providers.Prepare`) does this — after variables, before module
+   expansion — from configuration it has just resolved.
+
+Between the two the registry dispatches nothing, and that is not a hazard to design
+around: the only production caller is `internal/cli`, and every command either
+compiles (so stage 4.5 runs) or is a state-only command that registers its instances
+explicitly.
+
+**The two state-only paths are the honest cost.** `destroy` and `refresh` never
+compile: one synthesises an empty desired configuration from state and the other
+reads state and calls `Provider.Read`. `discover` and `import` do not compile either.
+None of them has a variable scope, so none can resolve an instance's configuration —
+they read `providers:` and take LITERAL values only, reporting an instance whose
+configuration interpolates anything rather than guessing at it. `plan` and `apply` on
+an ORPHANED environment (§6.1) are the same path for the same reason. What saves this
+is that the instance NAME is recorded in state, so a resource still reaches the right
+account whenever that account's own configuration does not depend on an environment.
+An instance configured per environment cannot be destroyed by `infra destroy`, and
+the diagnostic says so rather than reaching for a default.
+
+**Fail-closed is the engine's guarantee, not each plugin's.** Stage 4.5 refuses to
+construct anything when any instance's configuration did not resolve. A plugin that
+read a missing value as "use the default" would otherwise turn a broken interpolation
+into a silently different account, and a resource created in a place nobody named is
+not a problem anyone gets to read about.
+
+A plugin also refuses configuration keys it does not declare. A misspelled `clowd:`
+that is quietly ignored means an instance silently sharing another's account, and the
+first sign of it is a plan proposing to destroy resources somebody else owns.
 
 ### Resource-attribute defaults live under `defaults:`
 
@@ -1167,6 +1223,40 @@ forever, with no output in which its absence is visible.
 those — so the lifecycle key names are RESERVED, and a plugin declaring an
 attribute that collides with one is rejected at registration, the same place and
 for the same reason the `module.` type namespace is.
+
+A resource that WRITES a lifecycle option beats the block, in both directions.
+`prevent_destroy: false` on a resource under an instance defaulting it to true has
+to win, which is why `LifecycleDecl` records whether each key was written at all:
+in a bare bool, `false` and absent are the same value, and getting it backwards
+refuses a destroy the user explicitly allowed — the one direction a user cannot
+work around.
+
+**Where each half is decided.** The schema attributes are stage 7's, because they
+need a resource definition to check a key and a kind against. The lifecycle options
+are stage 6's, because a lifecycle option is not a schema attribute and has nothing
+to resolve against a definition. Two stages for one feature, each where its own
+thing lives.
+
+**What a plan says.** An instance default resolves as `SourceDefault` with
+`ScopeInstanceDefault`, so a plan reads `size: 200 [default, from provider instance
+default]` where a plugin's own would read `[default, from provider default]`. The
+distinction is worth a Scope constant of its own: one is something the user wrote
+and can edit, the other is something the plugin ships.
+
+**The plan artifact records the instance.** `operationWire` gained a `provider` key,
+because the artifact is the format §50 reads a saved plan back FROM — and a destroy
+read back without its instance would be dispatched to whichever account happened to
+be consulted. The key changes the bytes of essentially every artifact, which does not
+touch invariant 6 (determinism is "same inputs, equivalent plan", not byte-stability
+across builds) and needs no `version` bump because it is additive. Found by a sabotage
+and closed with a frozen-keys test, which the artifact had never had.
+
+**Generation omits it**, the same way §27 omits a schema default — it is not
+something the reader has to supply. Keyed by the resource's OWN instance, never by
+"any instance that defaults this name": two instances exist precisely because they
+differ, and trimming a value against the other account's block writes a file that
+plans a change the moment it is read back. `export` keeps it, because §28 is the
+opposite job.
 
 ### `default: true` overrides order
 

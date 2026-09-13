@@ -9,6 +9,7 @@ import (
 	"github.com/infrata/infrata/internal/environments"
 	"github.com/infrata/infrata/internal/modules"
 	"github.com/infrata/infrata/internal/modules/source"
+	"github.com/infrata/infrata/internal/providers"
 	"github.com/infrata/infrata/internal/registry"
 	"github.com/infrata/infrata/internal/variables"
 	"github.com/infrata/infrata/pkg/value"
@@ -111,6 +112,25 @@ func Compile(files []config.File, reg *registry.Registry, opts Options) (Resolve
 		return ResolvedConfig{}, ds
 	}
 
+	// Stage 4.5: the provider instances. AFTER variables, because an instance's
+	// configuration interpolates them — `cloud: ${path}`, `iam-role: ${role}` —
+	// and BEFORE stage 5, because expansion needs to know which instance a
+	// resource belongs to in order to inherit it down a module call.
+	//
+	// This is also where the registry stops being schemas-only: Prepare constructs
+	// each instance's provider object from the values just resolved, which is the
+	// whole reason the plugin/provider split exists (PLAN.md §12.1).
+	table, provDiags := providers.Prepare(project.Providers, scope, reg)
+	ds.Extend(provDiags)
+	if provDiags.HasErrors() {
+		// An instance that could not be configured cannot be dispatched to, and
+		// every resource belonging to it would report the same thing again. Worse,
+		// a resource whose instance silently vanished is one stage 6 would hand a
+		// different instance — the default — and a resource created in the wrong
+		// account is not a diagnostic anybody gets to read.
+		return ResolvedConfig{}, ds
+	}
+
 	dirScopes, dirDiags := directoryScopes(project, chain, opts, fileValues, varDiags)
 	ds.Extend(dirDiags)
 	if dirDiags.HasErrors() {
@@ -180,13 +200,13 @@ func Compile(files []config.File, reg *registry.Registry, opts Options) (Resolve
 		}
 	}
 
-	cfg, bindDiags := bindReferences(expansion, opts, reg)
+	cfg, bindDiags := bindReferences(expansion, opts, reg, table)
 	ds.Extend(bindDiags)
 	if bindDiags.HasErrors() {
 		return cfg, ds
 	}
 
-	schemaDiags := bindSchemas(&cfg, reg, opts)
+	schemaDiags := bindSchemas(&cfg, reg, opts, table)
 	ds.Extend(schemaDiags)
 	if schemaDiags.HasErrors() {
 		return cfg, ds

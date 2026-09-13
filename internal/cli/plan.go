@@ -73,7 +73,13 @@ func newPlanCommand(opts *GlobalOptions) *cobra.Command {
 				return unknownEnvironmentError(environment, declared)
 			case orphanedEnvironment:
 				// Deliberately NOT compiled — see orphanedEnvironment's doc
-				// comment for what compiling would produce instead.
+				// comment for what compiling would produce instead. Which means
+				// stage 4.5 never runs, so the provider instances this teardown
+				// dispatches to have to be built the state-only way: the names come
+				// from state, and an instance whose configuration depends on an
+				// environment that no longer exists has nothing to resolve against.
+				_, stateInstanceDiags := registerStateInstances(reg, opts.Dir)
+				ds.Extend(stateInstanceDiags)
 				cfg = teardownConfig(st, environment)
 				fmt.Fprint(cmd.OutOrStdout(), teardownNotice(environment, declared))
 			default:

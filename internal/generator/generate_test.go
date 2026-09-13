@@ -17,7 +17,7 @@ import (
 func testRegistry(t *testing.T) *registry.Registry {
 	t.Helper()
 	reg := registry.New()
-	if err := reg.Register(testprovider.New(filepath.Join(t.TempDir(), "cloud.json"))); err != nil {
+	if err := reg.Register("test", testprovider.New(filepath.Join(t.TempDir(), "cloud.json"))); err != nil {
 		t.Fatalf("registering the test provider: %v", err)
 	}
 	return reg

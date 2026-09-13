@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/infrata/infrata/internal/diag"
@@ -239,7 +240,7 @@ func (r *run) providerNameFor(node planner.OpNode) string {
 	if !ok {
 		return ""
 	}
-	prov, ok := r.opts.Registry.Provider(op.Type)
+	prov, ok := r.opts.Registry.ProviderFor(op.Type, op.Provider)
 	if !ok {
 		return ""
 	}
@@ -436,9 +437,10 @@ func (r *run) execute(node planner.OpNode, snapshot map[string]*resource.Resourc
 
 	var prov provider.Provider
 	if node.Kind != planner.OpForget {
-		p, ok := r.opts.Registry.Provider(op.Type)
+		p, ok := r.opts.Registry.ProviderFor(op.Type, op.Provider)
 		if !ok {
-			return nil, false, fmt.Errorf("%s: no provider registered for type %q", node.Address, op.Type)
+			return nil, false, fmt.Errorf("%s: no provider instance %q offers type %q; declared instances: %s",
+				node.Address, op.Provider, op.Type, strings.Join(r.opts.Registry.InstanceNames(), ", "))
 		}
 		prov = p
 	}
@@ -481,6 +483,7 @@ func (r *run) execute(node planner.OpNode, snapshot map[string]*resource.Resourc
 		// this is still the one "attempt" this operation ever makes.
 		attempt = 1
 		result, err = dispatch(r.ctx, prov, node, current, desired)
+		stampInstance(result, op.Provider)
 	} else {
 		// A local copy of the retry policy, never r.opts.Retry itself:
 		// execute runs on a worker goroutine, and r.opts is shared,
@@ -501,6 +504,7 @@ func (r *run) execute(node planner.OpNode, snapshot map[string]*resource.Resourc
 			attempt++
 			var derr error
 			result, derr = dispatch(r.ctx, prov, node, current, desired)
+			stampInstance(result, op.Provider)
 			return derr
 		})
 	}
@@ -619,3 +623,25 @@ func firstErrorSummary(ds diag.Diagnostics) string {
 type noResourceStateError struct{ msg string }
 
 func (e *noResourceStateError) Error() string { return e.msg }
+
+// stampInstance records which provider INSTANCE a resource belongs to, on the
+// state a provider just returned (PLAN.md §12.1).
+//
+// THE ENGINE DOES THIS, not the provider, and it has to: a plugin knows its own
+// name — "test", "aws" — and has no way to know which of several instances of
+// itself it is. Left to the provider, state records the PLUGIN, and then two
+// accounts are indistinguishable in the one place that has to tell them apart.
+//
+// Which place is the destroy path. The comment above about lifecycle describes the
+// identical failure: "A destroy reads lifecycle from STATE, because by then the
+// resource has left configuration — so a lifecycle that never reaches state is a
+// guard that silently does nothing." An INSTANCE that never reaches state is a
+// destroy with no account to delete from, and it was observed before this existed:
+// removing a resource from a two-instance project proposed nothing at all, because
+// refresh could not find a provider for the plugin name state had recorded.
+func stampInstance(rs *resource.ResourceState, instance string) {
+	if rs == nil || instance == "" {
+		return
+	}
+	rs.Provider = instance
+}

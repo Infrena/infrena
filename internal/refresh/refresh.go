@@ -94,7 +94,9 @@ func Refresh(ctx context.Context, st *state.State, reg *registry.Registry, paral
 		if !ok {
 			continue
 		}
-		prov, ok := reg.Provider(rs.Type)
+		// From STATE. Refresh reads only state, and a resource's own entry is the
+		// only thing that says which account to ask about it (PLAN.md §12.1).
+		prov, ok := reg.ProviderFor(rs.Type, rs.Provider)
 		if !ok {
 			continue
 		}
@@ -152,7 +154,7 @@ func readOne(ctx context.Context, st *state.State, reg *registry.Registry, addr 
 		return Observation{Address: addr, Err: fmt.Errorf("%s: not in state", addr)}, ds
 	}
 
-	prov, ok := reg.Provider(rs.Type)
+	prov, ok := reg.ProviderFor(rs.Type, rs.Provider)
 	if !ok {
 		var ds diag.Diagnostics
 		err := fmt.Errorf("%s: resource type %q is no longer registered", addr, rs.Type)

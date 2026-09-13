@@ -63,7 +63,11 @@ func newRefreshCommand(opts *GlobalOptions) *cobra.Command {
 			}
 			defer closeReport()
 
-			reg := buildRegistry(opts.Dir)
+			reg, _, regDiags := stateOnlyRegistry(opts.Dir)
+			if regDiags.HasErrors() {
+				regDiags.Render(cmd.ErrOrStderr())
+				return errProviderInstances
+			}
 			backend := backendFor(opts.Dir)
 
 			return withLockedEnvironment(environment, "refresh", backend, cmd.ErrOrStderr(), func(ctx context.Context) error {

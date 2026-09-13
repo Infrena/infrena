@@ -22,7 +22,18 @@ import (
 func addr(name string) address.Address { return address.Address{Name: name} }
 
 func op(a address.Address, resourceType string, kind planner.OpKind) planner.Operation {
-	return planner.Operation{Address: a, Type: resourceType, Kind: kind}
+	// Provider is the implicit instance every project without a `providers:` block
+	// uses (PLAN.md §12.1). Set here rather than left empty because dispatch is by
+	// (type, instance) now, and an empty instance is refused rather than guessed —
+	// which is the behaviour the milestone exists to get right.
+	return opIn(a, resourceType, kind, "test")
+}
+
+// opIn is op with an explicit provider INSTANCE, for the tests that register more
+// than one — per-provider parallelism among them, which cannot be observed unless
+// the two are distinguishable.
+func opIn(a address.Address, resourceType string, kind planner.OpKind, instance string) planner.Operation {
+	return planner.Operation{Address: a, Type: resourceType, Kind: kind, Provider: instance}
 }
 
 func planWith(ops ...planner.Operation) *planner.Plan {
@@ -109,7 +120,7 @@ func TestApplyRunsDependenciesBeforeDependents(t *testing.T) {
 		"zeta": 40 * time.Millisecond,
 	}}
 	reg := registry.New()
-	if err := reg.Register(prov); err != nil {
+	if err := reg.Register("test", prov); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 
@@ -167,7 +178,7 @@ func TestApplyResultOrderDoesNotDependOnCompletionOrder(t *testing.T) {
 		"b": 0,
 	}}
 	reg := registry.New()
-	if err := reg.Register(prov); err != nil {
+	if err := reg.Register("test", prov); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 
@@ -273,7 +284,7 @@ func TestApplyRunsIndependentOperationsConcurrently(t *testing.T) {
 	prov := &barrierProvider{resourceType: "test.thing"}
 	prov.barrier.Add(2)
 	reg := registry.New()
-	if err := reg.Register(prov); err != nil {
+	if err := reg.Register("test", prov); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 
@@ -363,7 +374,7 @@ func TestApplyBoundsGlobalParallelism(t *testing.T) {
 	backend := newLockedBackend(t, "dev")
 	prov := &countingProvider{resourceType: "test.thing", delay: 50 * time.Millisecond}
 	reg := registry.New()
-	if err := reg.Register(prov); err != nil {
+	if err := reg.Register("test", prov); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 
@@ -477,18 +488,21 @@ func TestApplyBoundsPerProviderIndependentlyOfGlobalParallelism(t *testing.T) {
 	provX := &boundedProvider{name: "x", resourceType: "test.x", delay: 50 * time.Millisecond, shared: shared}
 	provY := &boundedProvider{name: "y", resourceType: "test.y", delay: 50 * time.Millisecond, shared: shared}
 	reg := registry.New()
-	if err := reg.Register(provX); err != nil {
+	// Two providers are two INSTANCES now, and per-provider parallelism is what
+	// this test is about — so they must be distinguishable, which is exactly the
+	// distinction §12.1 adds.
+	if err := reg.Register("x", provX); err != nil {
 		t.Fatalf("Register x: %v", err)
 	}
-	if err := reg.Register(provY); err != nil {
+	if err := reg.Register("y", provY); err != nil {
 		t.Fatalf("Register y: %v", err)
 	}
 
 	plan := planWith(
-		op(addr("x0"), "test.x", planner.OpCreate),
-		op(addr("x1"), "test.x", planner.OpCreate),
-		op(addr("y0"), "test.y", planner.OpCreate),
-		op(addr("y1"), "test.y", planner.OpCreate),
+		opIn(addr("x0"), "test.x", planner.OpCreate, "x"),
+		opIn(addr("x1"), "test.x", planner.OpCreate, "x"),
+		opIn(addr("y0"), "test.y", planner.OpCreate, "y"),
+		opIn(addr("y1"), "test.y", planner.OpCreate, "y"),
 	)
 	g, err := planner.BuildExecution(plan, noDeps)
 	if err != nil {
@@ -560,7 +574,7 @@ func TestApplyFailureSkipsDependentsButNotIndependentBranches(t *testing.T) {
 	backend := newLockedBackend(t, "dev")
 	prov := &failingProvider{resourceType: "test.thing", failAddrs: map[string]bool{"root": true}}
 	reg := registry.New()
-	if err := reg.Register(prov); err != nil {
+	if err := reg.Register("test", prov); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 
@@ -601,7 +615,7 @@ func TestApplyFailureSkipsDependentsButNotIndependentBranches(t *testing.T) {
 func TestApplyDoesNotDispatchWhenContextIsAlreadyCancelled(t *testing.T) {
 	backend := newLockedBackend(t, "dev")
 	reg := registry.New()
-	if err := reg.Register(poisonProvider{t: t, resourceType: "test.thing"}); err != nil {
+	if err := reg.Register("test", poisonProvider{t: t, resourceType: "test.thing"}); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 
@@ -672,7 +686,7 @@ func TestApplyRetriesAccordingToPolicy(t *testing.T) {
 	backend := newLockedBackend(t, "dev")
 	prov := &flakyProvider{resourceType: "test.thing", failures: 2}
 	reg := registry.New()
-	if err := reg.Register(prov); err != nil {
+	if err := reg.Register("test", prov); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 
@@ -735,7 +749,7 @@ func TestApplyRespectsCancellationDuringRetryBackoff(t *testing.T) {
 	backend := newLockedBackend(t, "dev")
 	prov := &flakyProvider{resourceType: "test.thing", failures: 1}
 	reg := registry.New()
-	if err := reg.Register(prov); err != nil {
+	if err := reg.Register("test", prov); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 
@@ -856,7 +870,7 @@ func TestApplyDestroyRemovesFromState(t *testing.T) {
 	backend := newLockedBackend(t, "dev")
 	prov := &lifecycleProvider{resourceType: "test.thing"}
 	reg := registry.New()
-	if err := reg.Register(prov); err != nil {
+	if err := reg.Register("test", prov); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 
@@ -925,7 +939,7 @@ func TestApplyDestroyRemovesFromState(t *testing.T) {
 func TestApplyForgetNeverCallsProviderAndRemovesFromState(t *testing.T) {
 	backend := newLockedBackend(t, "dev")
 	reg := registry.New()
-	if err := reg.Register(poisonProvider{t: t, resourceType: "test.thing"}); err != nil {
+	if err := reg.Register("test", poisonProvider{t: t, resourceType: "test.thing"}); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 
@@ -991,17 +1005,18 @@ func TestApplyReplaceDestroysThenCreatesSharingOneOperation(t *testing.T) {
 	backend := newLockedBackend(t, "dev")
 	prov := &lifecycleProvider{resourceType: "test.thing"}
 	reg := registry.New()
-	if err := reg.Register(prov); err != nil {
+	if err := reg.Register("test", prov); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 
 	a := addr("swap")
 	replaceOp := planner.Operation{
-		Address: a,
-		Type:    "test.thing",
-		Kind:    planner.OpReplace,
-		Before:  map[string]value.Value{"x": value.String("old", value.SourceExplicit)},
-		After:   map[string]value.Value{"x": value.String("new", value.SourceExplicit)},
+		Provider: "test",
+		Address:  a,
+		Type:     "test.thing",
+		Kind:     planner.OpReplace,
+		Before:   map[string]value.Value{"x": value.String("old", value.SourceExplicit)},
+		After:    map[string]value.Value{"x": value.String("new", value.SourceExplicit)},
 	}
 	plan := planWith(replaceOp)
 	g, err := planner.BuildExecution(plan, noDeps)
@@ -1112,17 +1127,18 @@ func TestApplyReplaceLeavesNoStateWhenCreatePhaseFailsAfterDestroySucceeds(t *te
 	backend := newLockedBackend(t, "dev")
 	prov := &deleteSucceedsCreateFailsProvider{resourceType: "test.thing"}
 	reg := registry.New()
-	if err := reg.Register(prov); err != nil {
+	if err := reg.Register("test", prov); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 
 	a := addr("swap")
 	replaceOp := planner.Operation{
-		Address: a,
-		Type:    "test.thing",
-		Kind:    planner.OpReplace,
-		Before:  map[string]value.Value{"x": value.String("old", value.SourceExplicit)},
-		After:   map[string]value.Value{"x": value.String("new", value.SourceExplicit)},
+		Provider: "test",
+		Address:  a,
+		Type:     "test.thing",
+		Kind:     planner.OpReplace,
+		Before:   map[string]value.Value{"x": value.String("old", value.SourceExplicit)},
+		After:    map[string]value.Value{"x": value.String("new", value.SourceExplicit)},
 	}
 	plan := planWith(replaceOp)
 	g, err := planner.BuildExecution(plan, noDeps)
@@ -1216,7 +1232,7 @@ func TestApplyEmitsRetryingAndCorrectAttemptCounts(t *testing.T) {
 	backend := newLockedBackend(t, "dev")
 	prov := &flakyProvider{resourceType: "test.thing", failures: 2}
 	reg := registry.New()
-	if err := reg.Register(prov); err != nil {
+	if err := reg.Register("test", prov); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 
@@ -1286,7 +1302,7 @@ func TestApplyEmitsFailedWithFinalAttemptCount(t *testing.T) {
 	backend := newLockedBackend(t, "dev")
 	prov := &flakyProvider{resourceType: "test.thing", failures: 100}
 	reg := registry.New()
-	if err := reg.Register(prov); err != nil {
+	if err := reg.Register("test", prov); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 
@@ -1342,7 +1358,7 @@ func TestApplyChainsCallerSuppliedOnRetryAlongsideEventRetrying(t *testing.T) {
 	backend := newLockedBackend(t, "dev")
 	prov := &flakyProvider{resourceType: "test.thing", failures: 2}
 	reg := registry.New()
-	if err := reg.Register(prov); err != nil {
+	if err := reg.Register("test", prov); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 

@@ -37,7 +37,12 @@ func compilerOptions(opts *GlobalOptions, environment string) (compiler.Options,
 	// `source:` against the project directory. Passing anything but opts.Dir
 	// here makes --chdir silently wrong for modules and right for everything
 	// else, which is the worst combination to debug.
-	return compiler.Options{Dir: opts.Dir, Environment: environment, Vars: vars, FileVars: fileVars}, ds
+	return compiler.Options{
+		Dir:         opts.Dir,
+		Environment: environment,
+		Vars:        vars,
+		FileVars:    fileVars,
+	}, ds
 }
 
 // rejectVariableFlags refuses --var and --var-file for the commands that never

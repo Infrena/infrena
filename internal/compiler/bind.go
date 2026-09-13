@@ -9,13 +9,16 @@ import (
 	"github.com/infrata/infrata/internal/diag"
 	"github.com/infrata/infrata/internal/expressions"
 	"github.com/infrata/infrata/internal/modules"
+	"github.com/infrata/infrata/internal/providers"
 	"github.com/infrata/infrata/internal/registry"
 	"github.com/infrata/infrata/pkg/address"
 	"github.com/infrata/infrata/pkg/resource"
 	"github.com/infrata/infrata/pkg/value"
 )
 
-func bindReferences(exp *modules.Expansion, opts Options, reg *registry.Registry) (ResolvedConfig, diag.Diagnostics) {
+func bindReferences(
+	exp *modules.Expansion, opts Options, reg *registry.Registry, table providers.Table,
+) (ResolvedConfig, diag.Diagnostics) {
 	var ds diag.Diagnostics
 
 	out := ResolvedConfig{
@@ -49,11 +52,26 @@ func bindReferences(exp *modules.Expansion, opts Options, reg *registry.Registry
 		decl := inst.Decl
 		self := inst.Address.String()
 
+		// Once, into a local: the lifecycle rung below needs the same instance the
+		// resource is recorded as belonging to, and computing it twice is how the two
+		// come to disagree.
+		instance := providerInstanceFor(inst, table, &ds)
+
 		resolved := &resource.ResolvedResource{
-			Address:   inst.Address,
-			Type:      decl.Type,
-			Attrs:     make(map[string]value.Value, len(decl.Attributes)),
-			Lifecycle: resource.Lifecycle{PreventDestroy: decl.Lifecycle.PreventDestroy, Retain: decl.Lifecycle.Retain},
+			Address: inst.Address,
+			Type:    decl.Type,
+			// Stage 5 leaves this empty when nothing named an instance, because it
+			// has no business knowing which instances exist. THIS is where the
+			// default is supplied, once, so a resource reaching the planner always
+			// names the instance it belongs to — and a destroy, which has only
+			// state, inherits that name from the apply that created it.
+			Provider: instance,
+			Attrs:    make(map[string]value.Value, len(decl.Attributes)),
+			// The instance's `defaults:` may supply a lifecycle flag, and this is
+			// where the lifecycle is assembled. Stage 7 handles the SCHEMA half of
+			// §12.1's rung — a lifecycle option is not a schema attribute, so it has
+			// nothing to resolve against a definition and no business waiting for one.
+			Lifecycle: lifecycleFor(decl.Lifecycle, table[instance]),
 			Origin:    decl.Origin,
 		}
 
@@ -461,4 +479,74 @@ func describeSkipOrigin(o value.Origin) string {
 		return "its own declaration"
 	}
 	return o.String()
+}
+
+// providerInstanceFor settles which instance a resource belongs to.
+//
+// Stage 5 resolved the resource's own `provider:` and the module call it inherited
+// from (modules.providerFor); what is left is the default, which only the compiler
+// knows. Filled HERE rather than at dispatch, because a resource whose instance is
+// decided at dispatch time is one whose state cannot say which account it is in —
+// and a destroy has nothing but state.
+func providerInstanceFor(inst modules.Instance, table providers.Table, ds *diag.Diagnostics) string {
+	named := inst.ProviderInstance
+	if named == "" {
+		// The table's own default, which is the entry marked `default: true` or
+		// the first one declared. Taken from the table rather than from Options so
+		// that the instance a resource defaults to and the instance the registry
+		// built are decided by one thing — a disagreement there creates a resource
+		// in one account and then fails to find it in the other.
+		return table.DefaultName()
+	}
+	if _, exists := table[named]; !exists {
+		// Reported HERE, where the `provider:` key is, rather than at dispatch.
+		// The executor's own guard says "no provider instance offers this type",
+		// which is true and useless: the reader's mistake is a name, and the names
+		// available are in a file they can read.
+		ds.Add(diag.Diagnostic{
+			Severity: diag.SeverityError,
+			Summary: inst.Address.String() + " names provider instance " +
+				strconv.Quote(named) + ", which is not declared",
+			Detail: "`provider:` selects one entry of the project's `providers:` list." +
+				declaredInstancesDetail(table),
+			Action: "Correct the name, or add a `providers:` entry with `name: " + named + "`.",
+			Origin: inst.Decl.Origin,
+		})
+	}
+	return named
+}
+
+// lifecycleFor settles a resource's lifecycle flags against its instance's
+// `defaults:` (PLAN.md §12.1).
+//
+// WRITTEN beats DEFAULTED, which is why LifecycleDecl tracks whether each key was
+// written at all: `prevent_destroy: false` on a resource under an instance defaulting
+// it to true must win, and a bare bool cannot tell that from silence. Getting this
+// backwards refuses a destroy the user explicitly allowed, which is the direction a
+// user cannot work around.
+//
+// checkDefaults has already refused a non-boolean, so AsBool failing here means the
+// key is absent, and absent is the same as unset.
+func lifecycleFor(decl config.LifecycleDecl, inst providers.Instance) resource.Lifecycle {
+	out := resource.Lifecycle{PreventDestroy: decl.PreventDestroy, Retain: decl.Retain}
+	if !decl.PreventDestroySet {
+		if b, ok := inst.Defaults["prevent_destroy"].AsBool(); ok {
+			out.PreventDestroy = b
+		}
+	}
+	if !decl.RetainSet {
+		if b, ok := inst.Defaults["retain"].AsBool(); ok {
+			out.Retain = b
+		}
+	}
+	return out
+}
+
+// declaredInstancesDetail lists what the user could have meant.
+func declaredInstancesDetail(table providers.Table) string {
+	names := table.Names()
+	if len(names) == 0 {
+		return "\nThis project declares no provider instances."
+	}
+	return "\nDeclared instances:\n  " + strings.Join(names, "\n  ")
 }
