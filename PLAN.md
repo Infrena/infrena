@@ -1110,8 +1110,8 @@ above refuse, and a shape that cannot express it would refuse it silently.
 
 ### What this costs, recorded before it is built
 
-Three assumptions in the engine are one-provider-per-type and must change (all three
-are now discharged; the state migration remains a recorded follow-up):
+Three assumptions in the engine are one-provider-per-type and must change (all three are
+now discharged, the migration included — see §21.1):
 
 - `registry.Registry` is keyed by resource TYPE and `Register` REFUSES a type a
   second provider already claims. Two instances of one plugin collide there
