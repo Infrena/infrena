@@ -1,8 +1,8 @@
 package pluginhost
 
 import (
+	"bufio"
 	"context"
-	"io"
 	"strings"
 	"testing"
 	"time"
@@ -437,31 +437,39 @@ func TestGarbageOnTheStreamFailsLoudlyRatherThanHanging(t *testing.T) {
 	// A "plugin" that handshakes correctly and then writes nonsense.
 	hostReader, pluginWriter := ioPipe()
 	pluginReader, hostWriter := ioPipe()
+	// The fake answers requests it has READ, rather than writing blind. Writing
+	// the response before the request arrives is a race, not a shortcut: the
+	// client's reader runs continuously, so an early response finds no waiter
+	// registered, is dropped, and the garbage behind it kills the connection
+	// before loadSchemas ever registers — which fails the test with the very
+	// error it is trying to provoke later. That is what made this test flaky
+	// (1 run in 300 under -race), and a fake that waits to be asked cannot
+	// reorder the two.
+	requests := bufio.NewScanner(pluginReader)
 	go func() {
 		defer pluginWriter.Close()
 		handshake := `{"protocol":1,"name":"bad","version":"0.0.0"}` + "\n"
 		if _, err := pluginWriter.Write([]byte(handshake)); err != nil {
 			return
 		}
-		// Serve the schemas request so the connection completes, then corrupt it.
-		// A kind is a NAME on the wire, never a number: Kind is an iota, so a
-		// constant inserted into that list would silently reinterpret every schema
-		// ever sent (pkg/schema/wire.go).
+		// Serve the first request so the connection completes, then corrupt the
+		// stream in answer to the second. A kind is a NAME on the wire, never a
+		// number: Kind is an iota, so a constant inserted into that list would
+		// silently reinterpret every schema ever sent (pkg/schema/wire.go).
+		if !requests.Scan() {
+			return
+		}
 		schemas := `{"id":1,"result":{"definitions":[{"Type":"bad.thing",` +
 			`"Attributes":{"name":{"kind":"string","required":true}},` +
 			`"Capabilities":{"Create":true,"Read":true,"Delete":true}}]}}` + "\n"
 		if _, err := pluginWriter.Write([]byte(schemas)); err != nil {
 			return
 		}
+		if !requests.Scan() {
+			return
+		}
 		_, _ = pluginWriter.Write([]byte("this is not JSON at all\n"))
 	}()
-
-	// Drain the request side. io.Pipe writes BLOCK until read, and with no plugin
-	// serving there is nothing to read them — so the host's own write blocks
-	// forever. That is a hang in the TEST's fake rather than in the host, and the
-	// first version of this test hit it and looked exactly like the bug it is
-	// meant to catch.
-	go func() { _, _ = io.Copy(io.Discard, pluginReader) }()
 
 	c := newTestClient(hostWriter)
 	defer pluginReader.Close()
