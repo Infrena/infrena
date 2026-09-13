@@ -3,6 +3,7 @@ package planner
 import (
 	"bytes"
 	"encoding/json"
+	"github.com/infrata/infrata/pkg/resource"
 	"strings"
 	"testing"
 	"time"
@@ -408,5 +409,112 @@ func TestCanonicalOnNilPlanIsAnErrorNotAPanic(t *testing.T) {
 	var p *Plan
 	if _, err := p.Canonical(); err == nil {
 		t.Error("encoding a nil plan must return an error")
+	}
+}
+
+// TestTheArtifactsKeysAreFrozen pins the plan artifact's field names.
+//
+// Same contract as pkg/value's TestScopeWireNamesAreFrozen, and it was missing: the
+// artifact is a documented, versioned format that `--output` writes for other programs
+// to read, and until this test existed a field could be added, renamed or dropped from
+// planWire or operationWire with nothing to notice. M11 added `provider` and no test
+// anywhere changed.
+//
+// A NEW key is as much a change as a lost one — it is what a consumer's strict decoder
+// rejects — so this test fails in both directions, and either way the fix is to decide
+// deliberately: update the list, and bump `version` if the change is not additive.
+//
+// The literals are duplicated on purpose. Deriving them from the structs would assert
+// nothing at all.
+func TestTheArtifactsKeysAreFrozen(t *testing.T) {
+	p := samplePlan(time.Now())
+	p.Diagnostics = []diag.Diagnostic{{
+		Severity: diag.SeverityWarning,
+		Summary:  "a warning, so the diagnostic level has keys to check",
+		Detail:   "detail",
+		Action:   "action",
+	}}
+	for i := range p.Operations {
+		// Every operation-level key has to be present in at least one operation, or
+		// omitempty hides it and this test silently stops checking it.
+		p.Operations[i].Provider = "main"
+		p.Operations[i].Lifecycle = resource.Lifecycle{PreventDestroy: true}
+		p.Operations[i].Dependents = []address.Address{{Name: "dependent"}}
+	}
+
+	out, err := json.Marshal(p)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	var doc map[string]json.RawMessage
+	if err := json.Unmarshal(out, &doc); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	assertKeys(t, "the plan", doc, []string{
+		"version", "created_at", "project", "environment",
+		"config_hash", "state_serial", "state_hash", "operations", "diagnostics",
+	})
+
+	var ops []map[string]json.RawMessage
+	if err := json.Unmarshal(doc["operations"], &ops); err != nil {
+		t.Fatalf("operations: %v", err)
+	}
+	if len(ops) == 0 {
+		t.Fatal("no operations, so nothing below is checked")
+	}
+	// The union across operations: `before` belongs to a destroy and `after` to a
+	// create, so no single operation carries every key.
+	union := map[string]json.RawMessage{}
+	for _, op := range ops {
+		for k, v := range op {
+			union[k] = v
+		}
+	}
+	assertKeys(t, "an operation", union, []string{
+		"address", "type", "provider", "kind", "before", "after",
+		"reasons", "dependents", "lifecycle",
+	})
+}
+
+// assertKeys compares a decoded object's keys against the frozen set, in both
+// directions — a key gained is as much a format change as a key lost.
+func assertKeys(t *testing.T, what string, got map[string]json.RawMessage, want []string) {
+	t.Helper()
+	expected := map[string]bool{}
+	for _, k := range want {
+		expected[k] = true
+		if _, present := got[k]; !present {
+			t.Errorf("%s has lost the key %q; a consumer reading it gets nothing", what, k)
+		}
+	}
+	for k := range got {
+		if !expected[k] {
+			t.Errorf("%s has gained the key %q. That is a wire-format change: add it to this "+
+				"test's list deliberately, and bump `version` if it is not additive", what, k)
+		}
+	}
+}
+
+// TestTheArtifactRecordsWhichInstanceAnOperationActsOn.
+//
+// A destroy read back from a saved plan has nothing else to go on — the configuration
+// that named the account is the very thing the user deleted — so an artifact that omits
+// the instance cannot be applied to the right account. §50 reads plans back; this is
+// what makes that possible.
+func TestTheArtifactRecordsWhichInstanceAnOperationActsOn(t *testing.T) {
+	p := samplePlan(time.Now())
+	if len(p.Operations) == 0 {
+		t.Fatal("samplePlan has no operations")
+	}
+	p.Operations[0].Provider = "acct2"
+
+	out, err := json.Marshal(p)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	if !strings.Contains(string(out), `"provider": "acct2"`) &&
+		!strings.Contains(string(out), `"provider":"acct2"`) {
+		t.Errorf("the artifact does not record the instance:\n%s", out)
 	}
 }

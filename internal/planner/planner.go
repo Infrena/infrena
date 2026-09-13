@@ -358,6 +358,13 @@ func removalOperation(addr address.Address, rs *resource.ResourceState, actual *
 	if actual == nil {
 		// Nothing was observed, so the historical record in state is all
 		// there is left to show.
+		//
+		// Redundancy note (measured): setting Provider to "" on this operation and on
+		// the retain-forget below fails NOTHING. A Forget never calls a provider — the
+		// executor skips the lookup for it and providerNameFor returns "" before
+		// reaching one — so nothing dispatches on it. Kept because the operation is
+		// written into the plan artifact, and a record describing a resource leaving
+		// state without saying which account it was in is worse than one that says.
 		return &Operation{
 			Address:  addr,
 			Type:     rs.Type,

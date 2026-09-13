@@ -1243,6 +1243,14 @@ default]` where a plugin's own would read `[default, from provider default]`. Th
 distinction is worth a Scope constant of its own: one is something the user wrote
 and can edit, the other is something the plugin ships.
 
+**The plan artifact records the instance.** `operationWire` gained a `provider` key,
+because the artifact is the format §50 reads a saved plan back FROM — and a destroy
+read back without its instance would be dispatched to whichever account happened to
+be consulted. The key changes the bytes of essentially every artifact, which does not
+touch invariant 6 (determinism is "same inputs, equivalent plan", not byte-stability
+across builds) and needs no `version` bump because it is additive. Found by a sabotage
+and closed with a frozen-keys test, which the artifact had never had.
+
 **Generation omits it**, the same way §27 omits a schema default — it is not
 something the reader has to supply. Keyed by the resource's OWN instance, never by
 "any instance that defaults this name": two instances exist precisely because they

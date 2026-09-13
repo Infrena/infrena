@@ -7,6 +7,12 @@ conventional directory layout that decides which files get read.
 Run it from this directory. Nothing here touches a network — the only provider is the fake
 one, which keeps its "cloud" in a hand-editable JSON file.
 
+This example declares no `providers:` block, so it gets one implicit instance. A project that
+needs two accounts of one cloud declares a list of instances and picks one per resource with
+`provider:` — see `PLAN.md` §12.1. That is deliberately not shown here: a second account is a
+different lesson, needing its own cloud file and its own explanation, and this walkthrough is
+about the layout, variables and modules you meet first.
+
 ```bash
 infrata validate
 infrata plan dev

@@ -2,6 +2,7 @@ package integration
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -161,6 +162,33 @@ resources:
 	}
 }
 
+// twoAccounts is two instances of one plugin with resources split between them, and
+// DIFFERENT counts in each: a bug that split them evenly could otherwise satisfy a
+// per-cloud assertion by accident.
+const twoAccounts = `
+project: MainApp
+environments:
+  dev: {}
+providers:
+  - plugin: test
+    name: main
+  - plugin: test
+    name: acct2
+resources:
+  net:
+    type: test.network
+    cidr: 10.0.0.0/16
+  here:
+    type: test.database
+    engine: postgres
+    network: ${net.id}
+  there:
+    type: test.database
+    engine: postgres
+    network: 10.0.0.0/16
+    provider: acct2
+`
+
 // TestTwoInstancesThatConfigureNothingAreStillTwoAccounts.
 //
 // Found by a sabotage that collapsed the fake provider's per-instance default cloud
@@ -173,7 +201,49 @@ resources:
 // stand-in for an account, and only the plugin knows that two instances sharing one
 // is the same mistake as two AWS instances sharing one set of credentials.
 func TestTwoInstancesThatConfigureNothingAreStillTwoAccounts(t *testing.T) {
-	dir := project(t, `
+	dir := project(t, twoAccounts)
+	if a := run(t, dir, "apply", "dev", "--auto-approve"); a.ExitCode != 2 {
+		t.Fatalf("apply exit = %d:\n%s", a.ExitCode, a.combined())
+	}
+
+	base := filepath.Join(dir, ".infra")
+	main := cloudNames(t, filepath.Join(base, "fake-cloud-main.json"))
+	acct2 := cloudNames(t, filepath.Join(base, "fake-cloud-acct2.json"))
+	if strings.Join(main, ",") != "here,net" {
+		t.Errorf("main holds %v, want net and here", main)
+	}
+	// The half a shared file would fail: `there` must be in acct2 and NOWHERE else.
+	if strings.Join(acct2, ",") != "there" {
+		t.Errorf("acct2 holds %v, want just `there`", acct2)
+	}
+	// The counts DIFFER, so a symmetric bug that split resources evenly between two
+	// files cannot satisfy both assertions above by accident.
+	if len(main) == len(acct2) {
+		t.Errorf("both clouds hold %d resources", len(main))
+	}
+
+	// And it converges — invariant 2 across two accounts, which means each instance was
+	// asked about its own resources and found them.
+	if again := run(t, dir, "plan", "dev"); again.ExitCode != 0 {
+		t.Errorf("does not converge; re-plan exit = %d:\n%s", again.ExitCode, again.combined())
+	}
+}
+
+// TestRemovingAResourceDestroysItFromItsOwnCloudOnly is invariant 1 with two accounts,
+// and the rule §12.1 records the instance in state FOR.
+//
+// A destroy has nothing but state: the configuration that named the account is the very
+// thing the user deleted. If state did not carry the instance, this would either destroy
+// from whichever account won a lookup or propose nothing at all — and M11 shipped with
+// both of those bugs in turn.
+func TestRemovingAResourceDestroysItFromItsOwnCloudOnly(t *testing.T) {
+	dir := project(t, twoAccounts)
+	if a := run(t, dir, "apply", "dev", "--auto-approve"); a.ExitCode != 2 {
+		t.Fatalf("apply exit = %d:\n%s", a.ExitCode, a.combined())
+	}
+
+	// Remove only acct2's resource.
+	rewrite(t, dir, `
 project: MainApp
 environments:
   dev: {}
@@ -183,28 +253,100 @@ providers:
   - plugin: test
     name: acct2
 resources:
-  here:
+  net:
     type: test.network
     cidr: 10.0.0.0/16
-  there:
-    type: test.network
-    cidr: 10.1.0.0/16
-    provider: acct2
+  here:
+    type: test.database
+    engine: postgres
+    network: ${net.id}
 `)
+	p := run(t, dir, "plan", "dev")
+	if p.ExitCode != 2 {
+		t.Fatalf("removing a managed resource must propose a destroy; exit = %d:\n%s",
+			p.ExitCode, p.combined())
+	}
+	if !strings.Contains(p.Stdout, "there") {
+		t.Errorf("the destroy is not in the plan:\n%s", p.Stdout)
+	}
 	if a := run(t, dir, "apply", "dev", "--auto-approve"); a.ExitCode != 2 {
 		t.Fatalf("apply exit = %d:\n%s", a.ExitCode, a.combined())
 	}
 
 	base := filepath.Join(dir, ".infra")
-	main := cloudNames(t, filepath.Join(base, "fake-cloud-main.json"))
-	acct2 := cloudNames(t, filepath.Join(base, "fake-cloud-acct2.json"))
-	if len(main) != 1 || main[0] != "here" {
-		t.Errorf("main holds %v, want just `here`", main)
+	if got := cloudNames(t, filepath.Join(base, "fake-cloud-acct2.json")); len(got) != 0 {
+		t.Errorf("acct2 still holds %v", got)
 	}
-	// The half a shared file would fail: `there` must be in acct2 and NOWHERE else.
-	if len(acct2) != 1 || acct2[0] != "there" {
-		t.Errorf("acct2 holds %v, want just `there`", acct2)
+	// The other account UNTOUCHED, which is the half that fails if the destroy went to
+	// whichever instance a type lookup happened to return.
+	if got := cloudNames(t, filepath.Join(base, "fake-cloud-main.json")); strings.Join(got, ",") != "here,net" {
+		t.Errorf("main holds %v — removing acct2's resource disturbed the other account", got)
 	}
+}
+
+// TestTwoInstancesWithTheSameNameFailValidateNamingBothLines.
+//
+// An instance name is how a resource chooses its account, so two with one name would send
+// resources to whichever happened to win — and the resource that lost would be created in
+// the wrong place, successfully. Both LINES are named because the reader has to see the
+// pair to know which one to rename.
+func TestTwoInstancesWithTheSameNameFailValidateNamingBothLines(t *testing.T) {
+	const body = `
+project: MainApp
+environments:
+  dev: {}
+providers:
+  - plugin: test
+    name: main
+  - plugin: test
+    name: main
+resources:
+  net:
+    type: test.network
+    cidr: 10.0.0.0/16
+`
+	dir := project(t, body)
+	r := run(t, dir, "validate")
+	if r.ExitCode == 0 {
+		t.Fatalf("two instances called `main` must fail validate:\n%s", r.combined())
+	}
+	if !strings.Contains(r.combined(), `"main"`) {
+		t.Errorf("the diagnostic does not name the instance:\n%s", r.combined())
+	}
+
+	// BOTH declarations' lines, derived from the fixture rather than written down: a
+	// hardcoded number is wrong the first time anyone edits a line above it, and the
+	// first version of this test asserted two numbers that were both off by one and
+	// reported a diagnostic that was already correct.
+	lines := linesContaining(t, body, "name: main")
+	if len(lines) != 2 {
+		t.Fatalf("the fixture has %d `name: main` lines, want 2", len(lines))
+	}
+	// In their CONTEXTUAL spellings, not as bare numbers. A sabotage that removed the
+	// first declaration's line from the diagnostic passed against `Contains("7")`,
+	// because the temporary directory in the path happens to contain digits — the same
+	// way M11's first version of this check matched ".yml:" and asserted nothing.
+	for _, want := range []string{
+		fmt.Sprintf("infra.yml:%d:", lines[1]), // where the second one is
+		fmt.Sprintf("line %d of", lines[0]),    // and where to find the first
+	} {
+		if !strings.Contains(r.combined(), want) {
+			t.Errorf("the diagnostic does not say %q, so a reader sees one of the pair and has "+
+				"to find the other by hand:\n%s", want, r.combined())
+		}
+	}
+}
+
+// linesContaining returns the 1-based line numbers of body holding needle.
+func linesContaining(t *testing.T, body, needle string) []int {
+	t.Helper()
+	var out []int
+	for i, line := range strings.Split(body, "\n") {
+		if strings.Contains(line, needle) {
+			out = append(out, i+1)
+		}
+	}
+	return out
 }
 
 // TestDestroyReachesEveryInstanceFromStateAlone is invariant 1 for a project with
