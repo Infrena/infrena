@@ -91,6 +91,15 @@ func runImport(
 
 	// Refuse before writing anything. An import that adopted half a selection
 	// and then reported a collision leaves a user reasoning about which half.
+	//
+	// TWO AXES, and the second one is the dangerous one. A name already in state
+	// is the collision a user expects: importing over it would overwrite the
+	// provider ID recorded there. A provider ID already in state under ANOTHER
+	// name is worse and was not checked at all — it leaves two addresses managing
+	// one real resource, and since the new address declares nothing, invariant 1
+	// schedules it for destruction and the next apply deletes infrastructure the
+	// first address still manages and configuration still declares. §26 exists to
+	// stop exactly that, and the name check alone did not.
 	var already []string
 	for _, r := range selected {
 		if _, exists := st.Get(address.Address{Name: r.Name}); exists {
@@ -103,6 +112,17 @@ func runImport(
 			"Importing would overwrite what is recorded there, including the provider IDs. "+
 			"Remove them with `infrata state rm <address>` first, or import the others by name",
 			environment, strings.Join(already, ", "))
+	}
+
+	if claimed := alreadyManaged(st, selected); len(claimed) > 0 {
+		sort.Strings(claimed)
+		return fmt.Errorf("already managed in environment %q: %s\n"+
+			"Importing it again would leave two addresses managing one resource. The second "+
+			"declares nothing, so the next plan would propose destroying it — and destroying "+
+			"it deletes the resource the first one manages.\n"+
+			"Import something else, or use `infrata state rm <address>` if the existing entry "+
+			"is the one you want to replace",
+			environment, strings.Join(claimed, ", "))
 	}
 
 	// CONFIGURATION FIRST, then state. The window between the two writes is the
@@ -149,6 +169,45 @@ func runImport(
 				"or they will be proposed for destruction.")
 	}
 	return nil
+}
+
+// alreadyManaged reports which selections name a provider ID that some OTHER
+// address in this environment's state already manages, as
+// "<provider id> (managed by <address>)".
+//
+// Keyed by type AND instance, not by provider ID alone. Two accounts of one cloud
+// legitimately hold the same ID — an AWS resource ID is unique within an account,
+// not across them (§12.1) — so comparing IDs globally would refuse an import that
+// is perfectly correct. The instance is what makes an ID mean one thing.
+//
+// A selection whose NAME matches the existing entry is not reported here: that is
+// the same resource under the same address, which the name check above has already
+// refused with a message about overwriting.
+func alreadyManaged(st *state.State, selected []discovery.Result) []string {
+	type claim struct{ typ, instance, id string }
+	owner := map[claim]string{}
+	for _, addr := range st.Addresses() {
+		r, ok := st.Get(addr)
+		if !ok {
+			continue
+		}
+		if r.ProviderID == "" {
+			// Nothing to collide with: an entry with no provider ID names no
+			// real resource, so it cannot be the thing being adopted twice.
+			continue
+		}
+		owner[claim{r.Type, r.Provider, r.ProviderID}] = r.Address.String()
+	}
+
+	var out []string
+	for _, r := range selected {
+		held, taken := owner[claim{r.Type, r.Provider, r.ProviderID}]
+		if !taken || held == (address.Address{Name: r.Name}).String() {
+			continue
+		}
+		out = append(out, r.ProviderID+" (managed by "+held+")")
+	}
+	return out
 }
 
 // selectForImport resolves what to import: everything discovery finds, or the
