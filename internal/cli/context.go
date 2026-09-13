@@ -1,16 +1,22 @@
 package cli
 
 import (
+	"context"
 	"errors"
+	"io"
+	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/infrata/infrata/internal/config"
 	"github.com/infrata/infrata/internal/diag"
+	"github.com/infrata/infrata/internal/pluginhost"
 	"github.com/infrata/infrata/internal/providers"
 	"github.com/infrata/infrata/internal/registry"
 	"github.com/infrata/infrata/internal/state"
 	"github.com/infrata/infrata/internal/variables"
+	"github.com/infrata/infrata/pkg/provider"
 	"github.com/infrata/infrata/pkg/value"
 	"github.com/infrata/infrata/providers/test"
 )
@@ -21,32 +27,64 @@ const StateDirName = ".infra"
 
 // buildRegistry constructs the provider registry for a project directory.
 //
-// SCHEMAS ONLY. No provider object exists yet, and cannot: an instance's
-// configuration may interpolate a variable, resolving that variable needs a
-// compile, and a compile needs these schemas. compiler.Compile supplies the other
-// half — internal/providers.Prepare constructs each instance from the values it has
-// by then resolved and registers it here (PLAN.md §12.1).
+// IT NAMES NO PLUGINS. Which providers a project uses is a fact about that
+// project's configuration — a `providers:` entry saying `plugin: aws`, or a
+// resource of type `aws.instance` — so the registry is given a LOADER and the
+// plugins follow from what the configuration turns out to say. Compiler stage 4.5
+// is where that happens.
 //
-// So a command that compiles gets a registry that dispatches; a command that does
-// not — and there are two, `destroy` and `refresh`, which work from state alone —
-// must build its instances some other way. That is registerStateInstances.
-func buildRegistry(dir string) *registry.Registry {
-	reg := registry.New()
-	if err := reg.RegisterPlugin(test.NewPlugin(dir)); err != nil {
-		// A malformed built-in schema is a programming error, caught by the
-		// provider's own tests long before here. Nothing a user writes reaches it:
-		// this call reads no configuration at all.
-		panic("registering the test plugin: " + err.Error())
+// The returned close function shuts down every plugin that was started. Callers
+// must defer it: without it a command leaves child processes behind.
+func buildRegistry(opts *GlobalOptions) (*registry.Registry, func()) {
+	reg, loader := buildRegistryWithLoader(opts)
+	return reg, loader.Close
+}
+
+// buildRegistryWithLoader is buildRegistry for the one caller that needs the loader
+// itself: `discover` asks what plugins are available, because its scope is not set by
+// configuration.
+func buildRegistryWithLoader(opts *GlobalOptions) (*registry.Registry, *pluginhost.Loader) {
+	loader := &pluginhost.Loader{
+		Search:  pluginhost.DefaultSearch(opts.Dir, opts.PluginDirs),
+		Dir:     opts.Dir,
+		Verbose: verboseWriter(opts),
+		Builtin: builtinPlugins(opts.Dir),
 	}
-	return reg
+	reg := registry.New()
+	reg.SetLoader(loader)
+	return reg, loader
+}
+
+// builtinPlugins are the plugins served in process because no binary exists yet.
+//
+// TRANSITIONAL, and the only entry is the fake provider, which is being moved to
+// its own repository as infrata-plugin-fake. A builtin is not a second code path:
+// pluginhost.InProcess runs the SDK over an in-memory pipe, so it goes through the
+// same handshake, the same protocol and the same trust rules a subprocess does.
+// A real binary on the search path wins over this, so the cutover is a matter of
+// installing one.
+//
+// Delete this function, and pluginhost.Loader.Builtin, once that binary ships.
+func builtinPlugins(dir string) map[string]provider.Plugin {
+	return map[string]provider.Plugin{"test": test.NewPlugin(dir)}
+}
+
+// verboseWriter is where plugin logs go, or nil when --verbose is off.
+func verboseWriter(opts *GlobalOptions) io.Writer {
+	if !opts.Verbose {
+		return nil
+	}
+	return os.Stderr
 }
 
 // stateOnlyRegistry is buildRegistry plus the instances a command that never
 // compiles still has to dispatch to.
-func stateOnlyRegistry(dir string) (*registry.Registry, providers.Table, diag.Diagnostics) {
-	reg := buildRegistry(dir)
-	table, ds := registerStateInstances(reg, dir)
-	return reg, table, ds
+//
+// The returned close function shuts down every plugin started; callers must defer it.
+func stateOnlyRegistry(opts *GlobalOptions) (*registry.Registry, providers.Table, diag.Diagnostics, func()) {
+	reg, closePlugins := buildRegistry(opts)
+	table, ds := registerStateInstances(reg, opts.Dir)
+	return reg, table, ds, closePlugins
 }
 
 // registerStateInstances builds the provider instances a state-only command needs.
@@ -81,7 +119,27 @@ func registerStateInstances(reg *registry.Registry, dir string) (providers.Table
 		// `validate` — gives a reader two problems to reconcile instead of one.
 		return registerImplicit(reg, ds)
 	}
+	// The plugins this project uses, from the same rule compilation applies. A
+	// state-only command loads them here because nothing else will: it never reaches
+	// stage 4.5.
+	for _, name := range decl.NeededPlugins() {
+		if err := reg.EnsurePlugin(context.Background(), name); err != nil {
+			ds.Add(diag.Diagnostic{
+				Severity: diag.SeverityError,
+				Summary:  "the " + name + " plugin could not be loaded",
+				Detail:   err.Error(),
+				Action: "Install the plugin, or correct the `plugin:` name. `--verbose` reports " +
+					"where each plugin was loaded from.",
+			})
+		}
+	}
+	if ds.HasErrors() {
+		return nil, ds
+	}
+
 	if len(decl.Providers) == 0 {
+		// Resources but no `providers:` block: the plugins are loaded, so the
+		// implicit instance can be derived the same way a compile derives it.
 		return registerImplicit(reg, ds)
 	}
 
@@ -157,4 +215,136 @@ func defaultsByInstance(table providers.Table) map[string]map[string]value.Value
 		}
 	}
 	return out
+}
+
+// testRegistryFor builds a registry the way a command does, for tests that need one
+// without running a command.
+//
+// It exists so a test cannot accidentally build a registry a different way from the
+// commands it is testing — the difference that would hide is "which plugins does
+// this project actually load", which is the whole subject.
+func testRegistryFor(dir string) (*registry.Registry, func()) {
+	return buildRegistry(&GlobalOptions{Dir: dir})
+}
+
+// ensureStateProviders loads the plugins the RECORDED resources need, and registers
+// the implicit instance if the project declares none.
+//
+// Configuration cannot answer this for a state-only command. `destroy`'s whole
+// premise is that nothing is configured — `resources: {}`, or no file at all — so
+// the only thing that says which plugins are involved is the state: a resource
+// recorded as `test.network` can only be served by the plugin `test`, because a
+// plugin serves `<name>.*` and nothing else (PLAN.md §31.1).
+//
+// Called AFTER state is read, which is why it is separate from
+// registerStateInstances: at the time that runs, state has not been opened yet.
+func ensureStateProviders(reg *registry.Registry, st *state.State) diag.Diagnostics {
+	var ds diag.Diagnostics
+	if st == nil {
+		return ds
+	}
+
+	seen := map[string]bool{}
+	var names []string
+	for _, addr := range st.Addresses() {
+		rs, ok := st.Get(addr)
+		if !ok {
+			continue
+		}
+		prefix, _, found := strings.Cut(rs.Type, ".")
+		if !found || prefix == "" || seen[prefix] {
+			continue
+		}
+		seen[prefix] = true
+		names = append(names, prefix)
+	}
+	sort.Strings(names)
+
+	for _, name := range names {
+		if err := reg.EnsurePlugin(context.Background(), name); err != nil {
+			ds.Add(diag.Diagnostic{
+				Severity: diag.SeverityError,
+				Summary:  "the " + name + " plugin could not be loaded",
+				Detail: err.Error() + "\nIt is needed because state records resources of type " +
+					name + ".*, and only that plugin can report on them.",
+				Action: "Install the plugin. Until it is available, the resources it manages " +
+					"cannot be read, changed or destroyed.",
+			})
+		}
+	}
+	if ds.HasErrors() {
+		return ds
+	}
+
+	// Now that the plugins are here, the implicit instance can be derived. A project
+	// that DOES declare `providers:` already had its instances registered from
+	// configuration, and Register leaves those alone.
+	if len(reg.InstanceNames()) == 0 {
+		ds.Extend(providers.Register(providers.Implicit(reg), reg))
+	}
+	return ds
+}
+
+// loadConfiguredPlugins loads every plugin a project's configuration names.
+//
+// Shared by the commands that need SCHEMAS without compiling — `explain`, and the
+// state-only commands' first pass. Decoding errors are ignored here on purpose: this
+// runs before any diagnostic can be rendered properly, and reporting a malformed file
+// twice gives a reader two problems to reconcile instead of one.
+func loadConfiguredPlugins(reg *registry.Registry, dir string) diag.Diagnostics {
+	var ds diag.Diagnostics
+	files, err := config.Load(dir)
+	if err != nil {
+		return ds
+	}
+	decl, decodeDS := config.Decode(files)
+	if decodeDS.HasErrors() {
+		return ds
+	}
+	for _, name := range decl.NeededPlugins() {
+		if err := reg.EnsurePlugin(context.Background(), name); err != nil {
+			ds.Add(diag.Diagnostic{
+				Severity: diag.SeverityError,
+				Summary:  "the " + name + " plugin could not be loaded",
+				Detail:   err.Error(),
+				Action: "Install the plugin, or correct the `plugin:` name. `--verbose` reports " +
+					"where each plugin was loaded from.",
+			})
+		}
+	}
+	return ds
+}
+
+// discoveryRegistry builds the registry `discover` uses.
+//
+// Every OTHER command knows which plugins it needs because the project says so.
+// Discovery asks what EXISTS — including resources no configuration mentions, which
+// is the whole point — so its scope is every plugin available to ask, and a project's
+// own `providers:` only decides how those are configured.
+func discoveryRegistry(opts *GlobalOptions) (*registry.Registry, providers.Table, diag.Diagnostics, func()) {
+	reg, loader := buildRegistryWithLoader(opts)
+
+	var ds diag.Diagnostics
+	for _, name := range loader.Available() {
+		if err := reg.EnsurePlugin(context.Background(), name); err != nil {
+			// A plugin that will not load is reported and skipped rather than
+			// failing the command: discovery is a survey, and a partial answer the
+			// user is TOLD is partial beats no answer at all.
+			ds.Add(diag.Diagnostic{
+				Severity: diag.SeverityWarning,
+				Summary:  "the " + name + " plugin could not be loaded, so nothing it manages is listed",
+				Detail:   err.Error(),
+			})
+		}
+	}
+
+	table, instanceDS := registerStateInstances(reg, opts.Dir)
+	ds.Extend(instanceDS)
+	if len(table) == 0 {
+		// A project that configures no instances still has one per plugin: discovery
+		// asks each about the account its own defaults point at.
+		table = providers.Implicit(reg)
+		ds.Extend(providers.Register(table, reg))
+	}
+	return reg, table, ds, loader.Close
 }

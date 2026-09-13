@@ -31,10 +31,20 @@ func TestValidateAcceptsGoodProject(t *testing.T) {
 	requireContains(t, res.Stdout, "Configuration valid")
 }
 
+// TestValidateRejectsUnknownTypeWithUsefulMessage. "Unknown" now means a type whose
+// PLUGIN is not installed, which is the ordinary case: a plugin serves `<name>.*` and
+// nothing else, so `aws.rds` can only come from a plugin called `aws`.
+//
+// The fixture also declares a type that DOES load, because that is what makes the
+// "here is what you could have meant" half possible — nothing can list the types of a
+// plugin it could not load.
 func TestValidateRejectsUnknownTypeWithUsefulMessage(t *testing.T) {
 	dir := project(t, `
 project: myapp
 resources:
+  net:
+    type: test.network
+    cidr: 10.0.0.0/16
   database:
     type: aws.rds
     engine: postgres

@@ -57,7 +57,8 @@ func newDestroyCommand(opts *GlobalOptions) *cobra.Command {
 			}
 			defer closeReport()
 
-			reg, _, regDiags := stateOnlyRegistry(opts.Dir)
+			reg, _, regDiags, closePlugins := stateOnlyRegistry(opts)
+			defer closePlugins()
 			if regDiags.HasErrors() {
 				regDiags.Render(cmd.ErrOrStderr())
 				return errProviderInstances
@@ -67,6 +68,12 @@ func newDestroyCommand(opts *GlobalOptions) *cobra.Command {
 			st0, err := backend.Get(cmd.Context(), environment)
 			if err != nil {
 				return finishApply(cmd.ErrOrStderr(), rw, report.ApplyResult{}, err)
+			}
+			// STATE names the plugins here, not configuration: a destroy's premise is
+			// that nothing is configured.
+			if stateDiags := ensureStateProviders(reg, st0); stateDiags.HasErrors() {
+				stateDiags.Render(cmd.ErrOrStderr())
+				return finishApply(cmd.ErrOrStderr(), rw, report.ApplyResult{}, errProviderInstances)
 			}
 			// An empty desired configuration: every resource recorded in
 			// state falls into planner.Compute's "in state, not in

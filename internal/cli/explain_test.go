@@ -74,12 +74,36 @@ func TestExplainMarksSensitiveAndForceNew(t *testing.T) {
 	}
 }
 
-// TestExplainUnknownTypeListsTheKnownOnes. An error that only says no is an
-// error a user cannot act on, and the registry already sorts.
-func TestExplainUnknownTypeListsTheKnownOnes(t *testing.T) {
+// TestExplainATypeWhoseProviderIsNotInstalledSaysWhereToPutIt.
+//
+// `explain` needs no project: the TYPE names the plugin, so `explain aws.rds` is
+// itself the instruction to load infrata-plugin-aws. When that binary is not there,
+// nothing can list aws's types — nothing has ever seen them — so the actionable
+// answer is the plugin, every place that was searched, and what to do about it.
+//
+// This test used to assert that the error listed `test.database`. It could only do
+// that because the fake provider was compiled into the CLI and therefore always
+// registered; with plugins loaded on demand, a command that never mentions `test`
+// has no reason to have loaded it.
+func TestExplainATypeWhoseProviderIsNotInstalledSaysWhereToPutIt(t *testing.T) {
 	out, err := explainOut(t, "explain", "aws.rds")
 	if err == nil {
-		t.Fatal("an unknown resource type must be an error")
+		t.Fatal("a type whose plugin is not installed must be an error")
+	}
+	msg := err.Error() + out
+	for _, want := range []string{"aws.rds", "infrata-plugin-aws", "--plugin-dir"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("the error does not mention %q, so a reader cannot act on it:\n%s", want, msg)
+		}
+	}
+}
+
+// TestExplainListsTheKnownTypesWhenTheProviderIsThere is the other half: a type the
+// loaded plugin does not offer must still list what it does.
+func TestExplainListsTheKnownTypesWhenTheProviderIsThere(t *testing.T) {
+	out, err := explainOut(t, "explain", "test.nosuchthing")
+	if err == nil {
+		t.Fatal("an unknown type from an installed plugin must be an error")
 	}
 	msg := err.Error() + out
 	if !strings.Contains(msg, "test.database") {

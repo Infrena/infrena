@@ -7,6 +7,8 @@ package config
 import (
 	"github.com/infrata/infrata/internal/modules/source"
 	"github.com/infrata/infrata/pkg/value"
+	"sort"
+	"strings"
 )
 
 // AttributeDecl is one configured attribute.
@@ -252,4 +254,76 @@ type ProjectDecl struct {
 	// wrong account.
 	Providers []ProviderDecl
 	Origin    value.Origin
+}
+
+// NeededPlugins names every provider plugin a project's declarations imply.
+//
+// TWO SOURCES, and both are the project's own configuration:
+//
+//   - every `plugin:` named in a `providers:` entry, which is the explicit form.
+//   - every resource type's PREFIX, which is the same statement made by using one.
+//     A plugin serves `<name>.*` and nothing else (PLAN.md §31.1), so a resource of
+//     type `aws.instance` can only be served by the plugin `aws`.
+//
+// The second source is what keeps `providers:` optional. Without it, every project
+// ever written would have to gain a block naming something a reader can already see.
+//
+// It lives here, beside the declarations it reads, because two callers need the
+// identical answer: compiler stage 4.5 loads these before resolving instances, and
+// internal/cli loads them for the commands that never compile at all. A second copy
+// of the rule would be a silent disagreement about which plugins a project uses.
+func (p *ProjectDecl) NeededPlugins() []string {
+	out, _ := p.neededPlugins()
+	return out
+}
+
+// PluginsNeededBy is NeededPlugins with the resource types that implied each, so a
+// diagnostic about a missing plugin can name what asked for it.
+func (p *ProjectDecl) PluginsNeededBy() map[string][]string {
+	_, by := p.neededPlugins()
+	return by
+}
+
+func (p *ProjectDecl) neededPlugins() ([]string, map[string][]string) {
+	seen := map[string]bool{}
+	by := map[string][]string{}
+	var out []string
+	add := func(name, reason string) {
+		if name == "" {
+			return
+		}
+		if !seen[name] {
+			seen[name] = true
+			out = append(out, name)
+		}
+		if reason != "" && !contains(by[name], reason) {
+			by[name] = append(by[name], reason)
+		}
+	}
+
+	for _, d := range p.Providers {
+		add(d.Plugin, "`plugin: "+d.Plugin+"`")
+	}
+	for _, r := range p.Resources {
+		prefix, _, ok := strings.Cut(r.Type, ".")
+		if !ok || prefix == "module" {
+			// `module.<name>` instantiates a module, not a provider resource (§11).
+			continue
+		}
+		add(prefix, r.Type)
+	}
+	sort.Strings(out)
+	for name := range by {
+		sort.Strings(by[name])
+	}
+	return out, by
+}
+
+func contains(haystack []string, needle string) bool {
+	for _, s := range haystack {
+		if s == needle {
+			return true
+		}
+	}
+	return false
 }

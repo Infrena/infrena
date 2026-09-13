@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/infrata/infrata/pkg/provider"
 	"github.com/infrata/infrata/pkg/value"
 )
 
@@ -12,7 +13,7 @@ import (
 // thing this plugin's configuration decides.
 func cloudPathOf(t *testing.T, dir, instance string, config map[string]value.Value) string {
 	t.Helper()
-	p, err := NewPlugin(dir).New(instance, config)
+	p, err := NewPlugin(dir).New(provider.Config{Instance: instance, Values: config})
 	if err != nil {
 		t.Fatalf("New(%q): %v", instance, err)
 	}
@@ -66,9 +67,9 @@ func TestTheImplicitInstanceKeepsTheHistoricalPath(t *testing.T) {
 // ignored means an instance silently sharing another's account, and the first sign of
 // it is a plan proposing to destroy resources somebody else owns.
 func TestAnUnknownConfigurationKeyIsRefused(t *testing.T) {
-	_, err := NewPlugin(t.TempDir()).New("main", map[string]value.Value{
+	_, err := NewPlugin(t.TempDir()).New(provider.Config{Instance: "main", Values: map[string]value.Value{
 		"clowd": value.String("other.json", value.SourceExplicit),
-	})
+	}})
 	if err == nil {
 		t.Fatal("an unknown configuration key must be refused")
 	}
@@ -82,9 +83,9 @@ func TestAnUnknownConfigurationKeyIsRefused(t *testing.T) {
 
 // TestACloudPathOfTheWrongKindIsRefused, rather than silently formatted into one.
 func TestACloudPathOfTheWrongKindIsRefused(t *testing.T) {
-	_, err := NewPlugin(t.TempDir()).New("main", map[string]value.Value{
+	_, err := NewPlugin(t.TempDir()).New(provider.Config{Instance: "main", Values: map[string]value.Value{
 		"cloud": value.Int(7, value.SourceExplicit),
-	})
+	}})
 	if err == nil {
 		t.Fatal("`cloud: 7` must be refused")
 	}
@@ -97,9 +98,9 @@ func TestACloudPathOfTheWrongKindIsRefused(t *testing.T) {
 // directory, so the instance would open a DIRECTORY and report an unhelpful I/O error
 // much later.
 func TestAnEmptyCloudPathIsRefused(t *testing.T) {
-	_, err := NewPlugin(t.TempDir()).New("main", map[string]value.Value{
+	_, err := NewPlugin(t.TempDir()).New(provider.Config{Instance: "main", Values: map[string]value.Value{
 		"cloud": value.String("", value.SourceExplicit),
-	})
+	}})
 	if err == nil {
 		t.Fatal("an empty `cloud:` must be refused")
 	}

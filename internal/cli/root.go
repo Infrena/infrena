@@ -26,6 +26,10 @@ type GlobalOptions struct {
 	Parallelism int
 	AutoApprove bool
 	Dir         string
+	// PluginDirs is --plugin-dir: where to look for provider plugin binaries,
+	// before every other location. Repeatable, highest precedence, so a plugin
+	// author can point at a freshly built binary without installing it.
+	PluginDirs []string
 }
 
 // NewRootCommand builds the command tree. It is a constructor rather than a
@@ -45,6 +49,8 @@ func NewRootCommand() *cobra.Command {
 	f.StringArrayVar(&opts.VarFiles, "var-file", nil,
 		"read variables from a YAML file, as if each entry had been passed with --var; repeatable, later files win")
 	f.BoolVar(&opts.Verbose, "verbose", false, "include provider-level detail in output")
+	f.StringArrayVar(&opts.PluginDirs, "plugin-dir", nil,
+		"where to look for provider plugins, before every other location (repeatable)")
 	f.StringVar(&opts.Output, "output", "", "write machine-readable output to this path")
 	f.IntVar(&opts.Parallelism, "parallelism", 10, "maximum concurrent operations")
 	f.BoolVar(&opts.AutoApprove, "auto-approve", false, "skip interactive approval")

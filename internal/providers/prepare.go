@@ -1,6 +1,7 @@
 package providers
 
 import (
+	"context"
 	"sort"
 	"strconv"
 	"strings"
@@ -22,9 +23,23 @@ import (
 // `cloud: ${path}` choose the file a provider opens, rather than merely resolving
 // to a string nothing reads.
 func Prepare(
-	decls []config.ProviderDecl, scope variables.Scope, reg *registry.Registry,
+	ctx context.Context, project *config.ProjectDecl,
+	scope variables.Scope, reg *registry.Registry,
 ) (Table, diag.Diagnostics) {
-	table, ds := Resolve(decls, scope)
+	decls := project.Providers
+	// LOAD FIRST, from what configuration says. `plugin: aws` in a `providers:`
+	// entry is the instruction to go and find infrata-plugin-aws; so is a resource
+	// of type `aws.instance` in a project that declares no `providers:` block at
+	// all. Nothing outside configuration names a plugin.
+	ds := load(ctx, project, reg)
+	if ds.HasErrors() {
+		// Resolving an instance of a plugin that could not be loaded would report
+		// its every attribute against a provider that does not exist.
+		return nil, ds
+	}
+
+	table, resolveDS := Resolve(decls, scope)
+	ds.Extend(resolveDS)
 	if ds.HasErrors() {
 		// Registering an instance whose configuration did not resolve would build
 		// a provider from values nobody chose. The diagnostics already name what
@@ -37,6 +52,87 @@ func Prepare(
 	}
 	ds.Extend(Register(table, reg))
 	return table, ds
+}
+
+// load brings in every plugin this project needs.
+//
+// Two sources, and both are configuration:
+//
+//   - every `plugin:` named in a `providers:` entry, which is the explicit form.
+//   - every resource type's prefix, which is the same statement made by using one.
+//     A plugin serves `<name>.*` and nothing else (§31.1), so a resource of type
+//     `aws.instance` can only be served by the plugin `aws` — and a project that
+//     configures nothing still needs it loaded.
+//
+// The second source is what keeps `providers:` optional. Without it every project
+// ever written would have to gain a block that says nothing a reader could not
+// already see, purely to name something.
+func load(ctx context.Context, project *config.ProjectDecl, reg *registry.Registry) diag.Diagnostics {
+	var ds diag.Diagnostics
+
+	wanted := map[string]value.Origin{}
+	for _, d := range project.Providers {
+		if _, seen := wanted[d.Plugin]; !seen {
+			wanted[d.Plugin] = d.Origin
+		}
+	}
+	names := project.NeededPlugins()
+	neededBy := project.PluginsNeededBy()
+
+	// TWO PASSES. Every plugin is attempted before anything is reported, so that a
+	// diagnostic about one that failed can list the types the others DID offer.
+	// Loading is alphabetical, and reporting inside the loop meant `aws` failing
+	// before `test` had loaded — so the message that most needed to say "here is what
+	// you could have meant" was the one that never could.
+	failures := map[string]error{}
+	for _, name := range names {
+		if err := reg.EnsurePlugin(ctx, name); err != nil {
+			failures[name] = err
+		}
+	}
+
+	for _, name := range names {
+		err, failed := failures[name]
+		if !failed {
+			continue
+		}
+		ds.Add(diag.Diagnostic{
+			Severity: diag.SeverityError,
+			// The implying type goes in the SUMMARY, not only the detail: a user did
+			// not necessarily type the plugin's name anywhere, so a summary naming
+			// only the plugin leaves them hunting for where they asked for it.
+			Summary: "the " + name + " plugin is not available" + neededBySummary(neededBy[name]),
+			Detail:  err.Error() + knownTypes(reg),
+			Action: "Install the plugin, or correct the name: a resource type's prefix is the " +
+				"plugin that serves it, so `" + name + ".…` needs the " + name + " plugin. " +
+				"`--verbose` reports where each plugin was loaded from.",
+			Origin: wanted[name],
+		})
+	}
+	return ds
+}
+
+// neededBySummary names what asked for a plugin, for the summary line.
+func neededBySummary(reasons []string) string {
+	if len(reasons) == 0 {
+		return ""
+	}
+	return ", and it is needed by " + strings.Join(reasons, ", ")
+}
+
+// knownTypes lists what the plugins that DID load offer.
+//
+// A missing plugin and a mistyped type are the same diagnostic from where the user
+// is sitting — `type: awz.instance` asks for a plugin called `awz`, and the honest
+// answer is that no such plugin exists. Which is unhelpful on its own: what they
+// need next is the list of types they could have meant.
+func knownTypes(reg *registry.Registry) string {
+	types := reg.Types()
+	if len(types) == 0 {
+		return ""
+	}
+	return "\n\nResource types available from the plugins that did load:\n  " +
+		strings.Join(types, "\n  ")
 }
 
 // Implicit is the instance table of a project with no `providers:` block.

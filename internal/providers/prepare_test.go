@@ -1,6 +1,7 @@
 package providers
 
 import (
+	"context"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -27,7 +28,7 @@ func pluginRegistry(t *testing.T, dir string) *registry.Registry {
 
 func rendered(t *testing.T, body string, reg *registry.Registry, scope variables.Scope) (Table, string) {
 	t.Helper()
-	table, ds := Prepare(decls(t, body), scope, reg)
+	table, ds := Prepare(context.Background(), project(t, body), scope, reg)
 	var sb strings.Builder
 	ds.Render(&sb)
 	return table, sb.String()
@@ -160,7 +161,7 @@ func (pl *permissivePlugin) Definitions() []*schema.ResourceDefinition {
 	}}
 }
 
-func (pl *permissivePlugin) New(string, map[string]value.Value) (provider.Provider, error) {
+func (pl *permissivePlugin) New(provider.Config) (provider.Provider, error) {
 	pl.built++
 	return testprovider.New("/dev/null"), nil
 }

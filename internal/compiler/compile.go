@@ -120,7 +120,7 @@ func Compile(files []config.File, reg *registry.Registry, opts Options) (Resolve
 	// This is also where the registry stops being schemas-only: Prepare constructs
 	// each instance's provider object from the values just resolved, which is the
 	// whole reason the plugin/provider split exists (PLAN.md §12.1).
-	table, provDiags := providers.Prepare(project.Providers, scope, reg)
+	table, provDiags := providers.Prepare(opts.Context(), project, scope, reg)
 	ds.Extend(provDiags)
 	if provDiags.HasErrors() {
 		// An instance that could not be configured cannot be dispatched to, and

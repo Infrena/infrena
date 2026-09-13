@@ -63,7 +63,8 @@ func newRefreshCommand(opts *GlobalOptions) *cobra.Command {
 			}
 			defer closeReport()
 
-			reg, _, regDiags := stateOnlyRegistry(opts.Dir)
+			reg, _, regDiags, closePlugins := stateOnlyRegistry(opts)
+			defer closePlugins()
 			if regDiags.HasErrors() {
 				regDiags.Render(cmd.ErrOrStderr())
 				return errProviderInstances
@@ -74,6 +75,11 @@ func newRefreshCommand(opts *GlobalOptions) *cobra.Command {
 				st, err := backend.Get(ctx, environment)
 				if err != nil {
 					return finishRefresh(cmd.ErrOrStderr(), rw, report.RefreshResult{}, err)
+				}
+				// STATE names the plugins here: refresh reads no configuration at all.
+				if stateDiags := ensureStateProviders(reg, st); stateDiags.HasErrors() {
+					stateDiags.Render(cmd.ErrOrStderr())
+					return finishRefresh(cmd.ErrOrStderr(), rw, report.RefreshResult{}, errProviderInstances)
 				}
 
 				var onObservation func(refresh.Observation)

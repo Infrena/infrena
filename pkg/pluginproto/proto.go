@@ -142,8 +142,17 @@ type SchemasResult struct {
 // dropped by a plugin that forgot to carry it forward, and losing Lifecycle makes
 // a prevent_destroy guard vanish silently.
 type ResourceParams struct {
-	Handle     string                 `json:"handle"`
-	Type       string                 `json:"type"`
+	Handle string `json:"handle"`
+	Type   string `json:"type"`
+	// Address is the name infrata knows this resource by.
+	//
+	// SENT, unlike the rest of the bookkeeping, because it is an INPUT rather than
+	// something the plugin reports: a provider legitimately needs a name — to tag
+	// the resource, to name it in the remote system, to put it in an error message.
+	// The distinction the trust rules draw is between what the host sends and what
+	// it believes coming back: the address on a RESULT is ignored and re-attached
+	// from what the host already knows.
+	Address    string                 `json:"address,omitempty"`
 	ProviderID string                 `json:"provider_id,omitempty"`
 	Attributes map[string]value.Value `json:"attributes,omitempty"`
 }

@@ -19,10 +19,10 @@ import (
 	"os"
 	"sync"
 
+	"github.com/infrata/infrata/pkg/address"
 	"github.com/infrata/infrata/pkg/pluginproto"
 	"github.com/infrata/infrata/pkg/provider"
 	"github.com/infrata/infrata/pkg/resource"
-	"github.com/infrata/infrata/pkg/value"
 )
 
 // Main is the whole of a plugin's main(). It never returns.
@@ -172,7 +172,11 @@ func (s *server) dispatch(ctx context.Context, req pluginproto.Request) (any, er
 		if err := pluginproto.Decode(req.Method, req.Params, &p); err != nil {
 			return nil, err
 		}
-		prov, err := s.plugin.New(p.Instance, withDir(p.Config, p.Dir))
+		prov, err := s.plugin.New(provider.Config{
+			Instance:   p.Instance,
+			Values:     p.Config,
+			ProjectDir: p.Dir,
+		})
 		if err != nil {
 			return nil, err
 		}
@@ -343,25 +347,9 @@ func versionOf(p provider.Plugin) string {
 	return "0.0.0"
 }
 
-// withDir hands the project directory to the plugin alongside its configuration.
-//
-// Under a reserved key rather than as a separate argument to provider.Plugin.New,
-// so that the in-process interface a plugin author writes against does not grow a
-// parameter that only exists because of the transport.
-func withDir(config map[string]value.Value, dir string) map[string]value.Value {
-	if dir == "" {
-		return config
-	}
-	out := make(map[string]value.Value, len(config)+1)
-	for k, v := range config {
-		out[k] = v
-	}
-	out[provider.ConfigKeyProjectDir] = value.String(dir, value.SourceProvider)
-	return out
-}
-
 func stateOf(p pluginproto.ResourceParams) *resource.ResourceState {
 	return &resource.ResourceState{
+		Address:    address.Address{Name: p.Address},
 		Type:       p.Type,
 		ProviderID: p.ProviderID,
 		Attributes: p.Attributes,
@@ -370,8 +358,9 @@ func stateOf(p pluginproto.ResourceParams) *resource.ResourceState {
 
 func desiredOf(p pluginproto.ResourceParams) *resource.DesiredResource {
 	return &resource.DesiredResource{
-		Type:  p.Type,
-		Attrs: p.Attributes,
+		Address: address.Address{Name: p.Address},
+		Type:    p.Type,
+		Attrs:   p.Attributes,
 	}
 }
 

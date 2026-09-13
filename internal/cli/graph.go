@@ -38,7 +38,9 @@ func newGraphCommand(opts *GlobalOptions) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			cfg, ds := compiler.Compile(files, buildRegistry(opts.Dir), copts)
+			reg, closePlugins := buildRegistry(opts)
+			defer closePlugins()
+			cfg, ds := compiler.Compile(files, reg, copts)
 			ds.Extend(cds)
 			if ds.HasErrors() {
 				ds.Render(cmd.ErrOrStderr())

@@ -115,7 +115,7 @@ func TestCompileStopsAfterSchemaErrorsBeforeGraphValidation(t *testing.T) {
 project: myapp
 resources:
   bogus:
-    type: not.a.real.type
+    type: test.not_a_real_type
   guarded:
     type: test.network
     cidr: 10.0.0.0/16
@@ -138,14 +138,18 @@ resources:
 	}
 }
 
+// TestCompileAccumulatesDiagnosticsWithinAStage. Both types share the `test` prefix
+// deliberately: a type whose prefix names no PLUGIN is reported at stage 4.5 instead
+// — "the nope plugin is not available", once, which is the better diagnostic but not
+// the one this test is about.
 func TestCompileAccumulatesDiagnosticsWithinAStage(t *testing.T) {
 	files := loadFiles(t, `
 project: myapp
 resources:
   a:
-    type: nope.one
+    type: test.nope_one
   b:
-    type: nope.two
+    type: test.nope_two
 `)
 	_, ds := Compile(files, testRegistry(t), Options{Environment: "dev"})
 	if len(ds) < 2 {

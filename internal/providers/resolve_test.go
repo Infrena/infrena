@@ -22,6 +22,13 @@ func writeFile(t *testing.T, dir, body string) {
 
 func decls(t *testing.T, body string) []config.ProviderDecl {
 	t.Helper()
+	return project(t, body).Providers
+}
+
+// project decodes a one-file fixture, failing if it does not decode: a fixture that
+// cannot be read reaches no resolution at all, so the test would assert nothing.
+func project(t *testing.T, body string) *config.ProjectDecl {
+	t.Helper()
 	dir := t.TempDir()
 	writeFile(t, dir, body)
 	files, err := config.Load(dir)
@@ -32,7 +39,7 @@ func decls(t *testing.T, body string) []config.ProviderDecl {
 	if ds.HasErrors() {
 		t.Fatalf("the fixture does not decode, so no resolution is reached: %+v", ds)
 	}
-	return decl.Providers
+	return decl
 }
 
 func scopeWith(pairs map[string]string) variables.Scope {

@@ -26,7 +26,27 @@ func newExplainCommand(opts *GlobalOptions) *cobra.Command {
 		Short:         "Describe a resource type: its attributes, requirements and capabilities",
 		Args:          cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			reg := buildRegistry(opts.Dir)
+			reg, closePlugins := buildRegistry(opts)
+			defer closePlugins()
+
+			// THE TYPE NAMES THE PLUGIN. A plugin serves `<name>.*` and nothing
+			// else, so `explain aws.instance` is itself the instruction to load
+			// infrata-plugin-aws — and explain therefore works with no project and
+			// no configuration at all, which is most of what it is for.
+			//
+			// The project's own plugins are loaded too, so `explain` in a project
+			// can list everything available there when the type is wrong.
+			ds := loadConfiguredPlugins(reg, opts.Dir)
+			if prefix, _, ok := strings.Cut(args[0], "."); ok && prefix != "" {
+				if err := reg.EnsurePlugin(cmd.Context(), prefix); err != nil && len(reg.Types()) == 0 {
+					// Only when nothing else loaded either: a project that uses
+					// other plugins should hear what its types ARE, rather than a
+					// failure about one it does not use.
+					return fmt.Errorf("cannot describe %q: %w", args[0], err)
+				}
+			}
+			_ = ds
+
 			def, ok := reg.Definition(args[0])
 			if !ok {
 				// Listing what DOES exist is the difference between an error a

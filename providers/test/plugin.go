@@ -49,24 +49,32 @@ const cloudKey = "cloud"
 // instances are for. So an instance that names no file gets its OWN, named after
 // itself — except the implicit instance, which keeps the historical path so a
 // project that predates `providers:` finds the cloud it already has.
-func (pl *Plugin) New(instance string, config map[string]value.Value) (provider.Provider, error) {
-	if err := rejectUnknownKeys(config); err != nil {
+func (pl *Plugin) New(cfg provider.Config) (provider.Provider, error) {
+	if err := rejectUnknownKeys(cfg.Values); err != nil {
 		return nil, err
 	}
 
-	path := defaultCloudPath(instance)
-	if v, declared := config[cloudKey]; declared {
+	// The project directory the host supplied wins over the one this plugin was
+	// constructed with: in process they are the same, and over the protocol only
+	// the host's is right.
+	dir := pl.dir
+	if cfg.ProjectDir != "" {
+		dir = cfg.ProjectDir
+	}
+
+	path := defaultCloudPath(cfg.Instance)
+	if v, declared := cfg.Value(cloudKey); declared {
 		text, ok := v.AsString()
 		if !ok {
 			return nil, fmt.Errorf("`cloud` must be a path to a JSON file, got %s", v.Kind)
 		}
 		if text == "" {
 			return nil, fmt.Errorf("`cloud` is empty: give the path to the JSON file holding "+
-				"this instance's fake infrastructure, or omit the key to get %s", defaultCloudPath(instance))
+				"this instance's fake infrastructure, or omit the key to get %s", defaultCloudPath(cfg.Instance))
 		}
 		path = text
 	}
-	return New(filepath.Join(pl.dir, path)), nil
+	return New(filepath.Join(dir, path)), nil
 }
 
 // defaultCloudPath is where an instance's world lives when it names no file.

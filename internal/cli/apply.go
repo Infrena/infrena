@@ -67,7 +67,8 @@ func newApplyCommand(opts *GlobalOptions) *cobra.Command {
 				return finishApply(cmd.ErrOrStderr(), rw, report.ApplyResult{}, err)
 			}
 
-			reg := buildRegistry(opts.Dir)
+			reg, closePlugins := buildRegistry(opts)
+			defer closePlugins()
 			// apply is permitted to change the project directory, so it is
 			// where a pin first gets recorded. validate and plan only compare.
 			copts.RecordLocks = true
@@ -80,8 +81,13 @@ func newApplyCommand(opts *GlobalOptions) *cobra.Command {
 				return finishApply(cmd.ErrOrStderr(), rw, report.ApplyResult{}, stErr)
 			}
 
-			var cfg compiler.ResolvedConfig
+			// STATE names plugins too, and for the case invariant 1 is about: a
+			// resource removed from configuration is still in state, and the plugin
+			// that manages it has to be loaded for the destroy to be planned at all.
 			ds := cds
+			ds.Extend(ensureStateProviders(reg, st0))
+
+			var cfg compiler.ResolvedConfig
 			teardown := false
 			switch disp, declared := dispositionOf(files, environment, st0); disp {
 			case unknownEnvironment:

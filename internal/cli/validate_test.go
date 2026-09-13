@@ -36,21 +36,32 @@ resources:
     engine: postgres
     network: ${network.id}
 `)
-	ds := validateProject(dir, buildRegistry(dir), compiler.Options{})
+	ds := validateProject(dir, mustRegistry(t, dir), compiler.Options{})
 	if ds.HasErrors() {
 		t.Fatalf("valid project reported errors: %+v", ds)
 	}
 }
 
+// TestValidateRejectsUnknownResourceType, where "unknown" means a type whose PLUGIN
+// is not installed — the ordinary case, since a plugin serves `<name>.*` and nothing
+// else.
+//
+// The fixture also declares a resource of a type that DOES load, because that is
+// what makes the "known types" half of the diagnostic possible: nothing can list the
+// types of a plugin it could not load, so a project using only the missing plugin has
+// nothing to suggest.
 func TestValidateRejectsUnknownResourceType(t *testing.T) {
 	dir := projectDir(t, `
 project: myapp
 resources:
+  network:
+    type: test.network
+    cidr: 10.0.0.0/16
   database:
     type: aws.rds
     engine: postgres
 `)
-	ds := validateProject(dir, buildRegistry(dir), compiler.Options{})
+	ds := validateProject(dir, mustRegistry(t, dir), compiler.Options{})
 	if !ds.HasErrors() {
 		t.Fatal("an unregistered resource type must be an error")
 	}
@@ -72,7 +83,7 @@ resources:
     engine: postgres
     nonsense: true
 `)
-	ds := validateProject(dir, buildRegistry(dir), compiler.Options{})
+	ds := validateProject(dir, mustRegistry(t, dir), compiler.Options{})
 	if !ds.HasErrors() {
 		t.Fatal("an attribute the schema does not define must be an error")
 	}
@@ -90,7 +101,7 @@ resources:
     engine: postgres
     endpoint: nope.example.com
 `)
-	ds := validateProject(dir, buildRegistry(dir), compiler.Options{})
+	ds := validateProject(dir, mustRegistry(t, dir), compiler.Options{})
 	if !ds.HasErrors() {
 		t.Fatal("configuration must not set a computed attribute")
 	}
@@ -140,18 +151,22 @@ func TestFormatValueSortsMapKeys(t *testing.T) {
 	}
 }
 
+// TestValidateReportsEveryProblemAtOnce. All three share the `test` prefix
+// deliberately: a type whose prefix names no plugin is reported once, at stage 4.5,
+// as "that plugin is not available" — which is the better diagnostic for that
+// mistake, and not the accumulation this test is about.
 func TestValidateReportsEveryProblemAtOnce(t *testing.T) {
 	dir := projectDir(t, `
 project: myapp
 resources:
   a:
-    type: nope.one
+    type: test.nope_one
   b:
-    type: nope.two
+    type: test.nope_two
   c:
-    type: nope.three
+    type: test.nope_three
 `)
-	ds := validateProject(dir, buildRegistry(dir), compiler.Options{})
+	ds := validateProject(dir, mustRegistry(t, dir), compiler.Options{})
 	if len(ds) < 3 {
 		t.Errorf("got %d diagnostics, want at least 3", len(ds))
 	}
@@ -188,7 +203,7 @@ resources:
     engine: postgres
     nonexistent: 1
 `)
-	ds := validateProject(dir, buildRegistry(dir), compiler.Options{})
+	ds := validateProject(dir, mustRegistry(t, dir), compiler.Options{})
 	if !ds.HasErrors() {
 		t.Fatal("an unknown attribute must be an error")
 	}
@@ -219,7 +234,7 @@ resources:
     type: test.database
     engine: postgres
 `)
-	ds := validateProject(dir, buildRegistry(dir), compiler.Options{})
+	ds := validateProject(dir, mustRegistry(t, dir), compiler.Options{})
 	if !ds.HasErrors() {
 		t.Fatal("a database with no network anywhere in the project must be an error")
 	}
@@ -316,12 +331,12 @@ resources:
 `)
 
 	// Without the variable, the reference is genuinely undefined.
-	if ds := validateProject(dir, buildRegistry(dir), compiler.Options{}); !ds.HasErrors() {
+	if ds := validateProject(dir, mustRegistry(t, dir), compiler.Options{}); !ds.HasErrors() {
 		t.Fatal("an undefined variable must still be an error when no --var supplies it")
 	}
 
 	// With it, the configuration is valid — the same answer plan gives.
-	ds := validateProject(dir, buildRegistry(dir), compiler.Options{Vars: map[string]string{"cidr": "10.0.0.0/16"}})
+	ds := validateProject(dir, mustRegistry(t, dir), compiler.Options{Vars: map[string]string{"cidr": "10.0.0.0/16"}})
 	if ds.HasErrors() {
 		t.Errorf("--var must satisfy the reference, as it does for plan:\n%s", renderToString(ds))
 	}

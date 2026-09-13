@@ -12,17 +12,39 @@ import (
 	"github.com/infrata/infrata/pkg/value"
 )
 
-// ConfigKeyProjectDir is the configuration key carrying the project directory.
+// Config is everything a plugin is told when it configures one instance of itself.
 //
-// A plugin is a separate process started before any configuration is read, so it
-// cannot be handed the directory at construction the way an in-process provider
-// was. A relative path in a plugin's own configuration — the fake provider's
-// `cloud:`, say — has to resolve against the PROJECT, not against whatever working
-// directory the plugin happened to inherit, so the host supplies it here.
+// A STRUCT rather than a bag of arguments, because a plugin built against an older
+// SDK must keep compiling when this grows: a new field is additive, a new parameter
+// is not, and plugins are compiled by other people.
 //
-// Reserved: a plugin must not accept a configuration key of this name from a
-// user, and the host overwrites it if one appears.
-const ConfigKeyProjectDir = "infrata:project_dir"
+// It also keeps ProjectDir out of Values. The directory is not part of anybody's
+// configuration — it is context the host supplies — and carrying it as a reserved
+// key meant every plugin that validates its own keys had to know to skip it. The
+// fake provider did not, and refused its own configuration.
+type Config struct {
+	// Instance is the name the configuration gave this instance.
+	//
+	// A plugin whose configuration is entirely optional still needs it to keep two
+	// instances apart: the fake provider's cloud file is named after the instance,
+	// so two undeclared instances are two accounts rather than two names for one.
+	Instance string
+
+	// Values is the instance's own configuration, resolved. Nothing reserved
+	// appears here; every key came from the user.
+	Values map[string]value.Value
+
+	// ProjectDir is the project directory, for resolving a relative path a user
+	// wrote. It is not the plugin's working directory, which is inherited from
+	// infrata and is not where the project is.
+	ProjectDir string
+}
+
+// Value returns one configuration value, if the user supplied it.
+func (c Config) Value(key string) (value.Value, bool) {
+	v, ok := c.Values[key]
+	return v, ok
+}
 
 // ErrNotImplemented is returned by capabilities a provider does not offer.
 var ErrNotImplemented = errors.New("not implemented")
@@ -72,19 +94,11 @@ type Plugin interface {
 	Definitions() []*schema.ResourceDefinition
 	// New constructs one instance from its resolved configuration.
 	//
-	// instance is the name the configuration gave this instance, which the engine
-	// otherwise keeps to itself — a provider object has never needed to know
-	// which instance of itself it is, and still does not for any operation. It is
-	// passed because a plugin whose configuration is entirely optional must still
-	// keep two instances APART: the fake provider's `cloud:` defaults to a file
-	// named after the instance, so two undeclared instances are two accounts
-	// rather than two names for one. A plugin with required configuration can
-	// ignore it.
-	//
 	// An error here is a configuration error the user can act on — a missing
 	// credential, an unreadable path, a key the plugin does not accept — not a
-	// programming error.
-	New(instance string, config map[string]value.Value) (Provider, error)
+	// programming error. FAIL CLOSED on a key you do not understand: a misspelled
+	// key silently ignored means an instance quietly sharing another's account.
+	New(cfg Config) (Provider, error)
 }
 
 // Provider is the boundary between the infra core and external systems it manages.

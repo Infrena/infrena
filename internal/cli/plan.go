@@ -57,7 +57,8 @@ func newPlanCommand(opts *GlobalOptions) *cobra.Command {
 				return err
 			}
 
-			reg := buildRegistry(opts.Dir)
+			reg, closePlugins := buildRegistry(opts)
+			defer closePlugins()
 
 			// State is read BEFORE compiling, because §6.1's rule needs it: an
 			// environment is reachable if it is declared OR it has state.
@@ -66,8 +67,13 @@ func newPlanCommand(opts *GlobalOptions) *cobra.Command {
 				return err
 			}
 
-			var cfg compiler.ResolvedConfig
+			// STATE names plugins too, and for the case invariant 1 is about: a
+			// resource removed from configuration is still in state, and the plugin
+			// that manages it has to be loaded for the destroy to be planned at all.
 			ds := cds
+			ds.Extend(ensureStateProviders(reg, st))
+
+			var cfg compiler.ResolvedConfig
 			switch disp, declared := dispositionOf(files, environment, st); disp {
 			case unknownEnvironment:
 				return unknownEnvironmentError(environment, declared)

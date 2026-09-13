@@ -4,6 +4,7 @@
 package compiler
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -43,8 +44,26 @@ type Options struct {
 	Environment string
 	Region      string
 	Account     string
-	Vars        map[string]string      // from --var
-	FileVars    map[string]value.Value // from --var-file
+
+	// Ctx bounds plugin startup. Compilation itself is pure and never blocks, but
+	// stage 4.5 launches provider plugins, and a plugin that never answers must be
+	// interruptible by the same Ctrl-C that stops everything else.
+	//
+	// A context in a struct is usually a mistake. It is here because Options is the
+	// single place the CLI assembles what compilation needs, and threading a
+	// parameter through eight stages that do not use it would put it in every
+	// signature to be used by one.
+	Ctx      context.Context
+	Vars     map[string]string      // from --var
+	FileVars map[string]value.Value // from --var-file
+}
+
+// Context is Options.Ctx, or Background when the caller set none.
+func (o Options) Context() context.Context {
+	if o.Ctx != nil {
+		return o.Ctx
+	}
+	return context.Background()
 }
 
 // Get returns one resolved resource.

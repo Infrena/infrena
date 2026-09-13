@@ -46,7 +46,10 @@ func newImportCommand(opts *GlobalOptions) *cobra.Command {
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			environment := args[0]
-			reg, tbl, regDiags := stateOnlyRegistry(opts.Dir)
+			// The same scope discovery has: import adopts what discovery found, so
+			// it must be able to ask the same plugins.
+			reg, tbl, regDiags, closePlugins := discoveryRegistry(opts)
+			defer closePlugins()
 			if regDiags.HasErrors() {
 				regDiags.Render(cmd.ErrOrStderr())
 				return errProviderInstances

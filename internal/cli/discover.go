@@ -32,7 +32,8 @@ func newDiscoverCommand(opts *GlobalOptions) *cobra.Command {
 			"resource types to narrow the question.\n\nThe `name` column is what `infrata import` " +
 			"would call each resource, so a collision is visible here rather than after the fact.",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			reg, _, regDiags := stateOnlyRegistry(opts.Dir)
+			reg, _, regDiags, closePlugins := discoveryRegistry(opts)
+			defer closePlugins()
 			if regDiags.HasErrors() {
 				regDiags.Render(cmd.ErrOrStderr())
 				return errProviderInstances

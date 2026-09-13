@@ -38,7 +38,8 @@ func newExportCommand(opts *GlobalOptions) *cobra.Command {
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			environment := args[0]
-			reg := buildRegistry(opts.Dir)
+			reg, closePlugins := buildRegistry(opts)
+			defer closePlugins()
 			backend := backendFor(opts.Dir)
 
 			// No lock. Export only reads, and taking one would make an audit

@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/infrata/infrata/internal/registry"
+	"github.com/infrata/infrata/pkg/address"
 	"github.com/infrata/infrata/pkg/pluginproto"
 	"github.com/infrata/infrata/pkg/provider"
 	"github.com/infrata/infrata/pkg/resource"
@@ -100,27 +101,19 @@ func (p *Plugin) loadSchemas(ctx context.Context) error {
 }
 
 // New configures one instance and returns it as a provider.
-func (p *Plugin) New(instance string, config map[string]value.Value) (provider.Provider, error) {
-	// Reserved: a user's own key of this name must not reach the plugin as though
-	// infrata had sent it, or a configuration file could tell a plugin its project
-	// lives somewhere else.
-	clean := make(map[string]value.Value, len(config))
-	for k, v := range config {
-		if k != provider.ConfigKeyProjectDir {
-			clean[k] = v
-		}
-	}
-
+func (p *Plugin) New(cfg provider.Config) (provider.Provider, error) {
 	var result pluginproto.ConfigureResult
 	err := p.client.call(context.Background(), pluginproto.MethodConfigure, pluginproto.ConfigureParams{
-		Instance: instance,
-		Config:   clean,
-		Dir:      p.dir,
+		Instance: cfg.Instance,
+		Config:   cfg.Values,
+		// The host's own, not the caller's. ProjectDir is context infrata supplies,
+		// so a configuration file cannot tell a plugin its project lives elsewhere.
+		Dir: p.dir,
 	}, &result)
 	if err != nil {
 		return nil, err
 	}
-	return &remoteProvider{plugin: p, handle: result.Handle, instance: instance}, nil
+	return &remoteProvider{plugin: p, handle: result.Handle, instance: cfg.Instance}, nil
 }
 
 // remoteProvider is one configured instance living in a plugin process.
@@ -162,7 +155,7 @@ func (r *remoteProvider) ClassifyError(err error) provider.Retryability {
 // losing Lifecycle makes a prevent_destroy guard vanish silently.
 func (r *remoteProvider) Read(ctx context.Context, current *resource.ResourceState) (*resource.ResourceState, error) {
 	var result pluginproto.ResourceResult
-	err := r.plugin.client.call(ctx, pluginproto.MethodRead, r.params(current.Type, current.ProviderID, current.Attributes), &result)
+	err := r.plugin.client.call(ctx, pluginproto.MethodRead, r.params(current.Address, current.Type, current.ProviderID, current.Attributes), &result)
 	if err != nil {
 		return nil, err
 	}
@@ -174,22 +167,33 @@ func (r *remoteProvider) Read(ctx context.Context, current *resource.ResourceSta
 
 func (r *remoteProvider) Create(ctx context.Context, desired *resource.DesiredResource) (*resource.ResourceState, error) {
 	var result pluginproto.ResourceResult
-	err := r.plugin.client.call(ctx, pluginproto.MethodCreate, r.params(desired.Type, "", desired.Attrs), &result)
+	err := r.plugin.client.call(ctx, pluginproto.MethodCreate, r.params(desired.Address, desired.Type, "", desired.Attrs), &result)
 	if err != nil {
 		return nil, err
 	}
 	if result.Absent {
 		return nil, r.nothingHappened("create", desired.Type)
 	}
-	return r.rebuild(desired.Type, result, nil)
+	// A create has no PRIOR state to re-attach bookkeeping from, so the desired
+	// resource is where it comes from. The ADDRESS is the load-bearing part: a
+	// resource state with no address is dropped by state.Set, so the run reports
+	// "0 applied" for an operation whose provider really did create something.
+	// internal/cli's apply tests caught exactly that.
+	//
+	// Lifecycle is deliberately NOT taken from desired here: the executor stamps it
+	// onto the returned state from the plan, which is the one place that knows what
+	// the configuration asked for.
+	return r.rebuild(desired.Type, result, &resource.ResourceState{
+		Address: desired.Address,
+	})
 }
 
 func (r *remoteProvider) Update(ctx context.Context, current *resource.ResourceState, desired *resource.DesiredResource) (*resource.ResourceState, error) {
 	var result pluginproto.ResourceResult
 	err := r.plugin.client.call(ctx, pluginproto.MethodUpdate, pluginproto.UpdateParams{
 		Handle:  r.handle,
-		Current: r.params(current.Type, current.ProviderID, current.Attributes),
-		Desired: r.params(desired.Type, current.ProviderID, desired.Attrs),
+		Current: r.params(current.Address, current.Type, current.ProviderID, current.Attributes),
+		Desired: r.params(desired.Address, desired.Type, current.ProviderID, desired.Attrs),
 	}, &result)
 	if err != nil {
 		return nil, err
@@ -202,7 +206,7 @@ func (r *remoteProvider) Update(ctx context.Context, current *resource.ResourceS
 
 func (r *remoteProvider) Delete(ctx context.Context, current *resource.ResourceState) error {
 	return r.plugin.client.call(ctx, pluginproto.MethodDelete,
-		r.params(current.Type, current.ProviderID, current.Attributes), nil)
+		r.params(current.Address, current.Type, current.ProviderID, current.Attributes), nil)
 }
 
 func (r *remoteProvider) Discover(ctx context.Context, req provider.DiscoverRequest) ([]provider.DiscoveredResource, error) {
@@ -245,10 +249,11 @@ func (r *remoteProvider) Import(ctx context.Context, resourceType, id string) (*
 	return r.rebuild(resourceType, result, nil)
 }
 
-func (r *remoteProvider) params(resourceType, providerID string, attrs map[string]value.Value) pluginproto.ResourceParams {
+func (r *remoteProvider) params(addr address.Address, resourceType, providerID string, attrs map[string]value.Value) pluginproto.ResourceParams {
 	return pluginproto.ResourceParams{
 		Handle:     r.handle,
 		Type:       resourceType,
+		Address:    addr.String(),
 		ProviderID: providerID,
 		Attributes: attrs,
 	}
@@ -288,13 +293,22 @@ func (r *remoteProvider) rebuild(resourceType string, result pluginproto.Resourc
 		Type:       resourceType,
 		ProviderID: result.ProviderID,
 		Attributes: attrs,
+		// UNCONDITIONALLY, because this object IS one instance and knows which:
+		// a plugin cannot know which instance of itself it is, and the alternative
+		// is relying on a later caller to stamp it. The executor does stamp it for
+		// create and update, but `import` writes straight to state — so a resource
+		// adopted into a project came back with no instance at all, and the next
+		// plan could not find a provider for it.
+		Provider: r.instance,
 	}
 	if carry != nil {
 		// The bookkeeping the plugin was never sent and therefore cannot have
 		// lost. Dependencies is the only source of destroy-ordering edges once a
 		// resource leaves configuration (§14); Lifecycle is prevent_destroy.
 		out.Address = carry.Address
-		out.Provider = carry.Provider
+		if carry.Provider != "" {
+			out.Provider = carry.Provider
+		}
 		out.Dependencies = carry.Dependencies
 		out.Lifecycle = carry.Lifecycle
 		out.CreatedAt = carry.CreatedAt

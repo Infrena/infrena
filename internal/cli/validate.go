@@ -58,7 +58,8 @@ func newValidateCommand(opts *GlobalOptions) *cobra.Command {
 
 			envs, ds := environmentsToValidate(opts.Dir, args)
 			if !ds.HasErrors() {
-				reg := buildRegistry(opts.Dir)
+				reg, closePlugins := buildRegistry(opts)
+				defer closePlugins()
 				perEnv := make([]diag.Diagnostics, len(envs))
 				for i, env := range envs {
 					copts, cds := compilerOptions(opts, env)

@@ -4,6 +4,7 @@
 package registry
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"strings"
@@ -42,6 +43,55 @@ type Registry struct {
 	// and counted but cannot construct anything, which is why RegisterInstance
 	// says so rather than panicking on a nil.
 	plugins map[string]provider.Plugin
+
+	// loader supplies a plugin the registry has not been given.
+	//
+	// This is what makes plugin loading follow from CONFIGURATION rather than from a
+	// list somebody maintains: `plugin: aws` in a `providers:` block, or a resource
+	// of type `aws.instance`, is itself the instruction to go and find
+	// infrata-plugin-aws. Nothing in the CLI names a plugin.
+	//
+	// nil in tests that hand over their own providers directly, which is why every
+	// use of it is guarded rather than assumed.
+	loader Loader
+}
+
+// Loader finds and starts a plugin by name. internal/pluginhost implements it.
+//
+// An interface HERE rather than a dependency on internal/pluginhost, because the
+// registry is the low-level map every other package already imports and a cycle
+// through the host would be immediate.
+type Loader interface {
+	Load(ctx context.Context, name string) (provider.Plugin, error)
+}
+
+// SetLoader supplies the loader used for plugins not already registered.
+func (r *Registry) SetLoader(l Loader) { r.loader = l }
+
+// EnsurePlugin registers the named plugin, loading it if it is not here yet.
+//
+// Idempotent: a second call for a plugin already registered does nothing, which is
+// what lets every caller that needs a plugin simply say so without first checking.
+func (r *Registry) EnsurePlugin(ctx context.Context, name string) error {
+	if _, known := r.plugins[name]; known {
+		// Known AT ALL is enough, including known only by name because a caller
+		// handed over a constructed provider: that caller has already supplied the
+		// schemas, and loading a binary over the top would replace a provider
+		// somebody chose deliberately. Same rule as internal/providers.Register.
+		return nil
+	}
+	if r.loader == nil {
+		return fmt.Errorf("no plugin named %s is registered, and there is no way to load one", name)
+	}
+	p, err := r.loader.Load(ctx, name)
+	if err != nil {
+		return err
+	}
+	// A name registered by a CONSTRUCTED provider is nil here; replacing it with a
+	// real factory is an upgrade, not a conflict, so RegisterPlugin's duplicate
+	// check is deliberately not reached.
+	delete(r.plugins, name)
+	return r.RegisterPlugin(p)
 }
 
 // New returns an empty registry.
@@ -139,7 +189,7 @@ func (r *Registry) RegisterInstance(instance, plugin string, config map[string]v
 		return fmt.Errorf("plugin %s was registered as a constructed provider, so it cannot "+
 			"build a further instance", plugin)
 	}
-	built, err := p.New(instance, config)
+	built, err := p.New(provider.Config{Instance: instance, Values: config})
 	if err != nil {
 		return err
 	}

@@ -28,10 +28,10 @@ type stubPlugin struct {
 
 func (p *stubPlugin) Name() string                              { return p.name }
 func (p *stubPlugin) Definitions() []*schema.ResourceDefinition { return p.defs }
-func (p *stubPlugin) New(instance string, config map[string]value.Value) (provider.Provider, error) {
+func (p *stubPlugin) New(cfg provider.Config) (provider.Provider, error) {
 	p.calls++
-	p.gotInstance = instance
-	p.gotConfig = config
+	p.gotInstance = cfg.Instance
+	p.gotConfig = cfg.Values
 	if p.err != nil {
 		return nil, p.err
 	}

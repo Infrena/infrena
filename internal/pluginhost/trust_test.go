@@ -67,7 +67,7 @@ func (p *badPlugin) Definitions() []*schema.ResourceDefinition {
 	}}
 }
 
-func (p *badPlugin) New(string, map[string]value.Value) (provider.Provider, error) {
+func (p *badPlugin) New(provider.Config) (provider.Provider, error) {
 	return &badProvider{p: p}, nil
 }
 
@@ -138,7 +138,7 @@ func connect(t *testing.T, p provider.Plugin) (*Plugin, provider.Provider) {
 		t.Fatalf("InProcess: %v", err)
 	}
 	t.Cleanup(func() { _ = host.Close() })
-	prov, err := host.New("main", nil)
+	prov, err := host.New(provider.Config{Instance: "main"})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -403,7 +403,7 @@ func (p *reservedPlugin) Definitions() []*schema.ResourceDefinition {
 		Capabilities: schema.Capabilities{Create: true, Read: true, Delete: true},
 	}}
 }
-func (p *reservedPlugin) New(string, map[string]value.Value) (provider.Provider, error) {
+func (p *reservedPlugin) New(provider.Config) (provider.Provider, error) {
 	return &badProvider{p: &badPlugin{}}, nil
 }
 
@@ -444,8 +444,11 @@ func TestGarbageOnTheStreamFailsLoudlyRatherThanHanging(t *testing.T) {
 			return
 		}
 		// Serve the schemas request so the connection completes, then corrupt it.
+		// A kind is a NAME on the wire, never a number: Kind is an iota, so a
+		// constant inserted into that list would silently reinterpret every schema
+		// ever sent (pkg/schema/wire.go).
 		schemas := `{"id":1,"result":{"definitions":[{"Type":"bad.thing",` +
-			`"Attributes":{"name":{"Kind":1,"Required":true}},` +
+			`"Attributes":{"name":{"kind":"string","required":true}},` +
 			`"Capabilities":{"Create":true,"Read":true,"Delete":true}}]}}` + "\n"
 		if _, err := pluginWriter.Write([]byte(schemas)); err != nil {
 			return
