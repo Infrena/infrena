@@ -31,7 +31,7 @@ import (
 // what unit tests and the fast integration suite use, so a misbehaving plugin can
 // be written in Go, in a test file, and still be refused by exactly the code that
 // would refuse a real binary.
-func InProcess(ctx context.Context, p provider.Plugin) (*Plugin, error) {
+func InProcess(ctx context.Context, p provider.Plugin, dir string) (*Plugin, error) {
 	hostReader, pluginWriter := io.Pipe()
 	pluginReader, hostWriter := io.Pipe()
 
@@ -54,11 +54,11 @@ func InProcess(ctx context.Context, p provider.Plugin) (*Plugin, error) {
 			<-served
 		},
 	}
-	return finish(ctx, c, hostReader, p.Name())
+	return finish(ctx, c, hostReader, p.Name(), dir)
 }
 
 // Launch starts a plugin binary and connects to it.
-func Launch(ctx context.Context, name, path string, verbose io.Writer) (*Plugin, error) {
+func Launch(ctx context.Context, name, path, dir string, verbose io.Writer) (*Plugin, error) {
 	cookie, err := cookie()
 	if err != nil {
 		return nil, err
@@ -99,7 +99,7 @@ func Launch(ctx context.Context, name, path string, verbose io.Writer) (*Plugin,
 			_ = cmd.Wait()
 		},
 	}
-	p, err := finish(ctx, c, stdout, name)
+	p, err := finish(ctx, c, stdout, name, dir)
 	if err != nil {
 		_ = stdin.Close()
 		_ = cmd.Process.Kill()
@@ -114,14 +114,14 @@ func Launch(ctx context.Context, name, path string, verbose io.Writer) (*Plugin,
 // Schemas are fetched HERE, at connection time, because every command needs them —
 // `validate` and `explain` as much as `apply` — and because validating them once,
 // on load, is what lets every later lookup assume they are sound.
-func finish(ctx context.Context, c *Client, r io.Reader, name string) (*Plugin, error) {
+func finish(ctx context.Context, c *Client, r io.Reader, name, dir string) (*Plugin, error) {
 	if err := c.start(r, name); err != nil {
 		if c.stop != nil {
 			c.stop()
 		}
 		return nil, err
 	}
-	p := &Plugin{client: c}
+	p := &Plugin{client: c, dir: dir}
 	if err := p.loadSchemas(ctx); err != nil {
 		_ = c.Close()
 		return nil, err

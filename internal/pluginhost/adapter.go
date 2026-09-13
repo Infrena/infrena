@@ -21,6 +21,17 @@ type Plugin struct {
 	client *Client
 	defs   []*schema.ResourceDefinition
 	byType map[string]*schema.ResourceDefinition
+
+	// dir is the project directory, handed to every instance this plugin
+	// configures.
+	//
+	// Held HERE rather than passed through the engine's configuration maps. A
+	// plugin needs it — a relative `cloud:` path resolves against the project, not
+	// against whatever working directory the plugin inherited — but it is not part
+	// of anybody's configuration, and a reserved key travelling through
+	// internal/providers would be one every diagnostic and every `defaults:` check
+	// had to learn to ignore.
+	dir string
 }
 
 var _ provider.Plugin = (*Plugin)(nil)
@@ -78,12 +89,9 @@ func (p *Plugin) loadSchemas(ctx context.Context) error {
 
 // New configures one instance and returns it as a provider.
 func (p *Plugin) New(instance string, config map[string]value.Value) (provider.Provider, error) {
-	dir := ""
-	if v, ok := config[provider.ConfigKeyProjectDir]; ok {
-		dir, _ = v.AsString()
-	}
 	// Reserved: a user's own key of this name must not reach the plugin as though
-	// infrata had sent it.
+	// infrata had sent it, or a configuration file could tell a plugin its project
+	// lives somewhere else.
 	clean := make(map[string]value.Value, len(config))
 	for k, v := range config {
 		if k != provider.ConfigKeyProjectDir {
@@ -95,7 +103,7 @@ func (p *Plugin) New(instance string, config map[string]value.Value) (provider.P
 	err := p.client.call(context.Background(), pluginproto.MethodConfigure, pluginproto.ConfigureParams{
 		Instance: instance,
 		Config:   clean,
-		Dir:      dir,
+		Dir:      p.dir,
 	}, &result)
 	if err != nil {
 		return nil, err

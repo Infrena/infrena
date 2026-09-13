@@ -131,7 +131,7 @@ func (b *badProvider) Import(context.Context, string, string) (*resource.Resourc
 // connect wires a plugin up in process and returns one configured instance.
 func connect(t *testing.T, p provider.Plugin) (*Plugin, provider.Provider) {
 	t.Helper()
-	host, err := InProcess(context.Background(), p)
+	host, err := InProcess(context.Background(), p, t.TempDir())
 	if err != nil {
 		t.Fatalf("InProcess: %v", err)
 	}
@@ -265,7 +265,7 @@ func TestNilFromCreateBecomesAnError(t *testing.T) {
 // resources; the registry's duplicate-type check would then refuse whichever
 // loaded second, making the outcome depend on ordering.
 func TestAPluginServingAnotherPluginsNamespaceIsRefused(t *testing.T) {
-	_, err := InProcess(context.Background(), &badPlugin{badPrefix: true})
+	_, err := InProcess(context.Background(), &badPlugin{badPrefix: true}, t.TempDir())
 	if err == nil {
 		t.Fatal("a plugin declaring a type outside its own prefix must be refused")
 	}
