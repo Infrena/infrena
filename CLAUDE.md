@@ -6,16 +6,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Current state
 
-**PHASE 1 IS COMPLETE; PHASE 2 IS UNDER WAY.** M1-M7 are merged to `main` (tags `m1`-`m7`),
-and M8 (discovery and import) is on `m8-discovery`. Every one of `PLAN.md`
-§49's nineteen components exists, the last being the module system (M5) and the Phase-1 CLI
-surface (M6).
+**PHASES 1 AND 2 ARE COMPLETE. M1-M11 are merged to `main`** (tags `m1`-`m11`, which stay
+LOCAL — the remote carries no tags until a real release), and the provider-plugin cutover has
+landed on top of them. Every one of `PLAN.md` §49's nineteen components exists. Phase 3 (AWS)
+is the next milestone and has not started.
 
-The MVP workflow §48 describes runs end to end against the fake provider, as far as Phase 1
-reaches: `init` → `validate` → `plan` → `apply` → re-plan clean → externally mutate → `refresh`
-→ drift shown → remove from YAML → destroy proposed → `apply`, plus `graph` and `explain`. The
-three commands §48 ends on — `discover`, `import`, `export` — are **Phase 2** (§50), and
-`providers/test` returns `ErrNotImplemented` for `Discover` and `Import` saying so.
+The MVP workflow §48 describes runs end to end: `init` → `validate` → `plan` → `apply` →
+re-plan clean → externally mutate → `refresh` → drift shown → remove from YAML → destroy
+proposed → `apply`, plus `graph`, `explain`, and §48's last three — `discover`, `import`,
+`export` (M8). It runs against the fake provider, which since the cutover is a separate
+BINARY from a separate repository; see "A SHIPPED INFRATA CARRIES NO PROVIDER" below before
+assuming an in-tree provider exists.
 
 Present: the value model with per-leaf provenance and sensitivity, addressing, diagnostics,
 declarative resource schemas, the provider interface, a hand-editable file-backed fake provider,
@@ -128,22 +129,31 @@ in every environment, forever, with no output in which its absence is visible.
 **Absent until Phase 3+:** reading a saved plan back, remote state, AWS. Nothing half-implements
 one of those.
 
-**Planned before Phase 3: provider plugins as separate processes** (`PLAN.md` §31.1, §50.1).
+**BUILT, not planned: provider plugins as separate processes** (`PLAN.md` §31.1, §31.2, §50.1).
 Plugins are separately distributed Go binaries speaking newline-delimited JSON over stdio, with
-the standard library only. Official plugins, including AWS and the fake provider, ship that way
-too. Two consequences constrain work done before it lands:
+the standard library only. `pkg/pluginproto` is the wire contract, `pkg/pluginsdk` is the whole
+of a plugin's `main()`, `pkg/plugintest` is the harness an out-of-module plugin tests through,
+`pkg/pluginmanifest` parses the `plugin.yaml` a plugin repository publishes, and
+`internal/pluginhost` is the host — including the adapter enforcing the seven things the engine
+refuses to trust a plugin with. AWS will be a plugin from its first line, not a port.
 
-- **Nothing in `pkg/schema` may gain another function-typed field.** `DefaultFunc`, `Validate`
-  and `ImportSpec.Parse` are being removed because a function cannot cross a pipe.
+Two rules the design leaves behind, and both still bind:
+
+- **Nothing in `pkg/schema` may gain a function-typed field.** `DefaultFunc`, `Validate` and
+  `ImportSpec.Parse` are GONE: a function cannot cross a pipe. `Default` is a datum.
 - **Do not add a guarantee that rests on a provider obeying a comment.** Read's carry-forward,
-  non-nil-on-success and sensitivity flags are moving into the engine's host adapter, because a
-  third-party binary cannot be held to a doc comment.
+  non-nil-on-success and the sensitivity flags are enforced in the host adapter, because a
+  third-party binary cannot be held to a doc comment. A plugin that re-implements them is a
+  plugin whose tests pass when the host is broken.
 
 ## Name
 
-The product is **Infrata** (GitHub org `infrata`, command `infrata`). The Go module path
-and binary are still `infra` until a dedicated rename, so don't rename piecemeal inside
-feature work.
+The product is **Infrata** (GitHub org `infrata`, command `infrata`). The rename is DONE:
+the module is `github.com/infrata/infrata` and the binary is `cmd/infrata`. The repository is
+`github.com/infrata/infrata` and is **private until the product is feature complete** (§31.1),
+which is why a plugin in another repository reaches it through a `replace` directive pointing at
+a sibling checkout named `infrata` — the directory a `git clone` produces. Local working copies
+must use that name, or the plugin repository cannot build.
 
 ## What is being built
 
@@ -328,7 +338,7 @@ Key architectural rules, in rough order of how easy they are to violate:
   from, and an address is coupled to module structure, so renaming an
   instantiation or moving a resource between modules renames the resource, and
   a renamed resource is destroyed and recreated rather than moved. `state mv`
-  is deferred past Phase 1 (§5.2). `infra plan` notes the destroy/create pair
+  is deferred past Phase 1 (§5.2). `infrata plan` notes the destroy/create pair
   when it sees one (`moveCandidates` in `internal/planner/render.go`), which is
   the only warning a user gets; do not remove it without replacing it with
   something a user reads before typing `apply`.
@@ -369,19 +379,20 @@ Test these explicitly; they are the correctness definition of the product.
 
 ## Build order
 
-Do not start with AWS. Phase 1 (§49) is the core engine against the **fake provider**
-(`providers/test/`), which must support create/read/update/delete/drift/import/
-dependencies/failures so the whole engine is testable without cloud credentials.
+**Phase 1 (§49) and Phase 2 (§50) are DONE**, and the plugin protocol (§31.1) that §50.1
+placed before AWS is done with them. Phase 1 built the core engine against the fake provider,
+which had to support create/read/update/delete/drift/import/dependencies/failures so the whole
+engine is testable without cloud credentials — it now does that from its own repository, as a
+plugin. The MVP §48 describes runs end to end, `discover` / `import` / `export` included.
 
-MVP is done when this works end to end against the fake provider (§48): `init`,
-`validate`, `plan dev`, `apply dev`, re-plan showing no changes, externally mutate the
-fake infra and see drift, remove a resource from YAML and see a destroy proposed,
-`apply`, then `discover` / `import` / `export`.
+**Phase 3 is AWS, and it is next** (§51 — VPC, subnet, security group, S3, RDS Postgres, IAM
+role/policy attachment, ECS cluster/task definition/service, ALB, Route53; complete lifecycle
+support beats resource breadth). It is also the first thing built as a plugin from its first line
+rather than ported into one, which is why the protocol was finished first. Do not start it by
+adding AWS to this module: §31.1 puts `providers/aws` behind its own `go.mod`, so the AWS SDK
+never enters the core module's two-dependency budget.
 
-Then Phase 2 discovery+import (§50), Phase 3 AWS (§51 — VPC, subnet, security group,
-S3, RDS Postgres, IAM role/policy attachment, ECS cluster/task definition/service, ALB,
-Route53; complete lifecycle support beats resource breadth), Phase 4 remote state
-(§52), Phase 5 production features (§53).
+After that, Phase 4 remote state (§52) and Phase 5 production features (§53).
 
 §54 lists what **not** to build yet: the full AWS surface, a general-purpose language,
 web UI, SaaS control plane, distributed execution, Kubernetes/GCP/Azure providers, a
@@ -401,7 +412,7 @@ These are features, not polish, and are easy to under-deliver on:
   production (§20, §38 — `require_approval` / `prevent_destroy` are engine-enforced,
   not conventions).
 - **Generated configuration is minimal** — omit anything equal to a provider default
-  (§27). Full dumps are `infra export` only (§28).
+  (§27). Full dumps are `infrata export` only (§28).
 - **Retries** classify every operation as safe-to-retry / conditionally-retryable /
   not-safe-to-retry; never blindly retry destructive operations (§35).
 - **Concurrency** is bounded per provider/account to avoid API throttling (§34).
