@@ -3223,6 +3223,114 @@ The most important engineering goal is to make the **core reconciliation engine 
 
 ---
 
+# 61. Versioning
+
+**Decided 2026-09-13.** Six format versions already exist, independently, each at 1:
+
+| Version | Package | Guards | How it moves |
+| --- | --- | --- | --- |
+| `state.CurrentVersion` | `internal/state` | the state file | a migration chain, one step per version |
+| `pluginproto.Version`, `Supported` | `pkg/pluginproto` | the plugin wire | negotiated per plugin; `Supported` is a SET |
+| `planner.PlanVersion` | `internal/planner` | the plan artifact | additive, with a frozen-keys test |
+| `report.Version` | `pkg/report` | `--output` reports | additive |
+| lockfile `Version` | `internal/modules/source` | `modules.lock` | internal |
+| cache `Version` | `internal/modules/source` | module cache metadata | internal |
+
+**They stay independent, and that is the decision.** Each guards a different boundary
+with a different lifetime, and one shared number would mean a state migration every
+time a report gained a field — a migration being the most expensive thing in the list.
+Nothing may collapse them.
+
+## 61.1 The product version
+
+`infrata` itself is SEMVER, `v0.x.y` until the configuration language stops moving.
+It is not a seventh format version; it is the release, and its bumps are DEFINED in
+terms of the table above, because otherwise "minor" means nothing:
+
+- **patch** — no format version changes.
+- **minor** — may ADD a format version, and must still read every older one. May add
+  configuration syntax. May add a `pluginproto` version while leaving the previous one
+  in `Supported`, so existing plugins keep working.
+- **major** — may drop support for an old format version, or remove configuration
+  syntax. A plugin may stop working, and the handshake says so by name.
+
+**It is not a constant in the source.** A hand-maintained version is wrong by the
+second commit after a release. `runtime/debug.ReadBuildInfo()` reports the module
+version for `go install`, and `-ldflags -X` overrides it for a tagged build; a
+development build says so rather than claiming a release it is not.
+
+## 61.2 The configuration language is not versioned
+
+Considered and REJECTED: a `config_version: 2` key, or Terraform's
+`required_version`-as-format-number.
+
+The language is already FAIL CLOSED — an unknown lifecycle option, an unknown provider
+configuration key, a `defaults:` key nothing declares are each an error naming the key.
+So an older binary meeting newer syntax already stops safely and says what it choked
+on. A version integer would buy exactly one thing on top of that: a better message.
+And it would cost a key in every project file which is wrong by default, because the
+person adding a feature is not the person who remembers to raise it.
+
+**Instead, an OPTIONAL floor**, reusing the constraint syntax `plugins:` already needs:
+
+```yaml
+infrata: ">= 0.4"
+
+plugins:
+  aws: ">= 0.3.0, < 0.4.0"
+```
+
+Comparison operators on `MAJOR.MINOR.PATCH`, comma meaning AND, parsed by hand rather
+than by a semver library (§31.1). Absent means no constraint, so every project written
+before this key behaves exactly as it did. Present, it turns "unknown key `foo`" into
+"this project needs infrata >= 0.4; this is 0.3.1", which is the message a team
+sharing a repository between CI and laptops actually needs.
+
+**Checked immediately after decoding**, before anything else runs: a binary that cannot
+understand a project must say so once, rather than reporting twenty unknown-key errors
+that are all the same problem.
+
+**What it does not cover, recorded rather than hidden:** the check lives in the
+compiler, so the four commands that never compile — `destroy`, `refresh`, `discover`,
+`import` — do not apply it. They barely read configuration, which is why they are also
+the commands least likely to meet syntax they cannot parse. Revisit if that stops being
+true.
+
+## 61.3 There is no separate plugin SDK version
+
+`pkg/pluginsdk` is Go code a plugin author compiles against, and `pkg/pluginproto` is
+the wire. **The protocol version is the compatibility contract, not the Go types**
+(§31.1), so:
+
+- a plugin built against an older SDK keeps working for as long as its protocol version
+  is in `Supported`, and never needs rebuilding for an infrata release;
+- the SDK's Go API rides the module's own semver, which is what a plugin's `go.mod`
+  pins, and which therefore follows §61.1's rules like any other package.
+
+Two numbers, already present, doing different jobs. A third — an "SDK version" — would
+have to agree with one of them, and would eventually not.
+
+## 61.4 `infrata version`
+
+Nothing currently tells a user, or a bug report, which formats a binary speaks:
+
+```text
+$ infrata version
+infrata 0.4.1 (a1b2c3d, go1.24.13, linux/amd64)
+
+formats
+  state             1
+  plugin protocol   1
+  plan artifact     1
+  report            1
+```
+
+`--output json` emits the same thing as one object, so a CI job can assert on it. This
+is the artifact that makes "which version do I need" answerable without reading source,
+and it is why the format versions are exported rather than package-private.
+
+---
+
 # 60. Open Source and Commercial Model
 
 Infrata will be sold as a commercial product built around an open-source core.

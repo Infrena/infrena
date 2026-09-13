@@ -179,6 +179,25 @@ gofmt -l .
 AWS integration tests must be opt-in (build tag or env guard) — **normal CI must not
 require AWS credentials** (§46).
 
+**Versioning (§61).** Six format versions already exist and stay INDEPENDENT —
+`state.CurrentVersion`, `pluginproto.Version`/`Supported`, `planner.PlanVersion`,
+`report.Version`, and the module lockfile and cache. One shared number would mean a state
+migration every time a report gained a field. `infrata version` prints all of them, reading
+each from the package that owns it.
+
+The product is semver, and each bump is defined in terms of those formats: a patch changes
+none, a minor may ADD one and must still read every older one, a major may drop support.
+The version is never a constant in the source — `-ldflags -X` for a release,
+`debug.ReadBuildInfo` otherwise, and a development build says `0.0.0-dev` rather than
+claiming a release. Anything that parses as 0.0.0 is treated as "not a release", because a
+`go build` in a checkout with a remote produces a pseudo-version that parses that way.
+
+**The configuration language is not versioned**, deliberately (§61.2): it is additive and
+already fails closed on unknown keys, so a version integer would buy only a better message
+while costing a key in every file that is wrong by default. Instead an optional
+`infrata: ">= 0.4"` floor, sharing its constraint syntax with `plugins:`, checked
+immediately after decoding so a binary that cannot understand a project says so once.
+
 The CLI surface to implement (§37): `init`, `validate`, `plan <env>`, `apply <env>`,
 `destroy <env>`, `state` / `state show <address>`, `refresh <env>`, `import`, `export`,
 `discover`, `graph`, `explain <resource-type>`. Global options: `--var`, `--var-file`,

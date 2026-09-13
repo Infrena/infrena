@@ -62,6 +62,7 @@ func NewRootCommand() *cobra.Command {
 		return checkUnsupportedFlags(opts)
 	}
 
+	root.AddCommand(newVersionCommand(opts))
 	root.AddCommand(newInitCommand(opts))
 	root.AddCommand(newValidateCommand(opts))
 	root.AddCommand(newStateCommand(opts))

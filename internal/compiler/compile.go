@@ -11,6 +11,7 @@ import (
 	"github.com/infrata/infrata/internal/modules/source"
 	"github.com/infrata/infrata/internal/providers"
 	"github.com/infrata/infrata/internal/registry"
+	"github.com/infrata/infrata/internal/semver"
 	"github.com/infrata/infrata/internal/variables"
 	"github.com/infrata/infrata/pkg/value"
 )
@@ -85,6 +86,14 @@ func Compile(files []config.File, reg *registry.Registry, opts Options) (Resolve
 	project, decodeDiags := config.Decode(files)
 	ds.Extend(decodeDiags)
 	if decodeDiags.HasErrors() {
+		return ResolvedConfig{}, ds
+	}
+
+	// BEFORE ANYTHING ELSE RUNS. A binary that cannot understand this project must
+	// say so once, rather than reporting twenty unknown-key diagnostics that are all
+	// the same problem said badly (PLAN.md §61.2).
+	if versionDiags := checkRequiredVersion(project, opts.Version); versionDiags.HasErrors() {
+		ds.Extend(versionDiags)
 		return ResolvedConfig{}, ds
 	}
 
@@ -216,6 +225,62 @@ func Compile(files []config.File, reg *registry.Registry, opts Options) (Resolve
 	ds.Extend(validateDiags)
 
 	return cfg, ds
+}
+
+// checkRequiredVersion enforces the optional `infrata:` floor a project states.
+//
+// A DEVELOPMENT BUILD IS EXEMPT, deliberately. It reports 0.0.0-dev, which satisfies
+// no floor at all, so every `go build` from a checkout would refuse every project that
+// states one — including this repository's own fixtures. The constraint exists to stop
+// a RELEASED binary quietly misreading a project written for a later one; a developer
+// running their own build has not made that mistake.
+// isZero reports a version of 0.0.0, which nobody releases.
+func isZero(v semver.Version) bool {
+	return v.Major == 0 && v.Minor == 0 && v.Patch == 0
+}
+
+// developmentVersion is what a build with no version information calls itself. Stated
+// here rather than imported so that internal/compiler does not depend on
+// internal/version at all — the value is a string on the wire between them, and the
+// one place it is produced (internal/version) has the test that pins the spelling.
+const developmentVersion = "0.0.0-dev"
+
+// current is passed in rather than read from internal/version, so this is a pure
+// function of its inputs — which is what lets a test pin a build version without a
+// test-only export on a package the compiler depends on.
+func checkRequiredVersion(project *config.ProjectDecl, current string) diag.Diagnostics {
+	var ds diag.Diagnostics
+	if project.RequiredVersion.IsZero() {
+		return ds
+	}
+	if current == "" || current == developmentVersion {
+		return ds
+	}
+
+	running, err := semver.Parse(current)
+	if err != nil || isZero(running) {
+		// Neither an unparseable version nor 0.0.0 is a release, and a complaint about
+		// the binary's own version string is not something a user can act on. 0.0.0
+		// specifically is what a pseudo-version parses to — `go build` in a checkout
+		// with a remote produces one — so without this a developer's own build would
+		// be refused by every project stating a floor.
+		return ds
+	}
+	if project.RequiredVersion.Allows(running) {
+		return ds
+	}
+	ds.Add(diag.Diagnostic{
+		Severity: diag.SeverityError,
+		Summary: "this project requires infrata " + project.RequiredVersion.String() +
+			", and this is " + current,
+		Detail: "`infrata:` in the configuration states which versions of the tool the " +
+			"project is known to work with. Running an older one risks misreading syntax it " +
+			"does not have; running a newer one may be fine, and the constraint can be " +
+			"widened to say so.",
+		Action: "Upgrade infrata, or widen `infrata:` once you have confirmed this version works.",
+		Origin: project.RequiredVersionOrigin,
+	})
+	return ds
 }
 
 // fileVars merges --var-file entries over variables.yml's.

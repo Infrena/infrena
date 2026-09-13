@@ -6,6 +6,7 @@ package config
 
 import (
 	"github.com/infrata/infrata/internal/modules/source"
+	"github.com/infrata/infrata/internal/semver"
 	"github.com/infrata/infrata/pkg/value"
 	"sort"
 	"strings"
@@ -217,7 +218,13 @@ type ModuleLoadDecl struct {
 
 // ProjectDecl is the decoded, still-unresolved configuration.
 type ProjectDecl struct {
-	Project      string
+	Project string
+	// RequiredVersion is the optional `infrata:` floor a project states on the tool
+	// itself (PLAN.md §61.2). Zero means unconstrained, which is every project
+	// written before the key existed.
+	RequiredVersion       semver.Constraint
+	RequiredVersionOrigin value.Origin
+
 	Resources    []*ResourceDecl   // sorted by Name
 	Variables    []VariableDecl    // sorted by Name
 	Environments []EnvironmentDecl // sorted by Name

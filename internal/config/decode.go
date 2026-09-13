@@ -8,6 +8,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/infrata/infrata/internal/diag"
+	"github.com/infrata/infrata/internal/semver"
 	"github.com/infrata/infrata/pkg/value"
 )
 
@@ -257,15 +258,63 @@ func decodeDocument(path string, doc *yaml.Node, out *ProjectDecl, ds *diag.Diag
 			decodeProviders(path, val, out, ds)
 		case "modules":
 			decodeModuleLoads(path, val, &out.Modules, ds, seenModules)
+		case "infrata":
+			decodeRequiredVersion(path, key, val, out, ds)
 		default:
 			ds.Add(diag.Diagnostic{
 				Severity: diag.SeverityWarning,
 				Summary:  "unrecognised top-level key " + strconv.Quote(key.Value),
-				Detail:   ProjectFileName + " understands `project`, `resources`, `variables` and `environments`.",
-				Origin:   originOf(path, key),
+				Detail: ProjectFileName + " understands `project`, `infrata`, `resources`, " +
+					"`variables`, `environments`, `providers` and `modules`.",
+				Origin: originOf(path, key),
 			})
 		}
 	}
+}
+
+// decodeRequiredVersion reads `infrata: ">= 0.4"`, the optional floor a project may
+// state on the tool itself (PLAN.md §61.2).
+//
+// A CONSTRAINT, not a format version: the language is additive and already fails
+// closed on syntax it does not know, so this exists to turn "unknown key `foo`" into
+// "this project needs infrata >= 0.4", which is what a team sharing a repository
+// between CI and laptops actually needs.
+//
+// Declared TWICE is an error naming both lines. Two floors could contradict each other
+// — `>= 0.4` in one file and `< 0.4` in another — and silently taking the last one read
+// makes which file wins depend on directory order.
+func decodeRequiredVersion(path string, key, node *yaml.Node, out *ProjectDecl, ds *diag.Diagnostics) {
+	origin := originOf(path, key)
+	if out.RequiredVersionOrigin.File != "" {
+		ds.Add(diag.Diagnostic{
+			Severity: diag.SeverityError,
+			Summary:  "`infrata` is declared twice",
+			Detail: "The first is at " + describeOrigin(out.RequiredVersionOrigin) +
+				". Two version floors could contradict each other, and taking whichever " +
+				"was read last would make the answer depend on the order files are loaded.",
+			Action: "Keep one `infrata:` constraint for the project.",
+			Origin: origin,
+		})
+		return
+	}
+
+	text, ok := requireScalar(path, "`infrata`", node, ds)
+	if !ok {
+		return
+	}
+	constraint, err := semver.ParseConstraint(text)
+	if err != nil {
+		ds.Add(diag.Diagnostic{
+			Severity: diag.SeverityError,
+			Summary:  "`infrata` is not a version constraint: " + err.Error(),
+			Detail: "A constraint is comparison operators on MAJOR.MINOR.PATCH, with a comma " +
+				"meaning AND — `>= 0.4`, or `>= 0.4, < 1.0`.",
+			Origin: origin,
+		})
+		return
+	}
+	out.RequiredVersion = constraint
+	out.RequiredVersionOrigin = origin
 }
 
 func decodeResources(path string, node *yaml.Node, dst *[]*ResourceDecl, ds *diag.Diagnostics, seen map[string]value.Origin) {

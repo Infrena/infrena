@@ -6,8 +6,17 @@ GO ?= go
 
 .PHONY: build test vet fmt check
 
+# VERSION is stamped into the binary for a release. Left unset for a development
+# build, which then reports 0.0.0-dev rather than claiming a release it is not — see
+# internal/version and PLAN.md §61.1. A hand-maintained constant would be wrong by the
+# second commit after a release, so the linker is the only place a version is written.
+#
+#   make build VERSION=0.4.1
+VERSION ?=
+LDFLAGS := $(if $(VERSION),-X github.com/infrata/infrata/internal/version.version=$(VERSION),)
+
 build:
-	$(GO) build -o bin/infrata ./cmd/infrata
+	$(GO) build $(if $(LDFLAGS),-ldflags "$(LDFLAGS)",) -o bin/infrata ./cmd/infrata
 
 # -count=1 is not a preference, it disables the test cache — and without it
 # `make check` can pass while tests/integration has never run against the

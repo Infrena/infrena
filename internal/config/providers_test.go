@@ -353,3 +353,65 @@ resources:
 		t.Fatal("a list-valued `provider` must be refused")
 	}
 }
+
+// TestTheInfrataFloorIsDecodedAsAConstraint — PLAN.md §61.2's optional floor.
+func TestTheInfrataFloorIsDecodedAsAConstraint(t *testing.T) {
+	decl, out := providersIn(t, "project: p\ninfrata: \">= 0.4, < 1.0\"\n")
+	if out != "" {
+		t.Fatalf("unexpected diagnostics:\n%s", out)
+	}
+	if decl.RequiredVersion.IsZero() {
+		t.Fatal("`infrata:` was not decoded")
+	}
+	if got := decl.RequiredVersion.String(); got != ">= 0.4, < 1.0" {
+		t.Errorf("constraint = %q, want the text as written for a diagnostic to quote", got)
+	}
+	if decl.RequiredVersionOrigin.File == "" {
+		t.Error("no origin, so a diagnostic cannot point at the line")
+	}
+}
+
+// TestAProjectWithNoInfrataKeyIsUnconstrained — every project written before the key
+// existed, which is all of them.
+func TestAProjectWithNoInfrataKeyIsUnconstrained(t *testing.T) {
+	decl, _ := providersIn(t, "project: p\n")
+	if !decl.RequiredVersion.IsZero() {
+		t.Error("a project stating no floor must decode as unconstrained")
+	}
+}
+
+// TestAMalformedInfrataFloorIsRefused, rather than silently ignored — a floor nobody
+// checks is worse than no floor, because the file claims a guarantee it has not got.
+func TestAMalformedInfrataFloorIsRefused(t *testing.T) {
+	_, out := providersIn(t, "project: p\ninfrata: \"at least 4\"\n")
+	if out == "" {
+		t.Fatal("`infrata: \"at least 4\"` must be refused")
+	}
+	if !strings.Contains(out, "MAJOR.MINOR.PATCH") {
+		t.Errorf("the diagnostic does not say what a constraint looks like:\n%s", out)
+	}
+}
+
+// TestTheInfrataFloorDeclaredTwiceIsAnErrorNamingBothLines.
+//
+// Two floors can contradict each other — `>= 0.4` and `< 0.4` — and YAML is perfectly
+// happy with the repeated key, taking the last silently. Which floor won would then
+// depend on document order, and nothing in any output would say so.
+//
+// A resources file already refuses foreign keys, so the reachable case is twice in the
+// project file. Checked before writing the guard, because a guard for an unreachable
+// case is code nothing can exercise.
+func TestTheInfrataFloorDeclaredTwiceIsAnErrorNamingBothLines(t *testing.T) {
+	_, out := providersIn(t, "project: p\ninfrata: \">= 0.4\"\ninfrata: \"< 0.4\"\n")
+	if out == "" {
+		t.Fatal("`infrata` declared twice must be an error")
+	}
+	if !strings.Contains(out, "declared twice") {
+		t.Errorf("the diagnostic does not say it is a duplicate:\n%s", out)
+	}
+	// BOTH lines — 2 and 3 — because a reader shown one of the pair has to find the
+	// other by hand. distinctLines copes with either spelling of a position.
+	if got := distinctLines(out); len(got) < 2 {
+		t.Errorf("the diagnostic names %v, want both lines:\n%s", got, out)
+	}
+}

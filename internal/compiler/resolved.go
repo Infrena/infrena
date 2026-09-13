@@ -45,6 +45,16 @@ type Options struct {
 	Region      string
 	Account     string
 
+	// Version is the running build, for a project's `infrata:` floor to be checked
+	// against (PLAN.md §61.2). Empty means a development build, which every floor
+	// exempts.
+	//
+	// An INPUT rather than read from internal/version, so that compilation is a pure
+	// function of what it is given — and so the wiring is testable at all: a test
+	// binary reports a development version, which is exempt, so a Compile that read
+	// the build version itself could never be checked for actually calling the check.
+	Version string
+
 	// Ctx bounds plugin startup. Compilation itself is pure and never blocks, but
 	// stage 4.5 launches provider plugins, and a plugin that never answers must be
 	// interruptible by the same Ctrl-C that stops everything else.
