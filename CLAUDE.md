@@ -188,6 +188,12 @@ second entry — two toolchains is the only way the older promise is ever tested
 is a promise to plugin authors, and a plugin repo must declare at least it. It also runs on
 `merge_group`, and is called by the release workflow so a release cannot skip it.
 
+**Milestone tags stay LOCAL.** `m1`–`m11` mark development milestones, not releases, and
+are deliberately never pushed — ruled 2026-09-13. A public tag list is where a consumer
+looks for releases, and `m11` sitting beside `v0.1.0` blurs which is which. Nothing is at
+risk: every tagged commit is an ancestor of `origin/main`, so the tags are labels on work
+that is already pushed. **Do not offer to push them.**
+
 **Releases** (`.github/workflows/release.yml`) fire on a `v*` tag and cross-compile eight
 platforms from one runner — this is pure Go with no cgo, so a matrix of operating systems
 would buy nothing. `CGO_ENABLED=0` for static binaries; `-trimpath`; deliberately NOT
