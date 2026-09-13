@@ -2200,6 +2200,35 @@ schemas, not pipes.
   deliberately small: comparison operators on `MAJOR.MINOR.PATCH`, comma meaning AND,
   parsed by hand rather than by a semver library.
 
+### The repository stays PRIVATE until feature complete
+
+**Ruled 2026-09-13.** `github.com/infrata/infrata` is not a fetchable module and will not
+be until the product is feature complete. Requested by the fake-provider port, decided
+against for now; do not re-raise it as a blocker.
+
+What that costs, so nobody re-derives it:
+
+- **There are no third-party plugin authors yet**, and cannot be. A plugin needs either a
+  checkout of a private repository or `GOPRIVATE=github.com/infrata/*` plus credentials to
+  the org. `AGENT.md`, §31.2 and the reference plugin all exist to invite outside plugins,
+  and that invitation is on hold rather than withdrawn.
+- **The one consumer uses `replace`.** `infrata-provider-fake` carries
+  `replace github.com/infrata/infrata => ../ilan`, so every contributor needs a sibling
+  checkout and its release workflow needs a token to fetch this repository beside it.
+- **A `replace` means that repository builds against a WORKING TREE, not a version.** Its
+  tests run against whatever is uncommitted here, which is how it saw a stale
+  `internal/semver` that had been moved. That is a fast loop while both repositories change
+  together daily, and a correctness hazard once they do not.
+
+**A semver tag is worth cutting anyway**, and is independent of visibility: with
+`GOPRIVATE` set, a tagged version lets the plugin `require github.com/infrata/infrata
+vX.Y.Z` and drop the `replace`, which removes the sibling-checkout requirement and pins
+the build to something reproducible. It also makes `infrata version` report a real version
+instead of `0.0.0-dev` (§61.1).
+
+**Revisit when:** the product is feature complete. That is the stated gate, and going
+public is the only thing that makes an outside plugin author possible.
+
 **Phase B (later, §53).**
 
 - `infrata plugins install` fetches release binaries.

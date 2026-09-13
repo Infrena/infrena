@@ -188,6 +188,14 @@ second entry — two toolchains is the only way the older promise is ever tested
 is a promise to plugin authors, and a plugin repo must declare at least it. It also runs on
 `merge_group`, and is called by the release workflow so a release cannot skip it.
 
+**The repository stays PRIVATE until the product is feature complete** (§31.1, ruled
+2026-09-13). So `github.com/infrata/infrata` is not fetchable, there are no third-party
+plugin authors yet, and the one plugin repository depends on this one through
+`replace => ../ilan` — meaning it builds against a working tree rather than a version.
+**Do not raise making it public as a blocker.** A semver tag is still worth cutting: it is
+independent of visibility, lets a plugin pin a version with `GOPRIVATE` set, and makes
+`infrata version` report something real.
+
 **Milestone tags stay LOCAL.** `m1`–`m11` mark development milestones, not releases, and
 are deliberately never pushed — ruled 2026-09-13. A public tag list is where a consumer
 looks for releases, and `m11` sitting beside `v0.1.0` blurs which is which. Nothing is at
