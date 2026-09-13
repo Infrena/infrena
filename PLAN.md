@@ -1122,9 +1122,10 @@ are now discharged; the state migration remains a recorded follow-up):
 - `resource.ResourceState.Provider` already exists and already holds a provider
   name, so state needs no new field — but it must come to hold the INSTANCE name,
   and a state file written before this change names a plugin. That is a migration,
-  and §21's migration path is currently lossy (see the follow-up on
-  `state.Decode`), so this is the change that makes fixing it urgent rather than
-  theoretical.
+  and §21's migration path WAS lossy, which is what made fixing it urgent rather
+  than theoretical. It is fixed: `state.Decode` decodes the migration path with
+  `json.Decoder.UseNumber()`, so a number keeps its exact text and a version bump
+  is an ordinary change again.
 
 ### A plugin is not a provider: the factory split
 
