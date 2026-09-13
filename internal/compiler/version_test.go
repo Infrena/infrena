@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/infrata/infrata/internal/config"
-	"github.com/infrata/infrata/internal/semver"
+	"github.com/infrata/infrata/pkg/semver"
 )
 
 // PLAN.md §61.2: the optional `infrata:` floor.

@@ -9,7 +9,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/infrata/infrata/internal/diag"
-	"github.com/infrata/infrata/internal/semver"
+	"github.com/infrata/infrata/pkg/semver"
 	"github.com/infrata/infrata/pkg/value"
 )
 

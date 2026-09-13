@@ -12,8 +12,8 @@ import (
 	"github.com/infrata/infrata/internal/modules/source"
 	"github.com/infrata/infrata/internal/providers"
 	"github.com/infrata/infrata/internal/registry"
-	"github.com/infrata/infrata/internal/semver"
 	"github.com/infrata/infrata/internal/variables"
+	"github.com/infrata/infrata/pkg/semver"
 	"github.com/infrata/infrata/pkg/value"
 )
 

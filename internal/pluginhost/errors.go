@@ -3,7 +3,7 @@ package pluginhost
 import (
 	"fmt"
 
-	"github.com/infrata/infrata/internal/semver"
+	"github.com/infrata/infrata/pkg/semver"
 	"strconv"
 	"strings"
 	"sync"

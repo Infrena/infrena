@@ -5,9 +5,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/infrata/infrata/internal/semver"
 	"github.com/infrata/infrata/pkg/provider"
 	"github.com/infrata/infrata/pkg/schema"
+	"github.com/infrata/infrata/pkg/semver"
 	"github.com/infrata/infrata/pkg/value"
 )
 

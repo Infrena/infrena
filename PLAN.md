@@ -2207,12 +2207,127 @@ schemas, not pipes.
 - The host verifies the checksum on every launch once a lock file exists.
 - Phase A's search path is where install writes, so nothing moves.
 
+## 31.2 The plugin manifest: `plugin.yaml`
+
+**Agreed 2026-09-13**, from a proposal by the `infrata-provider-fake` port
+(`docs/proposals/2026-09-13-plugin-manifest.md` in that repository), amended as below.
+
+A plugin repository ships one file saying what the plugin is and what it works with.
+Its PURPOSE decides its whole shape: it is fetched over HTTP and read **before any
+binary is downloaded**, so that a search can answer "is this compatible with what I am
+running, and is there a build for my machine" without fetching anything else.
+
+```yaml
+# plugin.yaml
+manifest: 1
+name: fake
+version: 0.1.0
+protocol: [1]
+platforms: [linux/amd64, linux/arm64, darwin/arm64, windows/amd64]
+description: A fake provider for testing infrata without a cloud account.
+infrata: ">= 0.2.0"
+source: https://github.com/infrata/infrata-provider-fake
+```
+
+| Key | Required | Meaning |
+| --- | --- | --- |
+| `manifest` | yes | the format version of THIS FILE. Checked first, before any other key. |
+| `name` | yes | the plugin's name: the binary is `infrata-plugin-<name>`, `Plugin.Name()` returns it, and every resource type is prefixed with it. The host already refuses a mismatch between the last two. |
+| `version` | yes | `MAJOR.MINOR.PATCH`, and it must equal the tag this file is read at. |
+| `protocol` | yes | every plugin protocol version the plugin can speak, as a list, because the host accepts a SET (`pluginproto.Supported`). |
+| `platforms` | yes | `GOOS/GOARCH` for every published build. |
+| `description` | yes | one line, for a search result to show. |
+| `infrata` | no | the infrata releases this plugin is known to work with, in `pkg/semver`'s syntax. ABSENT means unconstrained. |
+| `source` | no | where the plugin lives, for a search result to link. |
+
+### READ IT AT THE TAG, never at the default branch
+
+The file at the root of the default branch describes UNRELEASED code, so reading it to
+judge a released version answers the wrong question — `v0.3.1` gets judged by a manifest
+that may already describe `v0.4.0`. And that is the mistake an implementer makes by
+default, because `raw.githubusercontent.com/<owner>/<repo>/HEAD/plugin.yaml` is the
+obvious URL.
+
+```text
+raw.githubusercontent.com/<owner>/<repo>/refs/tags/v0.3.1/plugin.yaml
+```
+
+The manifest answers two questions with different lifetimes — IDENTITY (`name`,
+`description`, `source`), which is the same on every ref, and THE COMPATIBILITY OF ONE
+VERSION (`version`, `protocol`, `platforms`, `infrata`), which differs per release. One
+file serves both only because it is always read at a tag.
+
+### Compatible means three things
+
+1. **Format:** `manifest` is a version this build understands. Checked FIRST, so a newer
+   manifest reports "this plugin needs a newer infrata to describe itself" rather than a
+   parse error about a key nobody recognises.
+2. **Protocol:** `protocol` shares at least one version with the build's own
+   `pluginproto.Supported`. Already enforced at runtime by the handshake.
+3. **Release:** `infrata`, if stated, allows the running build. A development build is
+   EXEMPT, the same exemption §61.2 gives a project's own floor and for the same reason.
+
+### Why the format is versioned, when configuration is not
+
+§61.2 argues AGAINST versioning the configuration language, and this is the other case.
+The distinction is who reads the file and when:
+
+- Configuration is written and read by the same person at the same time, on one machine,
+  and fails closed on an unknown key — which catches their typo.
+- A manifest is written by a plugin author and read by every infrata build for years
+  afterwards, over the network, with no way to upgrade the reader in step with the
+  writer. Refusing unknown keys there means a 2026 infrata cannot install a 2027 plugin.
+
+So: fail closed on unknown keys for a `manifest` version this build knows, and
+tolerate-with-a-warning for one it does not.
+
+### What the manifest deliberately does not carry
+
+- **Checksums.** They cannot exist until after the build, so a hand-written,
+  checked-in manifest cannot carry them honestly. `SHA256SUMS` is published as a release
+  asset (infrata's own release workflow already does this), and §31.1 Phase B's
+  `plugins.lock` is what records them per platform.
+- **Asset names or download URLs.** A CONVENTION instead, mirroring infrata's own
+  releases: `infrata-plugin-<name>_<version>_<goos>_<goarch>.tar.gz`, `.zip` on Windows.
+  Install constructs the URL. One convention beats a field every author can get wrong.
+- **Resource types.** `name` already implies them — a plugin serves `<name>.*` and the
+  host refuses anything else — so "which plugin provides `aws.instance`?" is answerable
+  from `name` alone.
+
+### Where infrata reads it
+
+**At install (Phase B).** `infrata plugins install` reads the manifest from the tag,
+refuses a plugin failing any of the three rules, and only then fetches and checksums the
+binary. A plugin with NO manifest installs with a warning rather than being refused:
+Phase A is hand-placed binaries, which is every plugin today.
+
+**Not in the handshake, for now.** That would catch a hand-placed binary too, and the
+cheap form needs no manifest embedding — the handshake already sends
+`{protocol, name, version}`, so `infrata` is one more optional string supplied the way
+`Version()` is. Deferred because with the protocol at 1 and one plugin in existence,
+rule 3 has nothing to catch yet. Recorded so it is not re-derived.
+
+### What a plugin repository owes its own manifest
+
+Its release workflow must assert that THREE things agree: the git tag, the manifest's
+`version`, and the binary's `Version()`. That is the shape of the check already in
+infrata's own release workflow, which builds for the host and refuses to publish a binary
+that does not report the tag. A drift test between the manifest and the code is the
+weaker substitute — it is a test someone can delete, where the release assertion blocks
+the release.
+
+`pkg/semver` is public so a plugin can validate its own `infrata:` field with the same
+parser infrata will check it with, rather than a second implementation that drifts.
+
+---
+
 ### Where the code lives
 
 ```text
 pkg/pluginproto/        message types, protocol version: the contract
 pkg/pluginsdk/          Main(p): what a plugin's main() calls
 pkg/plugintest/         the in-process harness a plugin's OWN tests use
+pkg/semver/             the constraint syntax, public so a plugin can check its manifest
 internal/pluginhost/    launch, handshake, client, the trust rules above
 providers/test/         the fake provider, in-process and TRANSITIONAL
 providers/aws/          its own Go module (Phase 3)

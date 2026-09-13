@@ -217,6 +217,15 @@ while costing a key in every file that is wrong by default. Instead an optional
 `infrata: ">= 0.4"` floor, sharing its constraint syntax with `plugins:`, checked
 immediately after decoding so a binary that cannot understand a project says so once.
 
+**A plugin repository ships `plugin.yaml`** (§31.2, agreed 2026-09-13): `manifest`, `name`,
+`version`, `protocol`, `platforms`, `description`, and optionally `infrata` and `source`.
+It is fetched over HTTP **before any binary is downloaded**, so a search can judge
+compatibility without one — and therefore **read at the TAG, never the default branch**,
+which describes unreleased code. Unlike the configuration language (§61.2) the format IS
+versioned, because its reader cannot be upgraded in step with its writer. It deliberately
+carries no checksums (they postdate the build; `SHA256SUMS` is a release asset) and no
+asset names (a convention mirrors infrata's own releases).
+
 **`plugins:` constrains provider plugin versions** (§31.1), keyed by plugin because two
 instances of one plugin share one process and therefore one version. The LOADER enforces
 it — four paths load plugins, and a constraint checked in three is one nobody can rely on
@@ -250,7 +259,9 @@ cmd/infrata/        CLI entrypoint
 internal/           config, compiler, expressions, environments, modules, variables,
                     state, planner, graph, executor, discovery, importer, generator,
                     lifecycle, secrets, cli
-pkg/                provider, schema, plan, resource   (the stable-ish interfaces)
+pkg/                provider, schema, plan, resource, pluginproto, pluginsdk, plugintest,
+                    semver   (the stable-ish interfaces; plugin authors compile against
+                    these, so §61.1's rules govern changing them)
 providers/          test/ (fake provider), aws/
 tests/integration/
 ```

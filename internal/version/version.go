@@ -7,7 +7,7 @@ import (
 	"runtime/debug"
 	"strings"
 
-	"github.com/infrata/infrata/internal/semver"
+	"github.com/infrata/infrata/pkg/semver"
 )
 
 // version is set at build time for a tagged release:

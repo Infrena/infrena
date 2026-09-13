@@ -10,8 +10,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/infrata/infrata/internal/semver"
 	"github.com/infrata/infrata/pkg/provider"
+	"github.com/infrata/infrata/pkg/semver"
 )
 
 // Loader turns a plugin NAME into a running plugin.

@@ -14,10 +14,10 @@ import (
 	"github.com/infrata/infrata/internal/pluginhost"
 	"github.com/infrata/infrata/internal/providers"
 	"github.com/infrata/infrata/internal/registry"
-	"github.com/infrata/infrata/internal/semver"
 	"github.com/infrata/infrata/internal/state"
 	"github.com/infrata/infrata/internal/variables"
 	"github.com/infrata/infrata/pkg/provider"
+	"github.com/infrata/infrata/pkg/semver"
 	"github.com/infrata/infrata/pkg/value"
 	"github.com/infrata/infrata/providers/test"
 )
