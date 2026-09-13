@@ -1,7 +1,7 @@
 // Package generator renders discovered resources as minimal YAML (spec §27).
 //
 // Minimal means: emit what the user must know, and nothing they would have got
-// anyway. A `test.database` with six attributes of which five equal their
+// anyway. A `fake.database` with six attributes of which five equal their
 // provider default is one line of configuration, because five of those lines
 // would be noise a reader has to check against the schema to dismiss.
 //
@@ -330,7 +330,7 @@ func equalsDefault(attr schema.Attribute, v value.Value) bool {
 }
 
 // FileName is the file a resource type is written to: the last segment of the
-// type, pluralised. `test.database` -> `databases.yml`.
+// type, pluralised. `fake.database` -> `databases.yml`.
 //
 // Grouping by type rather than one file per resource, because an account with
 // four hundred resources should not produce four hundred files; and by type

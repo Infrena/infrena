@@ -27,7 +27,7 @@ func TestAReferenceToAGenuinelyMissingResourceStillSaysNoSuchResource(t *testing
 	files := loadFiles(t, skipEnvs+`
 resources:
   a:
-    type: test.network
+    type: fake.network
     cidr: ${nosuch.id}
 `)
 	_, ds := Compile(files, testRegistry(t), Options{Environment: "dev"})
@@ -49,11 +49,11 @@ func TestAReferenceToASkippedResourceSaysSo(t *testing.T) {
 	files := loadFiles(t, skipEnvs+`
 resources:
   debug_box:
-    type: test.network
+    type: fake.network
     cidr: 10.9.0.0/16
     only: production
   web:
-    type: test.network
+    type: fake.network
     cidr: ${debug_box.id}
 `)
 	_, ds := Compile(files, testRegistry(t), Options{Environment: "dev"})
@@ -83,11 +83,11 @@ func TestDependsOnASkippedResourceSaysSo(t *testing.T) {
 	files := loadFiles(t, skipEnvs+`
 resources:
   debug_box:
-    type: test.network
+    type: fake.network
     cidr: 10.9.0.0/16
     only: production
   web:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
     depends_on: [debug_box]
 `)
@@ -112,10 +112,10 @@ func TestASkippedResourceMayReferToALiveOne(t *testing.T) {
 	files := loadFiles(t, skipEnvs+`
 resources:
   net:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
   debug_box:
-    type: test.database
+    type: fake.database
     engine: postgres
     network: ${net.id}
     only: production
@@ -141,11 +141,11 @@ func TestReferringToASkippedResourceIsFineInTheEnvironmentItExistsIn(t *testing.
 	body := skipEnvs + `
 resources:
   debug_box:
-    type: test.network
+    type: fake.network
     cidr: 10.9.0.0/16
     only: production
   web:
-    type: test.network
+    type: fake.network
     cidr: ${debug_box.id}
 `
 	if _, ds := Compile(loadFiles(t, body), testRegistry(t), Options{Environment: "production"}); ds.HasErrors() {
@@ -162,14 +162,14 @@ func TestTheSameConfigurationPlansDifferentlyPerEnvironment(t *testing.T) {
 	body := skipEnvs + `
 resources:
   shared:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
   prod_only:
-    type: test.network
+    type: fake.network
     cidr: 10.1.0.0/16
     only: production
   dev_only:
-    type: test.network
+    type: fake.network
     cidr: 10.2.0.0/16
     skip: [production]
 `
@@ -208,7 +208,7 @@ func TestPreventDestroyStillRefusesASkippedResource(t *testing.T) {
 	cfg, ds := Compile(loadFiles(t, skipEnvs+`
 resources:
   guarded:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
     only: production
     lifecycle:
@@ -244,7 +244,7 @@ func TestASkippedResourceIsStillChecked(t *testing.T) {
 	files := loadFiles(t, skipEnvs+`
 resources:
   prod_only:
-    type: test.network
+    type: fake.network
     cidr: ${nosuch.id}
     only: production
 `)
@@ -265,11 +265,11 @@ func TestASkippedResourceMayReferToAnotherSkippedOne(t *testing.T) {
 	files := loadFiles(t, skipEnvs+`
 resources:
   prod_net:
-    type: test.network
+    type: fake.network
     cidr: 10.1.0.0/16
     only: production
   prod_db:
-    type: test.database
+    type: fake.database
     engine: postgres
     network: ${prod_net.id}
     only: production

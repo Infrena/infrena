@@ -26,14 +26,14 @@ func validateOutput(t *testing.T, body string) (string, error) {
 const constrainedProject = `
 project: p
 plugins:
-  test: "%s"
+  fake: "%s"
 resources:
   net:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
 `
 
-// TestAConstraintReachesTheLoader. The builtin fake provider reports no version, so any
+// TestAConstraintReachesTheLoader. The in-process fake double reports no version, so any
 // constraint above 0.0.0 refuses it — which makes it the cheapest possible probe that the
 // constraint travelled from configuration to the thing that loads plugins.
 func TestAConstraintReachesTheLoader(t *testing.T) {
@@ -61,7 +61,7 @@ func TestAnUnconstrainedProjectIsUnaffected(t *testing.T) {
 project: p
 resources:
   net:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
 `)
 	if err != nil {

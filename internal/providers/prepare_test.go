@@ -46,14 +46,14 @@ func TestPrepareGivesThePluginTheRESOLVEDConfiguration(t *testing.T) {
 	_, out := rendered(t, `
 project: p
 providers:
-  - plugin: test
+  - plugin: fake
     cloud: "${account_file}"
 `, reg, scopeWith(map[string]string{"account_file": "prod-cloud.json"}))
 	if out != "" {
 		t.Fatalf("unexpected diagnostics:\n%s", out)
 	}
 
-	p, ok := reg.ProviderFor("test.network", "test")
+	p, ok := reg.ProviderFor("fake.network", "fake")
 	if !ok {
 		t.Fatal("no instance was constructed")
 	}
@@ -70,7 +70,7 @@ func TestAPluginsRefusalIsReportedAgainstTheDeclarationThatCausedIt(t *testing.T
 	_, out := rendered(t, `
 project: p
 providers:
-  - plugin: test
+  - plugin: fake
     name: acct2
     clowd: other.json
 `, pluginRegistry(t, dir), variables.Scope{})
@@ -95,7 +95,7 @@ providers:
 	if out == "" {
 		t.Fatal("a `plugin:` naming nothing registered must be reported")
 	}
-	if !strings.Contains(out, "awz") || !strings.Contains(out, "test") {
+	if !strings.Contains(out, "awz") || !strings.Contains(out, "fake") {
 		t.Errorf("the diagnostic needs the name written and the names available:\n%s", out)
 	}
 }
@@ -108,11 +108,11 @@ func TestAProjectWithNoProvidersBlockGetsOneImplicitInstance(t *testing.T) {
 	if out != "" {
 		t.Fatalf("unexpected diagnostics:\n%s", out)
 	}
-	if got := table.DefaultName(); got != "test" {
+	if got := table.DefaultName(); got != "fake" {
 		t.Errorf("DefaultName = %q, want the sole plugin's name", got)
 	}
 	// Constructed, not merely named: a table entry nothing built dispatches nowhere.
-	if _, ok := reg.ProviderFor("test.network", "test"); !ok {
+	if _, ok := reg.ProviderFor("fake.network", "fake"); !ok {
 		t.Error("the implicit instance was named but never constructed")
 	}
 }
@@ -126,7 +126,7 @@ func TestAnAlreadyRegisteredInstanceIsLeftAlone(t *testing.T) {
 	dir := t.TempDir()
 	reg := registry.New()
 	mine := testprovider.New(filepath.Join(dir, "mine.json"))
-	if err := reg.Register("test", mine); err != nil {
+	if err := reg.Register("fake", mine); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 
@@ -134,10 +134,10 @@ func TestAnAlreadyRegisteredInstanceIsLeftAlone(t *testing.T) {
 	if out != "" {
 		t.Fatalf("unexpected diagnostics:\n%s", out)
 	}
-	if got := table.DefaultName(); got != "test" {
+	if got := table.DefaultName(); got != "fake" {
 		t.Errorf("DefaultName = %q, want the sole registered instance", got)
 	}
-	got, _ := reg.ProviderFor("test.network", "test")
+	got, _ := reg.ProviderFor("fake.network", "fake")
 	if got != mine {
 		t.Error("the caller's own provider object was replaced")
 	}
@@ -152,10 +152,10 @@ func TestAnAlreadyRegisteredInstanceIsLeftAlone(t *testing.T) {
 // provider and passed with the halt deleted, for exactly that reason.
 type permissivePlugin struct{ built int }
 
-func (pl *permissivePlugin) Name() string { return "test" }
+func (pl *permissivePlugin) Name() string { return "fake" }
 func (pl *permissivePlugin) Definitions() []*schema.ResourceDefinition {
 	return []*schema.ResourceDefinition{{
-		Type:         "test.network",
+		Type:         "fake.network",
 		Attributes:   map[string]schema.Attribute{"cidr": {Kind: value.KindString, Required: true}},
 		Capabilities: schema.Capabilities{Create: true, Read: true, Delete: true},
 	}}
@@ -184,7 +184,7 @@ func TestAnUnresolvableInstanceConfigurationConstructsNothing(t *testing.T) {
 	_, out := rendered(t, `
 project: p
 providers:
-  - plugin: test
+  - plugin: fake
     cloud: "${nosuchvariable}"
 `, reg, variables.Scope{})
 	if out == "" {
@@ -194,7 +194,7 @@ providers:
 		t.Error("the plugin was asked to build an instance from configuration that did not " +
 			"resolve; nothing but the plugin's own goodwill then decides where resources land")
 	}
-	if _, ok := reg.ProviderFor("test.network", "test"); ok {
+	if _, ok := reg.ProviderFor("fake.network", "fake"); ok {
 		t.Error("an instance was constructed from configuration that did not resolve")
 	}
 }

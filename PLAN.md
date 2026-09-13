@@ -2476,10 +2476,29 @@ Tests this section requires, each with a sabotage proving it can fail:
    registry registers every plugin through the host.
 4. Subprocess launch, cookie, handshake, search path, `plugins:` constraints, stderr
    forwarding, crash and cancel handling.
-5. `infrata-provider-fake` builds `infrata-plugin-fake`; the subprocess suite; the
-   `init` scaffold and `examples/shop` move to `fake.*`; the builtin `test` plugin and
-   `providers/test` are deleted. Whether existing `test.*` STATE gets a migration is
-   open — see §21's note, now that the migration path is no longer lossy.
+5. **DONE 2026-09-13.** `infrata-provider-fake` builds `infrata-plugin-fake` (v0.1.1, 8
+   platforms); the state migration landed (§21.1); the `init` scaffold and `examples/shop`
+   use `fake.*`; and **a shipped infrata carries no provider at all.**
+
+   How the test suites divide, which is the part worth knowing:
+
+   - **tests/integration builds and runs the REAL plugin** from the sibling repository,
+     with `--plugin-dir`. So the path a user takes — a subprocess, a cookie, a handshake,
+     stderr forwarding, the host's trust rules over a real pipe — is proved somewhere, and
+     `TestAShippedBuildCarriesNoProvider` runs the binary with NO plugin installed to prove
+     the builtin is really gone. That test exists because every other suite injects the
+     double, so a build that regained a compiled-in provider would pass all of them.
+   - **Every in-process suite injects the fake double** through `internal/cli`'s TestMain,
+     which is what §31.1's Testing section always said: the unit and fast suites register
+     the fake provider over `pluginhost.InProcess`.
+   - `providers/test` SURVIVES as the engine's test double, not as a shipped provider. It
+     shares an origin with infrata-plugin-fake only because that binary was ported from
+     it, and what keeps the two honest is that tests/integration runs the real one.
+
+   CI checks out both repositories and sets `INFRATA_REQUIRE_PLUGIN`, which turns the
+   integration suite's skip into a failure: a run that silently skips its integration suite
+   reports green for tests that never executed. It needs a `PLUGIN_REPO_TOKEN` secret,
+   because the plugin repository is private.
 6. Documentation: `explain` and `validate` errors for a missing or incompatible plugin, and
    an authoring guide for the SDK.
 

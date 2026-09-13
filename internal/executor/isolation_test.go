@@ -121,11 +121,11 @@ func TestApplyIsolatesAFailureEndToEnd(t *testing.T) {
 	p := &planner.Plan{
 		Version: planner.PlanVersion,
 		Operations: []planner.Operation{
-			{Provider: "test", Address: address.Address{Name: "a"}, Type: "test.network", Kind: planner.OpCreate,
+			{Provider: "test", Address: address.Address{Name: "a"}, Type: "fake.network", Kind: planner.OpCreate,
 				After: map[string]value.Value{"cidr": value.String("10.0.0.0/24", value.SourceExplicit)}},
-			{Provider: "test", Address: address.Address{Name: "b"}, Type: "test.network", Kind: planner.OpCreate,
+			{Provider: "test", Address: address.Address{Name: "b"}, Type: "fake.network", Kind: planner.OpCreate,
 				After: map[string]value.Value{"cidr": value.String("10.0.1.0/24", value.SourceExplicit)}},
-			{Provider: "test", Address: address.Address{Name: "c"}, Type: "test.network", Kind: planner.OpCreate,
+			{Provider: "test", Address: address.Address{Name: "c"}, Type: "fake.network", Kind: planner.OpCreate,
 				After: map[string]value.Value{"cidr": value.String("10.0.2.0/24", value.SourceExplicit)}},
 		},
 	}
@@ -374,13 +374,13 @@ func TestApplyEmitsExactlyOneEventSkippedPerStrandedNodeThroughOnEvent(t *testin
 	p := &planner.Plan{
 		Version: planner.PlanVersion,
 		Operations: []planner.Operation{
-			{Provider: "test", Address: address.Address{Name: "a"}, Type: "test.network", Kind: planner.OpCreate,
+			{Provider: "test", Address: address.Address{Name: "a"}, Type: "fake.network", Kind: planner.OpCreate,
 				After: map[string]value.Value{"cidr": value.String("10.0.0.0/24", value.SourceExplicit)}},
-			{Provider: "test", Address: address.Address{Name: "b"}, Type: "test.network", Kind: planner.OpCreate,
+			{Provider: "test", Address: address.Address{Name: "b"}, Type: "fake.network", Kind: planner.OpCreate,
 				After: map[string]value.Value{"cidr": value.String("10.0.1.0/24", value.SourceExplicit)}},
-			{Provider: "test", Address: address.Address{Name: "c"}, Type: "test.network", Kind: planner.OpCreate,
+			{Provider: "test", Address: address.Address{Name: "c"}, Type: "fake.network", Kind: planner.OpCreate,
 				After: map[string]value.Value{"cidr": value.String("10.0.2.0/24", value.SourceExplicit)}},
-			{Provider: "test", Address: address.Address{Name: "d"}, Type: "test.network", Kind: planner.OpCreate,
+			{Provider: "test", Address: address.Address{Name: "d"}, Type: "fake.network", Kind: planner.OpCreate,
 				After: map[string]value.Value{"cidr": value.String("10.0.3.0/24", value.SourceExplicit)}},
 		},
 	}

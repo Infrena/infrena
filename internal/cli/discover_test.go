@@ -8,7 +8,7 @@ import (
 )
 
 func result(typ, id, name string) discovery.Result {
-	return discovery.Result{Type: typ, ProviderID: id, Name: name, Provider: "test"}
+	return discovery.Result{Type: typ, ProviderID: id, Name: name, Provider: "fake"}
 }
 
 // TestDiscoverShowsTheNameEachResourceWouldGet. §25's table exists so a user
@@ -16,12 +16,12 @@ func result(typ, id, name string) discovery.Result {
 func TestDiscoverShowsTheNameEachResourceWouldGet(t *testing.T) {
 	var sb strings.Builder
 	renderDiscovered(&sb, []discovery.Result{
-		result("test.database", "db-9", "orders"),
-		result("test.network", "vpc-0a1b", "vpc-0a1b"),
+		result("fake.database", "db-9", "orders"),
+		result("fake.network", "vpc-0a1b", "vpc-0a1b"),
 	}, nil)
 	got := sb.String()
 
-	for _, want := range []string{"TYPE", "ID", "NAME", "test.database", "db-9", "orders", "vpc-0a1b"} {
+	for _, want := range []string{"TYPE", "ID", "NAME", "fake.database", "db-9", "orders", "vpc-0a1b"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("output does not contain %q:\n%s", want, got)
 		}
@@ -40,8 +40,8 @@ func TestDiscoverShowsTheNameEachResourceWouldGet(t *testing.T) {
 func TestDiscoverMakesACollisionVisible(t *testing.T) {
 	var sb strings.Builder
 	renderDiscovered(&sb, []discovery.Result{
-		result("test.database", "db-9", "orders"),
-		result("test.database", "db-10", "orders_db-10"),
+		result("fake.database", "db-9", "orders"),
+		result("fake.database", "db-10", "orders_db-10"),
 	}, nil)
 	got := sb.String()
 
@@ -53,7 +53,7 @@ func TestDiscoverMakesACollisionVisible(t *testing.T) {
 	lines := strings.Split(got, "\n")
 	var names []string
 	for _, l := range lines {
-		if f := strings.Fields(l); len(f) == 3 && strings.HasPrefix(f[0], "test.") {
+		if f := strings.Fields(l); len(f) == 3 && strings.HasPrefix(f[0], "fake.") {
 			names = append(names, f[2])
 		}
 	}
@@ -72,12 +72,12 @@ func TestDiscoverMakesACollisionVisible(t *testing.T) {
 func TestDiscoverOnAnEmptyAccountSaysSo(t *testing.T) {
 	var all, filtered strings.Builder
 	renderDiscovered(&all, nil, nil)
-	renderDiscovered(&filtered, nil, []string{"test.database"})
+	renderDiscovered(&filtered, nil, []string{"fake.database"})
 
 	if !strings.Contains(all.String(), "Nothing found.") {
 		t.Errorf("unfiltered empty output = %q", all.String())
 	}
-	if !strings.Contains(filtered.String(), "test.database") {
+	if !strings.Contains(filtered.String(), "fake.database") {
 		t.Errorf("a filtered empty result must name the type asked about, or a user cannot "+
 			"tell it from an empty account: %q", filtered.String())
 	}
@@ -87,10 +87,10 @@ func TestDiscoverOnAnEmptyAccountSaysSo(t *testing.T) {
 // the table is long enough to scroll.
 func TestDiscoverCountsWhatItFound(t *testing.T) {
 	var one, two strings.Builder
-	renderDiscovered(&one, []discovery.Result{result("test.database", "db-9", "orders")}, nil)
+	renderDiscovered(&one, []discovery.Result{result("fake.database", "db-9", "orders")}, nil)
 	renderDiscovered(&two, []discovery.Result{
-		result("test.database", "db-9", "orders"),
-		result("test.network", "net-1", "net-1"),
+		result("fake.database", "db-9", "orders"),
+		result("fake.network", "net-1", "net-1"),
 	}, nil)
 
 	if !strings.Contains(one.String(), "1 resource found") {

@@ -1,6 +1,6 @@
 Plan for project "myapp", environment "dev":
 
-  + test.network.network
+  + fake.network.network
       cidr: "10.20.0.0/16"
       id: (known after apply)
 

@@ -73,7 +73,7 @@ func varProject(t *testing.T, variablesYML string) string {
 project: myapp
 resources:
   net:
-    type: test.network
+    type: fake.network
     cidr: ${cidr}
 `)
 	writeIn(t, dir, "variables.yml", variablesYML)

@@ -33,7 +33,7 @@ func TestRenderIncludesLocationExpectationAndAction(t *testing.T) {
 	ds := Diagnostics{{
 		Severity: SeverityError,
 		Summary:  "application requires a network",
-		Detail:   "No network resource was found in environment \"production\".\nExpected one of:\n  test.network",
+		Detail:   "No network resource was found in environment \"production\".\nExpected one of:\n  fake.network",
 		Action:   "Add a networking module or resource.",
 		Origin:   value.Origin{File: "infra.yml", Line: 12, Column: 3},
 	}}

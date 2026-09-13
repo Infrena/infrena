@@ -28,7 +28,7 @@ func configAtScope(s value.Scope, replicas int64) ResolvedConfig {
 		Resources: map[string]*resource.ResolvedResource{
 			addr.String(): {
 				Address: addr,
-				Type:    "test.database",
+				Type:    "fake.database",
 				Attrs: map[string]value.Value{
 					"replicas": value.Int(replicas, value.SourceVariable).WithScope(s),
 				},

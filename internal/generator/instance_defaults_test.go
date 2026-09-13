@@ -28,7 +28,7 @@ func renderWith(t *testing.T, rs []Resource, defaults map[string]map[string]valu
 
 func database(instance string, attrs map[string]value.Value) Resource {
 	return Resource{
-		Name: "db", Type: "test.database", ProviderID: "db-1",
+		Name: "db", Type: "fake.database", ProviderID: "db-1",
 		Provider: instance, Attributes: attrs,
 	}
 }

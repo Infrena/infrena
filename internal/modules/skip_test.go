@@ -65,10 +65,10 @@ func TestOnlyKeepsAResourceInItsNamedEnvironments(t *testing.T) {
 	body := twoEnvs + `
 resources:
   always:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
   prod_only:
-    type: test.network
+    type: fake.network
     cidr: 10.1.0.0/16
     only: production
 `
@@ -95,10 +95,10 @@ func TestSkipRemovesAResourceFromItsNamedEnvironments(t *testing.T) {
 	body := twoEnvs + `
 resources:
   always:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
   not_in_dev:
-    type: test.network
+    type: fake.network
     cidr: 10.1.0.0/16
     skip: [dev]
 `
@@ -119,7 +119,7 @@ func TestASkippedResourceIsMarkedNotDropped(t *testing.T) {
 	exp, _ := expandIn(t, Env{Name: "dev", Declared: []string{"dev", "production"}}, twoEnvs+`
 resources:
   gone:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
     only: production
 `, nil)
@@ -150,7 +150,7 @@ func TestAnUnknownEnvironmentNameIsAnError(t *testing.T) {
 	_, out := expandIn(t, Env{Name: "dev", Declared: []string{"dev", "production"}}, twoEnvs+`
 resources:
   a:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
     skip: [prod]
 `, nil)
@@ -174,7 +174,7 @@ func TestAProjectWithNoEnvironmentsChecksNothing(t *testing.T) {
 project: p
 resources:
   a:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
     skip: [anything]
 `, nil)
@@ -194,7 +194,7 @@ func TestSkipMayBeAnExpression(t *testing.T) {
 		decl, dir := declIn(t, twoEnvs+`
 resources:
   a:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
     `+attr+"\n", nil)
 		exp, ds := Expand(decl, scope, nil, Env{Name: "dev", Declared: []string{"dev", "production"}}, dir, paths{})
@@ -225,10 +225,10 @@ func TestAFilterThatDependsOnAResourceIsAnError(t *testing.T) {
 	_, out := expandIn(t, Env{Name: "dev", Declared: []string{"dev", "production"}}, twoEnvs+`
 resources:
   net:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
   a:
-    type: test.network
+    type: fake.network
     cidr: 10.1.0.0/16
     only: ${net.id}
 `, nil)
@@ -248,7 +248,7 @@ func TestAnUndefinedVariableInAFilterIsAnError(t *testing.T) {
 	_, out := expandIn(t, Env{Name: "dev", Declared: []string{"dev", "production"}}, twoEnvs+`
 resources:
   a:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
     only: ${nosuchvariable}
 `, nil)
@@ -285,7 +285,7 @@ inputs:
     default: {}
 resources:
   db:
-    type: test.database
+    type: fake.database
     engine: postgres
     tags: ${tags}
 `,

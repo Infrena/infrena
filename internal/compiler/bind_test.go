@@ -55,7 +55,7 @@ func TestBindLiteralAttributesPassThrough(t *testing.T) {
 project: myapp
 resources:
   network:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
 `)
 	cfg, ds := bindReferences(rootOnly(t, p, Options{Environment: "dev"}), Options{Environment: "dev"}, testRegistry(t), testTable())
@@ -76,10 +76,10 @@ func TestBindResourceReferenceBecomesUnknownWithAnEdge(t *testing.T) {
 project: myapp
 resources:
   network:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
   database:
-    type: test.database
+    type: fake.database
     engine: postgres
     network: ${network.id}
 `)
@@ -105,10 +105,10 @@ func TestBindExplicitDependsOnBecomesAnEdge(t *testing.T) {
 project: myapp
 resources:
   network:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
   database:
-    type: test.database
+    type: fake.database
     engine: postgres
     depends_on: [network]
 `)
@@ -125,10 +125,10 @@ func TestBindDeduplicatesEdges(t *testing.T) {
 project: myapp
 resources:
   network:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
   database:
-    type: test.database
+    type: fake.database
     engine: postgres
     network: ${network.id}
     depends_on: [network]
@@ -144,7 +144,7 @@ func TestBindReferenceToUnknownResourceIsAnError(t *testing.T) {
 project: myapp
 resources:
   database:
-    type: test.database
+    type: fake.database
     engine: postgres
     network: ${nonexistent.id}
 `)
@@ -164,7 +164,7 @@ func TestBindDependsOnUnknownResourceIsAnError(t *testing.T) {
 project: myapp
 resources:
   database:
-    type: test.database
+    type: fake.database
     engine: postgres
     depends_on: [nonexistent]
 `)
@@ -178,7 +178,7 @@ func TestBindSelfReferenceIsAnError(t *testing.T) {
 project: myapp
 resources:
   database:
-    type: test.database
+    type: fake.database
     engine: ${database.engine}
 `)
 	if _, ds := bindReferences(rootOnly(t, p, Options{Environment: "dev"}), Options{Environment: "dev"}, testRegistry(t), testTable()); !ds.HasErrors() {
@@ -191,7 +191,7 @@ func TestBindCarriesLifecycleAndOrigin(t *testing.T) {
 project: myapp
 resources:
   database:
-    type: test.database
+    type: fake.database
     engine: postgres
     lifecycle:
       prevent_destroy: true
@@ -211,7 +211,7 @@ func TestBindResolvesCliVariables(t *testing.T) {
 project: myapp
 resources:
   network:
-    type: test.network
+    type: fake.network
     cidr: ${cidr_block}
 `)
 	opts := Options{Environment: "dev", Vars: map[string]string{"cidr_block": "10.9.0.0/16"}}
@@ -229,10 +229,10 @@ func TestBindReportsEveryProblemAtOnce(t *testing.T) {
 project: myapp
 resources:
   a:
-    type: test.network
+    type: fake.network
     cidr: ${missing_one.id}
   b:
-    type: test.network
+    type: fake.network
     cidr: ${missing_two.id}
 `)
 	_, ds := bindReferences(rootOnly(t, p, Options{Environment: "dev"}), Options{Environment: "dev"}, testRegistry(t), testTable())
@@ -246,10 +246,10 @@ func TestBindPropagatesSensitivityIntoUnknowns(t *testing.T) {
 project: myapp
 resources:
   network:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
   database:
-    type: test.database
+    type: fake.database
     engine: postgres
     password: ${secret_value}-${network.id}
 `)
@@ -282,10 +282,10 @@ func TestBindDoesNotFalselyFlagAPrefixNameAsSelfReference(t *testing.T) {
 project: myapp
 resources:
   db:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
   database:
-    type: test.database
+    type: fake.database
     engine: postgres
     network: ${db.id}
 `)
@@ -315,10 +315,10 @@ func TestBindResolvesInterpolationInsideAList(t *testing.T) {
 project: myapp
 resources:
   network:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
   database:
-    type: test.database
+    type: fake.database
     engine: postgres
     tags:
       - "${network.id}"
@@ -386,19 +386,19 @@ func TestBindSortsDependsOnEveryTime(t *testing.T) {
 project: myapp
 resources:
   zulu:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
   yankee:
-    type: test.network
+    type: fake.network
     cidr: 10.1.0.0/16
   xray:
-    type: test.network
+    type: fake.network
     cidr: 10.2.0.0/16
   whiskey:
-    type: test.network
+    type: fake.network
     cidr: 10.3.0.0/16
   app:
-    type: test.network
+    type: fake.network
     cidr: 10.9.0.0/16
     depends_on: [zulu, yankee, xray, whiskey]
 `

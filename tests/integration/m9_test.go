@@ -21,10 +21,10 @@ environments:
   sandbox: {}
 resources:
   net:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
   db:
-    type: test.database
+    type: fake.database
     engine: postgres
     network: ${net.id}
 `
@@ -191,11 +191,11 @@ inputs:
     default: []
 resources:
   primary:
-    type: test.database
+    type: fake.database
     engine: postgres
     network: ${network}
   replica:
-    type: test.database
+    type: fake.database
     engine: postgres
     network: ${network}
     only: ${replica_in}
@@ -212,15 +212,15 @@ modules:
   - ./modules/stack
 resources:
   net:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
   debug_box:
-    type: test.application
+    type: fake.application
     image: debug:1
     database_url: fixed
     only: [dev, sandbox]
   audit:
-    type: test.application
+    type: fake.application
     image: audit:1
     database_url: fixed
     skip: [dev]
@@ -243,10 +243,10 @@ func TestOneConfigurationFourEnvironments(t *testing.T) {
 
 	want := map[string][]string{
 		// present, absent
-		"dev":        {"test.application.debug_box", "test.application.audit"},
-		"staging":    {"test.application.audit", "test.application.debug_box"},
-		"sandbox":    {"test.application.debug_box", ""},
-		"production": {"test.database.module.stack.replica", "test.application.debug_box"},
+		"dev":        {"fake.application.debug_box", "fake.application.audit"},
+		"staging":    {"fake.application.audit", "fake.application.debug_box"},
+		"sandbox":    {"fake.application.debug_box", ""},
+		"production": {"fake.database.module.stack.replica", "fake.application.debug_box"},
 	}
 
 	for _, env := range []string{"dev", "staging", "sandbox", "production"} {
@@ -270,7 +270,7 @@ func TestOneConfigurationFourEnvironments(t *testing.T) {
 		}
 		// Every environment keeps the unfiltered resources, or the filters are
 		// removing more than they were asked to.
-		for _, always := range []string{"test.network.net", "module.stack.primary"} {
+		for _, always := range []string{"fake.network.net", "module.stack.primary"} {
 			if !strings.Contains(p.Stdout, always) {
 				t.Errorf("%s lost %s, which no filter mentions:\n%s", env, always, p.Stdout)
 			}
@@ -309,10 +309,10 @@ environments:
   staging: {}
 resources:
   net:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
   extra:
-    type: test.network
+    type: fake.network
     cidr: 10.1.0.0/16
 `
 	dir := project(t, body)
@@ -324,10 +324,10 @@ resources:
 
 	// Now retire `extra` from dev only.
 	patched := strings.Replace(body, `  extra:
-    type: test.network
+    type: fake.network
     cidr: 10.1.0.0/16
 `, `  extra:
-    type: test.network
+    type: fake.network
     cidr: 10.1.0.0/16
     skip: [dev]
 `, 1)
@@ -343,7 +343,7 @@ resources:
 		t.Fatalf("plan dev exit = %d, want 2 (a destroy):\n%s", devPlan.ExitCode, devPlan.combined())
 	}
 	requireContains(t, devPlan.Stdout, "1 to destroy")
-	requireContains(t, devPlan.Stdout, "test.network.extra")
+	requireContains(t, devPlan.Stdout, "fake.network.extra")
 
 	// And staging is untouched — the filter named one environment.
 	if stagingPlan := run(t, dir, "plan", "staging"); stagingPlan.ExitCode != 0 {
@@ -361,7 +361,7 @@ environments:
     type: production
 resources:
   net:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
 `)
 	r := run(t, dir, "validate")

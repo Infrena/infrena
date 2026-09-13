@@ -32,7 +32,7 @@ func NewPlugin(dir string) *Plugin { return &Plugin{dir: dir} }
 var _ provider.Plugin = (*Plugin)(nil)
 
 // Name returns the plugin name, which is what `plugin:` names.
-func (pl *Plugin) Name() string { return "test" }
+func (pl *Plugin) Name() string { return "fake" }
 
 // Definitions returns the resource types the fake provider offers. Identical for
 // every instance, and available before any of them is configured.
@@ -79,7 +79,7 @@ func (pl *Plugin) New(cfg provider.Config) (provider.Provider, error) {
 
 // defaultCloudPath is where an instance's world lives when it names no file.
 func defaultCloudPath(instance string) string {
-	if instance == "" || instance == "test" {
+	if instance == "" || instance == "fake" {
 		return DefaultCloudPath
 	}
 	return filepath.Join(filepath.Dir(DefaultCloudPath), "fake-cloud-"+instance+".json")
@@ -101,7 +101,7 @@ func rejectUnknownKeys(config map[string]value.Value) error {
 		return nil
 	}
 	sort.Strings(unknown)
-	return fmt.Errorf("unknown configuration %s; the test provider accepts only `cloud`",
+	return fmt.Errorf("unknown configuration %s; the fake provider accepts only `cloud`",
 		strings.Join(quoteAll(unknown), ", "))
 }
 

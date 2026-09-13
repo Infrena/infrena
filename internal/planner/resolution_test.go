@@ -116,21 +116,21 @@ func operation(t *testing.T, p *Plan, name string) Operation {
 // incidentally satisfied.
 func TestPlanConvergesWhenAReferencedAttributeIsAlreadyKnown(t *testing.T) {
 	cfg := config(
-		configured("network", "test.network", map[string]value.Value{
+		configured("network", "fake.network", map[string]value.Value{
 			"cidr": str("10.0.0.0/16"),
 		}),
-		dependent("database", "test.database", map[string]value.Value{
+		dependent("database", "fake.database", map[string]value.Value{
 			"engine":  str("postgres"),
 			"size":    value.Int(10, value.SourceDefault),
 			"network": deferred(t, "${network.id}"),
 		}, "network"),
 	)
 	live := []*resource.ResourceState{
-		recorded("network", "test.network", map[string]value.Value{
+		recorded("network", "fake.network", map[string]value.Value{
 			"cidr": str("10.0.0.0/16").WithSource(value.SourceProvider),
 			"id":   str("net-1").WithSource(value.SourceProvider),
 		}),
-		recordedDependent("database", "test.database", map[string]value.Value{
+		recordedDependent("database", "fake.database", map[string]value.Value{
 			"engine":   str("postgres").WithSource(value.SourceProvider),
 			"size":     value.Int(10, value.SourceProvider),
 			"network":  str("net-1").WithSource(value.SourceProvider),
@@ -173,29 +173,29 @@ func TestPlanConvergesWhenAReferencedAttributeIsAlreadyKnown(t *testing.T) {
 // leaves the second proposing an update forever.
 func TestPlanConvergesThroughAChainOfReferences(t *testing.T) {
 	cfg := config(
-		configured("network", "test.network", map[string]value.Value{
+		configured("network", "fake.network", map[string]value.Value{
 			"cidr": str("10.0.0.0/16"),
 		}),
-		dependent("database", "test.database", map[string]value.Value{
+		dependent("database", "fake.database", map[string]value.Value{
 			"engine":  str("postgres"),
 			"network": deferred(t, "${network.id}"),
 		}, "network"),
-		dependent("application", "test.application", map[string]value.Value{
+		dependent("application", "fake.application", map[string]value.Value{
 			"image":        str("web:1"),
 			"database_url": deferred(t, "postgres://${database.endpoint}/app"),
 		}, "database"),
 	)
 	live := []*resource.ResourceState{
-		recorded("network", "test.network", map[string]value.Value{
+		recorded("network", "fake.network", map[string]value.Value{
 			"cidr": str("10.0.0.0/16"),
 			"id":   str("net-1"),
 		}),
-		recordedDependent("database", "test.database", map[string]value.Value{
+		recordedDependent("database", "fake.database", map[string]value.Value{
 			"engine":   str("postgres"),
 			"network":  str("net-1"),
 			"endpoint": str("db-1.db.test"),
 		}, "network"),
-		recordedDependent("application", "test.application", map[string]value.Value{
+		recordedDependent("application", "fake.application", map[string]value.Value{
 			"image":        str("web:1"),
 			"database_url": str("postgres://db-1.db.test/app"),
 			"url":          str("app-1.test"),
@@ -232,10 +232,10 @@ func TestPlanConvergesThroughAChainOfReferences(t *testing.T) {
 // which is why this asserts on Expr and not just on Known.
 func TestPlanLeavesAReferenceDeferredWhenItsDependencyIsBeingCreated(t *testing.T) {
 	cfg := config(
-		configured("network", "test.network", map[string]value.Value{
+		configured("network", "fake.network", map[string]value.Value{
 			"cidr": str("10.0.0.0/16"),
 		}),
-		dependent("database", "test.database", map[string]value.Value{
+		dependent("database", "fake.database", map[string]value.Value{
 			"engine":  str("postgres"),
 			"network": deferred(t, "${network.id}"),
 		}, "network"),
@@ -289,17 +289,17 @@ func TestPlanLeavesAReferenceDeferredWhenItsDependencyIsBeingCreated(t *testing.
 // not a broken apply.
 func TestPlanResolvesAReferenceForAResourceBeingCreated(t *testing.T) {
 	cfg := config(
-		configured("network", "test.network", map[string]value.Value{
+		configured("network", "fake.network", map[string]value.Value{
 			"cidr": str("10.0.0.0/16"),
 		}),
-		dependent("database", "test.database", map[string]value.Value{
+		dependent("database", "fake.database", map[string]value.Value{
 			"engine":  str("postgres"),
 			"network": deferred(t, "${network.id}"),
 		}, "network"),
 	)
 	// Only the network has ever been applied.
 	live := []*resource.ResourceState{
-		recorded("network", "test.network", map[string]value.Value{
+		recorded("network", "fake.network", map[string]value.Value{
 			"cidr": str("10.0.0.0/16"),
 			"id":   str("net-1"),
 		}),
@@ -343,20 +343,20 @@ func TestPlanResolvesAReferenceForAResourceBeingCreated(t *testing.T) {
 // the database must be reported as changing.
 func TestPlanLeavesAReferenceDeferredWhenItsDependencyIsBeingReplaced(t *testing.T) {
 	cfg := config(
-		configured("network", "test.network", map[string]value.Value{
+		configured("network", "fake.network", map[string]value.Value{
 			"cidr": str("10.9.0.0/16"),
 		}),
-		dependent("database", "test.database", map[string]value.Value{
+		dependent("database", "fake.database", map[string]value.Value{
 			"engine":  str("postgres"),
 			"network": deferred(t, "${network.id}"),
 		}, "network"),
 	)
 	live := []*resource.ResourceState{
-		recorded("network", "test.network", map[string]value.Value{
+		recorded("network", "fake.network", map[string]value.Value{
 			"cidr": str("10.0.0.0/16"),
 			"id":   str("net-1"),
 		}),
-		recorded("database", "test.database", map[string]value.Value{
+		recorded("database", "fake.database", map[string]value.Value{
 			"engine":   str("postgres"),
 			"network":  str("net-1"),
 			"endpoint": str("db-1.db.test"),
@@ -394,10 +394,10 @@ func TestPlanLeavesAReferenceDeferredWhenItsDependencyIsBeingReplaced(t *testing
 // this change touches.
 func TestPlanIsUnchangedForAConfigurationThatWasNeverApplied(t *testing.T) {
 	cfg := config(
-		configured("network", "test.network", map[string]value.Value{
+		configured("network", "fake.network", map[string]value.Value{
 			"cidr": str("10.0.0.0/16"),
 		}),
-		dependent("database", "test.database", map[string]value.Value{
+		dependent("database", "fake.database", map[string]value.Value{
 			"engine":  str("postgres"),
 			"network": deferred(t, "${network.id}"),
 		}, "network"),
@@ -435,21 +435,21 @@ func TestPlanIsUnchangedForAConfigurationThatWasNeverApplied(t *testing.T) {
 // identical configuration, state and observations must be byte-identical.
 func TestPlanIsDeterministicWhenReferencesResolve(t *testing.T) {
 	cfg := config(
-		configured("network", "test.network", map[string]value.Value{
+		configured("network", "fake.network", map[string]value.Value{
 			"cidr": str("10.0.0.0/16"),
 		}),
-		dependent("database", "test.database", map[string]value.Value{
+		dependent("database", "fake.database", map[string]value.Value{
 			"engine":  str("postgres"),
 			"network": deferred(t, "${network.id}"),
 			"tags":    value.Map(map[string]value.Value{"team": str("core"), "tier": str("db")}, value.SourceExplicit),
 		}, "network"),
 	)
 	live := []*resource.ResourceState{
-		recorded("network", "test.network", map[string]value.Value{
+		recorded("network", "fake.network", map[string]value.Value{
 			"cidr": str("10.0.0.0/16"),
 			"id":   str("net-1"),
 		}),
-		recorded("database", "test.database", map[string]value.Value{
+		recorded("database", "fake.database", map[string]value.Value{
 			"engine":   str("postgres"),
 			"network":  str("net-1"),
 			"endpoint": str("db-1.db.test"),
@@ -484,8 +484,8 @@ func TestPlanIsDeterministicWhenReferencesResolve(t *testing.T) {
 // returns for a malformed graph — produces a visibly different sequence.
 func TestResolutionOrderPutsDependenciesFirst(t *testing.T) {
 	cfg := config(
-		configured("zeta", "test.network", map[string]value.Value{"cidr": str("10.0.0.0/16")}),
-		dependent("alpha", "test.database", map[string]value.Value{
+		configured("zeta", "fake.network", map[string]value.Value{"cidr": str("10.0.0.0/16")}),
+		dependent("alpha", "fake.database", map[string]value.Value{
 			"engine":  str("postgres"),
 			"network": deferred(t, "${zeta.id}"),
 		}, "zeta"),
@@ -505,11 +505,11 @@ func TestResolutionOrderPutsDependenciesFirst(t *testing.T) {
 // in state and not in configuration, and before this change they reached
 // Compute through planAddresses alone.
 func TestResolutionOrderIncludesAddressesOnlyInState(t *testing.T) {
-	cfg := config(configured("network", "test.network", map[string]value.Value{"cidr": str("10.0.0.0/16")}))
+	cfg := config(configured("network", "fake.network", map[string]value.Value{"cidr": str("10.0.0.0/16")}))
 	st := stateOf(
-		recorded("network", "test.network", map[string]value.Value{"cidr": str("10.0.0.0/16")}),
-		recorded("gone", "test.database", map[string]value.Value{"engine": str("postgres")}),
-		recorded("alsogone", "test.database", map[string]value.Value{"engine": str("postgres")}),
+		recorded("network", "fake.network", map[string]value.Value{"cidr": str("10.0.0.0/16")}),
+		recorded("gone", "fake.database", map[string]value.Value{"engine": str("postgres")}),
+		recorded("alsogone", "fake.database", map[string]value.Value{"engine": str("postgres")}),
 	)
 
 	for i := range 50 {
@@ -538,8 +538,8 @@ func TestResolutionOrderIncludesAddressesOnlyInState(t *testing.T) {
 // earlier tests in this file passed against a broken scope.
 func TestOperationsAreEmittedInAddressOrder(t *testing.T) {
 	cfg := config(
-		configured("zeta", "test.network", map[string]value.Value{"cidr": str("10.0.0.0/16")}),
-		dependent("alpha", "test.database", map[string]value.Value{
+		configured("zeta", "fake.network", map[string]value.Value{"cidr": str("10.0.0.0/16")}),
+		dependent("alpha", "fake.database", map[string]value.Value{
 			"engine":  str("postgres"),
 			"network": deferred(t, "${zeta.id}"),
 		}, "zeta"),
@@ -548,11 +548,11 @@ func TestOperationsAreEmittedInAddressOrder(t *testing.T) {
 	// all — resolutionOrder puts removals after every configured resource —
 	// so it pins emission order against the removal tail as well.
 	st := stateOf(
-		recorded("zeta", "test.network", map[string]value.Value{
+		recorded("zeta", "fake.network", map[string]value.Value{
 			"cidr": str("10.0.0.0/16"),
 			"id":   str("net-1"),
 		}),
-		recorded("mu", "test.database", map[string]value.Value{"engine": str("postgres")}),
+		recorded("mu", "fake.database", map[string]value.Value{"engine": str("postgres")}),
 	)
 
 	// Deciding order for this fixture is [zeta alpha mu]; emitted order must
@@ -634,8 +634,8 @@ func TestDiagnosticsAreEmittedInAddressOrder(t *testing.T) {
 // which is precisely the signal that makes a mutation result unreadable.
 func TestResolutionOrderSurvivesADependencyOutsideConfiguration(t *testing.T) {
 	cfg := config(
-		configured("network", "test.network", map[string]value.Value{"cidr": str("10.0.0.0/16")}),
-		dependent("database", "test.database", map[string]value.Value{
+		configured("network", "fake.network", map[string]value.Value{"cidr": str("10.0.0.0/16")}),
+		dependent("database", "fake.database", map[string]value.Value{
 			"engine": str("postgres"),
 		}, "network", "vanished"),
 	)
@@ -674,10 +674,10 @@ func TestResolutionOrderSurvivesADependencyOutsideConfiguration(t *testing.T) {
 // fallback for an unrelated problem.
 func TestResolutionOrderFallsBackWithoutLosingRemovals(t *testing.T) {
 	cfg := config(
-		dependent("alpha", "test.database", map[string]value.Value{"engine": str("postgres")}, "zeta"),
-		dependent("zeta", "test.network", map[string]value.Value{"cidr": str("10.0.0.0/16")}, "alpha"),
+		dependent("alpha", "fake.database", map[string]value.Value{"engine": str("postgres")}, "zeta"),
+		dependent("zeta", "fake.network", map[string]value.Value{"cidr": str("10.0.0.0/16")}, "alpha"),
 	)
-	st := stateOf(recorded("mu", "test.database", map[string]value.Value{"engine": str("postgres")}))
+	st := stateOf(recorded("mu", "fake.database", map[string]value.Value{"engine": str("postgres")}))
 
 	order, panicked := recovered(func() []address.Address { return resolutionOrder(cfg, st) })
 	if panicked != nil {

@@ -35,7 +35,19 @@ jobs:
     name: check (${{ matrix.go }})
     runs-on: ubuntu-latest
 
+    defaults:
+      run:
+        # Everything below runs in this repository; the plugin is checked out beside it,
+        # which is where tests/integration looks for a sibling.
+        working-directory: infrata
+
     env:
+      # A CI RUN THAT SKIPS ITS INTEGRATION SUITE REPORTS GREEN FOR TESTS THAT NEVER RAN.
+      # tests/integration skips when infrata-plugin-fake is unavailable, which is right for
+      # a contributor who has not cloned it and wrong here. This turns that skip into a
+      # failure.
+      INFRATA_REQUIRE_PLUGIN: "1"
+
       # NO SILENT TOOLCHAIN UPGRADES. Go 1.21+ downloads a newer toolchain on its own
       # when go.mod asks for one, which would make the floor job pass by fetching
       # exactly the version it exists to prove is unnecessary. `local` makes the
@@ -54,6 +66,23 @@ jobs:
             name: current
     steps:
       - uses: actions/checkout@v4
+        with:
+          path: infrata
+
+      # THE FAKE PROVIDER IS A SEPARATE REPOSITORY (§31.1), and tests/integration builds
+      # it: a shipped infrata carries no provider, so the integration suite runs the same
+      # binary a user installs. That makes this checkout load-bearing rather than
+      # convenient.
+      #
+      # It needs a token because the repository is private (§31.1, "stays PRIVATE until
+      # feature complete"). Create PLUGIN_REPO_TOKEN as a secret with read access to
+      # infrata/infrata-provider-fake. Without it this step fails, which is deliberate:
+      # see INFRATA_REQUIRE_PLUGIN below.
+      - uses: actions/checkout@v4
+        with:
+          repository: infrata/infrata-provider-fake
+          path: infrata-provider-fake
+          token: ${{ secrets.PLUGIN_REPO_TOKEN }}
 
       - uses: actions/setup-go@v5
         with:

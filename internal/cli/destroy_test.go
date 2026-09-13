@@ -134,7 +134,7 @@ resources: {}
 	prov := testprovider.New(cloudPath)
 	rs, err := prov.Create(ctx, &resource.DesiredResource{
 		Address: address.Address{Name: "network"},
-		Type:    "test.network",
+		Type:    "fake.network",
 		Attrs: map[string]value.Value{
 			"cidr": value.String("10.20.0.0/16", value.SourceExplicit),
 		},
@@ -170,7 +170,7 @@ resources: {}
 	// plan that rendered a retained resource with "-" would be telling the
 	// user it is about to call Delete on infrastructure retain exists to
 	// protect.
-	if !strings.Contains(stdout.String(), "= test.network.network") {
+	if !strings.Contains(stdout.String(), "= fake.network.network") {
 		t.Errorf("plan did not render the retained resource as forgotten:\n%s", stdout.String())
 	}
 
@@ -238,7 +238,7 @@ resources: {}
 
 	guarded, err := prov.Create(ctx, &resource.DesiredResource{
 		Address: address.Address{Name: "guarded"},
-		Type:    "test.network",
+		Type:    "fake.network",
 		Attrs: map[string]value.Value{
 			"cidr": value.String("10.20.0.0/16", value.SourceExplicit),
 		},
@@ -249,7 +249,7 @@ resources: {}
 	}
 	plain, err := prov.Create(ctx, &resource.DesiredResource{
 		Address: address.Address{Name: "plain"},
-		Type:    "test.network",
+		Type:    "fake.network",
 		Attrs: map[string]value.Value{
 			"cidr": value.String("10.30.0.0/16", value.SourceExplicit),
 		},
@@ -335,7 +335,7 @@ resources: {}
 
 	doomed, err := prov.Create(ctx, &resource.DesiredResource{
 		Address: address.Address{Name: "doomed"},
-		Type:    "test.network",
+		Type:    "fake.network",
 		Attrs: map[string]value.Value{
 			"cidr": value.String("10.20.0.0/16", value.SourceExplicit),
 		},
@@ -345,7 +345,7 @@ resources: {}
 	}
 	keeper, err := prov.Create(ctx, &resource.DesiredResource{
 		Address: address.Address{Name: "keeper"},
-		Type:    "test.network",
+		Type:    "fake.network",
 		Attrs: map[string]value.Value{
 			"cidr": value.String("10.30.0.0/16", value.SourceExplicit),
 		},
@@ -596,7 +596,7 @@ resources: {}
 	prov := testprovider.New(cloudPath)
 	rs, err := prov.Create(ctx, &resource.DesiredResource{
 		Address: address.Address{Name: "network"},
-		Type:    "test.network",
+		Type:    "fake.network",
 		Attrs: map[string]value.Value{
 			"cidr": value.String("10.20.0.0/16", value.SourceExplicit),
 		},
@@ -674,7 +674,7 @@ func TestDestroyProjectNameComesFromAppliedState(t *testing.T) {
 }
 
 // applyRealNetwork runs a real `infra apply` end to end (through
-// newApplyCommand, not a hand-seeded fixture) to create one test.network
+// newApplyCommand, not a hand-seeded fixture) to create one fake.network
 // resource, and returns the project directory. See
 // TestDestroyProjectNameComesFromAppliedState for why this, rather than
 // seedOneNetwork, is what that test needs.
@@ -684,7 +684,7 @@ func applyRealNetwork(t *testing.T, environment string) string {
 project: myapp
 resources:
   network:
-    type: test.network
+    type: fake.network
     cidr: 10.20.0.0/16
 `)
 	opts := &GlobalOptions{Dir: dir, Parallelism: 4, AutoApprove: true}
@@ -700,7 +700,7 @@ resources:
 	return dir
 }
 
-// seedOneNetwork creates one test.network resource through the fake
+// seedOneNetwork creates one fake.network resource through the fake
 // provider and records it in state for environment, returning the project
 // directory. Shared by the confirmation tests above, which only care that
 // something exists to destroy, not about its specific attributes.
@@ -714,7 +714,7 @@ resources: {}
 	prov := testprovider.New(filepath.Join(dir, testprovider.DefaultCloudPath))
 	rs, err := prov.Create(ctx, &resource.DesiredResource{
 		Address: address.Address{Name: "network"},
-		Type:    "test.network",
+		Type:    "fake.network",
 		Attrs: map[string]value.Value{
 			"cidr": value.String("10.20.0.0/16", value.SourceExplicit),
 		},
@@ -749,10 +749,10 @@ func TestApplyRecordsDependenciesInStateSoALaterDestroyCanOrderItself(t *testing
 project: myapp
 resources:
   network:
-    type: test.network
+    type: fake.network
     cidr: 10.20.0.0/16
   db:
-    type: test.database
+    type: fake.database
     engine: postgres
     network: ${network.id}
 `)

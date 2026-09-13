@@ -375,8 +375,8 @@ func loadedBase(files []File, base string) bool {
 // replacement for the inline block.
 func TestResourcesDirectoryIsLoaded(t *testing.T) {
 	dir := writeTree(t, map[string]string{
-		"infra.yml":                       "project: p\nresources:\n  inline:\n    type: test.network\n    cidr: 10.0.0.0/16\n",
-		"resources/database/database.yml": "resources:\n  store:\n    type: test.database\n    engine: postgres\n",
+		"infra.yml":                       "project: p\nresources:\n  inline:\n    type: fake.network\n    cidr: 10.0.0.0/16\n",
+		"resources/database/database.yml": "resources:\n  store:\n    type: fake.database\n    engine: postgres\n",
 	})
 	files, err := Load(dir)
 	if err != nil {
@@ -414,7 +414,7 @@ func TestResourcesDirectoryIsLoaded(t *testing.T) {
 func TestNestedResourceDirectoriesAreLoaded(t *testing.T) {
 	dir := writeTree(t, map[string]string{
 		"infra.yml":                 "project: p\n",
-		"resources/eu/west/net.yml": "resources:\n  n:\n    type: test.network\n    cidr: 10.0.0.0/16\n",
+		"resources/eu/west/net.yml": "resources:\n  n:\n    type: fake.network\n    cidr: 10.0.0.0/16\n",
 	})
 	files, err := Load(dir)
 	if err != nil {
@@ -453,7 +453,7 @@ func TestVarsDirectoryIsLoaded(t *testing.T) {
 func TestDiscoveredDirectoryIsLoaded(t *testing.T) {
 	dir := writeTree(t, map[string]string{
 		"infra.yml":                "project: p\n",
-		"discovered/databases.yml": "resources:\n  imported:\n    type: test.database\n    engine: postgres\n",
+		"discovered/databases.yml": "resources:\n  imported:\n    type: fake.database\n    engine: postgres\n",
 	})
 	files, err := Load(dir)
 	if err != nil {
@@ -478,9 +478,9 @@ func TestDiscoveredDirectoryIsLoaded(t *testing.T) {
 func TestConventionalDirectoriesAreSortedOnce(t *testing.T) {
 	dir := writeTree(t, map[string]string{
 		"infra.yml":           "project: p\n",
-		"resources/zeta.yml":  "resources:\n  z:\n    type: test.network\n    cidr: 10.1.0.0/16\n",
-		"resources/alpha.yml": "resources:\n  a:\n    type: test.network\n    cidr: 10.2.0.0/16\n",
-		"resources/mid.yml":   "resources:\n  m:\n    type: test.network\n    cidr: 10.3.0.0/16\n",
+		"resources/zeta.yml":  "resources:\n  z:\n    type: fake.network\n    cidr: 10.1.0.0/16\n",
+		"resources/alpha.yml": "resources:\n  a:\n    type: fake.network\n    cidr: 10.2.0.0/16\n",
+		"resources/mid.yml":   "resources:\n  m:\n    type: fake.network\n    cidr: 10.3.0.0/16\n",
 	})
 	var first string
 	for i := range 20 {
@@ -525,7 +525,7 @@ func TestANonYamlFileInAConventionalDirectoryIsIgnored(t *testing.T) {
 		"resources/README.md":   "# notes\n",
 		"resources/.gitkeep":    "",
 		"resources/net.yml.bak": "resources:\n  bad: {}\n",
-		"resources/net.yml":     "resources:\n  n:\n    type: test.network\n    cidr: 10.0.0.0/16\n",
+		"resources/net.yml":     "resources:\n  n:\n    type: fake.network\n    cidr: 10.0.0.0/16\n",
 	})
 	files, err := Load(dir)
 	if err != nil {
@@ -547,8 +547,8 @@ func TestANonYamlFileInAConventionalDirectoryIsIgnored(t *testing.T) {
 func TestTheSameResourceInTwoFilesIsAnError(t *testing.T) {
 	dir := writeTree(t, map[string]string{
 		"infra.yml":         "project: p\n",
-		"resources/a/x.yml": "resources:\n  store:\n    type: test.network\n    cidr: 10.0.0.0/16\n",
-		"resources/b/y.yml": "resources:\n  store:\n    type: test.network\n    cidr: 10.9.0.0/16\n",
+		"resources/a/x.yml": "resources:\n  store:\n    type: fake.network\n    cidr: 10.0.0.0/16\n",
+		"resources/b/y.yml": "resources:\n  store:\n    type: fake.network\n    cidr: 10.9.0.0/16\n",
 	})
 	files, err := Load(dir)
 	if err != nil {
@@ -578,8 +578,8 @@ func TestTheSameResourceInTwoFilesIsAnError(t *testing.T) {
 func TestADuplicateAcrossFilesHaltsCompilation(t *testing.T) {
 	dir := writeTree(t, map[string]string{
 		"infra.yml":       "project: p\n",
-		"resources/a.yml": "resources:\n  store:\n    type: test.network\n    cidr: 10.0.0.0/16\n",
-		"resources/b.yml": "resources:\n  store:\n    type: test.network\n    cidr: 10.9.0.0/16\n",
+		"resources/a.yml": "resources:\n  store:\n    type: fake.network\n    cidr: 10.0.0.0/16\n",
+		"resources/b.yml": "resources:\n  store:\n    type: fake.network\n    cidr: 10.9.0.0/16\n",
 	})
 	files, _ := Load(dir)
 	_, ds := Decode(files)
@@ -595,8 +595,8 @@ func TestADuplicateAcrossFilesHaltsCompilation(t *testing.T) {
 func TestTwoModulesMayEachDeclareTheSameName(t *testing.T) {
 	dir := writeTree(t, map[string]string{
 		"infra.yml":         "project: p\n",
-		"resources/top.yml": "resources:\n  db:\n    type: test.network\n    cidr: 10.0.0.0/16\n",
-		"m/module.yml":      "resources:\n  db:\n    type: test.network\n    cidr: 10.1.0.0/16\n",
+		"resources/top.yml": "resources:\n  db:\n    type: fake.network\n    cidr: 10.0.0.0/16\n",
+		"m/module.yml":      "resources:\n  db:\n    type: fake.network\n    cidr: 10.1.0.0/16\n",
 	})
 	files, err := Load(dir)
 	if err != nil {
@@ -622,7 +622,7 @@ func TestTwoModulesMayEachDeclareTheSameName(t *testing.T) {
 // a reader looking for a mapping they did not write.
 func TestAnUnquotedInterpolationWithAColonExplainsTheQuoting(t *testing.T) {
 	dir := writeTree(t, map[string]string{
-		"infra.yml": "project: p\nresources:\n  n:\n    type: test.network\n    tags: ${merge(a, {b: c})}\n",
+		"infra.yml": "project: p\nresources:\n  n:\n    type: fake.network\n    tags: ${merge(a, {b: c})}\n",
 	})
 	_, err := Load(dir)
 	if err == nil {

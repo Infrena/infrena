@@ -53,13 +53,24 @@ func TestTwoInstancesNamingNoCloudGetDifferentFiles(t *testing.T) {
 	}
 }
 
-// TestTheImplicitInstanceKeepsTheHistoricalPath. Every project written before
-// `providers:` existed has one instance called `test`, and its cloud file is already on
-// disk at .infra/fake-cloud.json. Renaming it would lose that infrastructure.
+// TestTheImplicitInstanceKeepsTheHistoricalPath, which now means the instance called
+// `fake` rather than `test`.
+//
+// The pairing with the state migration is the point. A project written before the rename
+// has `.infra/fake-cloud.json` on disk and state recording `provider: test`; the migration
+// (internal/state/migrations.go) rewrites that to `fake`, and this is what makes the
+// existing cloud file still be the one found. Special-case `test` here instead and every
+// migrated project looks at `fake-cloud-fake.json` — an empty cloud, so the first plan
+// proposes recreating everything that already exists.
 func TestTheImplicitInstanceKeepsTheHistoricalPath(t *testing.T) {
 	dir := t.TempDir()
-	if got, want := cloudPathOf(t, dir, "test", nil), filepath.Join(dir, DefaultCloudPath); got != want {
+	if got, want := cloudPathOf(t, dir, "fake", nil), filepath.Join(dir, DefaultCloudPath); got != want {
 		t.Errorf("cloudPath = %q, want the historical %q", got, want)
+	}
+	// And an instance a user NAMED `test` is now ordinary: it gets its own file, because
+	// after the rename `test` carries no special meaning to this plugin.
+	if got := cloudPathOf(t, dir, "test", nil); got == filepath.Join(dir, DefaultCloudPath) {
+		t.Error("an instance named `test` still claims the implicit instance's cloud file")
 	}
 }
 

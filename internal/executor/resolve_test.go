@@ -52,7 +52,7 @@ func TestResolveAfterFillsUnknownFromDependency(t *testing.T) {
 	op := &planner.Operation{
 		Provider: "test",
 		Address:  address.Address{Name: "app"},
-		Type:     "test.application",
+		Type:     "fake.application",
 		After: map[string]value.Value{
 			"network_id": deferredValue(t, "${net.id}"),
 		},
@@ -100,7 +100,7 @@ func TestResolveAfterLeavesKnownValuesUntouched(t *testing.T) {
 // (internal/planner/diff.go) stages every not-yet-set Computed schema
 // attribute as value.Unknown(kind, SourceProvider) with a nil Expr, purely
 // so planner.Render can show "id: (known after apply)" — the fake
-// provider's test.network.id is exactly this shape. Such a value carries no
+// provider's fake.network.id is exactly this shape. Such a value carries no
 // expression at all (see Value.Expr's own doc comment: it is set only when
 // the value depends on a resource that does not exist yet), so there is
 // nothing for this function to evaluate. Before this fix, resolveAfter
@@ -116,7 +116,7 @@ func TestResolveAfterOmitsUnsetComputedAttributeWithNoExpression(t *testing.T) {
 	op := &planner.Operation{
 		Provider: "test",
 		Address:  address.Address{Name: "net"},
-		Type:     "test.network",
+		Type:     "fake.network",
 		After: map[string]value.Value{
 			"cidr": value.String("10.0.0.0/16", value.SourceExplicit),
 			"id":   value.Unknown(value.KindString, value.SourceProvider),

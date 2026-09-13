@@ -33,7 +33,7 @@ project: p
 environments:
   dev: {}
 providers:
-  - plugin: test
+  - plugin: fake
     defaults:
       size: 200
       tags:
@@ -41,13 +41,13 @@ providers:
         tier: shared
 resources:
   net:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
   plain:
-    type: test.database
+    type: fake.database
     engine: postgres
   own:
-    type: test.database
+    type: fake.database
     engine: postgres
     size: 50
     tags:
@@ -117,13 +117,13 @@ func TestAResourcesOwnValueReplacesTheInstanceDefaultWhole(t *testing.T) {
 
 // TestAnInstanceDefaultReachesOnlyTheTypesThatDeclareIt.
 //
-// `tags` is declared by test.database and by neither of its siblings. Applying it to a
+// `tags` is declared by fake.database and by neither of its siblings. Applying it to a
 // network would produce "no such attribute" from the resource's own type — a file that
 // does not load, pointing at nothing the user wrote.
 func TestAnInstanceDefaultReachesOnlyTheTypesThatDeclareIt(t *testing.T) {
 	cfg := compiled(t, defaultsProject)
 	if _, present := cfg.Resources["net"].Attrs["tags"]; present {
-		t.Error("a network was given `tags`, which test.network does not declare")
+		t.Error("a network was given `tags`, which fake.network does not declare")
 	}
 	// The other half, or this test would pass against a build applying nothing.
 	if _, present := cfg.Resources["plain"].Attrs["tags"]; !present {
@@ -138,9 +138,9 @@ func TestAnInstanceDefaultReachesOnlyTheTypesThatDeclareIt(t *testing.T) {
 // Nothing in the fake provider's schema is shaped that way today, so the guard is
 // asserted at the unit below rather than through a fixture that cannot exist.
 func TestAComputedAttributeIsNeverFilledFromDefaults(t *testing.T) {
-	def, ok := testRegistry(t).Definition("test.database")
+	def, ok := testRegistry(t).Definition("fake.database")
 	if !ok {
-		t.Fatal("no test.database definition")
+		t.Fatal("no fake.database definition")
 	}
 	attrs := map[string]value.Value{}
 	applyInstanceDefaults(attrs, def, instanceWith(map[string]value.Value{
@@ -162,9 +162,9 @@ func TestAComputedAttributeIsNeverFilledFromDefaults(t *testing.T) {
 // stage 4.5 refuses a kind no type accepts, so what is left is a kind accepted by one
 // type and not another.
 func TestADefaultOfTheWrongKindIsNotAppliedToAMismatchedType(t *testing.T) {
-	def, ok := testRegistry(t).Definition("test.database")
+	def, ok := testRegistry(t).Definition("fake.database")
 	if !ok {
-		t.Fatal("no test.database definition")
+		t.Fatal("no fake.database definition")
 	}
 	attrs := map[string]value.Value{}
 	applyInstanceDefaults(attrs, def, instanceWith(map[string]value.Value{
@@ -185,15 +185,15 @@ project: p
 environments:
   dev: {}
 providers:
-  - plugin: test
+  - plugin: fake
     defaults:
       prevent_destroy: true
 resources:
   inherits:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
   opts_out:
-    type: test.network
+    type: fake.network
     cidr: 10.1.0.0/16
     lifecycle:
       prevent_destroy: false
@@ -233,12 +233,12 @@ project: p
 environments:
   dev: {}
 providers:
-  - plugin: test
+  - plugin: fake
     defaults:
       prevent_destroy: false
 resources:
   guarded:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
     lifecycle:
       prevent_destroy: true
@@ -263,13 +263,13 @@ project: p
 environments:
   dev: {}
 providers:
-  - plugin: test
+  - plugin: fake
     defaults:
       tag:
         team: payments
 resources:
   net:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
 `), testRegistry(t), Options{Environment: "dev"})
 	if !ds.HasErrors() {

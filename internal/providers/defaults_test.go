@@ -25,7 +25,7 @@ func TestAKeyNoResourceTypeAcceptsIsRefused(t *testing.T) {
 	out := defaultsDiags(t, `
 project: p
 providers:
-  - plugin: test
+  - plugin: fake
     defaults:
       tag:
         team: payments
@@ -46,14 +46,14 @@ providers:
 // TestAKeyOnlySomeResourceTypesDeclareIsAccepted is the boundary, and the half that
 // keeps the rule above from making `defaults:` unusable.
 //
-// `tags` is declared by test.database and by neither of its siblings. A check demanding
+// `tags` is declared by fake.database and by neither of its siblings. A check demanding
 // every type accept a key would refuse the single most obvious thing anyone would
 // write here.
 func TestAKeyOnlySomeResourceTypesDeclareIsAccepted(t *testing.T) {
 	out := defaultsDiags(t, `
 project: p
 providers:
-  - plugin: test
+  - plugin: fake
     defaults:
       tags:
         team: payments
@@ -71,7 +71,7 @@ func TestALifecycleOptionIsAcceptedThoughNoSchemaDeclaresIt(t *testing.T) {
 	out := defaultsDiags(t, `
 project: p
 providers:
-  - plugin: test
+  - plugin: fake
     defaults:
       prevent_destroy: true
       retain: false
@@ -88,7 +88,7 @@ func TestANonBooleanLifecycleOptionIsRefused(t *testing.T) {
 	out := defaultsDiags(t, `
 project: p
 providers:
-  - plugin: test
+  - plugin: fake
     defaults:
       prevent_destroy: "sometimes"
 `)
@@ -109,7 +109,7 @@ func TestDefaultingAComputedAttributeIsRefused(t *testing.T) {
 	out := defaultsDiags(t, `
 project: p
 providers:
-  - plugin: test
+  - plugin: fake
     defaults:
       endpoint: db.example.com
 `)
@@ -128,7 +128,7 @@ func TestADefaultOfTheWrongKindIsRefused(t *testing.T) {
 	out := defaultsDiags(t, `
 project: p
 providers:
-  - plugin: test
+  - plugin: fake
     defaults:
       size: enormous
 `)
@@ -149,7 +149,7 @@ func TestADefaultMayInterpolateAVariable(t *testing.T) {
 	table, out := rendered(t, `
 project: p
 providers:
-  - plugin: test
+  - plugin: fake
     defaults:
       tags:
         environment: ${environment}
@@ -157,7 +157,7 @@ providers:
 	if out != "" {
 		t.Fatalf("unexpected diagnostics:\n%s", out)
 	}
-	tags, ok := table["test"].Defaults["tags"]
+	tags, ok := table["fake"].Defaults["tags"]
 	if !ok {
 		t.Fatal("the instance has no `tags` default")
 	}
@@ -182,7 +182,7 @@ plugins:
   awz: ">= 1.0"
 resources:
   net:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
 `)
 	if out == "" {
@@ -193,7 +193,7 @@ resources:
 	}
 	// And it lists what the project DOES use, because the next move is to pick the
 	// right name.
-	if !strings.Contains(out, "test") {
+	if !strings.Contains(out, "fake") {
 		t.Errorf("the diagnostic does not list the plugins in use:\n%s", out)
 	}
 }
@@ -209,19 +209,19 @@ func TestAConstraintOnAPluginThisProjectDoesUseIsAccepted(t *testing.T) {
 		`
 project: p
 plugins:
-  test: ">= 0.0.0"
+  fake: ">= 0.0.0"
 resources:
   net:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
 `,
 		// Named by a `providers:` entry only.
 		`
 project: p
 plugins:
-  test: ">= 0.0.0"
+  fake: ">= 0.0.0"
 providers:
-  - plugin: test
+  - plugin: fake
 `,
 	} {
 		if out := defaultsDiags(t, body); out != "" {

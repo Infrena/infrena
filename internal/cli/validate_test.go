@@ -29,10 +29,10 @@ func TestValidateAcceptsAGoodProject(t *testing.T) {
 project: myapp
 resources:
   network:
-    type: test.network
+    type: fake.network
     cidr: 10.20.0.0/16
   database:
-    type: test.database
+    type: fake.database
     engine: postgres
     network: ${network.id}
 `)
@@ -55,7 +55,7 @@ func TestValidateRejectsUnknownResourceType(t *testing.T) {
 project: myapp
 resources:
   network:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
   database:
     type: aws.rds
@@ -69,7 +69,7 @@ resources:
 	if !strings.Contains(joined, "aws.rds") {
 		t.Errorf("diagnostic does not name the offending type:\n%s", joined)
 	}
-	if !strings.Contains(joined, "test.database") {
+	if !strings.Contains(joined, "fake.database") {
 		t.Errorf("diagnostic should suggest the known types:\n%s", joined)
 	}
 }
@@ -79,7 +79,7 @@ func TestValidateRejectsUnknownAttribute(t *testing.T) {
 project: myapp
 resources:
   database:
-    type: test.database
+    type: fake.database
     engine: postgres
     nonsense: true
 `)
@@ -97,7 +97,7 @@ func TestValidateRejectsSettingComputedAttribute(t *testing.T) {
 project: myapp
 resources:
   database:
-    type: test.database
+    type: fake.database
     engine: postgres
     endpoint: nope.example.com
 `)
@@ -160,11 +160,11 @@ func TestValidateReportsEveryProblemAtOnce(t *testing.T) {
 project: myapp
 resources:
   a:
-    type: test.nope_one
+    type: fake.nope_one
   b:
-    type: test.nope_two
+    type: fake.nope_two
   c:
-    type: test.nope_three
+    type: fake.nope_three
 `)
 	ds := validateProject(dir, mustRegistry(t, dir), compiler.Options{})
 	if len(ds) < 3 {
@@ -199,7 +199,7 @@ func TestDiagnosticsAdviseOnlyRegisteredCommands(t *testing.T) {
 project: myapp
 resources:
   database:
-    type: test.database
+    type: fake.database
     engine: postgres
     nonexistent: 1
 `)
@@ -231,7 +231,7 @@ func TestValidateCatchesMissingRequiredInfrastructure(t *testing.T) {
 project: myapp
 resources:
   database:
-    type: test.database
+    type: fake.database
     engine: postgres
 `)
 	ds := validateProject(dir, mustRegistry(t, dir), compiler.Options{})
@@ -326,7 +326,7 @@ func TestValidateHonoursVarsLikePlanDoes(t *testing.T) {
 project: myapp
 resources:
   network:
-    type: test.network
+    type: fake.network
     cidr: ${cidr}
 `)
 

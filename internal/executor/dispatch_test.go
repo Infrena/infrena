@@ -67,7 +67,7 @@ func mustCreate(t *testing.T, prov *testprovider.Provider, name, resourceType st
 
 func TestDispatchForgetMakesNoProviderCall(t *testing.T) {
 	node := planner.OpNode{Address: address.Address{Name: "old"}, Kind: planner.OpForget, Phase: planner.PhaseDestroy}
-	current := &resource.ResourceState{Provider: "test", Address: node.Address, Type: "test.network", ProviderID: "net-1"}
+	current := &resource.ResourceState{Provider: "test", Address: node.Address, Type: "fake.network", ProviderID: "net-1"}
 
 	result, err := dispatch(context.Background(), poisonProvider{t: t}, node, current, nil)
 	if err != nil {
@@ -85,7 +85,7 @@ func TestDispatchCreateCallsProviderCreate(t *testing.T) {
 	node := planner.OpNode{Address: address.Address{Name: "net"}, Kind: planner.OpCreate, Phase: planner.PhaseCreate}
 	desired := &resource.DesiredResource{
 		Address: node.Address,
-		Type:    "test.network",
+		Type:    "fake.network",
 		Attrs:   map[string]value.Value{"cidr": value.String("10.0.0.0/16", value.SourceExplicit)},
 	}
 
@@ -104,14 +104,14 @@ func TestDispatchCreateCallsProviderCreate(t *testing.T) {
 func TestDispatchUpdateReusesProviderID(t *testing.T) {
 	dir := t.TempDir()
 	prov := testprovider.New(filepath.Join(dir, "cloud.json"))
-	current := mustCreate(t, prov, "net", "test.network", map[string]value.Value{
+	current := mustCreate(t, prov, "net", "fake.network", map[string]value.Value{
 		"cidr": value.String("10.0.0.0/16", value.SourceExplicit),
 	})
 
 	node := planner.OpNode{Address: current.Address, Kind: planner.OpUpdate, Phase: planner.PhaseCreate}
 	desired := &resource.DesiredResource{
 		Address: current.Address,
-		Type:    "test.network",
+		Type:    "fake.network",
 		Attrs:   map[string]value.Value{"cidr": value.String("10.1.0.0/16", value.SourceExplicit)},
 	}
 
@@ -130,7 +130,7 @@ func TestDispatchUpdateReusesProviderID(t *testing.T) {
 func TestDispatchDestroyRemovesTheResource(t *testing.T) {
 	dir := t.TempDir()
 	prov := testprovider.New(filepath.Join(dir, "cloud.json"))
-	current := mustCreate(t, prov, "net", "test.network", map[string]value.Value{
+	current := mustCreate(t, prov, "net", "fake.network", map[string]value.Value{
 		"cidr": value.String("10.0.0.0/16", value.SourceExplicit),
 	})
 
@@ -155,7 +155,7 @@ func TestDispatchDestroyRemovesTheResource(t *testing.T) {
 func TestDispatchReplaceCreatePhaseAllocatesANewObject(t *testing.T) {
 	dir := t.TempDir()
 	prov := testprovider.New(filepath.Join(dir, "cloud.json"))
-	original := mustCreate(t, prov, "net", "test.network", map[string]value.Value{
+	original := mustCreate(t, prov, "net", "fake.network", map[string]value.Value{
 		"cidr": value.String("10.0.0.0/16", value.SourceExplicit),
 	})
 
@@ -171,7 +171,7 @@ func TestDispatchReplaceCreatePhaseAllocatesANewObject(t *testing.T) {
 	createNode := planner.OpNode{Address: original.Address, Kind: planner.OpReplace, Phase: planner.PhaseCreate}
 	desired := &resource.DesiredResource{
 		Address: original.Address,
-		Type:    "test.network",
+		Type:    "fake.network",
 		Attrs:   map[string]value.Value{"cidr": value.String("10.2.0.0/16", value.SourceExplicit)},
 	}
 	got, err := dispatch(context.Background(), prov, createNode, nil, desired)

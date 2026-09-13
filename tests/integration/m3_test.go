@@ -18,7 +18,8 @@ import (
 // cmd.Wait(); the caller does that explicitly once it needs the result.
 func startAsync(t *testing.T, dir string, args ...string) (*exec.Cmd, *bytes.Buffer, *bytes.Buffer) {
 	t.Helper()
-	cmd := exec.Command(binary(t), append([]string{"--chdir", dir}, args...)...)
+	// --plugin-dir, as run() does: the binary under test carries no provider.
+	cmd := exec.Command(binary(t), append([]string{"--chdir", dir, "--plugin-dir", fakePluginDir(t)}, args...)...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -33,7 +34,8 @@ func startAsync(t *testing.T, dir string, args ...string) (*exec.Cmd, *bytes.Buf
 // this is additive, not a duplicate of it.
 func runStdin(t *testing.T, dir, stdin string, args ...string) result {
 	t.Helper()
-	cmd := exec.Command(binary(t), append([]string{"--chdir", dir}, args...)...)
+	// --plugin-dir, as run() does: the binary under test carries no provider.
+	cmd := exec.Command(binary(t), append([]string{"--chdir", dir, "--plugin-dir", fakePluginDir(t)}, args...)...)
 	cmd.Stdin = strings.NewReader(stdin)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -183,7 +185,7 @@ func TestM3MVPRoundTrip(t *testing.T) {
 project: myapp
 resources:
   network:
-    type: test.network
+    type: fake.network
     cidr: 10.20.0.0/16
 `)
 
@@ -195,7 +197,7 @@ resources:
 	if p1.ExitCode != 2 {
 		t.Fatalf("plan exit code %d, want 2\n%s", p1.ExitCode, p1.combined())
 	}
-	requireContains(t, p1.Stdout, "+ test.network.network")
+	requireContains(t, p1.Stdout, "+ fake.network.network")
 	if _, err := os.Stat(filepath.Join(dir, ".infra", "state", "dev.json")); !os.IsNotExist(err) {
 		t.Fatal("plan must not have written state")
 	}
@@ -227,7 +229,7 @@ resources:
 	// cidr is ForceNew (providers/test/definitions.go), so drifting it
 	// proposes a replacement, not an in-place update — confirmed against
 	// the team lead's own hand-verified anchor for this exact scenario.
-	requireContains(t, p3.Stdout, "-/+ test.network.network")
+	requireContains(t, p3.Stdout, "-/+ fake.network.network")
 	requireContains(t, p3.Stdout, "replacement forced by: cidr")
 	requireContains(t, p3.Stdout, `"10.99.0.0/16" -> "10.20.0.0/16"`)
 
@@ -249,7 +251,7 @@ resources:
 	if p4.ExitCode != 2 {
 		t.Fatalf("removal plan exit code %d, want 2\n%s", p4.ExitCode, p4.combined())
 	}
-	requireContains(t, p4.Stdout, "- test.network.network")
+	requireContains(t, p4.Stdout, "- fake.network.network")
 
 	a2 := run(t, dir, "apply", "dev", "--auto-approve")
 	if a2.ExitCode != 2 {
@@ -272,7 +274,7 @@ func TestConcurrentApplyToOneEnvironmentSerializes(t *testing.T) {
 project: myapp
 resources:
   network:
-    type: test.network
+    type: fake.network
     cidr: 10.20.0.0/16
 `)
 	seedCloudLatency(t, dir, 500)
@@ -323,11 +325,11 @@ func TestApplyCreatesDependencyBeforeDependent(t *testing.T) {
 project: myapp
 resources:
   database:
-    type: test.database
+    type: fake.database
     engine: postgres
     network: ${zzz_network.id}
   zzz_network:
-    type: test.network
+    type: fake.network
     cidr: 10.20.0.0/16
 `)
 
@@ -375,7 +377,7 @@ func TestDestroyRequiresTypedEnvironmentName(t *testing.T) {
 project: myapp
 resources:
   network:
-    type: test.network
+    type: fake.network
     cidr: 10.20.0.0/16
 `)
 	if res := run(t, dir, "apply", "dev", "--auto-approve"); res.ExitCode != 2 {
@@ -415,10 +417,10 @@ func TestApplyOnFirstInterruptFinishesInFlightWorkThenReleasesTheLock(t *testing
 project: myapp
 resources:
   first:
-    type: test.network
+    type: fake.network
     cidr: 10.20.0.0/16
   second:
-    type: test.network
+    type: fake.network
     cidr: 10.21.0.0/16
 `)
 	// seedCloudLatency high enough (800ms) that the signal at 200ms lands
@@ -481,10 +483,10 @@ func TestApplyOnSecondInterruptExitsImmediatelyAndLeavesTheLockStale(t *testing.
 project: myapp
 resources:
   first:
-    type: test.network
+    type: fake.network
     cidr: 10.20.0.0/16
   second:
-    type: test.network
+    type: fake.network
     cidr: 10.21.0.0/16
 `)
 	seedCloudLatency(t, dir, 800)
@@ -572,7 +574,7 @@ resources:
 // composite with its own sensitive leaf either — schema.go's markSensitive
 // marks a whole attribute's root Value, never a leaf inside one. The
 // deepest sensitivity this engine can construct today is a schema-declared
-// Sensitive SCALAR attribute (test.database.password) — the same depth
+// Sensitive SCALAR attribute (fake.database.password) — the same depth
 // M2's own test already used. What this test adds over M2's is coverage of
 // apply/refresh/destroy (M2 only had plan), plus a sibling, deliberately
 // VISIBLE value in the same composite (tags.visible_marker) alongside the
@@ -588,10 +590,10 @@ func TestSensitiveValueNeverAppearsInCommandOutput(t *testing.T) {
 project: myapp
 resources:
   network:
-    type: test.network
+    type: fake.network
     cidr: 10.20.0.0/16
   database:
-    type: test.database
+    type: fake.database
     engine: postgres
     password: `+secret+`
     network: ${network.id}
@@ -737,10 +739,10 @@ func TestDestroyOnInterruptExitsCleanlyAndReleasesTheLock(t *testing.T) {
 project: myapp
 resources:
   first:
-    type: test.network
+    type: fake.network
     cidr: 10.20.0.0/16
   second:
-    type: test.network
+    type: fake.network
     cidr: 10.21.0.0/16
 `)
 	// Exit code 2 is "changes were applied" (root.go's errChanges arm), not

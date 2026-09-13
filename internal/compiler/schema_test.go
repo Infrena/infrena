@@ -18,7 +18,7 @@ import (
 func testRegistry(t *testing.T) *registry.Registry {
 	t.Helper()
 	reg := registry.New()
-	if err := reg.Register("test", testprovider.New(t.TempDir()+"/fake-cloud.json")); err != nil {
+	if err := reg.Register("fake", testprovider.New(t.TempDir()+"/fake-cloud.json")); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	return reg
@@ -31,7 +31,7 @@ func testRegistry(t *testing.T) *registry.Registry {
 // derivation belongs to stage 4.5 (internal/providers.Prepare) and a stage that
 // re-derived it could come to disagree with the one that built the providers.
 func testTable() providers.Table {
-	return providers.Table{"test": providers.Instance{Name: "test", Plugin: "test", Default: true}}
+	return providers.Table{"fake": providers.Instance{Name: "fake", Plugin: "fake", Default: true}}
 }
 
 func oneResource(typ string, attrs map[string]value.Value) *ResolvedConfig {
@@ -52,13 +52,13 @@ func TestSchemaRejectsUnknownType(t *testing.T) {
 	}
 	var out strings.Builder
 	ds.Render(&out)
-	if !strings.Contains(out.String(), "test.database") {
+	if !strings.Contains(out.String(), "fake.database") {
 		t.Errorf("the diagnostic should list known types:\n%s", out.String())
 	}
 }
 
 func TestSchemaRejectsUnknownAttribute(t *testing.T) {
-	cfg := oneResource("test.network", map[string]value.Value{
+	cfg := oneResource("fake.network", map[string]value.Value{
 		"cidr":     value.String("10.0.0.0/16", value.SourceExplicit),
 		"nonsense": value.Bool(true, value.SourceExplicit),
 	})
@@ -68,7 +68,7 @@ func TestSchemaRejectsUnknownAttribute(t *testing.T) {
 }
 
 func TestSchemaRejectsSettingAComputedAttribute(t *testing.T) {
-	cfg := oneResource("test.network", map[string]value.Value{
+	cfg := oneResource("fake.network", map[string]value.Value{
 		"cidr": value.String("10.0.0.0/16", value.SourceExplicit),
 		"id":   value.String("net-1", value.SourceExplicit),
 	})
@@ -78,14 +78,14 @@ func TestSchemaRejectsSettingAComputedAttribute(t *testing.T) {
 }
 
 func TestSchemaRejectsAMissingRequiredAttribute(t *testing.T) {
-	cfg := oneResource("test.network", nil) // cidr is required
+	cfg := oneResource("fake.network", nil) // cidr is required
 	if ds := bindSchemas(cfg, testRegistry(t), Options{Environment: "dev"}, testTable()); !ds.HasErrors() {
 		t.Error("a missing required attribute must be an error")
 	}
 }
 
 func TestSchemaRejectsAWrongKind(t *testing.T) {
-	cfg := oneResource("test.database", map[string]value.Value{
+	cfg := oneResource("fake.database", map[string]value.Value{
 		"engine": value.String("postgres", value.SourceExplicit),
 		"size":   value.String("large", value.SourceExplicit), // size is an integer
 	})
@@ -103,7 +103,7 @@ func TestSchemaRejectsAWrongKind(t *testing.T) {
 func TestSchemaSkipsKindCheckOnUnknowns(t *testing.T) {
 	// An unknown carries the kind it will have; a mismatch there is not a
 	// user error and reporting it would be noise on every reference.
-	cfg := oneResource("test.database", map[string]value.Value{
+	cfg := oneResource("fake.database", map[string]value.Value{
 		"engine": value.String("postgres", value.SourceExplicit),
 		"size":   value.Unknown(value.KindString, value.SourceComputed),
 	})
@@ -113,7 +113,7 @@ func TestSchemaSkipsKindCheckOnUnknowns(t *testing.T) {
 }
 
 func TestSchemaFillsDefaults(t *testing.T) {
-	cfg := oneResource("test.database", map[string]value.Value{
+	cfg := oneResource("fake.database", map[string]value.Value{
 		"engine": value.String("postgres", value.SourceExplicit),
 	})
 	if ds := bindSchemas(cfg, testRegistry(t), Options{Environment: "dev"}, testTable()); ds.HasErrors() {
@@ -133,7 +133,7 @@ func TestSchemaFillsDefaults(t *testing.T) {
 }
 
 // TestSchemaDefaultsAreEnvironmentAware was here until M9 withdrew PLAN.md §13.
-// It asserted that test.database's size default was 100 in production and 10
+// It asserted that fake.database's size default was 100 in production and 10
 // elsewhere. There is now one default per attribute, so there is nothing left
 // for it to assert — the environment-varying behaviour it pinned is the feature
 // that was removed, not a regression to guard against.
@@ -145,7 +145,7 @@ func TestADefaultDoesNotVaryByEnvironment(t *testing.T) {
 	// invisible mechanism for environment variation that §13 exists to refuse.
 	var seen []int64
 	for _, env := range []string{"dev", "staging", "production", "prod"} {
-		cfg := oneResource("test.database", map[string]value.Value{
+		cfg := oneResource("fake.database", map[string]value.Value{
 			"engine": value.String("postgres", value.SourceExplicit),
 		})
 		bindSchemas(cfg, testRegistry(t), Options{Environment: env}, testTable())
@@ -167,7 +167,7 @@ func TestADefaultDoesNotVaryByEnvironment(t *testing.T) {
 }
 
 func TestSchemaDefaultNeverOverwritesAnExplicitValue(t *testing.T) {
-	cfg := oneResource("test.database", map[string]value.Value{
+	cfg := oneResource("fake.database", map[string]value.Value{
 		"engine": value.String("postgres", value.SourceExplicit),
 		"size":   value.Int(50, value.SourceExplicit),
 	})
@@ -183,7 +183,7 @@ func TestSchemaDefaultNeverOverwritesAnExplicitValue(t *testing.T) {
 }
 
 func TestSchemaMarksSensitiveAttributes(t *testing.T) {
-	cfg := oneResource("test.database", map[string]value.Value{
+	cfg := oneResource("fake.database", map[string]value.Value{
 		"engine":   value.String("postgres", value.SourceExplicit),
 		"password": value.String("hunter2", value.SourceExplicit),
 	})
@@ -195,7 +195,7 @@ func TestSchemaMarksSensitiveAttributes(t *testing.T) {
 }
 
 func TestSchemaDoesNotDeclassifyAnAlreadySensitiveValue(t *testing.T) {
-	cfg := oneResource("test.database", map[string]value.Value{
+	cfg := oneResource("fake.database", map[string]value.Value{
 		"engine": value.String("postgres", value.SourceExplicit).WithSensitive(true),
 	})
 	bindSchemas(cfg, testRegistry(t), Options{Environment: "dev"}, testTable())
@@ -267,7 +267,7 @@ func TestSchemaRejectsADefaultThatDoesNotMatchItsDeclaredKind(t *testing.T) {
 }
 
 func TestSchemaReportsEveryProblemAtOnce(t *testing.T) {
-	cfg := oneResource("test.network", map[string]value.Value{
+	cfg := oneResource("fake.network", map[string]value.Value{
 		"nonsense_one": value.Bool(true, value.SourceExplicit),
 		"nonsense_two": value.Bool(true, value.SourceExplicit),
 	})
@@ -278,10 +278,10 @@ func TestSchemaReportsEveryProblemAtOnce(t *testing.T) {
 }
 
 func TestSchemaStampsProviderDefaultsWithTheirScope(t *testing.T) {
-	// test.database's `size` is optional with a default (providers/test's
+	// fake.database's `size` is optional with a default (providers/test's
 	// definitions.go): 10, in every environment. Filling it is the only rung of
 	// PLAN.md §7's chain that stages 3 and 4 never see.
-	cfg := oneResource("test.database", map[string]value.Value{
+	cfg := oneResource("fake.database", map[string]value.Value{
 		"engine": value.String("postgres", value.SourceExplicit),
 	})
 	ds := bindSchemas(cfg, testRegistry(t), Options{Environment: "dev"}, testTable())
@@ -308,7 +308,7 @@ func TestSchemaDoesNotStampValuesConfigurationSupplied(t *testing.T) {
 	// provider supplied something the user wrote. That is a precedence lie,
 	// and unlike a missing stamp it is invisible — the value is right and only
 	// its provenance is wrong.
-	cfg := oneResource("test.database", map[string]value.Value{
+	cfg := oneResource("fake.database", map[string]value.Value{
 		"engine": value.String("postgres", value.SourceExplicit),
 		"size":   value.Int(50, value.SourceExplicit),
 	})
@@ -331,7 +331,7 @@ func TestSchemaStampingADefaultDoesNotMakeItCompareUnequal(t *testing.T) {
 	// stopped doing so, every resource with a filled default would diff
 	// against the same value from configuration or state, and acceptance
 	// invariant 2 (no-op plan) would fail for most resources in most projects.
-	cfg := oneResource("test.database", map[string]value.Value{
+	cfg := oneResource("fake.database", map[string]value.Value{
 		"engine": value.String("postgres", value.SourceExplicit),
 	})
 	if ds := bindSchemas(cfg, testRegistry(t), Options{Environment: "dev"}, testTable()); ds.HasErrors() {

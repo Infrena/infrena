@@ -25,7 +25,7 @@ func res(name, typ string, attrs map[string]value.Value) *resource.ResolvedResou
 }
 
 func TestAddressesAreSorted(t *testing.T) {
-	c := cfg(res("zebra", "test.network", nil), res("alpha", "test.network", nil))
+	c := cfg(res("zebra", "fake.network", nil), res("alpha", "fake.network", nil))
 	got := c.Addresses()
 	if len(got) != 2 || got[0].Name != "alpha" || got[1].Name != "zebra" {
 		t.Errorf("Addresses() = %v, want sorted", got)
@@ -34,8 +34,8 @@ func TestAddressesAreSorted(t *testing.T) {
 
 func TestHashIsStableAcrossRuns(t *testing.T) {
 	c := cfg(
-		res("a", "test.network", map[string]value.Value{"cidr": value.String("10.0.0.0/16", value.SourceExplicit)}),
-		res("b", "test.database", map[string]value.Value{"engine": value.String("postgres", value.SourceExplicit)}),
+		res("a", "fake.network", map[string]value.Value{"cidr": value.String("10.0.0.0/16", value.SourceExplicit)}),
+		res("b", "fake.database", map[string]value.Value{"engine": value.String("postgres", value.SourceExplicit)}),
 	)
 	first, err := c.Hash()
 	if err != nil {
@@ -54,10 +54,10 @@ func TestHashIsStableAcrossRuns(t *testing.T) {
 
 func TestHashIgnoresOrigin(t *testing.T) {
 	// Moving a resource between lines is not a change in desired state.
-	a := res("db", "test.database", map[string]value.Value{
+	a := res("db", "fake.database", map[string]value.Value{
 		"engine": value.String("postgres", value.SourceExplicit).WithOrigin(value.Origin{File: "infra.yml", Line: 3}),
 	})
-	b := res("db", "test.database", map[string]value.Value{
+	b := res("db", "fake.database", map[string]value.Value{
 		"engine": value.String("postgres", value.SourceExplicit).WithOrigin(value.Origin{File: "infra.yml", Line: 99}),
 	})
 	b.Origin = value.Origin{Line: 42}
@@ -72,10 +72,10 @@ func TestHashIgnoresOrigin(t *testing.T) {
 func TestHashIncludesProvenance(t *testing.T) {
 	// A value that arrived as an explicit setting is not the same desired
 	// state as the identical value arriving from a default.
-	explicit := res("db", "test.database", map[string]value.Value{
+	explicit := res("db", "fake.database", map[string]value.Value{
 		"size": value.Int(10, value.SourceExplicit),
 	})
-	defaulted := res("db", "test.database", map[string]value.Value{
+	defaulted := res("db", "fake.database", map[string]value.Value{
 		"size": value.Int(10, value.SourceDefault),
 	})
 	ha, _ := cfg(explicit).Hash()
@@ -86,8 +86,8 @@ func TestHashIncludesProvenance(t *testing.T) {
 }
 
 func TestHashIncludesLifecycle(t *testing.T) {
-	plain := res("db", "test.database", nil)
-	guarded := res("db", "test.database", nil)
+	plain := res("db", "fake.database", nil)
+	guarded := res("db", "fake.database", nil)
 	guarded.Lifecycle = resource.Lifecycle{PreventDestroy: true}
 
 	ha, _ := cfg(plain).Hash()
@@ -111,8 +111,8 @@ func TestHashDistinguishesDifferentUnresolvedReferences(t *testing.T) {
 		return v
 	}
 
-	a := cfg(res("db", "test.database", map[string]value.Value{"network": unknownRef("network_a", "id")}))
-	b := cfg(res("db", "test.database", map[string]value.Value{"network": unknownRef("network_b", "id")}))
+	a := cfg(res("db", "fake.database", map[string]value.Value{"network": unknownRef("network_a", "id")}))
+	b := cfg(res("db", "fake.database", map[string]value.Value{"network": unknownRef("network_b", "id")}))
 
 	ha, _ := a.Hash()
 	hb, _ := b.Hash()
@@ -131,16 +131,16 @@ func TestHashDistinguishesDifferentCalls(t *testing.T) {
 		}
 		return v
 	}
-	ha, _ := cfg(res("r", "test.network", map[string]value.Value{"cidr": call("lower")})).Hash()
-	hb, _ := cfg(res("r", "test.network", map[string]value.Value{"cidr": call("upper")})).Hash()
+	ha, _ := cfg(res("r", "fake.network", map[string]value.Value{"cidr": call("lower")})).Hash()
+	hb, _ := cfg(res("r", "fake.network", map[string]value.Value{"cidr": call("upper")})).Hash()
 	if ha == hb {
 		t.Error("lower() and upper() over the same reference are different desired states")
 	}
 }
 
 func TestHashChangesWithAValue(t *testing.T) {
-	a := cfg(res("db", "test.database", map[string]value.Value{"engine": value.String("postgres", value.SourceExplicit)}))
-	b := cfg(res("db", "test.database", map[string]value.Value{"engine": value.String("mysql", value.SourceExplicit)}))
+	a := cfg(res("db", "fake.database", map[string]value.Value{"engine": value.String("postgres", value.SourceExplicit)}))
+	b := cfg(res("db", "fake.database", map[string]value.Value{"engine": value.String("mysql", value.SourceExplicit)}))
 	ha, _ := a.Hash()
 	hb, _ := b.Hash()
 	if ha == hb {
@@ -149,10 +149,10 @@ func TestHashChangesWithAValue(t *testing.T) {
 }
 
 func TestHashDistinguishesUnknownFromEmpty(t *testing.T) {
-	unknown := cfg(res("db", "test.database", map[string]value.Value{
+	unknown := cfg(res("db", "fake.database", map[string]value.Value{
 		"endpoint": value.Unknown(value.KindString, value.SourceComputed),
 	}))
-	empty := cfg(res("db", "test.database", map[string]value.Value{
+	empty := cfg(res("db", "fake.database", map[string]value.Value{
 		"endpoint": value.String("", value.SourceExplicit),
 	}))
 	hu, _ := unknown.Hash()
@@ -174,10 +174,10 @@ func TestConfigHashSeesAVariableFeedingADeferredExpression(t *testing.T) {
 project: myapp
 resources:
   network:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
   database:
-    type: test.database
+    type: fake.database
     engine: postgres
     network: ${prefix}-${network.id}
 `
@@ -213,10 +213,10 @@ func TestConfigHashSeesAVariableFeedingADeferredCall(t *testing.T) {
 project: myapp
 resources:
   network:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
   database:
-    type: test.database
+    type: fake.database
     engine: postgres
     network: ${replace(network.id, "old", prefix)}
 `
@@ -253,10 +253,10 @@ func TestConfigHashSeesAVariableFeedingANestedDeferredCallInAConcat(t *testing.T
 project: myapp
 resources:
   network:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
   database:
-    type: test.database
+    type: fake.database
     engine: postgres
     network: ${replace(network.id, "old", prefix)}-tail
 `
@@ -291,10 +291,10 @@ func TestConfigHashSeesAVariableFeedingANestedDeferredCallInACall(t *testing.T) 
 project: myapp
 resources:
   network:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
   database:
-    type: test.database
+    type: fake.database
     engine: postgres
     network: ${upper(replace(network.id, "old", prefix))}
 `
@@ -328,7 +328,7 @@ resources:
 // alone leaves one of the two sorts removable with nothing failing.
 func TestHashIsIndependentOfDependencyOrder(t *testing.T) {
 	deps := func(names ...string) *resource.ResolvedResource {
-		r := res("app", "test.application", map[string]value.Value{
+		r := res("app", "fake.application", map[string]value.Value{
 			"image": value.String("nginx", value.SourceExplicit),
 		})
 		for _, n := range names {

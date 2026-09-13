@@ -70,7 +70,7 @@ func withTwoPlugins(t *testing.T) {
 	previous := builtinsFor
 	builtinsFor = func(dir string) map[string]provider.Plugin {
 		return map[string]provider.Plugin{
-			"test":   testprovider.NewPlugin(dir),
+			"fake":   testprovider.NewPlugin(dir),
 			"second": second{},
 		}
 	}
@@ -93,12 +93,12 @@ func TestDiscoveryRegistersAnInstancePerPluginNotNone(t *testing.T) {
 	}
 	// And they are REGISTERED, not merely tabulated — discovery walks the registry.
 	names := strings.Join(reg.InstanceNames(), ",")
-	if names != "second,test" {
+	if names != "fake,second" {
 		t.Errorf("registered instances = %q, want both plugins", names)
 	}
 	// Each serves its own plugin's types, which is what makes the survey complete.
-	if _, ok := reg.ProviderFor("test.network", "test"); !ok {
-		t.Error("the test instance does not serve test.network")
+	if _, ok := reg.ProviderFor("fake.network", "fake"); !ok {
+		t.Error("the fake instance does not serve fake.network")
 	}
 	if _, ok := reg.ProviderFor("second.thing", "second"); !ok {
 		t.Error("the second instance does not serve second.thing")
@@ -115,7 +115,7 @@ func TestOnePluginStillGetsItsInstance(t *testing.T) {
 	if ds.HasErrors() {
 		t.Fatalf("unexpected diagnostics:\n%s", renderToString(ds))
 	}
-	if len(table) != 1 || table.Names()[0] != "test" {
+	if len(table) != 1 || table.Names()[0] != "fake" {
 		t.Errorf("discovery has %v, want the one builtin", table.Names())
 	}
 }
@@ -130,7 +130,7 @@ func TestBindingStillRefusesToGuessBetweenTwoPlugins(t *testing.T) {
 
 	reg, closePlugins := buildRegistry(&GlobalOptions{Dir: dir})
 	defer closePlugins()
-	for _, name := range []string{"test", "second"} {
+	for _, name := range []string{"fake", "second"} {
 		if err := reg.EnsurePlugin(context.Background(), name); err != nil {
 			t.Fatalf("EnsurePlugin(%s): %v", name, err)
 		}

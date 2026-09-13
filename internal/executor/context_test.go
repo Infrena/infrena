@@ -43,7 +43,7 @@ func TestApplySurvivesCancellationDuringDispatch(t *testing.T) {
 	p := &planner.Plan{
 		Version: planner.PlanVersion,
 		Operations: []planner.Operation{
-			{Provider: "test", Address: address.Address{Name: "network"}, Type: "test.network", Kind: planner.OpCreate,
+			{Provider: "test", Address: address.Address{Name: "network"}, Type: "fake.network", Kind: planner.OpCreate,
 				After: map[string]value.Value{"cidr": value.String("10.0.0.0/24", value.SourceExplicit)}},
 		},
 	}
@@ -151,7 +151,7 @@ func TestDispatchSurvivesCancellationForEveryProviderCall(t *testing.T) {
 
 			node := planner.OpNode{Address: address.Address{Name: "net"}, Kind: planner.OpCreate, Phase: planner.PhaseCreate}
 			desired := &resource.DesiredResource{
-				Address: node.Address, Type: "test.network",
+				Address: node.Address, Type: "fake.network",
 				Attrs: map[string]value.Value{"cidr": value.String("10.0.0.0/16", value.SourceExplicit)},
 			}
 			ctx, cancel := cancelPartway()
@@ -174,7 +174,7 @@ func TestDispatchSurvivesCancellationForEveryProviderCall(t *testing.T) {
 			}
 			prov := testprovider.New(cloudPath)
 			current, err := prov.Create(context.Background(), &resource.DesiredResource{
-				Address: address.Address{Name: "net"}, Type: "test.network",
+				Address: address.Address{Name: "net"}, Type: "fake.network",
 				Attrs: map[string]value.Value{"cidr": value.String("10.0.0.0/16", value.SourceExplicit)},
 			})
 			if err != nil {
@@ -184,7 +184,7 @@ func TestDispatchSurvivesCancellationForEveryProviderCall(t *testing.T) {
 
 			node := planner.OpNode{Address: current.Address, Kind: planner.OpUpdate, Phase: planner.PhaseCreate}
 			desired := &resource.DesiredResource{
-				Address: current.Address, Type: "test.network",
+				Address: current.Address, Type: "fake.network",
 				Attrs: map[string]value.Value{"cidr": value.String("10.1.0.0/16", value.SourceExplicit)},
 			}
 			ctx, cancel := cancelPartway()
@@ -207,7 +207,7 @@ func TestDispatchSurvivesCancellationForEveryProviderCall(t *testing.T) {
 			}
 			prov := testprovider.New(cloudPath)
 			current, err := prov.Create(context.Background(), &resource.DesiredResource{
-				Address: address.Address{Name: "net"}, Type: "test.network",
+				Address: address.Address{Name: "net"}, Type: "fake.network",
 				Attrs: map[string]value.Value{"cidr": value.String("10.0.0.0/16", value.SourceExplicit)},
 			})
 			if err != nil {

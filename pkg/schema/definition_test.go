@@ -9,7 +9,7 @@ import (
 
 func sampleDefinition() *ResourceDefinition {
 	return &ResourceDefinition{
-		Type:        "test.database",
+		Type:        "fake.database",
 		Description: "A fake database",
 		Attributes: map[string]Attribute{
 			"engine":   {Kind: value.KindString, Required: true, ForceNew: true},
@@ -17,7 +17,7 @@ func sampleDefinition() *ResourceDefinition {
 			"password": {Kind: value.KindString, Sensitive: true},
 			"endpoint": {Kind: value.KindString, Computed: true},
 		},
-		Requirements: []Requirement{{Name: "network", Types: []string{"test.network"}}},
+		Requirements: []Requirement{{Name: "network", Types: []string{"fake.network"}}},
 		Capabilities: Capabilities{Create: true, Read: true, Update: true, Delete: true},
 	}
 }

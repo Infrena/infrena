@@ -64,7 +64,7 @@ func stateResource(name, resourceType, providerID string, attrs map[string]any, 
 	r := map[string]any{
 		"address":     map[string]any{"name": name},
 		"type":        resourceType,
-		"provider":    "test",
+		"provider":    "fake",
 		"provider_id": providerID,
 		"attributes":  attrs,
 	}
@@ -116,10 +116,10 @@ func TestPlanOnFreshProjectProposesCreatesForEverything(t *testing.T) {
 project: myapp
 resources:
   network:
-    type: test.network
+    type: fake.network
     cidr: 10.20.0.0/16
   database:
-    type: test.database
+    type: fake.database
     engine: postgres
     network: ${network.id}
 `)
@@ -127,8 +127,8 @@ resources:
 	if res.ExitCode != 2 {
 		t.Fatalf("exit code %d, want 2 (changes present)\n%s", res.ExitCode, res.combined())
 	}
-	requireContains(t, res.Stdout, "+ test.network.network")
-	requireContains(t, res.Stdout, "+ test.database.database")
+	requireContains(t, res.Stdout, "+ fake.network.network")
+	requireContains(t, res.Stdout, "+ fake.database.database")
 }
 
 func TestPlanAgainstMatchingStateReportsNoChanges(t *testing.T) {
@@ -136,17 +136,17 @@ func TestPlanAgainstMatchingStateReportsNoChanges(t *testing.T) {
 project: myapp
 resources:
   network:
-    type: test.network
+    type: fake.network
     cidr: 10.20.0.0/16
 `)
 	writeM2State(t, dir, "dev", map[string]any{
-		"network": stateResource("network", "test.network", "net-1", map[string]any{
+		"network": stateResource("network", "fake.network", "net-1", map[string]any{
 			"cidr": wireAttr("string", "10.20.0.0/16", false),
 			"id":   wireAttr("string", "net-1", false),
 		}, nil),
 	})
 	writeFakeCloud(t, dir, map[string]map[string]any{
-		"net-1": cloudResource("test.network", map[string]any{
+		"net-1": cloudResource("fake.network", map[string]any{
 			"cidr": "10.20.0.0/16",
 			"id":   "net-1",
 		}),
@@ -177,32 +177,32 @@ func TestPlanShowsExternalDriftAsAnUpdate(t *testing.T) {
 project: myapp
 resources:
   network:
-    type: test.network
+    type: fake.network
     cidr: 10.20.0.0/16
   database:
-    type: test.database
+    type: fake.database
     engine: postgres
     size: 50
     network: ${network.id}
 `)
 	writeM2State(t, dir, "dev", map[string]any{
-		"network": stateResource("network", "test.network", "net-1", map[string]any{
+		"network": stateResource("network", "fake.network", "net-1", map[string]any{
 			"cidr": wireAttr("string", "10.20.0.0/16", false),
 			"id":   wireAttr("string", "net-1", false),
 		}, nil),
-		"database": stateResource("database", "test.database", "db-1", map[string]any{
+		"database": stateResource("database", "fake.database", "db-1", map[string]any{
 			"engine": wireAttr("string", "postgres", false),
 			"size":   wireAttr("integer", 50, false),
 		}, nil),
 	})
 	writeFakeCloud(t, dir, map[string]map[string]any{
-		"net-1": cloudResource("test.network", map[string]any{
+		"net-1": cloudResource("fake.network", map[string]any{
 			"cidr": "10.20.0.0/16",
 			"id":   "net-1",
 		}),
 		// Someone resized the database by hand, outside infra entirely — this
 		// is the mutation the drift check exists to catch.
-		"db-1": cloudResource("test.database", map[string]any{
+		"db-1": cloudResource("fake.database", map[string]any{
 			"engine": "postgres",
 			"size":   90,
 		}),
@@ -212,7 +212,7 @@ resources:
 	if res.ExitCode != 2 {
 		t.Fatalf("exit code %d, want 2 (drift is a change)\n%s", res.ExitCode, res.combined())
 	}
-	requireContains(t, res.Stdout, "~ test.database.database")
+	requireContains(t, res.Stdout, "~ fake.database.database")
 	// Not just "an update happened somewhere" — the specific drifted
 	// attribute, with its old (cloud, 90) and new (configured, 50) values.
 	// This is the assertion that would catch a planner that noticed
@@ -227,13 +227,13 @@ project: myapp
 resources: {}
 `)
 	writeM2State(t, dir, "dev", map[string]any{
-		"orphan": stateResource("orphan", "test.network", "net-99", map[string]any{
+		"orphan": stateResource("orphan", "fake.network", "net-99", map[string]any{
 			"cidr": wireAttr("string", "10.5.0.0/16", false),
 			"id":   wireAttr("string", "net-99", false),
 		}, nil),
 	})
 	writeFakeCloud(t, dir, map[string]map[string]any{
-		"net-99": cloudResource("test.network", map[string]any{
+		"net-99": cloudResource("fake.network", map[string]any{
 			"cidr": "10.5.0.0/16",
 			"id":   "net-99",
 		}),
@@ -243,7 +243,7 @@ resources: {}
 	if res.ExitCode != 2 {
 		t.Fatalf("exit code %d, want 2\n%s", res.ExitCode, res.combined())
 	}
-	requireContains(t, res.Stdout, "- test.network.orphan")
+	requireContains(t, res.Stdout, "- fake.network.orphan")
 }
 
 func TestPlanErrorsOnPreventDestroyForRemovedResource(t *testing.T) {
@@ -252,13 +252,13 @@ project: myapp
 resources: {}
 `)
 	writeM2State(t, dir, "dev", map[string]any{
-		"protected": stateResource("protected", "test.network", "net-42", map[string]any{
+		"protected": stateResource("protected", "fake.network", "net-42", map[string]any{
 			"cidr": wireAttr("string", "10.6.0.0/16", false),
 			"id":   wireAttr("string", "net-42", false),
 		}, map[string]any{"prevent_destroy": true}),
 	})
 	writeFakeCloud(t, dir, map[string]map[string]any{
-		"net-42": cloudResource("test.network", map[string]any{
+		"net-42": cloudResource("fake.network", map[string]any{
 			"cidr": "10.6.0.0/16",
 			"id":   "net-42",
 		}),
@@ -285,10 +285,10 @@ func TestPlanNeverLeaksASecret(t *testing.T) {
 project: myapp
 resources:
   network:
-    type: test.network
+    type: fake.network
     cidr: 10.20.0.0/16
   database:
-    type: test.database
+    type: fake.database
     engine: postgres
     password: hunter2
     network: ${network.id}
@@ -308,7 +308,7 @@ func TestPlanOutputWritesValidJSONMode0600(t *testing.T) {
 project: myapp
 resources:
   network:
-    type: test.network
+    type: fake.network
     cidr: 10.20.0.0/16
 `)
 	outPath := filepath.Join(dir, "plan.json")
@@ -340,10 +340,10 @@ func TestPlanIsDeterministicAcrossRuns(t *testing.T) {
 project: myapp
 resources:
   network:
-    type: test.network
+    type: fake.network
     cidr: 10.20.0.0/16
   database:
-    type: test.database
+    type: fake.database
     engine: postgres
     size: 50
     network: ${network.id}

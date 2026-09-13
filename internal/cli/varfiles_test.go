@@ -139,7 +139,7 @@ variables:
     type: string
 resources:
   network:
-    type: test.network
+    type: fake.network
     cidr: ${cidr}
 `)
 	writeFile(t, dir, "vars.yml", "cidr: 10.77.0.0/16\n")
@@ -177,7 +177,7 @@ environments:
     cidr: 10.1.0.0/16
 resources:
   network:
-    type: test.network
+    type: fake.network
     cidr: ${cidr}
 `)
 	writeFile(t, dir, "vars.yml", "cidr: 10.77.0.0/16\n")
@@ -225,7 +225,7 @@ variables:
     type: string
 resources:
   network:
-    type: test.network
+    type: fake.network
     cidr: ${cidr}
 `
 	run := func(t *testing.T, opts *GlobalOptions) string {
@@ -296,7 +296,7 @@ func TestPlanRendersVarFileWarningsEvenWithoutErrors(t *testing.T) {
 project: myapp
 resources:
   network:
-    type: test.network
+    type: fake.network
     cidr: 10.20.0.0/16
 `)
 	// "resources" collides with one of infra.yml's own top-level blocks —

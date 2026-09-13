@@ -23,7 +23,7 @@ func TestPlanProposesCreatesOnFreshProject(t *testing.T) {
 project: myapp
 resources:
   network:
-    type: test.network
+    type: fake.network
     cidr: 10.20.0.0/16
 `)
 	opts := &GlobalOptions{Dir: dir, Parallelism: 4}
@@ -46,7 +46,7 @@ resources:
 	// rendered text is the only assertion that would have caught it.
 	want := "Plan for project \"myapp\", environment \"dev\":\n" +
 		"\n" +
-		"  + test.network.network\n" +
+		"  + fake.network.network\n" +
 		"      cidr: \"10.20.0.0/16\"\n" +
 		"      id: (known after apply)\n" +
 		"\n" +
@@ -88,7 +88,7 @@ func TestPlanNeverWritesStateOrTakesTheLock(t *testing.T) {
 project: myapp
 resources:
   network:
-    type: test.network
+    type: fake.network
     cidr: 10.20.0.0/16
 `)
 	opts := &GlobalOptions{Dir: dir, Parallelism: 4}
@@ -111,7 +111,7 @@ func TestPlanOutputWritesA0600JSONFile(t *testing.T) {
 project: myapp
 resources:
   network:
-    type: test.network
+    type: fake.network
     cidr: 10.20.0.0/16
 `)
 	outPath := filepath.Join(t.TempDir(), "plan.json")
@@ -178,7 +178,7 @@ resources: {}
 	prov := testprovider.New(filepath.Join(dir, testprovider.DefaultCloudPath))
 	rs, err := prov.Create(ctx, &resource.DesiredResource{
 		Address: address.Address{Name: "network"},
-		Type:    "test.network",
+		Type:    "fake.network",
 		Attrs: map[string]value.Value{
 			"cidr": value.String("10.20.0.0/16", value.SourceExplicit),
 		},

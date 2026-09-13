@@ -12,7 +12,7 @@ import (
 func sampleResource(name string) *resource.ResourceState {
 	return &resource.ResourceState{
 		Address:    address.Address{Name: name},
-		Type:       "test.database",
+		Type:       "fake.database",
 		Provider:   "test",
 		ProviderID: "db-1",
 		Attributes: map[string]value.Value{

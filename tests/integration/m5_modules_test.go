@@ -79,7 +79,7 @@ modules:
   - ./modules/db
 resources:
   net:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
   primary:
     type: module.db
@@ -90,12 +90,12 @@ resources:
 	if r.ExitCode != 2 {
 		t.Fatalf("plan exit = %d, want 2\n%s", r.ExitCode, r.combined())
 	}
-	if !strings.Contains(r.Stdout, "test.database.module.primary.store") {
+	if !strings.Contains(r.Stdout, "fake.database.module.primary.store") {
 		t.Errorf("the plan does not print the canonical module-prefixed address produced by "+
 			"address.Address.String(). A flat `primary.store` would be indistinguishable from a "+
 			"reference to an OUTPUT named `store` on the instance (Amendment 12a):\n%s", r.Stdout)
 	}
-	if got := modHeader("test.database", []string{"primary"}, "store"); !strings.Contains(r.Stdout, got) {
+	if got := modHeader("fake.database", []string{"primary"}, "store"); !strings.Contains(r.Stdout, got) {
 		t.Errorf("the plan header disagrees with address.Address.String(): want a line containing %q\n%s",
 			got, r.Stdout)
 	}
@@ -114,7 +114,7 @@ inputs:
     default: 7
 resources:
   store:
-    type: test.database
+    type: fake.database
     engine: postgres
     network: ${network}
     size: ${size}
@@ -140,7 +140,7 @@ modules:
   - ./modules/db
 resources:
   net:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
   primary:
     type: module.db
@@ -161,7 +161,7 @@ resources:
 	// than by name would produce two.
 	requireContains(t, r.Stdout, "3 to create")
 
-	primary := attrLine(t, r.Stdout, modHeader("test.database", []string{"primary"}, "store"), "size")
+	primary := attrLine(t, r.Stdout, modHeader("fake.database", []string{"primary"}, "store"), "size")
 	if !strings.HasPrefix(primary, "size: 20") {
 		t.Errorf("primary size line = %q, want the caller's explicit 20", primary)
 	}
@@ -171,7 +171,7 @@ resources:
 			"environment override and invert `explicit config always wins`", primary)
 	}
 
-	secondary := attrLine(t, r.Stdout, modHeader("test.database", []string{"secondary"}, "store"), "size")
+	secondary := attrLine(t, r.Stdout, modHeader("fake.database", []string{"secondary"}, "store"), "size")
 	if !strings.HasPrefix(secondary, "size: 7 [") {
 		t.Errorf("secondary size line = %q, want `size: 7 [...]` — the module's declared default, not the "+
 			"provider's 10", secondary)
@@ -184,8 +184,8 @@ resources:
 	// Absence. A flat address set means nothing renders the module's own
 	// internal name, and neither instantiation's value may appear on the
 	// other's line.
-	if n := strings.Count(r.Stdout, "test.database."+address.Address{Name: "store"}.String()); n != 0 {
-		t.Errorf("an unqualified `test.database.store` appears %d times — after stage 5 every address "+
+	if n := strings.Count(r.Stdout, "fake.database."+address.Address{Name: "store"}.String()); n != 0 {
+		t.Errorf("an unqualified `fake.database.store` appears %d times — after stage 5 every address "+
 			"carries its module path:\n%s", n, r.Stdout)
 	}
 	for _, text := range []string{"size: 20", "size: 7"} {
@@ -218,13 +218,13 @@ modules:
   - ./modules/platform
 resources:
   net:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
   platform:
     type: module.platform
     network: ${net.id}
   app:
-    type: test.application
+    type: fake.application
     image: nginx:1.27
     database_url: ${platform.dsn}
 `, map[string]string{
@@ -253,13 +253,13 @@ outputs:
 
 	// Two segments, outermost first, and the module path is a path rather than
 	// a single name.
-	line := attrLine(t, r.Stdout, modHeader("test.database", []string{"platform", "storage"}, "store"), "size")
+	line := attrLine(t, r.Stdout, modHeader("fake.database", []string{"platform", "storage"}, "store"), "size")
 	if !strings.HasPrefix(line, "size: 30") {
 		t.Errorf("nested store size line = %q, want the 30 the outer module passed in", line)
 	}
 
 	// An output that reads another module's output, two levels up.
-	dsn := attrLine(t, r.Stdout, "test.application.app", "database_url")
+	dsn := attrLine(t, r.Stdout, "fake.application.app", "database_url")
 	if dsn != "database_url: (known after apply)" {
 		t.Errorf("database_url = %q, want `database_url: (known after apply)` — the inner module's "+
 			"computed endpoint, republished by the outer module's output", dsn)
@@ -268,8 +268,8 @@ outputs:
 	// Absence: neither a one-level address nor the inner module's own name
 	// alone may appear.
 	for _, wrong := range []string{
-		modHeader("test.database", []string{"storage"}, "store"),
-		modHeader("test.database", []string{"platform"}, "store"),
+		modHeader("fake.database", []string{"storage"}, "store"),
+		modHeader("fake.database", []string{"platform"}, "store"),
 	} {
 		if strings.Contains(r.Stdout, wrong) {
 			t.Errorf("%s appears in the plan; a nested instantiation carries BOTH levels of its path:\n%s",
@@ -295,7 +295,7 @@ modules:
   - ./modules/app
 resources:
   net:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
   left:
     type: module.app
@@ -313,7 +313,7 @@ inputs:
     type: string
 resources:
   db:
-    type: test.database
+    type: fake.database
     engine: ${engine}
     network: ${network}
 `})
@@ -327,10 +327,10 @@ resources:
 	// modules collapsing into one would show 2.
 	requireContains(t, r.Stdout, "3 to create")
 
-	if line := attrLine(t, r.Stdout, modHeader("test.database", []string{"left"}, "db"), "engine"); line != `engine: "postgres"` {
+	if line := attrLine(t, r.Stdout, modHeader("fake.database", []string{"left"}, "db"), "engine"); line != `engine: "postgres"` {
 		t.Errorf("left db engine line = %q, want `engine: \"postgres\"`", line)
 	}
-	if line := attrLine(t, r.Stdout, modHeader("test.database", []string{"right"}, "db"), "engine"); line != `engine: "mysql"` {
+	if line := attrLine(t, r.Stdout, modHeader("fake.database", []string{"right"}, "db"), "engine"); line != `engine: "mysql"` {
 		t.Errorf("right db engine line = %q, want `engine: \"mysql\"`", line)
 	}
 
@@ -352,7 +352,7 @@ resources:
 // `${database.endpoint}` names a MODULE, not a resource, and its output reads
 // a computed attribute of a resource that does not exist yet. It must stay
 // unknown all the way to the page: never an empty string, never a coercion
-// failure. And `test.application` declares a Requirement for a test.database
+// failure. And `fake.application` declares a Requirement for a fake.database
 // (providers/test/definitions.go) which only the module supplies — so stage 8
 // passing is itself proof that flattening happened before validation.
 func TestAModuleOutputReachesTheCallerAndMayBeUnknown(t *testing.T) {
@@ -362,13 +362,13 @@ modules:
   - ./modules/db
 resources:
   net:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
   database:
     type: module.db
     network: ${net.id}
   app:
-    type: test.application
+    type: fake.application
     image: nginx:1.27
     database_url: ${database.endpoint}
 `, map[string]string{"modules/db/module.yml": dbModule})
@@ -378,7 +378,7 @@ resources:
 		t.Fatalf("plan exit = %d, want 2\n%s", r.ExitCode, r.combined())
 	}
 
-	line := attrLine(t, r.Stdout, "test.application.app", "database_url")
+	line := attrLine(t, r.Stdout, "fake.application.app", "database_url")
 	if line != "database_url: (known after apply)" {
 		t.Errorf("database_url = %q, want `database_url: (known after apply)` — a module output reading a "+
 			"computed attribute is unknown at plan time, and an empty string or a coercion error here is "+
@@ -387,7 +387,7 @@ resources:
 
 	// Stage 8's requirement check saw the module's database. The real
 	// wording (internal/compiler/validate.go) is `"<addr>" is missing
-	// required database`; if stage 8 could not see the module's test.database,
+	// required database`; if stage 8 could not see the module's fake.database,
 	// that is what `app` would fail with.
 	if strings.Contains(r.combined(), "is missing required database") {
 		t.Errorf("stage 8 did not see the module's resource:\n%s", r.combined())
@@ -405,7 +405,7 @@ resources:
 }
 
 // TestAModuleOutputBindsToTheModulesOwnResource. The root `store` is a decoy:
-// a test.network with the same LOGICAL NAME as the module's test.database,
+// a fake.network with the same LOGICAL NAME as the module's fake.database,
 // referenced by nothing. If the module's output `${store.endpoint}` is left
 // scope-relative it binds to that decoy, and `app` acquires a dependency on it.
 //
@@ -420,16 +420,16 @@ modules:
   - ./modules/db
 resources:
   net:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
   store:
-    type: test.network
+    type: fake.network
     cidr: 10.1.0.0/16
   thedb:
     type: module.db
     network: ${net.id}
   app:
-    type: test.application
+    type: fake.application
     image: nginx:1.27
     database_url: ${thedb.endpoint}
 `
@@ -441,7 +441,7 @@ resources:
 
 	// Drop the decoy. Nothing references it, so this must be a lone destroy.
 	writeIn(t, dir, "infra.yml", strings.Replace(withDecoy, `  store:
-    type: test.network
+    type: fake.network
     cidr: 10.1.0.0/16
 `, "", 1))
 
@@ -452,7 +452,7 @@ resources:
 			"resource\n%s", r.ExitCode, r.combined())
 	}
 	requireContains(t, r.Stdout, "1 to destroy")
-	requireContains(t, r.Stdout, "test.network.store")
+	requireContains(t, r.Stdout, "fake.network.store")
 
 	// The assertion. A dependents warning on the decoy means `app` depends on
 	// it, which can only happen if the module output's ${store.endpoint}
@@ -466,7 +466,7 @@ resources:
 
 	// And the application itself is untouched: its database_url still comes
 	// from the module, so removing the decoy changes nothing about it.
-	if strings.Contains(r.Stdout, "test.application.app") {
+	if strings.Contains(r.Stdout, "fake.application.app") {
 		t.Errorf("removing an unrelated resource changed the application:\n%s", r.Stdout)
 	}
 }
@@ -487,13 +487,13 @@ modules:
   - ./modules/db
 resources:
   net:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
   database:
     type: module.db
     network: ${net.id}
   app:
-    type: test.application
+    type: fake.application
     image: nginx:1.27
     database_url: ${datbase.endpoint}
 `, map[string]string{"modules/db/module.yml": dbModule})
@@ -523,7 +523,7 @@ modules:
   - ./modules/db
 resources:
   net:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
   primary:
     type: module.db
@@ -537,7 +537,7 @@ inputs:
     default: 7
 resources:
   store:
-    type: test.database
+    type: fake.database
     engine: postgres
     network: ${network}
     size: ${size}
@@ -575,13 +575,13 @@ modules:
   - ./modules/db
 resources:
   net:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
   thedb:
     type: module.db
     network: ${net.id}
   app:
-    type: test.application
+    type: fake.application
     image: nginx:1.27
     database_url: ${thedb.vpc_id}
 `, map[string]string{"modules/db/module.yml": dbModule})
@@ -615,10 +615,10 @@ func TestAReferenceToANonexistentAttributeFailsAtValidate(t *testing.T) {
 project: myapp
 resources:
   store:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
   db:
-    type: test.database
+    type: fake.database
     engine: postgres
     network: ${store.id}
     password: ${store.endpoint}
@@ -626,13 +626,13 @@ resources:
 
 	v := run(t, dir, "validate", "dev")
 	if v.ExitCode != 1 {
-		t.Fatalf("validate exit = %d, want 1 — test.network has no `endpoint`, and validate is the "+
+		t.Fatalf("validate exit = %d, want 1 — fake.network has no `endpoint`, and validate is the "+
 			"command whose entire job is to catch that before anything is created\n%s",
 			v.ExitCode, v.combined())
 	}
 	out := v.combined()
 	requireContains(t, out, "endpoint")
-	requireContains(t, out, "test.network") // the cause, which the apply-time message never names
+	requireContains(t, out, "fake.network") // the cause, which the apply-time message never names
 	requireContains(t, out, "cidr")         // what was expected, per §44
 
 	// The regression that matters. Before Amendment 11 this apply created
@@ -679,7 +679,7 @@ modules:
   - ./modules/ping
 resources:
   net:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
   first:
     type: module.ping
@@ -722,7 +722,7 @@ modules:
   - ./modules/n0
 resources:
   net:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
   top:
     type: module.n0
@@ -741,7 +741,7 @@ modules:
   - ./modules/ping
 resources:
   net:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
   first:
     type: module.ping
@@ -773,7 +773,7 @@ modules:
   - ./modules/db
 resources:
   net:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
   primary:
     type: module.db
@@ -787,7 +787,7 @@ inputs:
     type: string
 resources:
   store:
-    type: test.database
+    type: fake.database
     engine: postgres
     network: ${network}
     password: ${secret}
@@ -800,7 +800,7 @@ resources:
 	if strings.Contains(r.combined(), secret) {
 		t.Errorf("the secret reached the command's output:\n%s", r.combined())
 	}
-	line := attrLine(t, r.Stdout, modHeader("test.database", []string{"primary"}, "store"), "password")
+	line := attrLine(t, r.Stdout, modHeader("fake.database", []string{"primary"}, "store"), "password")
 	if !strings.HasPrefix(line, "password: <sensitive>") {
 		t.Errorf("password rendered as %q, want a redacted value", line)
 	}
@@ -830,7 +830,7 @@ modules:
   - ./modules/db
 resources:
   net:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
   delta:
     type: module.db
@@ -862,10 +862,10 @@ resources:
 	// loop above. The instantiations are declared delta, alpha, charlie,
 	// bravo, so declaration order and sorted order differ.
 	want := []string{
-		modHeader("test.database", []string{"alpha"}, "store"),
-		modHeader("test.database", []string{"bravo"}, "store"),
-		modHeader("test.database", []string{"charlie"}, "store"),
-		modHeader("test.database", []string{"delta"}, "store"),
+		modHeader("fake.database", []string{"alpha"}, "store"),
+		modHeader("fake.database", []string{"bravo"}, "store"),
+		modHeader("fake.database", []string{"charlie"}, "store"),
+		modHeader("fake.database", []string{"delta"}, "store"),
 	}
 	at := 0
 	for _, name := range want {
@@ -904,7 +904,7 @@ modules:
   - ./modules/db
 resources:
   net:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
   bad:
     type: `+tc.typ+`
@@ -937,7 +937,7 @@ modules:
   - ./modules/db
 resources:
   net:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
   primary:
     type: module.db
@@ -1006,7 +1006,7 @@ modules:
   - `+source+`:`+pinned+`
 resources:
   net:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
   primary:
     type: module.repo
@@ -1078,7 +1078,7 @@ modules:
   - `+source+`:`+newPin+`
 resources:
   net:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
   primary:
     type: module.repo
@@ -1122,7 +1122,7 @@ modules:
   - ./modules/db
 resources:
   net:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
   %s:
     type: module.db
@@ -1146,8 +1146,8 @@ resources:
 	}
 	requireContains(t, r.Stdout, "1 to create")
 	requireContains(t, r.Stdout, "1 to destroy")
-	requireContains(t, r.Stdout, modHeader("test.database", []string{"new"}, "store"))
-	requireContains(t, r.Stdout, modHeader("test.database", []string{"old"}, "store"))
+	requireContains(t, r.Stdout, modHeader("fake.database", []string{"new"}, "store"))
+	requireContains(t, r.Stdout, modHeader("fake.database", []string{"old"}, "store"))
 
 	// The user is told what happened, on the destroy, before they approve it.
 	note := lineContaining(t, r.Stdout, "destroyed and recreated")

@@ -1,4 +1,4 @@
 resources:
   network:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16

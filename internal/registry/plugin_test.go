@@ -39,7 +39,7 @@ func (p *stubPlugin) New(cfg provider.Config) (provider.Provider, error) {
 }
 
 func plugin() *stubPlugin {
-	return &stubPlugin{name: "test", defs: []*schema.ResourceDefinition{def("test.network")}}
+	return &stubPlugin{name: "test", defs: []*schema.ResourceDefinition{def("fake.network")}}
 }
 
 // TestAPluginsSchemasAreAvailableBeforeAnyInstanceExists is the whole point. If this
@@ -50,12 +50,12 @@ func TestAPluginsSchemasAreAvailableBeforeAnyInstanceExists(t *testing.T) {
 	if err := r.RegisterPlugin(plugin()); err != nil {
 		t.Fatalf("RegisterPlugin: %v", err)
 	}
-	if _, ok := r.Definition("test.network"); !ok {
+	if _, ok := r.Definition("fake.network"); !ok {
 		t.Error("the schema is not available from a registry holding only the plugin")
 	}
 	// And the other half: nothing can be dispatched to yet. A registry that
 	// answered here would be one that invented a provider from no configuration.
-	if _, ok := r.ProviderFor("test.network", "test"); ok {
+	if _, ok := r.ProviderFor("fake.network", "test"); ok {
 		t.Error("a provider object exists before any instance was configured")
 	}
 	if names := r.InstanceNames(); len(names) != 0 {
@@ -83,7 +83,7 @@ func TestRegisterInstancePassesResolvedConfigurationToThePlugin(t *testing.T) {
 	if got, _ := p.gotConfig["cloud"].AsString(); got != "/tmp/one.json" {
 		t.Errorf("the plugin received cloud = %v, want the resolved value", p.gotConfig["cloud"])
 	}
-	if _, ok := r.ProviderFor("test.network", "acct2"); !ok {
+	if _, ok := r.ProviderFor("fake.network", "acct2"); !ok {
 		t.Error("the constructed instance does not serve the plugin's types")
 	}
 }
@@ -142,7 +142,7 @@ func TestAPluginErrorIsReturnedNotSwallowed(t *testing.T) {
 // a further instance, and saying so beats a nil dereference.
 func TestAConstructedProviderRegistersItsPluginByNameOnly(t *testing.T) {
 	r := New()
-	if err := r.Register("test", stubProvider{name: "test", defs: []*schema.ResourceDefinition{def("test.network")}}); err != nil {
+	if err := r.Register("test", stubProvider{name: "test", defs: []*schema.ResourceDefinition{def("fake.network")}}); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	if got := r.PluginNames(); strings.Join(got, ",") != "test" {

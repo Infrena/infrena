@@ -63,11 +63,11 @@ environments:
   production:
     account_file: prod-cloud.json
 providers:
-  - plugin: test
+  - plugin: fake
     cloud: "${account_file}"
 resources:
   net:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
 `)
 
@@ -110,11 +110,11 @@ project: MainApp
 environments:
   dev: {}
 providers:
-  - plugin: test
+  - plugin: fake
     clowd: other.json
 resources:
   net:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
 `)
 	r := run(t, dir, "validate")
@@ -141,13 +141,13 @@ project: MainApp
 environments:
   dev: {}
 providers:
-  - plugin: test
+  - plugin: fake
     name: main
-  - plugin: test
+  - plugin: fake
     name: acct2
 resources:
   net:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
     provider: acct3
 `)
@@ -170,20 +170,20 @@ project: MainApp
 environments:
   dev: {}
 providers:
-  - plugin: test
+  - plugin: fake
     name: main
-  - plugin: test
+  - plugin: fake
     name: acct2
 resources:
   net:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
   here:
-    type: test.database
+    type: fake.database
     engine: postgres
     network: ${net.id}
   there:
-    type: test.database
+    type: fake.database
     engine: postgres
     network: 10.0.0.0/16
     provider: acct2
@@ -248,16 +248,16 @@ project: MainApp
 environments:
   dev: {}
 providers:
-  - plugin: test
+  - plugin: fake
     name: main
-  - plugin: test
+  - plugin: fake
     name: acct2
 resources:
   net:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
   here:
-    type: test.database
+    type: fake.database
     engine: postgres
     network: ${net.id}
 `)
@@ -296,13 +296,13 @@ project: MainApp
 environments:
   dev: {}
 providers:
-  - plugin: test
+  - plugin: fake
     name: main
-  - plugin: test
+  - plugin: fake
     name: main
 resources:
   net:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
 `
 	dir := project(t, body)
@@ -364,16 +364,16 @@ project: MainApp
 environments:
   dev: {}
 providers:
-  - plugin: test
+  - plugin: fake
     name: main
-  - plugin: test
+  - plugin: fake
     name: acct2
 resources:
   here:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
   there:
-    type: test.network
+    type: fake.network
     cidr: 10.1.0.0/16
     provider: acct2
 `)
@@ -439,29 +439,29 @@ environments:
   dev:
     tier: shared
 providers:
-  - plugin: test
+  - plugin: fake
     name: main
     defaults:
       size: 200
       tags:
         tier: ${tier}
-  - plugin: test
+  - plugin: fake
     name: acct2
 resources:
   net:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
   here:
-    type: test.database
+    type: fake.database
     engine: postgres
     network: ${net.id}
   there:
-    type: test.database
+    type: fake.database
     engine: postgres
     network: ${net.id}
     provider: acct2
   own:
-    type: test.database
+    type: fake.database
     engine: postgres
     network: ${net.id}
     size: 50
@@ -518,13 +518,13 @@ project: MainApp
 environments:
   dev: {}
 providers:
-  - plugin: test
+  - plugin: fake
     defaults:
       tag:
         team: payments
 resources:
   net:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
 `)
 	r := run(t, dir, "validate")
@@ -547,17 +547,17 @@ project: MainApp
 environments:
   dev: {}
 providers:
-  - plugin: test
+  - plugin: fake
     defaults:
       prevent_destroy: true
 `
 	dir := project(t, providersBlock+`
 resources:
   guarded:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
   replaceable:
-    type: test.network
+    type: fake.network
     cidr: 10.1.0.0/16
     lifecycle:
       prevent_destroy: false
@@ -571,7 +571,7 @@ resources:
 	rewrite(t, dir, providersBlock+`
 resources:
   guarded:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
 `)
 	p := run(t, dir, "plan", "dev")
@@ -588,7 +588,7 @@ resources:
 	rewrite(t, dir, providersBlock+`
 resources:
   replaceable:
-    type: test.network
+    type: fake.network
     cidr: 10.1.0.0/16
     lifecycle:
       prevent_destroy: false

@@ -39,7 +39,7 @@ func newImportCommand(opts *GlobalOptions) *cobra.Command {
 		Short:         "Adopt existing infrastructure into state",
 		Long: "Adopt resources that already exist, so this tool manages them without recreating " +
 			"them.\n\nWith no type.id arguments, everything discovery finds is imported. Pass " +
-			"`test.database.db-9` to import one.\n\n--generate additionally writes the " +
+			"`fake.database.db-9` to import one.\n\n--generate additionally writes the " +
 			"configuration that declares what was imported, under " + config.DiscoveredDirName +
 			"/. Without it you must write that configuration yourself before the next apply: a " +
 			"resource in state that no configuration declares is scheduled for destruction.",
@@ -156,7 +156,7 @@ func runImport(
 //
 // A selector names a TYPE and an ID because an ID alone is not unique across
 // types in every provider, and because the type is what the provider needs to
-// read the resource. `test.database.db-9` splits at the LAST dot: a type
+// read the resource. `fake.database.db-9` splits at the LAST dot: a type
 // already contains one.
 func selectForImport(ctx context.Context, reg *registry.Registry, selectors []string) ([]discovery.Result, []error, error) {
 	found, problems := discovery.Walk(ctx, reg, nil)

@@ -62,7 +62,11 @@ func (r result) combined() string { return r.Stdout + r.Stderr }
 // run executes the CLI inside dir.
 func run(t *testing.T, dir string, args ...string) result {
 	t.Helper()
-	cmd := exec.Command(binary(t), append([]string{"--chdir", dir}, args...)...)
+	// EVERY command gets --plugin-dir. The binary under test carries no provider, so
+	// without it nothing loads and every test fails with "no binary for plugin fake" —
+	// which is true, and says nothing about the test that was running.
+	full := append([]string{"--chdir", dir, "--plugin-dir", fakePluginDir(t)}, args...)
+	cmd := exec.Command(binary(t), full...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr

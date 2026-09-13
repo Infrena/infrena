@@ -20,7 +20,7 @@ func explainOut(t *testing.T, args ...string) (string, error) {
 // and Capabilities, and an attribute must appear in exactly one group — a
 // reader counting them is entitled to see the whole surface.
 func TestExplainRendersEveryGroup(t *testing.T) {
-	out, err := explainOut(t, "explain", "test.database")
+	out, err := explainOut(t, "explain", "fake.database")
 	if err != nil {
 		t.Fatalf("explain: %v\n%s", err, out)
 	}
@@ -53,7 +53,7 @@ func TestExplainRendersEveryGroup(t *testing.T) {
 // anywhere, this output is where it would surface first, because `explain`
 // reads the schema directly rather than through a compile.
 func TestExplainStatesADefaultOnce(t *testing.T) {
-	out, _ := explainOut(t, "explain", "test.database")
+	out, _ := explainOut(t, "explain", "fake.database")
 	if !strings.Contains(out, "default: 10") {
 		t.Errorf("the default must be stated:\n%s", out)
 	}
@@ -65,7 +65,7 @@ func TestExplainStatesADefaultOnce(t *testing.T) {
 // TestExplainSensitiveAndForceNewAreMarked. Both change what a user may safely
 // do with an attribute, and neither is visible from its name or kind.
 func TestExplainMarksSensitiveAndForceNew(t *testing.T) {
-	out, _ := explainOut(t, "explain", "test.database")
+	out, _ := explainOut(t, "explain", "fake.database")
 	if !strings.Contains(out, "sensitive") {
 		t.Errorf("a sensitive attribute must be marked:\n%s", out)
 	}
@@ -81,7 +81,7 @@ func TestExplainMarksSensitiveAndForceNew(t *testing.T) {
 // nothing can list aws's types — nothing has ever seen them — so the actionable
 // answer is the plugin, every place that was searched, and what to do about it.
 //
-// This test used to assert that the error listed `test.database`. It could only do
+// This test used to assert that the error listed `fake.database`. It could only do
 // that because the fake provider was compiled into the CLI and therefore always
 // registered; with plugins loaded on demand, a command that never mentions `test`
 // has no reason to have loaded it.
@@ -101,12 +101,12 @@ func TestExplainATypeWhoseProviderIsNotInstalledSaysWhereToPutIt(t *testing.T) {
 // TestExplainListsTheKnownTypesWhenTheProviderIsThere is the other half: a type the
 // loaded plugin does not offer must still list what it does.
 func TestExplainListsTheKnownTypesWhenTheProviderIsThere(t *testing.T) {
-	out, err := explainOut(t, "explain", "test.nosuchthing")
+	out, err := explainOut(t, "explain", "fake.nosuchthing")
 	if err == nil {
 		t.Fatal("an unknown type from an installed plugin must be an error")
 	}
 	msg := err.Error() + out
-	if !strings.Contains(msg, "test.database") {
+	if !strings.Contains(msg, "fake.database") {
 		t.Errorf("the error must list the types that DO exist:\n%s", msg)
 	}
 }

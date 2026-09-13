@@ -29,7 +29,7 @@ resources: {}
 	prov := testprovider.New(cloudPath)
 	rs, err := prov.Create(ctx, &resource.DesiredResource{
 		Address: address.Address{Name: "network"},
-		Type:    "test.network",
+		Type:    "fake.network",
 		Attrs: map[string]value.Value{
 			"cidr": value.String("10.20.0.0/16", value.SourceExplicit),
 		},
@@ -85,7 +85,7 @@ resources: {}
 	prov := testprovider.New(cloudPath)
 	rs, err := prov.Create(ctx, &resource.DesiredResource{
 		Address: address.Address{Name: "network"},
-		Type:    "test.network",
+		Type:    "fake.network",
 		Attrs: map[string]value.Value{
 			"cidr": value.String("10.20.0.0/16", value.SourceExplicit),
 		},
@@ -153,7 +153,7 @@ resources: {}
 	prov := testprovider.New(cloudPath)
 	rs, err := prov.Create(ctx, &resource.DesiredResource{
 		Address: address.Address{Name: "network"},
-		Type:    "test.network",
+		Type:    "fake.network",
 		Attrs: map[string]value.Value{
 			"cidr": value.String("10.20.0.0/16", value.SourceExplicit),
 		},
@@ -266,7 +266,7 @@ resources: {}
 	prov := testprovider.New(cloudPath)
 	rs, err := prov.Create(ctx, &resource.DesiredResource{
 		Address: address.Address{Name: "network"},
-		Type:    "test.network",
+		Type:    "fake.network",
 		Attrs: map[string]value.Value{
 			"cidr": value.String("10.20.0.0/16", value.SourceExplicit),
 		},
@@ -362,7 +362,7 @@ func TestApplyObservationsLeavesStateAloneOnAMissingObservation(t *testing.T) {
 	st := state.New("myapp", "dev")
 	st.Set(&resource.ResourceState{
 		Address:    address.Address{Name: "network"},
-		Type:       "test.network",
+		Type:       "fake.network",
 		ProviderID: "net-1",
 		Attributes: map[string]value.Value{
 			"cidr": value.String("10.20.0.0/16", value.SourceExplicit),
@@ -413,7 +413,7 @@ resources: {}
 	prov := testprovider.New(cloudPath)
 	rs, err := prov.Create(ctx, &resource.DesiredResource{
 		Address: address.Address{Name: "network"},
-		Type:    "test.network",
+		Type:    "fake.network",
 		Attrs: map[string]value.Value{
 			"cidr": value.String("10.20.0.0/16", value.SourceExplicit),
 		},
@@ -497,7 +497,7 @@ resources: {}
 	prov := testprovider.New(cloudPath)
 	rs, err := prov.Create(ctx, &resource.DesiredResource{
 		Address: address.Address{Name: "network"},
-		Type:    "test.network",
+		Type:    "fake.network",
 		Attrs: map[string]value.Value{
 			"cidr": value.String("10.20.0.0/16", value.SourceExplicit),
 		},

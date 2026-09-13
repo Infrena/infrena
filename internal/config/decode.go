@@ -551,7 +551,7 @@ func decodeResources(path string, node *yaml.Node, dst *[]*ResourceDecl, ds *dia
 			ds.Add(diag.Diagnostic{
 				Severity: diag.SeverityError,
 				Summary:  "resource " + strconv.Quote(r.Name) + " has no `type`",
-				Detail:   "Every resource must name the provider resource type it manages, for example `type: test.database`.",
+				Detail:   "Every resource must name the provider resource type it manages, for example `type: fake.database`.",
 				Action:   "Add a `type` key to " + strconv.Quote(r.Name) + ".",
 				Origin:   r.Origin,
 			})

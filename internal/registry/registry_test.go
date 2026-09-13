@@ -49,13 +49,13 @@ func def(t string) *schema.ResourceDefinition {
 
 func TestRegisterAndLookup(t *testing.T) {
 	r := New()
-	if err := r.Register("test", stubProvider{name: "test", defs: []*schema.ResourceDefinition{def("test.database")}}); err != nil {
+	if err := r.Register("test", stubProvider{name: "test", defs: []*schema.ResourceDefinition{def("fake.database")}}); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
-	if _, ok := r.Definition("test.database"); !ok {
+	if _, ok := r.Definition("fake.database"); !ok {
 		t.Error("definition not found after registration")
 	}
-	p, ok := r.ProviderFor("test.database", "test")
+	p, ok := r.ProviderFor("fake.database", "test")
 	if !ok || p.Name() != "test" {
 		t.Error("provider not found after registration")
 	}
@@ -66,12 +66,12 @@ func TestRegisterAndLookup(t *testing.T) {
 
 func TestRegisterRejectsDuplicateType(t *testing.T) {
 	r := New()
-	p := stubProvider{name: "test", defs: []*schema.ResourceDefinition{def("test.database")}}
+	p := stubProvider{name: "test", defs: []*schema.ResourceDefinition{def("fake.database")}}
 	if err := r.Register("test", p); err != nil {
 		t.Fatalf("first Register: %v", err)
 	}
-	err := r.Register("other", stubProvider{name: "other", defs: []*schema.ResourceDefinition{def("test.database")}})
-	if err == nil || !strings.Contains(err.Error(), "test.database") {
+	err := r.Register("other", stubProvider{name: "other", defs: []*schema.ResourceDefinition{def("fake.database")}})
+	if err == nil || !strings.Contains(err.Error(), "fake.database") {
 		t.Errorf("duplicate registration error = %v; want one naming the type", err)
 	}
 }
@@ -79,7 +79,7 @@ func TestRegisterRejectsDuplicateType(t *testing.T) {
 func TestRegisterRejectsDuplicateTypeWithinOneProvider(t *testing.T) {
 	r := New()
 	err := r.Register("test", stubProvider{name: "test", defs: []*schema.ResourceDefinition{
-		def("test.database"), def("test.database"),
+		def("fake.database"), def("fake.database"),
 	}})
 	if err == nil {
 		t.Fatal("a provider declaring the same type twice must be rejected, not silently clobbered")
@@ -143,10 +143,10 @@ func TestRegisterAcceptsATypeMerelyContainingModule(t *testing.T) {
 func TestTypesIsSorted(t *testing.T) {
 	r := New()
 	_ = r.Register("test", stubProvider{name: "test", defs: []*schema.ResourceDefinition{
-		def("test.network"), def("test.application"), def("test.database"),
+		def("fake.network"), def("fake.application"), def("fake.database"),
 	}})
 	got := r.Types()
-	want := []string{"test.application", "test.database", "test.network"}
+	want := []string{"fake.application", "fake.database", "fake.network"}
 	for i := range want {
 		if got[i] != want[i] {
 			t.Fatalf("Types() = %v, want %v — explain output must be stable", got, want)

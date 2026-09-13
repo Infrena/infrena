@@ -42,11 +42,11 @@ inputs:
 
 resources:
   service:
-    type: test.database
+    type: fake.database
     engine: postgres
     count: ${replicas}
   cache:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
 
 outputs:
@@ -85,7 +85,7 @@ outputs:
 	if got.Resources[0].Name != "cache" || got.Resources[1].Name != "service" {
 		t.Errorf("resources are not sorted by name: %s, %s", got.Resources[0].Name, got.Resources[1].Name)
 	}
-	if got.Resources[1].Type != "test.database" {
+	if got.Resources[1].Type != "fake.database" {
 		t.Errorf("service type = %q", got.Resources[1].Type)
 	}
 	if !got.Resources[1].Attributes["count"].HasExpressions {
@@ -218,7 +218,7 @@ func TestModuleFileAcceptsNestedModules(t *testing.T) {
 	f := writeModule(t, `
 resources:
   outer:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
 
 modules:
@@ -395,7 +395,7 @@ func TestEmptyAndMalformedModuleFiles(t *testing.T) {
 	})
 
 	t.Run("a block declared twice", func(t *testing.T) {
-		f := writeModule(t, "resources:\n  a:\n    type: test.network\noutputs:\n  x:\n    value: ${a.id}\nresources:\n  b:\n    type: test.network\n")
+		f := writeModule(t, "resources:\n  a:\n    type: fake.network\noutputs:\n  x:\n    value: ${a.id}\nresources:\n  b:\n    type: fake.network\n")
 		_, ds := DecodeModule(f)
 		requireErrorAbout(t, ds, "`resources` is declared more than once in this module file", "line 1")
 	})

@@ -44,14 +44,14 @@ func TestApplyWithNoChangesTakesNoLockAndDoesNotPrompt(t *testing.T) {
 project: myapp
 resources:
   network:
-    type: test.network
+    type: fake.network
     cidr: 10.20.0.0/16
 `)
 	ctx := context.Background()
 	prov := testprovider.New(filepath.Join(dir, testprovider.DefaultCloudPath))
 	rs, err := prov.Create(ctx, &resource.DesiredResource{
 		Address: address.Address{Name: "network"},
-		Type:    "test.network",
+		Type:    "fake.network",
 		Attrs: map[string]value.Value{
 			"cidr": value.String("10.20.0.0/16", value.SourceExplicit),
 		},
@@ -110,7 +110,7 @@ func TestApplyWithAutoApproveCreatesResourcesAndReportsChanges(t *testing.T) {
 project: myapp
 resources:
   network:
-    type: test.network
+    type: fake.network
     cidr: 10.20.0.0/16
 `)
 	opts := &GlobalOptions{Dir: dir, Parallelism: 4, AutoApprove: true}
@@ -152,7 +152,7 @@ func TestApplyDeclinedApprovalAppliesNothing(t *testing.T) {
 project: myapp
 resources:
   network:
-    type: test.network
+    type: fake.network
     cidr: 10.20.0.0/16
 `)
 	opts := &GlobalOptions{Dir: dir, Parallelism: 4}
@@ -190,7 +190,7 @@ func TestApplyEOFOnStdinDeclinesRatherThanHanging(t *testing.T) {
 project: myapp
 resources:
   network:
-    type: test.network
+    type: fake.network
     cidr: 10.20.0.0/16
 `)
 	opts := &GlobalOptions{Dir: dir, Parallelism: 4}
@@ -228,10 +228,10 @@ func TestApplyOrdersDependentResourcesAndAppliesBoth(t *testing.T) {
 project: myapp
 resources:
   network:
-    type: test.network
+    type: fake.network
     cidr: 10.20.0.0/16
   database:
-    type: test.database
+    type: fake.database
     engine: postgres
     network: ${network.id}
 `)
@@ -283,7 +283,7 @@ func TestApplyReportsFailureAndReturnsPlainError(t *testing.T) {
 project: myapp
 resources:
   network:
-    type: test.network
+    type: fake.network
     cidr: 10.20.0.0/16
 `)
 	cloud := testprovider.Cloud{
@@ -349,10 +349,10 @@ func TestApplyRePlansInsideTheLockNotJustBeforeIt(t *testing.T) {
 project: myapp
 resources:
   network:
-    type: test.network
+    type: fake.network
     cidr: 10.20.0.0/16
   database:
-    type: test.database
+    type: fake.database
     engine: postgres
     network: ${network.id}
 `)
@@ -361,7 +361,7 @@ resources:
 	prov := testprovider.New(cloudPath)
 	rs, err := prov.Create(ctx, &resource.DesiredResource{
 		Address: address.Address{Name: "network"},
-		Type:    "test.network",
+		Type:    "fake.network",
 		Attrs: map[string]value.Value{
 			"cidr": value.String("10.20.0.0/16", value.SourceExplicit),
 		},
@@ -446,7 +446,7 @@ func TestApplyPlanConvergesToNoChangesInsideTheLock(t *testing.T) {
 project: myapp
 resources:
   network:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
 `)
 	ctx := context.Background()
@@ -457,7 +457,7 @@ resources:
 	// replace and apply reaches the approval prompt at all.
 	rs, err := prov.Create(ctx, &resource.DesiredResource{
 		Address: address.Address{Name: "network"},
-		Type:    "test.network",
+		Type:    "fake.network",
 		Attrs: map[string]value.Value{
 			"cidr": value.String("10.1.0.0/16", value.SourceExplicit),
 		},
@@ -508,7 +508,7 @@ func TestApplyLockConflictNamesTheHolder(t *testing.T) {
 project: myapp
 resources:
   network:
-    type: test.network
+    type: fake.network
     cidr: 10.20.0.0/16
 `)
 	backend := backendFor(dir)
@@ -562,10 +562,10 @@ func TestApplyReplaceWhoseNewValueReferencesAResourceCreatedInTheSameRun(t *test
 project: myapp
 resources:
   network:
-    type: test.network
+    type: fake.network
     cidr: 10.20.0.0/16
   db:
-    type: test.database
+    type: fake.database
     engine: postgres
     network: ${network.id}
 `)
@@ -592,13 +592,13 @@ resources:
 project: myapp
 resources:
   network:
-    type: test.network
+    type: fake.network
     cidr: 10.20.0.0/16
   network2:
-    type: test.network
+    type: fake.network
     cidr: 10.50.0.0/16
   db:
-    type: test.database
+    type: fake.database
     engine: mysql
     network: ${network2.id}
 `), 0o644); err != nil {
@@ -701,10 +701,10 @@ func TestApplyOnADependsOnOnlyChangeUpdatesRecordedDependencies(t *testing.T) {
 project: myapp
 resources:
   net:
-    type: test.network
+    type: fake.network
     cidr: 10.20.0.0/16
   db:
-    type: test.database
+    type: fake.database
     engine: postgres
     network: ${net.id}
 `)
@@ -738,13 +738,13 @@ resources:
 project: myapp
 resources:
   net:
-    type: test.network
+    type: fake.network
     cidr: 10.20.0.0/16
   other:
-    type: test.network
+    type: fake.network
     cidr: 10.50.0.0/16
   db:
-    type: test.database
+    type: fake.database
     engine: postgres
     network: ${net.id}
     depends_on: [other]

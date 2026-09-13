@@ -34,7 +34,7 @@ func samplePlan(created time.Time) *Plan {
 		Operations: []Operation{
 			{
 				Address: addr("zebra"),
-				Type:    "test.database",
+				Type:    "fake.database",
 				Kind:    OpUpdate,
 				Before:  map[string]value.Value{"size": value.Int(10, value.SourceProvider)},
 				After:   map[string]value.Value{"size": value.Int(20, value.SourceExplicit)},
@@ -42,7 +42,7 @@ func samplePlan(created time.Time) *Plan {
 			},
 			{
 				Address: addr("alpha"),
-				Type:    "test.network",
+				Type:    "fake.network",
 				Kind:    OpCreate,
 				After:   map[string]value.Value{"cidr": str("10.0.0.0/16")},
 			},
@@ -208,8 +208,8 @@ func TestCreateOmitsBeforeAndDestroyOmitsAfter(t *testing.T) {
 	p := &Plan{
 		Version: PlanVersion,
 		Operations: []Operation{
-			{Address: addr("a"), Type: "test.network", Kind: OpCreate, After: map[string]value.Value{"cidr": str("10.0.0.0/16")}},
-			{Address: addr("b"), Type: "test.network", Kind: OpDestroy, Before: map[string]value.Value{"cidr": str("10.1.0.0/16")}},
+			{Address: addr("a"), Type: "fake.network", Kind: OpCreate, After: map[string]value.Value{"cidr": str("10.0.0.0/16")}},
+			{Address: addr("b"), Type: "fake.network", Kind: OpDestroy, Before: map[string]value.Value{"cidr": str("10.1.0.0/16")}},
 		},
 	}
 	data, err := p.Canonical()
@@ -240,7 +240,7 @@ func TestUnknownValuesSurviveIntoTheArtifact(t *testing.T) {
 	p := &Plan{
 		Version: PlanVersion,
 		Operations: []Operation{{
-			Address: addr("db"), Type: "test.database", Kind: OpCreate,
+			Address: addr("db"), Type: "fake.database", Kind: OpCreate,
 			After: map[string]value.Value{"endpoint": value.Unknown(value.KindString, value.SourceProvider)},
 		}},
 	}
@@ -261,7 +261,7 @@ func TestSensitiveValuesArePresentInTheArtifact(t *testing.T) {
 	p := &Plan{
 		Version: PlanVersion,
 		Operations: []Operation{{
-			Address: addr("db"), Type: "test.database", Kind: OpCreate,
+			Address: addr("db"), Type: "fake.database", Kind: OpCreate,
 			After: map[string]value.Value{"password": str("hunter2").WithSensitive(true)},
 		}},
 	}
@@ -334,7 +334,7 @@ func TestDependentsAreCarriedAndSortedInTheCanonicalForm(t *testing.T) {
 	forward := &Plan{
 		Version: PlanVersion,
 		Operations: []Operation{{
-			Address: addr("net"), Type: "test.network", Kind: OpDestroy,
+			Address: addr("net"), Type: "fake.network", Kind: OpDestroy,
 			Before:     map[string]value.Value{"cidr": str("10.0.0.0/16")},
 			Dependents: []address.Address{addr("alpha"), addr("middle"), addr("zebra")},
 		}},
@@ -342,7 +342,7 @@ func TestDependentsAreCarriedAndSortedInTheCanonicalForm(t *testing.T) {
 	reversed := &Plan{
 		Version: PlanVersion,
 		Operations: []Operation{{
-			Address: addr("net"), Type: "test.network", Kind: OpDestroy,
+			Address: addr("net"), Type: "fake.network", Kind: OpDestroy,
 			Before:     map[string]value.Value{"cidr": str("10.0.0.0/16")},
 			Dependents: []address.Address{addr("zebra"), addr("middle"), addr("alpha")},
 		}},

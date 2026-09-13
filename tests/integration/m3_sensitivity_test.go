@@ -27,14 +27,14 @@ const secretProject = `
 project: leak
 resources:
   net:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
   db:
-    type: test.database
+    type: fake.database
     engine: postgres
     password: hunter2
   app:
-    type: test.application
+    type: fake.application
     image: nginx
     database_url: ${db.password}
 `

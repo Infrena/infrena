@@ -18,6 +18,6 @@ resources:
       team: storefront
 
   web:
-    type: test.application
+    type: fake.application
     image: nginx:1.27
     database_url: ${stack.endpoint}

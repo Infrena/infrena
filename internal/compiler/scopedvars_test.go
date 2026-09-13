@@ -50,13 +50,13 @@ db_only: 7
 		"resources/net/net.yml": `
 resources:
   net:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
 `,
 		"resources/db/db.yml": `
 resources:
   db:
-    type: test.database
+    type: fake.database
     engine: postgres
     size: ${size}
     network: ${net.id}
@@ -64,7 +64,7 @@ resources:
 		"resources/app/app.yml": `
 resources:
   app:
-    type: test.database
+    type: fake.database
     engine: postgres
     size: ${size}
     network: ${net.id}
@@ -115,7 +115,7 @@ func TestADirectoryScopedVariableIsNotVisibleElsewhere(t *testing.T) {
 		"resources/app/app.yml": `
 resources:
   app:
-    type: test.database
+    type: fake.database
     engine: postgres
     size: ${db_only}
     network: ${net.id}
@@ -239,7 +239,7 @@ inputs:
     type: string
 resources:
   inner:
-    type: test.database
+    type: fake.database
     engine: postgres
     size: ${size}
     network: ${network}
@@ -255,7 +255,7 @@ inputs:
     type: string
 resources:
   probe:
-    type: test.network
+    type: fake.network
     cidr: ${upstream}
 `,
 		"resources/db/call.yml": `

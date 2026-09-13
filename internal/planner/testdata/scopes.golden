@@ -1,12 +1,12 @@
 Plan for project "myapp", environment "production":
 
-  + test.database.db
+  + fake.database.db
       engine: "postgres"
       network: "net-1" [variable, from base config]
       size: 100 [default, from provider default]
       zone: "us-east-1a" [variable, from prod.yml]
 
-  ~ test.network.net
+  ~ fake.network.net
       cidr: "10.0.0.0/16" [variable, from base config] -> "10.9.0.0/16" [variable, from --var]
 
 Plan: 1 to create, 1 to update, 0 to replace, 0 to destroy, 0 to forget.

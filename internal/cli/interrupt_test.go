@@ -99,14 +99,14 @@ func TestRunInterruptibleProtectsAnInFlightApplyFromItsOwnSignal(t *testing.T) {
 	}
 
 	reg := registry.New()
-	if err := reg.Register("test", testprovider.New(cloudPath)); err != nil {
+	if err := reg.Register("fake", testprovider.New(cloudPath)); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 
 	p := &planner.Plan{
 		Version: planner.PlanVersion,
 		Operations: []planner.Operation{
-			{Provider: "test", Address: address.Address{Name: "network"}, Type: "test.network", Kind: planner.OpCreate,
+			{Provider: "fake", Address: address.Address{Name: "network"}, Type: "fake.network", Kind: planner.OpCreate,
 				After: map[string]value.Value{"cidr": value.String("10.0.0.0/24", value.SourceExplicit)}},
 		},
 	}

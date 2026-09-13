@@ -15,9 +15,9 @@ import (
 )
 
 func TestValidateGraphDetectsCycle(t *testing.T) {
-	alpha := res("alpha", "test.network", map[string]value.Value{"cidr": value.String("10.0.0.0/16", value.SourceExplicit)})
-	bravo := res("bravo", "test.network", map[string]value.Value{"cidr": value.String("10.0.1.0/16", value.SourceExplicit)})
-	charlie := res("charlie", "test.network", map[string]value.Value{"cidr": value.String("10.0.2.0/16", value.SourceExplicit)})
+	alpha := res("alpha", "fake.network", map[string]value.Value{"cidr": value.String("10.0.0.0/16", value.SourceExplicit)})
+	bravo := res("bravo", "fake.network", map[string]value.Value{"cidr": value.String("10.0.1.0/16", value.SourceExplicit)})
+	charlie := res("charlie", "fake.network", map[string]value.Value{"cidr": value.String("10.0.2.0/16", value.SourceExplicit)})
 	alpha.DependsOn = []address.Address{{Name: "bravo"}}
 	bravo.DependsOn = []address.Address{{Name: "charlie"}}
 	charlie.DependsOn = []address.Address{{Name: "alpha"}}
@@ -38,10 +38,10 @@ func TestValidateGraphDetectsCycle(t *testing.T) {
 }
 
 func TestValidateGraphAcceptsAcyclicGraph(t *testing.T) {
-	a := res("a", "test.network", map[string]value.Value{"cidr": value.String("10.0.0.0/16", value.SourceExplicit)})
-	b := res("b", "test.network", map[string]value.Value{"cidr": value.String("10.0.1.0/16", value.SourceExplicit)})
-	c := res("c", "test.network", map[string]value.Value{"cidr": value.String("10.0.2.0/16", value.SourceExplicit)})
-	d := res("d", "test.network", map[string]value.Value{"cidr": value.String("10.0.3.0/16", value.SourceExplicit)})
+	a := res("a", "fake.network", map[string]value.Value{"cidr": value.String("10.0.0.0/16", value.SourceExplicit)})
+	b := res("b", "fake.network", map[string]value.Value{"cidr": value.String("10.0.1.0/16", value.SourceExplicit)})
+	c := res("c", "fake.network", map[string]value.Value{"cidr": value.String("10.0.2.0/16", value.SourceExplicit)})
+	d := res("d", "fake.network", map[string]value.Value{"cidr": value.String("10.0.3.0/16", value.SourceExplicit)})
 	b.DependsOn = []address.Address{{Name: "a"}}
 	c.DependsOn = []address.Address{{Name: "a"}}
 	d.DependsOn = []address.Address{{Name: "b"}, {Name: "c"}}
@@ -53,7 +53,7 @@ func TestValidateGraphAcceptsAcyclicGraph(t *testing.T) {
 }
 
 func TestValidateGraphReportsMissingRequiredInfrastructure(t *testing.T) {
-	graph := oneResource("test.database", map[string]value.Value{
+	graph := oneResource("fake.database", map[string]value.Value{
 		"engine": value.String("postgres", value.SourceExplicit),
 	})
 	ds := validateGraph(graph, testRegistry(t))
@@ -66,14 +66,14 @@ func TestValidateGraphReportsMissingRequiredInfrastructure(t *testing.T) {
 	if !strings.Contains(out.String(), "network") {
 		t.Errorf("diagnostic must name the missing requirement:\n%s", out.String())
 	}
-	if !strings.Contains(out.String(), "test.network") {
+	if !strings.Contains(out.String(), "fake.network") {
 		t.Errorf("diagnostic must name what would satisfy it:\n%s", out.String())
 	}
 }
 
 func TestValidateGraphAcceptsSatisfiedRequirement(t *testing.T) {
-	network := res("network", "test.network", map[string]value.Value{"cidr": value.String("10.0.0.0/16", value.SourceExplicit)})
-	database := res("database", "test.database", map[string]value.Value{"engine": value.String("postgres", value.SourceExplicit)})
+	network := res("network", "fake.network", map[string]value.Value{"cidr": value.String("10.0.0.0/16", value.SourceExplicit)})
+	database := res("database", "fake.database", map[string]value.Value{"engine": value.String("postgres", value.SourceExplicit)})
 
 	graph := cfg(network, database)
 	if ds := validateGraph(&graph, testRegistry(t)); ds.HasErrors() {
@@ -137,7 +137,7 @@ func TestValidateGraphSkipsOptionalRequirement(t *testing.T) {
 }
 
 func TestValidateGraphRejectsPreventDestroyAndRetainTogether(t *testing.T) {
-	guarded := res("guarded", "test.network", map[string]value.Value{"cidr": value.String("10.0.0.0/16", value.SourceExplicit)})
+	guarded := res("guarded", "fake.network", map[string]value.Value{"cidr": value.String("10.0.0.0/16", value.SourceExplicit)})
 	guarded.Lifecycle = resource.Lifecycle{PreventDestroy: true, Retain: true}
 
 	graph := cfg(guarded)
@@ -165,7 +165,7 @@ func TestValidateGraphAcceptsLifecycleFlagsIndividually(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			r := res("net", "test.network", map[string]value.Value{"cidr": value.String("10.0.0.0/16", value.SourceExplicit)})
+			r := res("net", "fake.network", map[string]value.Value{"cidr": value.String("10.0.0.0/16", value.SourceExplicit)})
 			r.Lifecycle = tc.lifecycle
 
 			graph := cfg(r)
@@ -181,17 +181,17 @@ func TestValidateGraphReportsEveryProblemAtOnce(t *testing.T) {
 	// alongside an unrelated resource with a lifecycle contradiction: one
 	// category of problem must not mask the others.
 	//
-	// guarded is deliberately test.application, not test.network: its own
+	// guarded is deliberately fake.application, not fake.network: its own
 	// requirement (database) is satisfied by x and y, so it contributes no
 	// requirement diagnostic of its own — but it also must not accidentally
-	// satisfy x and y's network requirement, which a test.network resource
+	// satisfy x and y's network requirement, which a fake.network resource
 	// here would do regardless of any edge connecting it to them.
-	x := res("x", "test.database", nil)
-	y := res("y", "test.database", nil)
+	x := res("x", "fake.database", nil)
+	y := res("y", "fake.database", nil)
 	x.DependsOn = []address.Address{{Name: "y"}}
 	y.DependsOn = []address.Address{{Name: "x"}}
 
-	guarded := res("guarded", "test.application", nil)
+	guarded := res("guarded", "fake.application", nil)
 	guarded.Lifecycle = resource.Lifecycle{PreventDestroy: true, Retain: true}
 
 	graph := cfg(x, y, guarded)
@@ -219,11 +219,11 @@ func TestValidateGraphReportsEveryProblemAtOnce(t *testing.T) {
 // not a regression test of a fixed false-negative.
 func TestValidateGraphStillReportsACycleAfterAPartialFix(t *testing.T) {
 	build := func() ResolvedConfig {
-		a := res("a", "test.network", map[string]value.Value{"cidr": value.String("10.0.0.0/16", value.SourceExplicit)})
-		b := res("b", "test.network", map[string]value.Value{"cidr": value.String("10.0.1.0/16", value.SourceExplicit)})
-		c := res("c", "test.network", map[string]value.Value{"cidr": value.String("10.0.2.0/16", value.SourceExplicit)})
-		d := res("d", "test.network", map[string]value.Value{"cidr": value.String("10.0.3.0/16", value.SourceExplicit)})
-		e := res("e", "test.network", map[string]value.Value{"cidr": value.String("10.0.4.0/16", value.SourceExplicit)})
+		a := res("a", "fake.network", map[string]value.Value{"cidr": value.String("10.0.0.0/16", value.SourceExplicit)})
+		b := res("b", "fake.network", map[string]value.Value{"cidr": value.String("10.0.1.0/16", value.SourceExplicit)})
+		c := res("c", "fake.network", map[string]value.Value{"cidr": value.String("10.0.2.0/16", value.SourceExplicit)})
+		d := res("d", "fake.network", map[string]value.Value{"cidr": value.String("10.0.3.0/16", value.SourceExplicit)})
+		e := res("e", "fake.network", map[string]value.Value{"cidr": value.String("10.0.4.0/16", value.SourceExplicit)})
 		a.DependsOn = []address.Address{{Name: "b"}, {Name: "c"}}
 		b.DependsOn = []address.Address{{Name: "d"}}
 		c.DependsOn = []address.Address{{Name: "d"}}
@@ -251,9 +251,9 @@ func TestValidateGraphStillReportsACycleAfterAPartialFix(t *testing.T) {
 // the sequence reads in depends-on order and closes back on its first member,
 // and Related therefore names every member except the one carrying Origin.
 func TestCycleDiagnosticShapeIsStable(t *testing.T) {
-	a := res("a", "test.network", map[string]value.Value{"cidr": value.String("10.0.0.0/16", value.SourceExplicit)})
-	b := res("b", "test.network", map[string]value.Value{"cidr": value.String("10.0.1.0/16", value.SourceExplicit)})
-	c := res("c", "test.network", map[string]value.Value{"cidr": value.String("10.0.2.0/16", value.SourceExplicit)})
+	a := res("a", "fake.network", map[string]value.Value{"cidr": value.String("10.0.0.0/16", value.SourceExplicit)})
+	b := res("b", "fake.network", map[string]value.Value{"cidr": value.String("10.0.1.0/16", value.SourceExplicit)})
+	c := res("c", "fake.network", map[string]value.Value{"cidr": value.String("10.0.2.0/16", value.SourceExplicit)})
 	a.DependsOn = []address.Address{{Name: "b"}}
 	b.DependsOn = []address.Address{{Name: "c"}}
 	c.DependsOn = []address.Address{{Name: "a"}}
@@ -303,9 +303,9 @@ func TestCycleDiagnosticShapeIsStable(t *testing.T) {
 // cycle so the test also confirms the dangling reference does not swallow
 // the real diagnostic.
 func TestCycleForSkipsDanglingReferenceWithoutPanicking(t *testing.T) {
-	a := res("a", "test.network", map[string]value.Value{"cidr": value.String("10.0.0.0/16", value.SourceExplicit)})
-	b := res("b", "test.network", map[string]value.Value{"cidr": value.String("10.0.1.0/16", value.SourceExplicit)})
-	c := res("c", "test.network", map[string]value.Value{"cidr": value.String("10.0.2.0/16", value.SourceExplicit)})
+	a := res("a", "fake.network", map[string]value.Value{"cidr": value.String("10.0.0.0/16", value.SourceExplicit)})
+	b := res("b", "fake.network", map[string]value.Value{"cidr": value.String("10.0.1.0/16", value.SourceExplicit)})
+	c := res("c", "fake.network", map[string]value.Value{"cidr": value.String("10.0.2.0/16", value.SourceExplicit)})
 	a.DependsOn = []address.Address{{Name: "b"}}
 	b.DependsOn = []address.Address{{Name: "a"}}
 	// c depends on a resource absent from this configuration entirely.

@@ -13,11 +13,11 @@ project: myapp
 
 resources:
   network:
-    type: test.network
+    type: fake.network
     cidr: 10.20.0.0/16
 
   database:
-    type: test.database
+    type: fake.database
     engine: postgres
     size: 50
 `
@@ -43,7 +43,7 @@ func TestValidateRejectsUnknownTypeWithUsefulMessage(t *testing.T) {
 project: myapp
 resources:
   net:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
   database:
     type: aws.rds
@@ -54,7 +54,7 @@ resources:
 		t.Fatal("expected a non-zero exit code for invalid configuration")
 	}
 	requireContains(t, res.Stderr, "aws.rds")
-	requireContains(t, res.Stderr, "test.database")
+	requireContains(t, res.Stderr, "fake.database")
 	requireContains(t, res.Stderr, "Suggested action:")
 }
 
@@ -96,8 +96,8 @@ func writeState(t *testing.T, dir, environment string) {
 		"resources": map[string]any{
 			"database": map[string]any{
 				"address":     map[string]any{"name": "database"},
-				"type":        "test.database",
-				"provider":    "test",
+				"type":        "fake.database",
+				"provider":    "fake",
 				"provider_id": "db-1",
 				"attributes": map[string]any{
 					"engine":   map[string]any{"kind": "string", "known": true, "raw": "postgres", "source": "provider"},
@@ -120,7 +120,7 @@ func TestStateListAndShow(t *testing.T) {
 	writeState(t, dir, "dev")
 
 	list := run(t, dir, "state", "list", "dev")
-	requireContains(t, list.Stdout, "test.database.database")
+	requireContains(t, list.Stdout, "fake.database.database")
 
 	show := run(t, dir, "state", "show", "dev", "database")
 	if show.ExitCode != 0 {

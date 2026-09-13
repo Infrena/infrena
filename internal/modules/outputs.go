@@ -164,7 +164,7 @@ func (s *Scope) Qualify(e *value.Expr) *value.Expr {
 // This is the module arm of ONE attribute-existence check (Amendment 11).
 // Nothing validates today that a referenced ATTRIBUTE exists on its target —
 // bind.go:148 checks only that the resource is declared — so `${store.endpoint}`
-// on a `test.network` with no `endpoint` passes `validate`, produces a clean
+// on a `fake.network` with no `endpoint` passes `validate`, produces a clean
 // plan, and fails halfway through `apply` after creating real infrastructure.
 // Task 8 closes that generally. A provider resource answers from its schema, a
 // module instance answers from here, and the user reads the same sentence

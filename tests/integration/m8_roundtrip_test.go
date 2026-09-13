@@ -19,11 +19,11 @@ import (
 // field on anything, which is what the fake provider writes when IT created a
 // resource.
 const preexistingCloud = `{"resources":{
-  "vpc-0a1b":{"type":"test.network","attributes":{
+  "vpc-0a1b":{"type":"fake.network","attributes":{
     "cidr":"10.0.0.0/16","id":"vpc-0a1b"}},
-  "db-9":{"type":"test.database","attributes":{
+  "db-9":{"type":"fake.database","attributes":{
     "engine":"postgres","size":10,"network":"vpc-0a1b","endpoint":"db-9.internal"}},
-  "db-77":{"type":"test.database","attributes":{
+  "db-77":{"type":"fake.database","attributes":{
     "engine":"mysql","size":500,"network":"vpc-0a1b","endpoint":"db-77.internal"}}
 }}`
 
@@ -136,8 +136,8 @@ func TestTheRoundTripGeneratesMinimalConfiguration(t *testing.T) {
 func TestTheRoundTripLeavesExactlyTheOmittedSecret(t *testing.T) {
 	const secret = "hunter2-correct-horse-battery"
 	dir := roundTripProject(t, `{"resources":{
-	  "vpc-0a1b":{"type":"test.network","attributes":{"cidr":"10.0.0.0/16","id":"vpc-0a1b"}},
-	  "db-9":{"type":"test.database","attributes":{
+	  "vpc-0a1b":{"type":"fake.network","attributes":{"cidr":"10.0.0.0/16","id":"vpc-0a1b"}},
+	  "db-9":{"type":"fake.database","attributes":{
 	    "engine":"postgres","size":10,"network":"vpc-0a1b","password":"`+secret+`"}}
 	}}`)
 
@@ -242,7 +242,7 @@ func TestImportingANewResourceAppendsToTheExistingFile(t *testing.T) {
 	// and then failed on a resource that was never added.
 	cloudPath := filepath.Join(dir, ".infra", "fake-cloud.json")
 	grown := strings.Replace(preexistingCloud, `"resources":{`, `"resources":{
-	  "db-500":{"type":"test.database","attributes":{
+	  "db-500":{"type":"fake.database","attributes":{
 	    "engine":"postgres","size":42,"network":"vpc-0a1b"}},`, 1)
 	if grown == preexistingCloud {
 		t.Fatal("the fixture did not grow; the replacement matched nothing")
@@ -252,7 +252,7 @@ func TestImportingANewResourceAppendsToTheExistingFile(t *testing.T) {
 	}
 
 	// Import just that one, by selector — the others are already in state.
-	r := run(t, dir, "import", "dev", "test.database.db-500", "--generate")
+	r := run(t, dir, "import", "dev", "fake.database.db-500", "--generate")
 	if r.ExitCode != 0 {
 		t.Fatalf("importing one new resource exit = %d: %s", r.ExitCode, r.combined())
 	}

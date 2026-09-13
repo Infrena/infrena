@@ -72,7 +72,7 @@ func TestValidateOutputWritesMetaAndResult(t *testing.T) {
 project: myapp
 resources:
   network:
-    type: test.network
+    type: fake.network
     cidr: 10.20.0.0/16
 `)
 	outPath := filepath.Join(t.TempDir(), "out.ndjson")
@@ -170,7 +170,7 @@ func TestApplyOutputWritesEventsAndResult(t *testing.T) {
 project: myapp
 resources:
   network:
-    type: test.network
+    type: fake.network
     cidr: 10.20.0.0/16
 `)
 	outPath := filepath.Join(t.TempDir(), "out.ndjson")
@@ -239,7 +239,7 @@ func TestApplyOutputReportsFailedEventAndResult(t *testing.T) {
 project: myapp
 resources:
   network:
-    type: test.network
+    type: fake.network
     cidr: 10.20.0.0/16
 `)
 	cloud := testprovider.Cloud{
@@ -438,7 +438,7 @@ resources: {}
 	prov := testprovider.New(cloudPath)
 	rs, err := prov.Create(ctx, &resource.DesiredResource{
 		Address: address.Address{Name: "database"},
-		Type:    "test.database",
+		Type:    "fake.database",
 		Attrs: map[string]value.Value{
 			"engine":   value.String("postgres", value.SourceExplicit),
 			"password": value.String("hunter2", value.SourceExplicit).WithSensitive(true),
@@ -532,7 +532,7 @@ resources: {}
 	for _, name := range []string{"a", "b"} {
 		rs, err := prov.Create(ctx, &resource.DesiredResource{
 			Address: address.Address{Name: name},
-			Type:    "test.network",
+			Type:    "fake.network",
 			Attrs: map[string]value.Value{
 				"cidr": value.String("10.20.0.0/16", value.SourceExplicit),
 			},
@@ -584,7 +584,7 @@ resources: {}
 	prov := testprovider.New(cloudPath)
 	rs, err := prov.Create(ctx, &resource.DesiredResource{
 		Address: address.Address{Name: "network"},
-		Type:    "test.network",
+		Type:    "fake.network",
 		Attrs: map[string]value.Value{
 			"cidr": value.String("10.20.0.0/16", value.SourceExplicit),
 		},
@@ -640,7 +640,7 @@ func TestApplyOutputIncludesVarFileWarning(t *testing.T) {
 project: myapp
 resources:
   network:
-    type: test.network
+    type: fake.network
     cidr: 10.20.0.0/16
 `)
 	writeFile(t, dir, "vars.yml", "resources: 3\n")

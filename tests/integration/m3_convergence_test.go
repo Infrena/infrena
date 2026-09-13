@@ -14,7 +14,7 @@ import (
 // It lives at the integration level on purpose. The defect it pins was
 // invisible to every unit test in internal/planner and internal/executor
 // because it only appears once a REAL provider schema (one with a computed
-// attribute, e.g. test.network's provider-assigned "id") meets a real
+// attribute, e.g. fake.network's provider-assigned "id") meets a real
 // reference across a real apply. Nothing below the CLI put those three
 // together, so nothing below the CLI could have caught a plan that proposed
 // the same phantom update after every apply, forever.
@@ -25,10 +25,10 @@ const referencingProject = `
 project: conv
 resources:
   network:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
   database:
-    type: test.database
+    type: fake.database
     engine: postgres
     network: ${network.id}
 `
@@ -64,7 +64,7 @@ func applied(t *testing.T, dir string) result {
 // defect: after applying a configuration whose database references
 // ${network.id}, planning it again proposed
 //
-//	~ test.database.database
+//	~ fake.database.database
 //	    network: "net-1" -> (known after apply)
 //
 // and went on proposing it after every subsequent apply, because the desired
@@ -112,14 +112,14 @@ func TestApplyThenPlanConvergesAcrossAChainOfReferences(t *testing.T) {
 project: conv
 resources:
   network:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
   database:
-    type: test.database
+    type: fake.database
     engine: postgres
     network: ${network.id}
   application:
-    type: test.application
+    type: fake.application
     image: web:1
     database_url: postgres://${database.endpoint}/app
 `)
@@ -180,7 +180,7 @@ func TestPlanShowsAResolvedReferenceForANewlyAddedResource(t *testing.T) {
 project: conv
 resources:
   network:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
 `)
 	applied(t, dir)
@@ -210,7 +210,7 @@ resources:
 // planner resolves a reference against what the plan says its dependency WILL
 // be, not against what state records it was.
 //
-// test.network's cidr is ForceNew, so changing it replaces the network and its
+// fake.network's cidr is ForceNew, so changing it replaces the network and its
 // id will not survive. A planner that answered ${network.id} from the recorded
 // state would report the database unchanged, then leave it pointing at a
 // network that no longer exists — and the plan after that apply would propose
@@ -224,10 +224,10 @@ func TestPlanDefersAReferenceWhoseDependencyIsBeingReplaced(t *testing.T) {
 project: conv
 resources:
   network:
-    type: test.network
+    type: fake.network
     cidr: 10.1.0.0/16
   database:
-    type: test.database
+    type: fake.database
     engine: postgres
     network: ${network.id}
 `)

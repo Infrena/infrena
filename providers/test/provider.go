@@ -58,7 +58,7 @@ func New(cloudPath string) *Provider {
 var _ provider.Provider = (*Provider)(nil)
 
 // Name returns the provider name.
-func (p *Provider) Name() string { return "test" }
+func (p *Provider) Name() string { return "fake" }
 
 // Definitions returns the resource definitions the fake provider supports.
 func (p *Provider) Definitions() []*schema.ResourceDefinition { return p.defs }
@@ -312,7 +312,7 @@ func (p *Provider) Discover(ctx context.Context, req provider.DiscoverRequest) (
 // Import adopts one existing resource by provider ID (spec §26).
 //
 // The type is CHECKED against what the cloud actually holds rather than
-// trusted. `import test.network db-9` naming a real database would otherwise
+// trusted. `import fake.network db-9` naming a real database would otherwise
 // write state claiming a database is a network, and the next plan would propose
 // replacing real infrastructure to resolve a disagreement the tool invented.
 //
@@ -378,11 +378,11 @@ func (p *Provider) toState(addr, resourceType, id string, attrs map[string]any) 
 
 func (p *Provider) computedFor(resourceType, id string) map[string]any {
 	switch resourceType {
-	case "test.network":
+	case "fake.network":
 		return map[string]any{"id": id}
-	case "test.database":
+	case "fake.database":
 		return map[string]any{"endpoint": id + ".db.test"}
-	case "test.application":
+	case "fake.application":
 		return map[string]any{"url": "https://" + id + ".test"}
 	default:
 		return nil
@@ -391,11 +391,11 @@ func (p *Provider) computedFor(resourceType, id string) map[string]any {
 
 func idPrefix(resourceType string) string {
 	switch resourceType {
-	case "test.network":
+	case "fake.network":
 		return "net"
-	case "test.database":
+	case "fake.database":
 		return "db"
-	case "test.application":
+	case "fake.application":
 		return "app"
 	default:
 		return strings.ReplaceAll(resourceType, ".", "-")

@@ -43,7 +43,7 @@ func mixedPlan() *Plan {
 		Environment: "dev",
 		Operations: []Operation{
 			{
-				Address: address.Address{Name: "app"}, Type: "test.application", Kind: OpDestroy,
+				Address: address.Address{Name: "app"}, Type: "fake.application", Kind: OpDestroy,
 				Before: map[string]value.Value{
 					"password": value.String("hunter2", value.SourceProvider).WithSensitive(true),
 				},
@@ -56,7 +56,7 @@ func mixedPlan() *Plan {
 				},
 			},
 			{
-				Address: address.Address{Name: "database"}, Type: "test.database", Kind: OpReplace,
+				Address: address.Address{Name: "database"}, Type: "fake.database", Kind: OpReplace,
 				Before:     map[string]value.Value{"engine": value.String("postgres", value.SourceExplicit)},
 				After:      map[string]value.Value{"engine": value.String("mysql", value.SourceExplicit)},
 				Reasons:    []ChangeReason{{Attribute: "engine", ForceNew: true, Note: "forces replacement"}},
@@ -68,7 +68,7 @@ func mixedPlan() *Plan {
 				After:  map[string]value.Value{"size": value.Int(50, value.SourceExplicit)},
 			},
 			{
-				Address: address.Address{Name: "network"}, Type: "test.network", Kind: OpCreate,
+				Address: address.Address{Name: "network"}, Type: "fake.network", Kind: OpCreate,
 				After: map[string]value.Value{"cidr": value.String("10.0.0.0/16", value.SourceExplicit)},
 			},
 		},
@@ -81,7 +81,7 @@ func TestRenderCreateOnly(t *testing.T) {
 		Environment: "dev",
 		Operations: []Operation{
 			{
-				Address: address.Address{Name: "network"}, Type: "test.network", Kind: OpCreate,
+				Address: address.Address{Name: "network"}, Type: "fake.network", Kind: OpCreate,
 				After: map[string]value.Value{
 					"cidr": value.String("10.20.0.0/16", value.SourceExplicit),
 					"id":   value.Unknown(value.KindString, value.SourceComputed),
@@ -107,7 +107,7 @@ func scopedPlan() *Plan {
 		Environment: "production",
 		Operations: []Operation{
 			{
-				Address: address.Address{Name: "db"}, Type: "test.database", Kind: OpCreate,
+				Address: address.Address{Name: "db"}, Type: "fake.database", Kind: OpCreate,
 				After: map[string]value.Value{
 					// Explicit at base config: rule 2 suppresses the
 					// annotation entirely.
@@ -126,7 +126,7 @@ func scopedPlan() *Plan {
 				},
 			},
 			{
-				Address: address.Address{Name: "net"}, Type: "test.network", Kind: OpUpdate,
+				Address: address.Address{Name: "net"}, Type: "fake.network", Kind: OpUpdate,
 				Before: map[string]value.Value{
 					"cidr": value.String("10.0.0.0/16", value.SourceVariable).WithScope(value.ScopeBaseConfig),
 				},
@@ -165,7 +165,7 @@ func TestRenderScopedPlanIsDeterministicAcrossRepeatedCalls(t *testing.T) {
 func TestRenderVerboseListsUnchangedResources(t *testing.T) {
 	p := mixedPlan()
 	p.Operations = append(p.Operations, Operation{
-		Address: address.Address{Name: "zzz"}, Type: "test.network", Kind: OpNoOp,
+		Address: address.Address{Name: "zzz"}, Type: "fake.network", Kind: OpNoOp,
 		Before: map[string]value.Value{"cidr": value.String("10.0.0.0/16", value.SourceExplicit)},
 		After:  map[string]value.Value{"cidr": value.String("10.0.0.0/16", value.SourceExplicit)},
 	})
@@ -178,7 +178,7 @@ func TestRenderNoChanges(t *testing.T) {
 		Environment: "dev",
 		Operations: []Operation{
 			{
-				Address: address.Address{Name: "network"}, Type: "test.network", Kind: OpNoOp,
+				Address: address.Address{Name: "network"}, Type: "fake.network", Kind: OpNoOp,
 				Before: map[string]value.Value{"cidr": value.String("10.0.0.0/16", value.SourceExplicit)},
 				After:  map[string]value.Value{"cidr": value.String("10.0.0.0/16", value.SourceExplicit)},
 			},
@@ -246,7 +246,7 @@ func TestRenderColorWrapsMarkersInANSIAndPlainDoesNot(t *testing.T) {
 		Environment: "dev",
 		Operations: []Operation{
 			{
-				Address: address.Address{Name: "network"}, Type: "test.network", Kind: OpCreate,
+				Address: address.Address{Name: "network"}, Type: "fake.network", Kind: OpCreate,
 				After: map[string]value.Value{"cidr": value.String("10.0.0.0/16", value.SourceExplicit)},
 			},
 		},
@@ -269,7 +269,7 @@ func TestRenderDestructiveWithoutDependentsShowsNoWarning(t *testing.T) {
 		Environment: "dev",
 		Operations: []Operation{
 			{
-				Address: address.Address{Name: "solo"}, Type: "test.network", Kind: OpDestroy,
+				Address: address.Address{Name: "solo"}, Type: "fake.network", Kind: OpDestroy,
 				Before: map[string]value.Value{"cidr": value.String("10.0.0.0/16", value.SourceExplicit)},
 			},
 		},
@@ -286,12 +286,12 @@ func TestRenderDestructiveWithDependentsShowsCountSingularAndPlural(t *testing.T
 		Environment: "dev",
 		Operations: []Operation{
 			{
-				Address: address.Address{Name: "one"}, Type: "test.network", Kind: OpDestroy,
+				Address: address.Address{Name: "one"}, Type: "fake.network", Kind: OpDestroy,
 				Before:     map[string]value.Value{"cidr": value.String("10.0.0.0/16", value.SourceExplicit)},
 				Dependents: []address.Address{{Name: "app"}},
 			},
 			{
-				Address: address.Address{Name: "two"}, Type: "test.network", Kind: OpDestroy,
+				Address: address.Address{Name: "two"}, Type: "fake.network", Kind: OpDestroy,
 				Before:     map[string]value.Value{"cidr": value.String("10.1.0.0/16", value.SourceExplicit)},
 				Dependents: []address.Address{{Name: "app"}, {Name: "worker"}},
 			},
@@ -509,7 +509,7 @@ func TestRenderDistinguishesRemovedFromUnknown(t *testing.T) {
 		Version: PlanVersion, Project: "myapp", Environment: "dev",
 		Operations: []Operation{{
 			Address: addr("database"),
-			Type:    "test.database",
+			Type:    "fake.database",
 			Kind:    OpUpdate,
 			Before: map[string]value.Value{
 				"size": value.Int(10, value.SourceExplicit),
@@ -560,7 +560,7 @@ func TestRenderForcedByIsSortedRegardlessOfReasonOrder(t *testing.T) {
 		Project:     "myapp",
 		Environment: "dev",
 		Operations: []Operation{{
-			Address: address.Address{Name: "db"}, Type: "test.database", Kind: OpReplace,
+			Address: address.Address{Name: "db"}, Type: "fake.database", Kind: OpReplace,
 			Before: map[string]value.Value{"engine": value.String("postgres", value.SourceProvider)},
 			After:  map[string]value.Value{"engine": value.String("mysql", value.SourceExplicit)},
 			Reasons: []ChangeReason{
@@ -574,7 +574,7 @@ func TestRenderForcedByIsSortedRegardlessOfReasonOrder(t *testing.T) {
 	}
 
 	got := Render(p, RenderOptions{})
-	const want = "-/+ test.database.db  (replacement forced by: account, engine, region, zone)"
+	const want = "-/+ fake.database.db  (replacement forced by: account, engine, region, zone)"
 	if !strings.Contains(got, want) {
 		t.Errorf("replacement header is not canonically ordered.\n--- want line ---\n%s\n--- got ---\n%s", want, got)
 	}
@@ -602,7 +602,7 @@ func TestRenderIsDeterministicAcrossRepeatedCalls(t *testing.T) {
 			Project:     "myapp",
 			Environment: "dev",
 			Operations: []Operation{{
-				Address: address.Address{Name: "db"}, Type: "test.database", Kind: OpReplace,
+				Address: address.Address{Name: "db"}, Type: "fake.database", Kind: OpReplace,
 				Before: map[string]value.Value{
 					"engine":   value.String("postgres", value.SourceProvider),
 					"size":     value.Int(10, value.SourceProvider),
@@ -663,13 +663,13 @@ func TestRenderNotesAResourceThatMayHaveMovedBetweenModules(t *testing.T) {
 		Operations: []Operation{
 			{
 				Address: address.Address{Module: []string{"new"}, Name: "store"},
-				Type:    "test.database",
+				Type:    "fake.database",
 				Kind:    OpCreate,
 				After:   map[string]value.Value{"engine": value.String("postgres", value.SourceExplicit)},
 			},
 			{
 				Address: address.Address{Module: []string{"old"}, Name: "store"},
-				Type:    "test.database",
+				Type:    "fake.database",
 				Kind:    OpDestroy,
 				Before:  map[string]value.Value{"engine": value.String("postgres", value.SourceExplicit)},
 			},
@@ -678,7 +678,7 @@ func TestRenderNotesAResourceThatMayHaveMovedBetweenModules(t *testing.T) {
 
 	out := Render(p, RenderOptions{})
 	// Not "module.new.store" alone: the create operation's own header line
-	// ("+ test.database.module.new.store") also contains that substring, so a
+	// ("+ fake.database.module.new.store") also contains that substring, so a
 	// needle of just the address finds two lines rather than the one note.
 	// "destroyed and recreated" appears only in the note.
 	note := lineContainingInRender(t, out, "destroyed and recreated")
@@ -686,7 +686,7 @@ func TestRenderNotesAResourceThatMayHaveMovedBetweenModules(t *testing.T) {
 		t.Errorf("the note %q does not name the address the resource is reappearing at:\n%s", note, out)
 	}
 	// On the destroy, not on the create: the create is not the dangerous half.
-	destroyAt := strings.Index(out, "- test.database.module.old.store")
+	destroyAt := strings.Index(out, "- fake.database.module.old.store")
 	if destroyAt < 0 || strings.Index(out, note) < destroyAt {
 		t.Errorf("the note is not attached to the destroy operation:\n%s", out)
 	}
@@ -702,13 +702,13 @@ func TestRenderDoesNotNoteUnrelatedDestroysAndCreates(t *testing.T) {
 		Operations: []Operation{
 			{
 				Address: address.Address{Module: []string{"new"}, Name: "cache"},
-				Type:    "test.database",
+				Type:    "fake.database",
 				Kind:    OpCreate,
 				After:   map[string]value.Value{"engine": value.String("postgres", value.SourceExplicit)},
 			},
 			{
 				Address: address.Address{Module: []string{"old"}, Name: "store"},
-				Type:    "test.database",
+				Type:    "fake.database",
 				Kind:    OpDestroy,
 				Before:  map[string]value.Value{"engine": value.String("postgres", value.SourceExplicit)},
 			},
@@ -727,7 +727,7 @@ func TestRenderDoesNotNoteUnrelatedDestroysAndCreates(t *testing.T) {
 func TestRenderDoesNotNoteADestroyWithNoMatchingCreate(t *testing.T) {
 	destroy := Operation{
 		Address: address.Address{Module: []string{"old"}, Name: "store"},
-		Type:    "test.database",
+		Type:    "fake.database",
 		Kind:    OpDestroy,
 		Before:  map[string]value.Value{"engine": value.String("postgres", value.SourceExplicit)},
 	}
@@ -749,7 +749,7 @@ func TestRenderDoesNotNoteADestroyWithNoMatchingCreate(t *testing.T) {
 			ops: []Operation{
 				{
 					Address: address.Address{Module: []string{"new"}, Name: "store"},
-					Type:    "test.network",
+					Type:    "fake.network",
 					Kind:    OpCreate,
 					After:   map[string]value.Value{"cidr": value.String("10.0.0.0/16", value.SourceExplicit)},
 				},

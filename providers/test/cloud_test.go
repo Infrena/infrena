@@ -27,7 +27,7 @@ func TestLoadCloudMissingFileIsEmptyNotError(t *testing.T) {
 func TestSaveThenLoadRoundTrips(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "fake-cloud.json")
 	c := &Cloud{Resources: map[string]*CloudResource{
-		"db-1": {Type: "test.database", Attributes: map[string]any{"engine": "postgres", "size": float64(10)}},
+		"db-1": {Type: "fake.database", Attributes: map[string]any{"engine": "postgres", "size": float64(10)}},
 	}}
 	if err := c.Save(path); err != nil {
 		t.Fatalf("Save: %v", err)
@@ -44,7 +44,7 @@ func TestSaveThenLoadRoundTrips(t *testing.T) {
 
 func TestSaveIsHumanEditable(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "fake-cloud.json")
-	c := &Cloud{Resources: map[string]*CloudResource{"db-1": {Type: "test.database"}}}
+	c := &Cloud{Resources: map[string]*CloudResource{"db-1": {Type: "fake.database"}}}
 	if err := c.Save(path); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
@@ -101,7 +101,7 @@ func TestConcurrentCreatesDoNotLoseUpdates(t *testing.T) {
 		wg.Go(func() {
 			_, errs[i] = p.Create(context.Background(), &resource.DesiredResource{
 				Address: address.Address{Name: fmt.Sprintf("net%02d", i)},
-				Type:    "test.network",
+				Type:    "fake.network",
 				Attrs: map[string]value.Value{
 					"cidr": value.String("10.0.0.0/16", value.SourceExplicit),
 				},
@@ -137,7 +137,7 @@ func TestConcurrentReadsSeeWholeFiles(t *testing.T) {
 
 	seed, err := p.Create(context.Background(), &resource.DesiredResource{
 		Address: address.Address{Name: "net"},
-		Type:    "test.network",
+		Type:    "fake.network",
 		Attrs:   map[string]value.Value{"cidr": value.String("10.0.0.0/16", value.SourceExplicit)},
 	})
 	if err != nil {
@@ -171,7 +171,7 @@ func TestConcurrentReadsSeeWholeFiles(t *testing.T) {
 func TestSaveIsAtomicAndPrivate(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "nested", "fake-cloud.json")
-	c := &Cloud{Resources: map[string]*CloudResource{"db-1": {Type: "test.database"}}}
+	c := &Cloud{Resources: map[string]*CloudResource{"db-1": {Type: "fake.database"}}}
 	if err := c.Save(path); err != nil {
 		t.Fatalf("Save: %v", err)
 	}

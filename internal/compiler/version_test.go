@@ -17,7 +17,7 @@ environments:
   dev: {}
 resources:
   net:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
 `
 
@@ -137,7 +137,7 @@ environments:
   dev: {}
 resources:
   net:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
 `)
 	if _, ds := Compile(files, testRegistry(t), Options{Environment: "dev"}); ds.HasErrors() {

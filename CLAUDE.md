@@ -179,7 +179,20 @@ gofmt -l .
 AWS integration tests must be opt-in (build tag or env guard) — **normal CI must not
 require AWS credentials** (§46).
 
-**CI** (`.github/workflows/ci.yml`) runs gofmt, vet, the suite and `-race`.
+**A SHIPPED INFRATA CARRIES NO PROVIDER** (since 2026-09-13). `init` scaffolds `fake.*`,
+and a project installs `infrata-plugin-fake` like any other plugin. The suites divide:
+`tests/integration` builds and runs the REAL plugin from the sibling repository, so the
+path a user takes is proved somewhere; every in-process suite injects the fake double via
+`internal/cli`'s TestMain, which is what §31.1's Testing section always specified.
+`providers/test` survives as the engine's TEST DOUBLE, not a shipped provider.
+`TestAShippedBuildCarriesNoProvider` runs the binary with no plugin installed, and is the
+only test that can make that claim — every other suite injects the double.
+
+**CI** (`.github/workflows/ci.yml`) runs gofmt, vet, the suite and `-race`. It checks out
+`infrata-provider-fake` too (needs a `PLUGIN_REPO_TOKEN` secret, since that repo is
+private) and sets `INFRATA_REQUIRE_PLUGIN`, which turns the integration suite's skip into a
+failure — a run that silently skips its integration suite reports green for tests that
+never ran.
 `GOTOOLCHAIN=local` is set for the whole job, because Go otherwise downloads a newer
 toolchain to satisfy `go.mod` and a floor break would pass by fetching the very version
 it should have failed on. `go.mod`'s floor currently MATCHES `mise.toml`, so the matrix

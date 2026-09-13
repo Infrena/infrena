@@ -24,7 +24,7 @@ import (
 func testRegistry(t *testing.T) *registry.Registry {
 	t.Helper()
 	reg := registry.New()
-	if err := reg.Register("test", testprovider.New(t.TempDir()+"/fake-cloud.json")); err != nil {
+	if err := reg.Register("fake", testprovider.New(t.TempDir()+"/fake-cloud.json")); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	return reg
@@ -54,7 +54,7 @@ func config(resources ...*resource.ResolvedResource) compiler.ResolvedConfig {
 }
 
 func configured(name, typ string, attrs map[string]value.Value) *resource.ResolvedResource {
-	return &resource.ResolvedResource{Address: addr(name), Type: typ, Provider: "test", Attrs: attrs}
+	return &resource.ResolvedResource{Address: addr(name), Type: typ, Provider: "fake", Attrs: attrs}
 }
 
 // recorded builds a state entry. Its attributes carry SourceProvider so that
@@ -63,7 +63,7 @@ func recorded(name, typ string, attrs map[string]value.Value) *resource.Resource
 	return &resource.ResourceState{
 		Address:    addr(name),
 		Type:       typ,
-		Provider:   "test",
+		Provider:   "fake",
 		ProviderID: name + "-1",
 		Attributes: attrs,
 	}
@@ -122,7 +122,7 @@ func provAttr(v value.Value) value.Value { return v.WithSource(value.SourceProvi
 // --- one test per row of spec §11's decision table -------------------------
 
 func TestInConfigNotInStateIsCreate(t *testing.T) {
-	cfg := config(configured("net", "test.network", map[string]value.Value{
+	cfg := config(configured("net", "fake.network", map[string]value.Value{
 		"cidr": str("10.0.0.0/16"),
 	}))
 	p, ds := Compute(cfg, stateOf(), refresh.Observations{}, planOpts(t))
@@ -147,10 +147,10 @@ func TestInConfigNotInStateIsCreate(t *testing.T) {
 }
 
 func TestNoDifferencesIsNoOp(t *testing.T) {
-	cfg := config(configured("net", "test.network", map[string]value.Value{
+	cfg := config(configured("net", "fake.network", map[string]value.Value{
 		"cidr": str("10.0.0.0/16"),
 	}))
-	live := recorded("net", "test.network", map[string]value.Value{
+	live := recorded("net", "fake.network", map[string]value.Value{
 		"cidr": provAttr(str("10.0.0.0/16")),
 		"id":   provAttr(str("net-1")),
 	})
@@ -173,11 +173,11 @@ func TestNoDifferencesIsNoOp(t *testing.T) {
 }
 
 func TestUpdatableDifferenceIsUpdate(t *testing.T) {
-	cfg := config(configured("db", "test.database", map[string]value.Value{
+	cfg := config(configured("db", "fake.database", map[string]value.Value{
 		"engine": str("postgres"),
 		"size":   value.Int(20, value.SourceExplicit),
 	}))
-	live := recorded("db", "test.database", map[string]value.Value{
+	live := recorded("db", "fake.database", map[string]value.Value{
 		"engine":   provAttr(str("postgres")),
 		"size":     value.Int(10, value.SourceProvider),
 		"endpoint": provAttr(str("db-1.test")),
@@ -200,12 +200,12 @@ func TestUpdatableDifferenceIsUpdate(t *testing.T) {
 }
 
 func TestForceNewDifferenceIsReplace(t *testing.T) {
-	// engine is ForceNew on test.database.
-	cfg := config(configured("db", "test.database", map[string]value.Value{
+	// engine is ForceNew on fake.database.
+	cfg := config(configured("db", "fake.database", map[string]value.Value{
 		"engine": str("mysql"),
 		"size":   value.Int(10, value.SourceExplicit),
 	}))
-	live := recorded("db", "test.database", map[string]value.Value{
+	live := recorded("db", "fake.database", map[string]value.Value{
 		"engine":   provAttr(str("postgres")),
 		"size":     value.Int(10, value.SourceProvider),
 		"endpoint": provAttr(str("db-1.test")),
@@ -233,10 +233,10 @@ func TestForceNewDifferenceIsReplace(t *testing.T) {
 func TestObservedAbsentIsRecreate(t *testing.T) {
 	// In config, in state, but the provider no longer has it: something
 	// deleted it outside infra.
-	cfg := config(configured("net", "test.network", map[string]value.Value{
+	cfg := config(configured("net", "fake.network", map[string]value.Value{
 		"cidr": str("10.0.0.0/16"),
 	}))
-	live := recorded("net", "test.network", map[string]value.Value{
+	live := recorded("net", "fake.network", map[string]value.Value{
 		"cidr": provAttr(str("10.0.0.0/16")),
 	})
 
@@ -257,7 +257,7 @@ func TestObservedAbsentIsRecreate(t *testing.T) {
 }
 
 func TestNotInConfigButPresentIsDestroy(t *testing.T) {
-	live := recorded("net", "test.network", map[string]value.Value{
+	live := recorded("net", "fake.network", map[string]value.Value{
 		"cidr": provAttr(str("10.0.0.0/16")),
 	})
 
@@ -278,7 +278,7 @@ func TestNotInConfigButPresentIsDestroy(t *testing.T) {
 }
 
 func TestNotInConfigAndAbsentIsForget(t *testing.T) {
-	live := recorded("net", "test.network", map[string]value.Value{
+	live := recorded("net", "fake.network", map[string]value.Value{
 		"cidr": provAttr(str("10.0.0.0/16")),
 	})
 
@@ -300,11 +300,11 @@ func TestNotInConfigAndAbsentIsForget(t *testing.T) {
 func TestUnknownDesiredValueIsAnUpdate(t *testing.T) {
 	// Rule 1. An unknown cannot be proven unchanged, so it must show as a
 	// change; treating it as unchanged under-reports, invisibly until apply.
-	cfg := config(configured("db", "test.database", map[string]value.Value{
+	cfg := config(configured("db", "fake.database", map[string]value.Value{
 		"engine":  str("postgres"),
 		"network": value.Unknown(value.KindString, value.SourceComputed),
 	}))
-	live := recorded("db", "test.database", map[string]value.Value{
+	live := recorded("db", "fake.database", map[string]value.Value{
 		"engine":  provAttr(str("postgres")),
 		"network": provAttr(str("net-1")),
 	})
@@ -325,14 +325,14 @@ func TestUnknownDesiredValueIsAnUpdate(t *testing.T) {
 func TestUnknownInsideACompositeIsAnUpdate(t *testing.T) {
 	// Rule 1, the case that is easy to miss: a map is Known even when one of
 	// its entries is not, so a top-level check alone reports the wrong reason.
-	cfg := config(configured("db", "test.database", map[string]value.Value{
+	cfg := config(configured("db", "fake.database", map[string]value.Value{
 		"engine": str("postgres"),
 		"tags": value.Map(map[string]value.Value{
 			"env":     str("dev"),
 			"release": value.Unknown(value.KindString, value.SourceComputed),
 		}, value.SourceExplicit),
 	}))
-	live := recorded("db", "test.database", map[string]value.Value{
+	live := recorded("db", "fake.database", map[string]value.Value{
 		"engine": provAttr(str("postgres")),
 		"tags": value.Map(map[string]value.Value{
 			"env":     provAttr(str("dev")),
@@ -360,11 +360,11 @@ func TestUnknownInsideACompositeIsAnUpdate(t *testing.T) {
 // ForceNew attribute the change is a replacement — a live resource destroyed
 // and recreated because the planner could not prove nothing changed.
 func TestUnknownForceNewAttributeIsAReplace(t *testing.T) {
-	// engine is ForceNew on test.database.
-	cfg := config(configured("db", "test.database", map[string]value.Value{
+	// engine is ForceNew on fake.database.
+	cfg := config(configured("db", "fake.database", map[string]value.Value{
 		"engine": value.Unknown(value.KindString, value.SourceComputed),
 	}))
-	live := recorded("db", "test.database", map[string]value.Value{
+	live := recorded("db", "fake.database", map[string]value.Value{
 		"engine": provAttr(str("postgres")),
 	})
 
@@ -386,10 +386,10 @@ func TestUnknownForceNewAttributeIsAReplace(t *testing.T) {
 
 func TestComputedAttributesDoNotDriveADiff(t *testing.T) {
 	// Rule 2. id and endpoint are provider outputs, not desired state.
-	cfg := config(configured("db", "test.database", map[string]value.Value{
+	cfg := config(configured("db", "fake.database", map[string]value.Value{
 		"engine": str("postgres"),
 	}))
-	live := recorded("db", "test.database", map[string]value.Value{
+	live := recorded("db", "fake.database", map[string]value.Value{
 		"engine":   provAttr(str("postgres")),
 		"endpoint": provAttr(str("db-1.test")),
 	})
@@ -407,10 +407,10 @@ func TestComputedAttributesDoNotDriveADiff(t *testing.T) {
 func TestRemovedAttributeIsAnUpdate(t *testing.T) {
 	// The other half of rule 2: an attribute the schema defines, that is not
 	// computed, and that configuration no longer sets, is a change.
-	cfg := config(configured("db", "test.database", map[string]value.Value{
+	cfg := config(configured("db", "fake.database", map[string]value.Value{
 		"engine": str("postgres"),
 	}))
-	live := recorded("db", "test.database", map[string]value.Value{
+	live := recorded("db", "fake.database", map[string]value.Value{
 		"engine":   provAttr(str("postgres")),
 		"password": provAttr(str("s3cret")).WithSensitive(true),
 		"endpoint": provAttr(str("db-1.test")),
@@ -429,10 +429,10 @@ func TestRemovedAttributeIsAnUpdate(t *testing.T) {
 func TestReplaceMarksComputedAttributesUnknown(t *testing.T) {
 	// Rule 3's consequence: a replacement builds a new object, so the
 	// provider's outputs are known after apply rather than carried across.
-	cfg := config(configured("db", "test.database", map[string]value.Value{
+	cfg := config(configured("db", "fake.database", map[string]value.Value{
 		"engine": str("mysql"),
 	}))
-	live := recorded("db", "test.database", map[string]value.Value{
+	live := recorded("db", "fake.database", map[string]value.Value{
 		"engine":   provAttr(str("postgres")),
 		"endpoint": provAttr(str("db-1.test")),
 	})
@@ -453,7 +453,7 @@ func TestReplaceMarksComputedAttributesUnknown(t *testing.T) {
 
 func TestPreventDestroyIsAPlanTimeError(t *testing.T) {
 	// Rule 4. The user learns before approving, not after.
-	live := recorded("db", "test.database", map[string]value.Value{
+	live := recorded("db", "fake.database", map[string]value.Value{
 		"engine": provAttr(str("postgres")),
 	})
 	live.Lifecycle = resource.Lifecycle{PreventDestroy: true}
@@ -473,7 +473,7 @@ func TestPreventDestroyIsAPlanTimeError(t *testing.T) {
 
 func TestRetainForgetsWithoutDestroying(t *testing.T) {
 	// Rule 5. The provider is never called.
-	live := recorded("db", "test.database", map[string]value.Value{
+	live := recorded("db", "fake.database", map[string]value.Value{
 		"engine": provAttr(str("postgres")),
 	})
 	live.Lifecycle = resource.Lifecycle{Retain: true}
@@ -497,7 +497,7 @@ func TestRetainForgetsWithoutDestroying(t *testing.T) {
 func TestRetainWinsOverPreventDestroy(t *testing.T) {
 	// A resource carrying both is forgotten, not refused: retain destroys
 	// nothing, so it already satisfies what prevent_destroy protects.
-	live := recorded("db", "test.database", map[string]value.Value{
+	live := recorded("db", "fake.database", map[string]value.Value{
 		"engine": provAttr(str("postgres")),
 	})
 	live.Lifecycle = resource.Lifecycle{Retain: true, PreventDestroy: true}
@@ -514,13 +514,13 @@ func TestRetainWinsOverPreventDestroy(t *testing.T) {
 // --- judgement calls the signature forces ----------------------------------
 
 func TestReadErrorFailsPlanningRatherThanAssumingAbsence(t *testing.T) {
-	inConfig := recorded("net", "test.network", map[string]value.Value{
+	inConfig := recorded("net", "fake.network", map[string]value.Value{
 		"cidr": provAttr(str("10.0.0.0/16")),
 	})
-	orphan := recorded("db", "test.database", map[string]value.Value{
+	orphan := recorded("db", "fake.database", map[string]value.Value{
 		"engine": provAttr(str("postgres")),
 	})
-	cfg := config(configured("net", "test.network", map[string]value.Value{
+	cfg := config(configured("net", "fake.network", map[string]value.Value{
 		"cidr": str("10.0.0.0/16"),
 	}))
 
@@ -550,15 +550,15 @@ func TestReadErrorFailsPlanningRatherThanAssumingAbsence(t *testing.T) {
 // it just as well. Here db fails to read and net genuinely changed (cidr is
 // ForceNew), so net must still get its operation.
 func TestReadErrorOnOneResourceDoesNotAbortPlanningForOthers(t *testing.T) {
-	broken := recorded("db", "test.database", map[string]value.Value{
+	broken := recorded("db", "fake.database", map[string]value.Value{
 		"engine": provAttr(str("postgres")),
 	})
-	healthy := recorded("net", "test.network", map[string]value.Value{
+	healthy := recorded("net", "fake.network", map[string]value.Value{
 		"cidr": provAttr(str("10.0.0.0/16")),
 	})
 	cfg := config(
-		configured("db", "test.database", map[string]value.Value{"engine": str("postgres")}),
-		configured("net", "test.network", map[string]value.Value{"cidr": str("10.1.0.0/16")}),
+		configured("db", "fake.database", map[string]value.Value{"engine": str("postgres")}),
+		configured("net", "fake.network", map[string]value.Value{"cidr": str("10.1.0.0/16")}),
 	)
 
 	obs := merge(
@@ -593,10 +593,10 @@ func TestReadErrorOnOneResourceDoesNotAbortPlanningForOthers(t *testing.T) {
 
 func TestMissingObservationFallsBackToRecordedState(t *testing.T) {
 	// Refresh not having covered an address is not evidence of absence.
-	cfg := config(configured("net", "test.network", map[string]value.Value{
+	cfg := config(configured("net", "fake.network", map[string]value.Value{
 		"cidr": str("10.0.0.0/16"),
 	}))
-	live := recorded("net", "test.network", map[string]value.Value{
+	live := recorded("net", "fake.network", map[string]value.Value{
 		"cidr": provAttr(str("10.0.0.0/16")),
 	})
 
@@ -610,11 +610,11 @@ func TestMissingObservationFallsBackToRecordedState(t *testing.T) {
 }
 
 func TestChangeReasonsNeverCarryValues(t *testing.T) {
-	cfg := config(configured("db", "test.database", map[string]value.Value{
+	cfg := config(configured("db", "fake.database", map[string]value.Value{
 		"engine":   str("postgres"),
 		"password": str("hunter2").WithSensitive(true),
 	}))
-	live := recorded("db", "test.database", map[string]value.Value{
+	live := recorded("db", "fake.database", map[string]value.Value{
 		"engine":   provAttr(str("postgres")),
 		"password": provAttr(str("s3cret")).WithSensitive(true),
 	})
@@ -659,11 +659,11 @@ func TestMissingSchemaIsAnErrorNotASilentUpdate(t *testing.T) {
 // it at compile time), but Compute does not get to assume its caller went
 // through Compile.
 func TestAttributeNotDefinedByTheSchemaIsAnErrorNotASilentUpdate(t *testing.T) {
-	cfg := config(configured("db", "test.database", map[string]value.Value{
+	cfg := config(configured("db", "fake.database", map[string]value.Value{
 		"engine":     str("postgres"),
 		"not_a_real": str("mystery"),
 	}))
-	live := recorded("db", "test.database", map[string]value.Value{
+	live := recorded("db", "fake.database", map[string]value.Value{
 		"engine": provAttr(str("postgres")),
 	})
 
@@ -683,7 +683,7 @@ func TestAttributeNotDefinedByTheSchemaIsAnErrorNotASilentUpdate(t *testing.T) {
 func TestNilRegistryIsAnErrorNotADegradation(t *testing.T) {
 	opts := planOpts(t)
 	opts.Registry = nil
-	cfg := config(configured("net", "test.network", map[string]value.Value{
+	cfg := config(configured("net", "fake.network", map[string]value.Value{
 		"cidr": str("10.0.0.0/16"),
 	}))
 	if _, ds := Compute(cfg, stateOf(), refresh.Observations{}, opts); !ds.HasErrors() {
@@ -692,7 +692,7 @@ func TestNilRegistryIsAnErrorNotADegradation(t *testing.T) {
 }
 
 func TestPlanningAgainstAnotherEnvironmentsStateIsAnError(t *testing.T) {
-	cfg := config(configured("net", "test.network", map[string]value.Value{
+	cfg := config(configured("net", "fake.network", map[string]value.Value{
 		"cidr": str("10.0.0.0/16"),
 	}))
 	prod := state.New("myapp", "prod")
@@ -708,7 +708,7 @@ func TestPlanningAgainstAnotherEnvironmentsStateIsAnError(t *testing.T) {
 }
 
 func TestComputeDoesNotMutateItsInputs(t *testing.T) {
-	live := recorded("db", "test.database", map[string]value.Value{
+	live := recorded("db", "fake.database", map[string]value.Value{
 		"engine": provAttr(str("postgres")),
 	})
 	st := stateOf(live)
@@ -717,7 +717,7 @@ func TestComputeDoesNotMutateItsInputs(t *testing.T) {
 		t.Fatalf("Encode: %v", err)
 	}
 
-	cfg := config(configured("db", "test.database", map[string]value.Value{
+	cfg := config(configured("db", "fake.database", map[string]value.Value{
 		"engine": str("mysql"),
 	}))
 	p, _ := Compute(cfg, st, present(live), planOpts(t))
@@ -735,7 +735,7 @@ func TestComputeDoesNotMutateItsInputs(t *testing.T) {
 }
 
 func TestPlanRecordsItsInputFingerprints(t *testing.T) {
-	cfg := config(configured("net", "test.network", map[string]value.Value{
+	cfg := config(configured("net", "fake.network", map[string]value.Value{
 		"cidr": str("10.0.0.0/16"),
 	}))
 	st := stateOf()
@@ -799,12 +799,12 @@ func TestDestroyReportsDependentsFromState(t *testing.T) {
 	// actually sorts. Three distinct names whose insertion order differs from
 	// their sorted order is what turns a deleted address.Sort call into a
 	// failing test instead of an assertion that cannot fail.
-	net := recorded("net", "test.network", map[string]value.Value{
+	net := recorded("net", "fake.network", map[string]value.Value{
 		"cidr": provAttr(str("10.0.0.0/16")),
 	})
-	zebra := recorded("zebra-db", "test.database", map[string]value.Value{"engine": provAttr(str("postgres"))})
-	alpha := recorded("alpha-db", "test.database", map[string]value.Value{"engine": provAttr(str("postgres"))})
-	middle := recorded("middle-db", "test.database", map[string]value.Value{"engine": provAttr(str("postgres"))})
+	zebra := recorded("zebra-db", "fake.database", map[string]value.Value{"engine": provAttr(str("postgres"))})
+	alpha := recorded("alpha-db", "fake.database", map[string]value.Value{"engine": provAttr(str("postgres"))})
+	middle := recorded("middle-db", "fake.database", map[string]value.Value{"engine": provAttr(str("postgres"))})
 	for _, db := range []*resource.ResourceState{zebra, alpha, middle} {
 		db.Dependencies = []address.Address{addr("net")}
 	}
@@ -846,10 +846,10 @@ func TestDestroyReportsDependentsFromState(t *testing.T) {
 // resource still exists, then show the plan a different resource's attributes
 // than the ones that decision was based on.
 func TestDestroyBeforeReflectsObservedStateNotStaleRecordedState(t *testing.T) {
-	recordedState := recorded("net", "test.network", map[string]value.Value{
+	recordedState := recorded("net", "fake.network", map[string]value.Value{
 		"cidr": provAttr(str("10.0.0.0/16")), // what state remembers
 	})
-	drifted := recorded("net", "test.network", map[string]value.Value{
+	drifted := recorded("net", "fake.network", map[string]value.Value{
 		"cidr": provAttr(str("10.9.0.0/16")), // what the provider reports now
 	})
 
@@ -869,19 +869,19 @@ func TestDestroyBeforeReflectsObservedStateNotStaleRecordedState(t *testing.T) {
 }
 
 func TestConfiguredOperationsReportDependentsFromConfigSorted(t *testing.T) {
-	db := configured("db", "test.database", map[string]value.Value{
+	db := configured("db", "fake.database", map[string]value.Value{
 		"engine": str("mysql"),
 	})
 	var dependents []*resource.ResolvedResource
 	for _, name := range []string{"zebra-app", "alpha-app", "middle-app"} {
-		app := configured(name, "test.application", map[string]value.Value{
+		app := configured(name, "fake.application", map[string]value.Value{
 			"image": str("app:1"),
 		})
 		app.DependsOn = []address.Address{addr("db")}
 		dependents = append(dependents, app)
 	}
 
-	live := recorded("db", "test.database", map[string]value.Value{
+	live := recorded("db", "fake.database", map[string]value.Value{
 		"engine": provAttr(str("postgres")),
 	})
 
@@ -913,7 +913,7 @@ func TestConfiguredOperationsReportDependentsFromConfigSorted(t *testing.T) {
 }
 
 func TestResourcesWithoutDependentsReportNone(t *testing.T) {
-	cfg := config(configured("net", "test.network", map[string]value.Value{
+	cfg := config(configured("net", "fake.network", map[string]value.Value{
 		"cidr": str("10.0.0.0/16"),
 	}))
 	p, _ := Compute(cfg, stateOf(), refresh.Observations{}, planOpts(t))
@@ -952,7 +952,7 @@ func TestPlanIsDeterministicAcrossTwentyRuns(t *testing.T) {
 		desired = append(desired, &resource.ResolvedResource{
 			Provider:  "test",
 			Address:   addr(name),
-			Type:      "test.database",
+			Type:      "fake.database",
 			DependsOn: []address.Address{addr("keep-a")},
 			Attrs: map[string]value.Value{
 				"engine": str(engine),
@@ -965,7 +965,7 @@ func TestPlanIsDeterministicAcrossTwentyRuns(t *testing.T) {
 		})
 		live = append(live, &resource.ResourceState{
 			Address:      addr(name),
-			Type:         "test.database",
+			Type:         "fake.database",
 			Provider:     "test",
 			ProviderID:   name + "-1",
 			Dependencies: []address.Address{addr("keep-a")},
@@ -1027,11 +1027,11 @@ func TestPlanIsDeterministicAcrossTwentyRuns(t *testing.T) {
 }
 
 func configuredNetwork(name, cidr string) *resource.ResolvedResource {
-	return configured(name, "test.network", map[string]value.Value{"cidr": str(cidr)})
+	return configured(name, "fake.network", map[string]value.Value{"cidr": str(cidr)})
 }
 
 func recordedNetwork(name, cidr string) *resource.ResourceState {
-	return recorded(name, "test.network", map[string]value.Value{
+	return recorded(name, "fake.network", map[string]value.Value{
 		"cidr": provAttr(str(cidr)),
 		"id":   provAttr(str(name + "-1")),
 	})
@@ -1056,7 +1056,7 @@ func TestEnvironmentMismatchProducesNoOperations(t *testing.T) {
 		Resources: map[string]*resource.ResolvedResource{
 			"network": {
 				Address: address.Address{Name: "network"},
-				Type:    "test.network",
+				Type:    "fake.network",
 				Attrs:   map[string]value.Value{"cidr": value.String("10.0.0.0/16", value.SourceExplicit)},
 			},
 		},
@@ -1069,7 +1069,7 @@ func TestEnvironmentMismatchProducesNoOperations(t *testing.T) {
 		Resources: map[string]*resource.ResourceState{
 			"database": {
 				Address:    address.Address{Name: "database"},
-				Type:       "test.database",
+				Type:       "fake.database",
 				Attributes: nil,
 			},
 		},

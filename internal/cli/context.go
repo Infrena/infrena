@@ -61,23 +61,35 @@ func buildRegistryWithLoader(opts *GlobalOptions) (*registry.Registry, *pluginho
 	return reg, loader
 }
 
-// builtinsFor is a seam so a test can supply MORE THAN ONE plugin, which is the shape
-// that broke discovery and which no test could otherwise reach: the real builtin set
-// has exactly one entry, and the bug only appears at two.
-var builtinsFor = builtinPlugins
+// builtinsFor supplies plugins served in process rather than as a binary.
+//
+// EMPTY IN A SHIPPED BUILD, since 2026-09-13: infrata carries no provider, and a project
+// using the fake provider installs infrata-plugin-fake like any other. That is the whole
+// point of §31.1 — a provider is a separate binary, including the official ones.
+//
+// It is a variable rather than a constant because it is the one seam the test suites use,
+// for two different reasons:
+//
+//   - internal/cli's TestMain injects fakeDouble, because these tests run commands IN THIS
+//     PROCESS, and §31.1's Testing section says the unit and fast suites register the fake
+//     provider that way — over pluginhost.InProcess, which is the same handshake, protocol
+//     and trust rules a subprocess gets.
+//   - a discovery test injects TWO plugins, the shape that broke `discover`. A shipped
+//     build now has none, so that shape is reachable no other way.
+//
+// tests/integration deliberately does NOT use this: it shells out to the built binary and
+// builds the real infrata-plugin-fake, so the path a user actually runs is proved
+// somewhere.
+var builtinsFor = func(string) map[string]provider.Plugin { return nil }
 
-// builtinPlugins are the plugins served in process because no binary exists yet.
+// fakeDouble is the in-process fake provider, for suites that need a provider without a
+// binary.
 //
-// TRANSITIONAL, and the only entry is the fake provider, which is being moved to
-// its own repository as infrata-plugin-fake. A builtin is not a second code path:
-// pluginhost.InProcess runs the SDK over an in-memory pipe, so it goes through the
-// same handshake, the same protocol and the same trust rules a subprocess does.
-// A real binary on the search path wins over this, so the cutover is a matter of
-// installing one.
-//
-// Delete this function, and pluginhost.Loader.Builtin, once that binary ships.
-func builtinPlugins(dir string) map[string]provider.Plugin {
-	return map[string]provider.Plugin{"test": test.NewPlugin(dir)}
+// Not a second implementation of anything shipped: it is the ENGINE'S TEST DOUBLE, and it
+// shares an origin with infrata-plugin-fake only because that binary was ported from it.
+// What keeps the two honest is that tests/integration runs the real one.
+func fakeDouble(dir string) map[string]provider.Plugin {
+	return map[string]provider.Plugin{"fake": test.NewPlugin(dir)}
 }
 
 // pluginConstraints reads the project's `plugins:` block (PLAN.md §31.1).
@@ -267,7 +279,7 @@ func testRegistryFor(dir string) (*registry.Registry, func()) {
 // Configuration cannot answer this for a state-only command. `destroy`'s whole
 // premise is that nothing is configured — `resources: {}`, or no file at all — so
 // the only thing that says which plugins are involved is the state: a resource
-// recorded as `test.network` can only be served by the plugin `test`, because a
+// recorded as `fake.network` can only be served by the plugin `test`, because a
 // plugin serves `<name>.*` and nothing else (PLAN.md §31.1).
 //
 // Called AFTER state is read, which is why it is separate from

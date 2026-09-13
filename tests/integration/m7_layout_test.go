@@ -25,7 +25,7 @@ inputs:
     type: string
 resources:
   db:
-    type: test.database
+    type: fake.database
     engine: postgres
     network: ${network}
     size: ${size}
@@ -64,7 +64,7 @@ modules:
 		"resources/network/net.yml": `
 resources:
   network:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
 `,
 		"resources/app/vars/sizes.yml": "size: 50\n",
@@ -76,7 +76,7 @@ resources:
     size: ${size}
     password: ${db_password}
   web:
-    type: test.application
+    type: fake.application
     image: nginx:1.27
     database_url: ${stack.endpoint}
 `,
@@ -95,7 +95,7 @@ resources:
 	// the rung it came from. A plan that resolved the value but called it base
 	// configuration would still deploy correctly and would still be wrong: the
 	// label is how a user finds the file to edit.
-	size := attrLine(t, p.Stdout, modHeader("test.database", []string{"stack"}, "db"), "size")
+	size := attrLine(t, p.Stdout, modHeader("fake.database", []string{"stack"}, "db"), "size")
 	if !strings.HasPrefix(size, "size: 50 [") {
 		t.Errorf("stack db size line = %q, want the directory's 50 (the module's own default is 10)", size)
 	}
@@ -106,7 +106,7 @@ resources:
 	// vars/default.yml supplied the password, and the provider's schema still
 	// redacts it. A value arriving from a new kind of file must not arrive
 	// through a new rendering path.
-	pw := attrLine(t, p.Stdout, modHeader("test.database", []string{"stack"}, "db"), "password")
+	pw := attrLine(t, p.Stdout, modHeader("fake.database", []string{"stack"}, "db"), "password")
 	if !strings.Contains(pw, "<sensitive>") {
 		t.Errorf("password line = %q, want it redacted", pw)
 	}
@@ -158,7 +158,7 @@ modules:
 	const resources = `
 resources:
   network:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
   stack:
     type: module.app_stack
@@ -172,7 +172,7 @@ resources:
 		"resources/net/net.yml": `
 resources:
   network:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
 `,
 		"resources/stack/stack.yml": `
@@ -214,7 +214,7 @@ func TestADuplicateAcrossTwoFilesNamesBothPaths(t *testing.T) {
 	const body = `
 resources:
   store:
-    type: test.database
+    type: fake.database
     engine: postgres
 `
 	dir := projectWithFiles(t, "project: shop\n", map[string]string{
@@ -258,13 +258,13 @@ environments:
 		"resources/net/net.yml": `
 resources:
   net:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
 `,
 		"resources/db/db.yml": `
 resources:
   store:
-    type: test.database
+    type: fake.database
     engine: postgres
     network: ${net.id}
 `,

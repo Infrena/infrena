@@ -16,7 +16,7 @@ import (
 func testRegistry(t *testing.T) *registry.Registry {
 	t.Helper()
 	reg := registry.New()
-	if err := reg.Register("test", testprovider.New(filepath.Join(t.TempDir(), "cloud.json"))); err != nil {
+	if err := reg.Register("fake", testprovider.New(filepath.Join(t.TempDir(), "cloud.json"))); err != nil {
 		t.Fatalf("registering the test provider: %v", err)
 	}
 	return reg
@@ -45,10 +45,10 @@ func oneFile(t *testing.T, rs []Resource) File {
 // resource whose size is what it would have been anyway produces no size line.
 func TestGenerationOmitsWhatADefaultAlreadyProvides(t *testing.T) {
 	f := oneFile(t, []Resource{{
-		Name: "orders", Type: "test.database", ProviderID: "db-9",
+		Name: "orders", Type: "fake.database", ProviderID: "db-9",
 		Attributes: map[string]value.Value{
 			"engine": prov("postgres"),
-			// 10 is test.database's default.
+			// 10 is fake.database's default.
 			"size": provInt(10),
 		},
 	}})
@@ -80,7 +80,7 @@ func TestGenerationOmitsWhatADefaultAlreadyProvides(t *testing.T) {
 func TestGenerationOmitsASensitiveAttributeAndSaysSo(t *testing.T) {
 	const secret = "hunter2-correct-horse"
 	f := oneFile(t, []Resource{{
-		Name: "orders", Type: "test.database", ProviderID: "db-9",
+		Name: "orders", Type: "fake.database", ProviderID: "db-9",
 		Attributes: map[string]value.Value{
 			"engine":   prov("postgres"),
 			"password": prov(secret).WithSensitive(true),
@@ -112,7 +112,7 @@ func TestGenerationOmitsASensitiveAttributeAndSaysSo(t *testing.T) {
 // diagnostic pointing at a file the user never wrote.
 func TestGenerationOmitsComputedAttributes(t *testing.T) {
 	f := oneFile(t, []Resource{{
-		Name: "orders", Type: "test.database", ProviderID: "db-9",
+		Name: "orders", Type: "fake.database", ProviderID: "db-9",
 		Attributes: map[string]value.Value{
 			"engine":   prov("postgres"),
 			"id":       prov("db-9"),
@@ -135,13 +135,13 @@ func TestGenerationOmitsComputedAttributes(t *testing.T) {
 // order in both dimensions: resources and attributes.
 func TestGenerationIsDeterministic(t *testing.T) {
 	rs := []Resource{
-		{Name: "zeta", Type: "test.network", ProviderID: "net-9", Attributes: map[string]value.Value{
+		{Name: "zeta", Type: "fake.network", ProviderID: "net-9", Attributes: map[string]value.Value{
 			"cidr": prov("10.9.0.0/16"),
 		}},
-		{Name: "alpha", Type: "test.network", ProviderID: "net-1", Attributes: map[string]value.Value{
+		{Name: "alpha", Type: "fake.network", ProviderID: "net-1", Attributes: map[string]value.Value{
 			"cidr": prov("10.1.0.0/16"),
 		}},
-		{Name: "mid", Type: "test.database", ProviderID: "db-5", Attributes: map[string]value.Value{
+		{Name: "mid", Type: "fake.database", ProviderID: "db-5", Attributes: map[string]value.Value{
 			"size": provInt(77), "engine": prov("postgres"), "network": prov("net-1"),
 		}},
 	}
@@ -182,8 +182,8 @@ func TestGenerationIsDeterministic(t *testing.T) {
 
 func TestFileNameIsTheTypePluralised(t *testing.T) {
 	for _, tc := range []struct{ typ, want string }{
-		{"test.database", "databases.yml"},
-		{"test.network", "networks.yml"},
+		{"fake.database", "databases.yml"},
+		{"fake.network", "networks.yml"},
 		{"aws.s3_bucket", "s3_buckets.yml"},
 		{"aws.iam_policy", "iam_policies.yml"},
 		{"aws.address", "addresses.yml"},
@@ -207,7 +207,7 @@ func TestFileNameIsTheTypePluralised(t *testing.T) {
 // not accept.
 func TestGeneratedConfigurationParsesBackAndPlansClean(t *testing.T) {
 	files, err := Generate([]Resource{
-		{Name: "orders", Type: "test.database", ProviderID: "db-9", Attributes: map[string]value.Value{
+		{Name: "orders", Type: "fake.database", ProviderID: "db-9", Attributes: map[string]value.Value{
 			"engine":   prov("postgres"),
 			"size":     provInt(10), // the default — omitted
 			"id":       prov("db-9"),
@@ -215,7 +215,7 @@ func TestGeneratedConfigurationParsesBackAndPlansClean(t *testing.T) {
 			"password": prov("hunter2").WithSensitive(true),
 			"network":  prov("net-1"),
 		}},
-		{Name: "vpc-0a1b", Type: "test.network", ProviderID: "vpc-0a1b", Attributes: map[string]value.Value{
+		{Name: "vpc-0a1b", Type: "fake.network", ProviderID: "vpc-0a1b", Attributes: map[string]value.Value{
 			"cidr": prov("10.0.0.0/16"),
 			"id":   prov("vpc-0a1b"),
 		}},
@@ -288,7 +288,7 @@ func TestGeneratedConfigurationParsesBackAndPlansClean(t *testing.T) {
 func TestExportModeKeepsDefaultsButStillOmitsSecrets(t *testing.T) {
 	const secret = "hunter2-correct-horse"
 	rs := []Resource{{
-		Name: "orders", Type: "test.database", ProviderID: "db-9",
+		Name: "orders", Type: "fake.database", ProviderID: "db-9",
 		Attributes: map[string]value.Value{
 			"engine":   prov("postgres"),
 			"size":     provInt(10), // the development default
@@ -329,7 +329,7 @@ func TestExportModeKeepsDefaultsButStillOmitsSecrets(t *testing.T) {
 // an audit dump is an instruction to edit a file nobody will apply.
 func TestTheOmissionNoteSuitsItsReader(t *testing.T) {
 	rs := []Resource{{
-		Name: "orders", Type: "test.database", ProviderID: "db-9",
+		Name: "orders", Type: "fake.database", ProviderID: "db-9",
 		Attributes: map[string]value.Value{
 			"engine":   prov("postgres"),
 			"password": prov("s3cret").WithSensitive(true),

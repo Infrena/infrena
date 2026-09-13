@@ -34,7 +34,7 @@ func desired(name, resourceType string, attrs map[string]value.Value) *resource.
 
 func TestCreateAssignsProviderIDAndComputedAttributes(t *testing.T) {
 	p, _ := newTestProvider(t)
-	st, err := p.Create(context.Background(), desired("db", "test.database", map[string]value.Value{
+	st, err := p.Create(context.Background(), desired("db", "fake.database", map[string]value.Value{
 		"engine": value.String("postgres", value.SourceExplicit),
 	}))
 	if err != nil {
@@ -53,7 +53,7 @@ func TestCreateAssignsProviderIDAndComputedAttributes(t *testing.T) {
 
 func TestReadReflectsExternalMutation(t *testing.T) {
 	p, path := newTestProvider(t)
-	st, err := p.Create(context.Background(), desired("db", "test.database", map[string]value.Value{
+	st, err := p.Create(context.Background(), desired("db", "fake.database", map[string]value.Value{
 		"engine": value.String("postgres", value.SourceExplicit),
 	}))
 	if err != nil {
@@ -81,7 +81,7 @@ func TestReadReflectsExternalMutation(t *testing.T) {
 
 func TestReadReturnsNilWhenDeletedExternally(t *testing.T) {
 	p, path := newTestProvider(t)
-	st, _ := p.Create(context.Background(), desired("net", "test.network", map[string]value.Value{
+	st, _ := p.Create(context.Background(), desired("net", "fake.network", map[string]value.Value{
 		"cidr": value.String("10.0.0.0/16", value.SourceExplicit),
 	}))
 
@@ -101,12 +101,12 @@ func TestReadReturnsNilWhenDeletedExternally(t *testing.T) {
 func TestUpdateAndDelete(t *testing.T) {
 	p, _ := newTestProvider(t)
 	ctx := context.Background()
-	st, _ := p.Create(ctx, desired("db", "test.database", map[string]value.Value{
+	st, _ := p.Create(ctx, desired("db", "fake.database", map[string]value.Value{
 		"engine": value.String("postgres", value.SourceExplicit),
 		"size":   value.Int(10, value.SourceDefault),
 	}))
 
-	updated, err := p.Update(ctx, st, desired("db", "test.database", map[string]value.Value{
+	updated, err := p.Update(ctx, st, desired("db", "fake.database", map[string]value.Value{
 		"engine": value.String("postgres", value.SourceExplicit),
 		"size":   value.Int(50, value.SourceExplicit),
 	}))
@@ -135,7 +135,7 @@ func TestInjectedFailureIsClassified(t *testing.T) {
 	c.Failures = []FailureRule{{Op: "create", Address: "db", Nth: 1, Retryability: RetrySafe, Message: "throttled"}}
 	_ = c.Save(path)
 
-	_, err := p.Create(context.Background(), desired("db", "test.database", map[string]value.Value{
+	_, err := p.Create(context.Background(), desired("db", "fake.database", map[string]value.Value{
 		"engine": value.String("postgres", value.SourceExplicit),
 	}))
 	if err == nil {
@@ -148,7 +148,7 @@ func TestInjectedFailureIsClassified(t *testing.T) {
 
 func TestSensitiveAttributeIsMarkedOnRead(t *testing.T) {
 	p, _ := newTestProvider(t)
-	st, _ := p.Create(context.Background(), desired("db", "test.database", map[string]value.Value{
+	st, _ := p.Create(context.Background(), desired("db", "fake.database", map[string]value.Value{
 		"engine":   value.String("postgres", value.SourceExplicit),
 		"password": value.String("hunter2", value.SourceVariable),
 	}))
@@ -164,7 +164,7 @@ func TestNthReadRuleSurvivesAcrossOperations(t *testing.T) {
 	// persists the advanced counter itself.
 	p, path := newTestProvider(t)
 	ctx := context.Background()
-	st, err := p.Create(ctx, desired("net", "test.network", map[string]value.Value{
+	st, err := p.Create(ctx, desired("net", "fake.network", map[string]value.Value{
 		"cidr": value.String("10.0.0.0/16", value.SourceExplicit),
 	}))
 	if err != nil {
@@ -191,7 +191,7 @@ func TestNthReadRuleSurvivesAcrossOperations(t *testing.T) {
 func TestNullAttributeIsTreatedAsUnset(t *testing.T) {
 	p, path := newTestProvider(t)
 	ctx := context.Background()
-	st, err := p.Create(ctx, desired("db", "test.database", map[string]value.Value{
+	st, err := p.Create(ctx, desired("db", "fake.database", map[string]value.Value{
 		"engine": value.String("postgres", value.SourceExplicit),
 	}))
 	if err != nil {
@@ -252,11 +252,11 @@ func TestNthFailureRuleSurvivesAcrossOperations(t *testing.T) {
 		"engine": value.String("postgres", value.SourceExplicit),
 	}
 
-	if _, err := p.Create(context.Background(), desired("db", "test.database", attrs)); err != nil {
+	if _, err := p.Create(context.Background(), desired("db", "fake.database", attrs)); err != nil {
 		t.Fatalf("first Create must succeed (Nth: 2 has not fired yet), got: %v", err)
 	}
 
-	_, err = p.Create(context.Background(), desired("db", "test.database", attrs))
+	_, err = p.Create(context.Background(), desired("db", "fake.database", attrs))
 	if err == nil {
 		t.Fatal("second Create must fail: the rule's Seen counter must have persisted across the first call")
 	}
@@ -273,7 +273,7 @@ func TestUpdatePreservesDependencies(t *testing.T) {
 	// every resource it ever updates, and the failure would surface much later
 	// as a destroy in the wrong order.
 	p, _ := newTestProvider(t)
-	created, err := p.Create(context.Background(), desired("db", "test.database", map[string]value.Value{
+	created, err := p.Create(context.Background(), desired("db", "fake.database", map[string]value.Value{
 		"engine": value.String("postgres", value.SourceExplicit),
 	}))
 	if err != nil {
@@ -284,7 +284,7 @@ func TestUpdatePreservesDependencies(t *testing.T) {
 	created.CreatedAt = time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 	created.Lifecycle = resource.Lifecycle{PreventDestroy: true}
 
-	updated, err := p.Update(context.Background(), created, desired("db", "test.database", map[string]value.Value{
+	updated, err := p.Update(context.Background(), created, desired("db", "fake.database", map[string]value.Value{
 		"engine": value.String("mysql", value.SourceExplicit),
 	}))
 	if err != nil {
@@ -301,7 +301,7 @@ func TestUpdatePreservesDependencies(t *testing.T) {
 
 func TestReadPreservesCarriedFields(t *testing.T) {
 	p, _ := newTestProvider(t)
-	created, err := p.Create(context.Background(), desired("db", "test.database", map[string]value.Value{
+	created, err := p.Create(context.Background(), desired("db", "fake.database", map[string]value.Value{
 		"engine": value.String("postgres", value.SourceExplicit),
 	}))
 	if err != nil {
@@ -341,7 +341,7 @@ func TestCreateLeavesDependenciesNil(t *testing.T) {
 	// the edges from configuration. Asserted so the carry-forward helper is not
 	// extended to Create by mistake.
 	p, _ := newTestProvider(t)
-	st, err := p.Create(context.Background(), desired("net", "test.network", map[string]value.Value{
+	st, err := p.Create(context.Background(), desired("net", "fake.network", map[string]value.Value{
 		"cidr": value.String("10.0.0.0/16", value.SourceExplicit),
 	}))
 	if err != nil {
@@ -369,7 +369,7 @@ func TestCompositeAttributesRoundTripAsPlainJSON(t *testing.T) {
 		"inner": value.List([]value.Value{value.String("a", value.SourceExplicit)}, value.SourceExplicit),
 	}, value.SourceExplicit)
 
-	st, err := p.Create(context.Background(), desired("db", "test.database", map[string]value.Value{
+	st, err := p.Create(context.Background(), desired("db", "fake.database", map[string]value.Value{
 		"engine": value.String("postgres", value.SourceExplicit),
 		"tags":   tags,
 	}))
@@ -433,7 +433,7 @@ func TestCompositeAttributesRoundTripAsPlainJSON(t *testing.T) {
 	}
 	requireLeaves(t, read.Attributes["tags"], "Read")
 
-	updated, err := p.Update(context.Background(), st, desired("db", "test.database", map[string]value.Value{
+	updated, err := p.Update(context.Background(), st, desired("db", "fake.database", map[string]value.Value{
 		"engine": value.String("postgres", value.SourceExplicit),
 		"tags":   tags,
 	}))
@@ -479,7 +479,7 @@ func TestFailureRuleReachesAllThreeClassifications(t *testing.T) {
 			}
 			p := New(path)
 
-			_, err := p.Create(context.Background(), desired("db", "test.database", map[string]value.Value{
+			_, err := p.Create(context.Background(), desired("db", "fake.database", map[string]value.Value{
 				"engine": value.String("postgres", value.SourceExplicit),
 			}))
 			if err == nil {
@@ -525,7 +525,7 @@ func TestOperationsOverlapRatherThanSerialise(t *testing.T) {
 
 	states := make([]*resource.ResourceState, 0, resources)
 	for i := range resources {
-		st, err := p.Create(ctx, desired(fmt.Sprintf("net%d", i), "test.network", map[string]value.Value{
+		st, err := p.Create(ctx, desired(fmt.Sprintf("net%d", i), "fake.network", map[string]value.Value{
 			"cidr": value.String("10.0.0.0/16", value.SourceExplicit),
 		}))
 		if err != nil {
@@ -588,10 +588,10 @@ func writeCloud(t *testing.T, path string, c *Cloud) {
 // was created by this project, which is the case discovery exists for.
 func preexisting() *Cloud {
 	return &Cloud{Resources: map[string]*CloudResource{
-		"net-1": {Type: "test.network", Attributes: map[string]any{
+		"net-1": {Type: "fake.network", Attributes: map[string]any{
 			"cidr": "10.0.0.0/16", "id": "net-1",
 		}},
-		"db-9": {Type: "test.database", Attributes: map[string]any{
+		"db-9": {Type: "fake.database", Attributes: map[string]any{
 			"engine": "postgres", "id": "db-9", "password": "hunter2",
 		}},
 	}}
@@ -617,8 +617,8 @@ func TestDiscoverFindsEveryResourceInTheCloud(t *testing.T) {
 	if got[0].ProviderID != "db-9" || got[1].ProviderID != "net-1" {
 		t.Errorf("discovery is not sorted: %s, %s", got[0].ProviderID, got[1].ProviderID)
 	}
-	if got[0].Type != "test.database" {
-		t.Errorf("got[0].Type = %q, want test.database", got[0].Type)
+	if got[0].Type != "fake.database" {
+		t.Errorf("got[0].Type = %q, want fake.database", got[0].Type)
 	}
 	if cidr, _ := got[1].Attributes["cidr"].AsString(); cidr != "10.0.0.0/16" {
 		t.Errorf("net-1 cidr = %v, want the provider's value", got[1].Attributes["cidr"])
@@ -642,7 +642,7 @@ func TestDiscoverIsDeterministic(t *testing.T) {
 	p, path := newTestProvider(t)
 	c := preexisting()
 	for _, id := range []string{"alpha", "zeta", "mid", "beta"} {
-		c.Resources[id] = &CloudResource{Type: "test.network", Attributes: map[string]any{"id": id}}
+		c.Resources[id] = &CloudResource{Type: "fake.network", Attributes: map[string]any{"id": id}}
 	}
 	writeCloud(t, path, c)
 
@@ -676,7 +676,7 @@ func TestDiscoverFiltersByType(t *testing.T) {
 	p, path := newTestProvider(t)
 	writeCloud(t, path, preexisting())
 
-	got, err := p.Discover(context.Background(), provider.DiscoverRequest{Types: []string{"test.database"}})
+	got, err := p.Discover(context.Background(), provider.DiscoverRequest{Types: []string{"fake.database"}})
 	if err != nil {
 		t.Fatalf("Discover: %v", err)
 	}
@@ -686,7 +686,7 @@ func TestDiscoverFiltersByType(t *testing.T) {
 		t.Fatalf("filtered discovery = %+v, want only db-9", got)
 	}
 	for _, r := range got {
-		if r.Type == "test.network" {
+		if r.Type == "fake.network" {
 			t.Errorf("the filter returned a %s, which was not asked for", r.Type)
 		}
 	}
@@ -710,15 +710,15 @@ func TestImportReadsARealResourceByID(t *testing.T) {
 	p, path := newTestProvider(t)
 	writeCloud(t, path, preexisting())
 
-	st, err := p.Import(context.Background(), "test.database", "db-9")
+	st, err := p.Import(context.Background(), "fake.database", "db-9")
 	if err != nil {
 		t.Fatalf("Import: %v", err)
 	}
 	if st.ProviderID != "db-9" {
 		t.Errorf("ProviderID = %q, want db-9", st.ProviderID)
 	}
-	if st.Type != "test.database" {
-		t.Errorf("Type = %q, want test.database", st.Type)
+	if st.Type != "fake.database" {
+		t.Errorf("Type = %q, want fake.database", st.Type)
 	}
 	if engine, _ := st.Attributes["engine"].AsString(); engine != "postgres" {
 		t.Errorf("engine = %v, want the provider's value", st.Attributes["engine"])
@@ -740,7 +740,7 @@ func TestImportOfAnUnknownIDNamesTheID(t *testing.T) {
 	p, path := newTestProvider(t)
 	writeCloud(t, path, preexisting())
 
-	_, err := p.Import(context.Background(), "test.database", "db-404")
+	_, err := p.Import(context.Background(), "fake.database", "db-404")
 	if err == nil {
 		t.Fatal("importing an ID that does not exist must be an error")
 	}
@@ -749,7 +749,7 @@ func TestImportOfAnUnknownIDNamesTheID(t *testing.T) {
 	}
 }
 
-// TestImportOfTheWrongTypeIsRefused. `import test.network db-9` names a real
+// TestImportOfTheWrongTypeIsRefused. `import fake.network db-9` names a real
 // resource of the wrong type. Adopting it anyway writes state claiming a
 // database is a network, and the next plan proposes replacing real
 // infrastructure to fix a disagreement the tool invented.
@@ -757,11 +757,11 @@ func TestImportOfTheWrongTypeIsRefused(t *testing.T) {
 	p, path := newTestProvider(t)
 	writeCloud(t, path, preexisting())
 
-	_, err := p.Import(context.Background(), "test.network", "db-9")
+	_, err := p.Import(context.Background(), "fake.network", "db-9")
 	if err == nil {
 		t.Fatal("importing a resource as the wrong type must be an error")
 	}
-	for _, want := range []string{"db-9", "test.network", "test.database"} {
+	for _, want := range []string{"db-9", "fake.network", "fake.database"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("the error does not name %q — it must say what was asked for and what is "+
 				"actually there: %v", want, err)

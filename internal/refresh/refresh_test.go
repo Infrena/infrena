@@ -25,7 +25,7 @@ func newTestRegistry(t *testing.T, cloudPath string) (*registry.Registry, *testp
 	t.Helper()
 	reg := registry.New()
 	prov := testprovider.New(cloudPath)
-	if err := reg.Register("test", prov); err != nil {
+	if err := reg.Register("fake", prov); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	return reg, prov
@@ -35,7 +35,7 @@ func createNetwork(t *testing.T, prov *testprovider.Provider, name string) *reso
 	t.Helper()
 	st, err := prov.Create(context.Background(), &resource.DesiredResource{
 		Address: address.Address{Name: name},
-		Type:    "test.network",
+		Type:    "fake.network",
 		Attrs: map[string]value.Value{
 			"cidr": value.String("10.0.0.0/16", value.SourceExplicit),
 		},
@@ -268,7 +268,7 @@ func TestRefreshUnregisteredTypeIsADiagnostic(t *testing.T) {
 
 	st := state.New("myapp", "dev")
 	st.Set(&resource.ResourceState{
-		Provider:   "test",
+		Provider:   "fake",
 		Address:    address.Address{Name: "ghost"},
 		Type:       "ghost.thing",
 		ProviderID: "ghost-1",
@@ -402,7 +402,7 @@ func TestRefreshBoundsConcurrentReads(t *testing.T) {
 	const resourceType = "delayed.thing"
 	prov := &delayedProvider{resourceType: resourceType, delay: 50 * time.Millisecond}
 	reg := registry.New()
-	if err := reg.Register("test", prov); err != nil {
+	if err := reg.Register("fake", prov); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 
@@ -410,7 +410,7 @@ func TestRefreshBoundsConcurrentReads(t *testing.T) {
 	for i := range 8 {
 		name := fmt.Sprintf("r%d", i)
 		st.Set(&resource.ResourceState{
-			Provider:   "test",
+			Provider:   "fake",
 			Address:    address.Address{Name: name},
 			Type:       resourceType,
 			ProviderID: name,
@@ -453,7 +453,7 @@ func TestRefreshBoundsReadsPerProviderIndependentlyOfGlobalParallelism(t *testin
 	const resourceType = "delayed.thing"
 	prov := &delayedProvider{resourceType: resourceType, delay: 50 * time.Millisecond}
 	reg := registry.New()
-	if err := reg.Register("test", prov); err != nil {
+	if err := reg.Register("fake", prov); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 
@@ -461,7 +461,7 @@ func TestRefreshBoundsReadsPerProviderIndependentlyOfGlobalParallelism(t *testin
 	for i := range 8 {
 		name := fmt.Sprintf("r%d", i)
 		st.Set(&resource.ResourceState{
-			Provider:   "test",
+			Provider:   "fake",
 			Address:    address.Address{Name: name},
 			Type:       resourceType,
 			ProviderID: name,
@@ -498,13 +498,13 @@ func TestRefreshDiagnosticsAreSortedByAddressNotCompletionOrder(t *testing.T) {
 		fail: map[string]bool{"zzz": true, "aaa": true},
 	}
 	reg := registry.New()
-	if err := reg.Register("test", prov); err != nil {
+	if err := reg.Register("fake", prov); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 
 	st := state.New("myapp", "dev")
 	for _, name := range []string{"zzz", "aaa"} {
-		st.Set(&resource.ResourceState{Address: address.Address{Name: name}, Type: resourceType, Provider: "test", ProviderID: name})
+		st.Set(&resource.ResourceState{Address: address.Address{Name: name}, Type: resourceType, Provider: "fake", ProviderID: name})
 	}
 
 	// zzz has no delay and fails almost immediately; aaa is deliberately
@@ -573,14 +573,14 @@ func TestRefreshDoesNotExposeLiveStateToProviderRead(t *testing.T) {
 	const resourceType = "mutating.thing"
 	prov := &mutatingReadProvider{resourceType: resourceType}
 	reg := registry.New()
-	if err := reg.Register("test", prov); err != nil {
+	if err := reg.Register("fake", prov); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 
 	addr := address.Address{Name: "net"}
 	st := state.New("myapp", "dev")
 	st.Set(&resource.ResourceState{
-		Provider:   "test",
+		Provider:   "fake",
 		Address:    addr,
 		Type:       resourceType,
 		ProviderID: "orig-id",
@@ -662,14 +662,14 @@ func TestRefreshSkipsProviderReadWhenContextAlreadyCancelled(t *testing.T) {
 	const resourceType = "counting.thing"
 	prov := &countingReadProvider{resourceType: resourceType}
 	reg := registry.New()
-	if err := reg.Register("test", prov); err != nil {
+	if err := reg.Register("fake", prov); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 
 	st := state.New("myapp", "dev")
 	for i := range 4 {
 		name := fmt.Sprintf("r%d", i)
-		st.Set(&resource.ResourceState{Address: address.Address{Name: name}, Type: resourceType, Provider: "test", ProviderID: name})
+		st.Set(&resource.ResourceState{Address: address.Address{Name: name}, Type: resourceType, Provider: "fake", ProviderID: name})
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())

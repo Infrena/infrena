@@ -297,7 +297,7 @@ project: myapp
 
 resources:
   module.prod.database:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
 `)
 	got, ds := Decode(files)
@@ -323,7 +323,7 @@ resources:
 func TestResourceNameMustBeAnIdentifier(t *testing.T) {
 	for _, name := range []string{"9lives", "my name", "web!", ""} {
 		t.Run("rejected/"+name, func(t *testing.T) {
-			files := writeConfig(t, "project: myapp\n\nresources:\n  "+strconv.Quote(name)+":\n    type: test.network\n")
+			files := writeConfig(t, "project: myapp\n\nresources:\n  "+strconv.Quote(name)+":\n    type: fake.network\n")
 			_, ds := Decode(files)
 			requireErrorAbout(t, ds, "is not a valid identifier")
 		})
@@ -331,7 +331,7 @@ func TestResourceNameMustBeAnIdentifier(t *testing.T) {
 
 	for _, name := range []string{"web", "web_2", "my-app", "_internal", "A"} {
 		t.Run("accepted/"+name, func(t *testing.T) {
-			files := writeConfig(t, "project: myapp\n\nresources:\n  "+name+":\n    type: test.network\n")
+			files := writeConfig(t, "project: myapp\n\nresources:\n  "+name+":\n    type: fake.network\n")
 			got, ds := Decode(files)
 			requireNoErrors(t, ds)
 			if len(got.Resources) != 1 || got.Resources[0].Name != name {

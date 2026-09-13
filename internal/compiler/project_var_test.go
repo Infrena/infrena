@@ -22,7 +22,7 @@ environments:
   dev: {}
 resources:
   network:
-    type: test.network
+    type: fake.network
     cidr: ${project}-${environment}
 `)
 	cfg, ds := Compile(files, testRegistry(t), Options{Environment: "dev"})
@@ -57,7 +57,7 @@ environments:
     project: NotThis
 resources:
   network:
-    type: test.network
+    type: fake.network
     cidr: ${project}
 `)
 	cfg, ds := Compile(files, testRegistry(t), Options{Environment: "dev"})
@@ -84,7 +84,7 @@ environments:
   dev: {}
 resources:
   network:
-    type: test.network
+    type: fake.network
     cidr: ${project}
 `)
 	cfg, ds := Compile(files, testRegistry(t), Options{Environment: "dev"})
@@ -113,7 +113,7 @@ func TestProjectCrossesAModuleBoundary(t *testing.T) {
 		"modules/namer/module.yml": `
 resources:
   net:
-    type: test.network
+    type: fake.network
     cidr: ${project}-inner
 `,
 		"infra.yml": `
@@ -156,7 +156,7 @@ environments:
   dev: {}
 resources:
   network:
-    type: test.network
+    type: fake.network
     cidr: ${project}
 `)
 	cfg, ds := Compile(files, testRegistry(t), Options{

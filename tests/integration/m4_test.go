@@ -17,7 +17,7 @@ func TestValidatePlanAndApplyResolveTheSameVariableLayers(t *testing.T) {
 project: myapp
 resources:
   net:
-    type: test.network
+    type: fake.network
     cidr: ${cidr}
 `)
 		writeIn(t, dir, "overrides.yml", "cidr: 10.7.0.0/16\n")
@@ -68,7 +68,7 @@ func TestValidateWithNoArgumentChecksEveryDeclaredEnvironment(t *testing.T) {
 project: myapp
 resources:
   net:
-    type: test.network
+    type: fake.network
     cidr: ${cidr}
 `)
 	// Five environments set cidr; the sixth does not, so validate must fail
@@ -201,19 +201,19 @@ func TestPrecedenceChainEveryRungWins(t *testing.T) {
 project: myapp
 resources:
   a:
-    type: test.network
+    type: fake.network
     cidr: ${a}
   b:
-    type: test.network
+    type: fake.network
     cidr: ${b}
   c:
-    type: test.network
+    type: fake.network
     cidr: ${c}
   d:
-    type: test.network
+    type: fake.network
     cidr: ${d}
   e:
-    type: test.network
+    type: fake.network
     cidr: ${e}
 `)
 	// rung 2: base configuration
@@ -246,7 +246,7 @@ resources:
 		{"d", `"file"`, "from overrides.yml"},
 		{"e", `"cli"`, "from --var"},
 	} {
-		line := attrLine(t, r.Stdout, "test.network."+tc.resource, "cidr")
+		line := attrLine(t, r.Stdout, "fake.network."+tc.resource, "cidr")
 		if !strings.HasPrefix(line, "cidr: "+tc.want) {
 			t.Errorf("resource %s: %q, want the value %s", tc.resource, line, tc.want)
 		}
@@ -270,7 +270,7 @@ resources:
 	}
 
 	// The user's fixed target shape, asserted literally once.
-	if line := attrLine(t, r.Stdout, "test.network.e", "cidr"); line != `cidr: "cli" [variable, from --var]` {
+	if line := attrLine(t, r.Stdout, "fake.network.e", "cidr"); line != `cidr: "cli" [variable, from --var]` {
 		t.Errorf("got %q, want %q", line, `cidr: "cli" [variable, from --var]`)
 	}
 }
@@ -282,13 +282,13 @@ func TestVarFileStackAppliesInFlagOrder(t *testing.T) {
 project: myapp
 resources:
   a:
-    type: test.network
+    type: fake.network
     cidr: ${a}
   b:
-    type: test.network
+    type: fake.network
     cidr: ${b}
   c:
-    type: test.network
+    type: fake.network
     cidr: ${c}
 `)
 	writeIn(t, dir, "one.yml", "a: one\nb: one\nc: one\n")
@@ -305,7 +305,7 @@ resources:
 	for _, tc := range []struct{ resource, want string }{
 		{"a", `"one"`}, {"b", `"two"`}, {"c", `"three"`},
 	} {
-		line := attrLine(t, r.Stdout, "test.network."+tc.resource, "cidr")
+		line := attrLine(t, r.Stdout, "fake.network."+tc.resource, "cidr")
 		if !strings.HasPrefix(line, "cidr: "+tc.want) {
 			t.Errorf("resource %s: %q, want %s", tc.resource, line, tc.want)
 		}
@@ -338,10 +338,10 @@ variables:
     max: 100
 resources:
   net:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
   db:
-    type: test.database
+    type: fake.database
     engine: postgres
     network: ${net.id}
     size: ${size}
@@ -385,7 +385,7 @@ func TestATypedVariableKeepsItsTypeThroughTheChain(t *testing.T) {
 		t.Fatalf("plan exit = %d, want 2\n%s", r.ExitCode, r.combined())
 	}
 	// Unquoted: an integer. `size: "42"` would mean the string survived.
-	if line := attrLine(t, r.Stdout, "test.database.db", "size"); line != `size: 42 [variable, from --var]` {
+	if line := attrLine(t, r.Stdout, "fake.database.db", "size"); line != `size: 42 [variable, from --var]` {
 		t.Errorf("got %q, want %q", line, `size: 42 [variable, from --var]`)
 	}
 
@@ -393,7 +393,7 @@ func TestATypedVariableKeepsItsTypeThroughTheChain(t *testing.T) {
 	// an annotation — the exact source word is Task 6's to fix if it differs,
 	// but a declared default is never SourceExplicit and so is never bare.
 	d := run(t, dir, "plan", "dev")
-	line := attrLine(t, d.Stdout, "test.database.db", "size")
+	line := attrLine(t, d.Stdout, "fake.database.db", "size")
 	if !strings.HasPrefix(line, "size: 10 [") {
 		t.Errorf("declared default rendered as %q, want `size: 10 [...]`", line)
 	}
@@ -408,10 +408,10 @@ func TestASensitiveAttributeIsRedactedWhicheverLayerSuppliedIt(t *testing.T) {
 project: myapp
 resources:
   net:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
   db:
-    type: test.database
+    type: fake.database
     engine: postgres
     network: ${net.id}
     password: ${dbpass}
@@ -448,7 +448,7 @@ resources:
 			if strings.Contains(r.combined(), secret) {
 				t.Errorf("the secret reached the command's output:\n%s", r.combined())
 			}
-			line := attrLine(t, r.Stdout, "test.database.db", "password")
+			line := attrLine(t, r.Stdout, "fake.database.db", "password")
 			if !strings.HasPrefix(line, "password: <sensitive>") {
 				t.Errorf("password rendered as %q, want a redacted value", line)
 			}
@@ -480,7 +480,7 @@ func TestApplySuccessStillShowsAVarFileWarning(t *testing.T) {
 project: myapp
 resources:
   net:
-    type: test.network
+    type: fake.network
     cidr: ${cidr}
 `)
 	// "resources" here names a VARIABLE inside the flat var-file mapping, not

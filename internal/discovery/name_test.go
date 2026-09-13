@@ -10,7 +10,7 @@ import (
 )
 
 func discovered(id string, attrs map[string]value.Value) provider.DiscoveredResource {
-	return provider.DiscoveredResource{Type: "test.database", ProviderID: id, Attributes: attrs}
+	return provider.DiscoveredResource{Type: "fake.database", ProviderID: id, Attributes: attrs}
 }
 
 func str(s string) value.Value { return value.String(s, value.SourceProvider) }

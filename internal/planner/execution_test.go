@@ -54,8 +54,8 @@ func indexOf(t *testing.T, order []string, id string) int {
 
 func TestCreatesRunAfterWhatTheyDependOn(t *testing.T) {
 	p := planWith(
-		Operation{Address: addr("network"), Type: "test.network", Kind: OpCreate},
-		Operation{Address: addr("database"), Type: "test.database", Kind: OpCreate},
+		Operation{Address: addr("network"), Type: "fake.network", Kind: OpCreate},
+		Operation{Address: addr("database"), Type: "fake.database", Kind: OpCreate},
 	)
 	// network has one dependent: database.
 	g, err := BuildExecution(p, depsFrom(map[string][]string{"network": {"database"}}))
@@ -82,8 +82,8 @@ func TestDestroysRunInReverseDependencyOrder(t *testing.T) {
 	// assertion passed even with the destroy-side edge logic deleted
 	// outright (Task 18 fix round 1 found this).
 	p := planWith(
-		Operation{Address: addr("network"), Type: "test.network", Kind: OpDestroy},
-		Operation{Address: addr("webapp"), Type: "test.application", Kind: OpDestroy},
+		Operation{Address: addr("network"), Type: "fake.network", Kind: OpDestroy},
+		Operation{Address: addr("webapp"), Type: "fake.application", Kind: OpDestroy},
 	)
 	g, err := BuildExecution(p, depsFrom(map[string][]string{"network": {"webapp"}}))
 	if err != nil {
@@ -99,7 +99,7 @@ func TestDestroysRunInReverseDependencyOrder(t *testing.T) {
 
 func TestReplaceBecomesTwoNodesDestroyThenCreate(t *testing.T) {
 	p := planWith(
-		Operation{Address: addr("database"), Type: "test.database", Kind: OpReplace},
+		Operation{Address: addr("database"), Type: "fake.database", Kind: OpReplace},
 	)
 	g, err := BuildExecution(p, depsFrom(nil))
 	if err != nil {
@@ -134,8 +134,8 @@ func TestReplaceOrdersDependentsAroundBothPhases(t *testing.T) {
 	// test was live and half was not, which is why it survived a sweep that
 	// fixed the identical defect in TestDestroysRunInReverseDependencyOrder.
 	p := planWith(
-		Operation{Address: addr("network"), Type: "test.network", Kind: OpReplace},
-		Operation{Address: addr("webapp"), Type: "test.application", Kind: OpReplace},
+		Operation{Address: addr("network"), Type: "fake.network", Kind: OpReplace},
+		Operation{Address: addr("webapp"), Type: "fake.application", Kind: OpReplace},
 	)
 	g, err := BuildExecution(p, depsFrom(map[string][]string{"network": {"webapp"}}))
 	if err != nil {
@@ -153,8 +153,8 @@ func TestReplaceOrdersDependentsAroundBothPhases(t *testing.T) {
 
 func TestNoOpsAreNotScheduled(t *testing.T) {
 	p := planWith(
-		Operation{Address: addr("network"), Type: "test.network", Kind: OpNoOp},
-		Operation{Address: addr("database"), Type: "test.database", Kind: OpCreate},
+		Operation{Address: addr("network"), Type: "fake.network", Kind: OpNoOp},
+		Operation{Address: addr("database"), Type: "fake.database", Kind: OpCreate},
 	)
 	g, err := BuildExecution(p, depsFrom(nil))
 	if err != nil {
@@ -170,7 +170,7 @@ func TestForgetIsScheduledWithoutAProviderCall(t *testing.T) {
 	// Forget still removes the resource from state, so it is ordered like a
 	// destroy even though no provider is called.
 	p := planWith(
-		Operation{Address: addr("database"), Type: "test.database", Kind: OpForget},
+		Operation{Address: addr("database"), Type: "fake.database", Kind: OpForget},
 	)
 	g, err := BuildExecution(p, depsFrom(nil))
 	if err != nil {
@@ -183,10 +183,10 @@ func TestForgetIsScheduledWithoutAProviderCall(t *testing.T) {
 
 func TestOrderingIsDeterministic(t *testing.T) {
 	p := planWith(
-		Operation{Address: addr("c"), Type: "test.network", Kind: OpCreate},
-		Operation{Address: addr("a"), Type: "test.network", Kind: OpCreate},
-		Operation{Address: addr("b"), Type: "test.network", Kind: OpCreate},
-		Operation{Address: addr("d"), Type: "test.network", Kind: OpCreate},
+		Operation{Address: addr("c"), Type: "fake.network", Kind: OpCreate},
+		Operation{Address: addr("a"), Type: "fake.network", Kind: OpCreate},
+		Operation{Address: addr("b"), Type: "fake.network", Kind: OpCreate},
+		Operation{Address: addr("d"), Type: "fake.network", Kind: OpCreate},
 	)
 	deps := depsFrom(nil)
 
@@ -220,8 +220,8 @@ func TestOrderingIsDeterministic(t *testing.T) {
 // fixed.
 func TestForgetSharingADestroyEdgeDoesNotPanic(t *testing.T) {
 	p := planWith(
-		Operation{Address: addr("forgotten"), Type: "test.network", Kind: OpForget},
-		Operation{Address: addr("dependent"), Type: "test.database", Kind: OpDestroy},
+		Operation{Address: addr("forgotten"), Type: "fake.network", Kind: OpForget},
+		Operation{Address: addr("dependent"), Type: "fake.database", Kind: OpDestroy},
 	)
 	// dependent depends on forgotten, so BuildExecution draws a
 	// destroy-side edge from dependent's destroy to forgotten's
@@ -242,8 +242,8 @@ func TestForgetSharingADestroyEdgeDoesNotPanic(t *testing.T) {
 
 func TestCycleAmongOperationsIsAnError(t *testing.T) {
 	p := planWith(
-		Operation{Address: addr("a"), Type: "test.network", Kind: OpCreate},
-		Operation{Address: addr("b"), Type: "test.network", Kind: OpCreate},
+		Operation{Address: addr("a"), Type: "fake.network", Kind: OpCreate},
+		Operation{Address: addr("b"), Type: "fake.network", Kind: OpCreate},
 	)
 	// a depends on b and b depends on a.
 	g, err := BuildExecution(p, depsFrom(map[string][]string{"a": {"b"}, "b": {"a"}}))
@@ -267,8 +267,8 @@ func TestCycleAmongOperationsIsAnError(t *testing.T) {
 // legitimately-applied, unrelated entry.
 func TestBuildExecutionRejectsADuplicateAddress(t *testing.T) {
 	p := planWith(
-		Operation{Address: addr("dup"), Type: "test.network", Kind: OpCreate},
-		Operation{Address: addr("dup"), Type: "test.network", Kind: OpDestroy},
+		Operation{Address: addr("dup"), Type: "fake.network", Kind: OpCreate},
+		Operation{Address: addr("dup"), Type: "fake.network", Kind: OpDestroy},
 	)
 	noDeps := func(address.Address) []address.Address { return nil }
 

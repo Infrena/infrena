@@ -57,7 +57,7 @@ func (s ResourceScope) Variable(string) (value.Value, bool) { return value.Value
 // An attribute that is present but NOT known reports unavailable too, which
 // is the difference that matters at plan time. The planner's snapshot holds
 // each operation's After map, and After deliberately carries a computed
-// attribute the provider has yet to assign (test.network's "id" on a create)
+// attribute the provider has yet to assign (fake.network's "id" on a create)
 // as an unknown, purely so the plan can print "(known after apply)". Handing
 // that unknown back as a resolved answer would substitute it for the
 // referring expression's own unknown and, with it, that expression — leaving

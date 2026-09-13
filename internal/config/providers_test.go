@@ -45,7 +45,7 @@ func TestASingleProviderNeedsOnlyItsPlugin(t *testing.T) {
 	decl, out := providersIn(t, `
 project: p
 providers:
-  - plugin: test
+  - plugin: fake
     iam-role: some-role
 `)
 	if out != "" {
@@ -55,7 +55,7 @@ providers:
 		t.Fatalf("decoded %d providers, want 1", len(decl.Providers))
 	}
 	p := decl.Providers[0]
-	if p.Plugin != "test" {
+	if p.Plugin != "fake" {
 		t.Errorf("Plugin = %q", p.Plugin)
 	}
 	// Its configuration travels, with origins, because a diagnostic about a bad
@@ -71,11 +71,11 @@ providers:
 // which is also what makes a v1 state file's existing provider name correct
 // without a migration.
 func TestNameDefaultsToThePluginName(t *testing.T) {
-	decl, out := providersIn(t, "project: p\nproviders:\n  - plugin: test\n")
+	decl, out := providersIn(t, "project: p\nproviders:\n  - plugin: fake\n")
 	if out != "" {
 		t.Fatalf("unexpected diagnostics:\n%s", out)
 	}
-	if decl.Providers[0].Name != "test" {
+	if decl.Providers[0].Name != "fake" {
 		t.Errorf("Name = %q, want the plugin name", decl.Providers[0].Name)
 	}
 }
@@ -83,8 +83,8 @@ func TestNameDefaultsToThePluginName(t *testing.T) {
 // TestTwoInstancesWithTheSameNameIsAnError, in BOTH spellings §12.1 names.
 func TestTwoInstancesWithTheSameNameIsAnError(t *testing.T) {
 	for _, tc := range []struct{ label, body string }{
-		{"two unnamed entries of one plugin", "project: p\nproviders:\n  - plugin: test\n  - plugin: test\n"},
-		{"two entries named the same", "project: p\nproviders:\n  - plugin: test\n    name: a\n  - plugin: test\n    name: a\n"},
+		{"two unnamed entries of one plugin", "project: p\nproviders:\n  - plugin: fake\n  - plugin: fake\n"},
+		{"two entries named the same", "project: p\nproviders:\n  - plugin: fake\n    name: a\n  - plugin: fake\n    name: a\n"},
 	} {
 		t.Run(tc.label, func(t *testing.T) {
 			_, out := providersIn(t, tc.body)
@@ -114,9 +114,9 @@ func TestTheFirstEntryIsTheDefault(t *testing.T) {
 	decl, out := providersIn(t, `
 project: p
 providers:
-  - plugin: test
+  - plugin: fake
     name: first
-  - plugin: test
+  - plugin: fake
     name: second
 `)
 	if out != "" {
@@ -137,9 +137,9 @@ func TestDefaultTrueOverridesOrder(t *testing.T) {
 	decl, out := providersIn(t, `
 project: p
 providers:
-  - plugin: test
+  - plugin: fake
     name: first
-  - plugin: test
+  - plugin: fake
     name: second
     default: true
 `)
@@ -160,10 +160,10 @@ func TestTwoEntriesMarkedDefaultIsAnError(t *testing.T) {
 	_, out := providersIn(t, `
 project: p
 providers:
-  - plugin: test
+  - plugin: fake
     name: a
     default: true
-  - plugin: test
+  - plugin: fake
     name: b
     default: true
 `)
@@ -182,7 +182,7 @@ func TestConfigAndDefaultsAreSeparate(t *testing.T) {
 	decl, out := providersIn(t, `
 project: p
 providers:
-  - plugin: test
+  - plugin: fake
     iam-role: some-role
     defaults:
       tags:
@@ -253,17 +253,17 @@ func TestAResourceRecordsItsProviderInstance(t *testing.T) {
 	decl, out := providersIn(t, `
 project: p
 providers:
-  - plugin: test
+  - plugin: fake
     name: main
-  - plugin: test
+  - plugin: fake
     name: acct2
 resources:
   a:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
     provider: acct2
   b:
-    type: test.network
+    type: fake.network
     cidr: 10.1.0.0/16
 `)
 	if out != "" {
@@ -288,16 +288,16 @@ resources:
 
 // TestProviderIsNotAResourceAttribute keeps the namespace honest: everything the
 // resource switch does not recognise becomes an ATTRIBUTE, so a `provider` that
-// fell through would reach stage 7 as "test.network has no attribute provider" on
+// fell through would reach stage 7 as "fake.network has no attribute provider" on
 // every resource that names one.
 func TestProviderIsNotAResourceAttribute(t *testing.T) {
 	decl, _ := providersIn(t, `
 project: p
 providers:
-  - plugin: test
+  - plugin: fake
 resources:
   a:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
     provider: test
 `)
@@ -317,7 +317,7 @@ func TestProviderSurvivesInAModuleFile(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "module.yml"), []byte(`
 resources:
   inner:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
     provider: acct2
 `), 0o644); err != nil {
@@ -342,10 +342,10 @@ func TestANonScalarProviderIsRefused(t *testing.T) {
 	_, out := providersIn(t, `
 project: p
 providers:
-  - plugin: test
+  - plugin: fake
 resources:
   a:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
     provider: [test, other]
 `)

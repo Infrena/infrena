@@ -18,10 +18,10 @@ environments:
   production: {}
 resources:
   net:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
   db:
-    type: test.database
+    type: fake.database
     engine: postgres
     network: ${net.id}
     tags:
@@ -80,10 +80,10 @@ environments:
   dev: {}
 resources:
   net:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
   db:
-    type: test.database
+    type: fake.database
     engine: postgres
     network: ${net.id}
     tags: "${merge(base_tags, {team: payments, project: billing})}"
@@ -129,15 +129,15 @@ environments:
   dev: {}
 resources:
   net:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
   primary:
-    type: test.database
+    type: fake.database
     engine: postgres
     network: ${net.id}
     password: `+secret+`
   replica:
-    type: test.database
+    type: fake.database
     engine: postgres
     network: ${net.id}
     tags:
@@ -181,10 +181,10 @@ environments:
   dev: {}
 resources:
   net:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
   db:
-    type: test.database
+    type: fake.database
     engine: postgres
     network: 10.0.0.0/16
     tags:
@@ -217,7 +217,7 @@ environments:
   dev: {}
 resources:
   net:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
     tags: ${merge(a, {b: c})}
 `)

@@ -10,7 +10,7 @@ import (
 func TestDesiredRejectsUnknownAttributes(t *testing.T) {
 	r := ResolvedResource{
 		Address: address.Address{Name: "db"},
-		Type:    "test.database",
+		Type:    "fake.database",
 		Attrs: map[string]value.Value{
 			"engine": value.String("postgres", value.SourceExplicit),
 			"url":    value.Unknown(value.KindString, value.SourceComputed),
@@ -24,7 +24,7 @@ func TestDesiredRejectsUnknownAttributes(t *testing.T) {
 func TestDesiredSucceedsWhenFullyKnown(t *testing.T) {
 	r := ResolvedResource{
 		Address:   address.Address{Name: "db"},
-		Type:      "test.database",
+		Type:      "fake.database",
 		Attrs:     map[string]value.Value{"engine": value.String("postgres", value.SourceExplicit)},
 		Lifecycle: Lifecycle{PreventDestroy: true},
 	}
@@ -32,7 +32,7 @@ func TestDesiredSucceedsWhenFullyKnown(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Desired(): %v", err)
 	}
-	if d.Type != "test.database" || !d.Lifecycle.PreventDestroy {
+	if d.Type != "fake.database" || !d.Lifecycle.PreventDestroy {
 		t.Errorf("Desired() lost fields: %#v", d)
 	}
 	if got, _ := d.Attrs["engine"].AsString(); got != "postgres" {
@@ -43,7 +43,7 @@ func TestDesiredSucceedsWhenFullyKnown(t *testing.T) {
 func TestCloneIsDeep(t *testing.T) {
 	s := &ResourceState{
 		Address:      address.Address{Name: "db"},
-		Type:         "test.database",
+		Type:         "fake.database",
 		Attributes:   map[string]value.Value{"engine": value.String("postgres", value.SourceProvider)},
 		Dependencies: []address.Address{{Name: "net"}},
 	}

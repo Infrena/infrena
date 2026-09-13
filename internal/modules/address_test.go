@@ -297,13 +297,13 @@ modules:
   - ./db
 resources:
   net:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
   primary:
     type: module.db
     network: ${net.id}
 `,
-		"db/module.yml": "inputs:\n  network:\n    type: string\nresources:\n  store:\n    type: test.database\n    engine: postgres\n    network: ${network}\n",
+		"db/module.yml": "inputs:\n  network:\n    type: string\nresources:\n  store:\n    type: fake.database\n    engine: postgres\n    network: ${network}\n",
 	})
 
 	exp, ds := Expand(decl, variables.Scope{}, nil, Env{Name: "dev"}, dir, paths{})

@@ -25,7 +25,7 @@ const atVersionZero = `{
   "resources": {
     "db": {
       "address": {"name": "db"},
-      "type": "test.database",
+      "type": "fake.database",
       "provider": "test",
       "provider_id": "db-1",
       "attributes": {

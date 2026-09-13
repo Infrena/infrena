@@ -59,7 +59,7 @@ environments:
 resources:
 
   network:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
 `,
 		"variables.yml": `# Values shared by every environment. An environment may override any of

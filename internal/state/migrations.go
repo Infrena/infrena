@@ -24,7 +24,7 @@ const (
 // plugin called `fake`, so the types it serves moved from `test.*` to `fake.*`.
 //
 // Without this, every project that ever used the fake provider stops loading the moment
-// the builtin is deleted: state records `test.network`, no installed plugin serves that
+// the builtin is deleted: state records `fake.network`, no installed plugin serves that
 // type, and the resource cannot be read, planned or destroyed. The user's real
 // infrastructure is fine and their state file is the only thing standing between them and
 // it, which is the worst position to leave someone in.

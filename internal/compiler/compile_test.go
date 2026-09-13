@@ -48,10 +48,10 @@ func TestCompileRunsTheFullPipelineOnAValidProject(t *testing.T) {
 project: myapp
 resources:
   network:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
   database:
-    type: test.database
+    type: fake.database
     engine: postgres
     network: ${network.id}
 `)
@@ -85,10 +85,10 @@ func TestCompileStopsAfterDecodeErrors(t *testing.T) {
 project: myapp
 resources:
   database:
-    type: test.database
+    type: fake.database
     engine: postgres
   database:
-    type: test.database
+    type: fake.database
     engine: postgres
 `)
 	_, ds := Compile(files, testRegistry(t), Options{Environment: "dev"})
@@ -115,9 +115,9 @@ func TestCompileStopsAfterSchemaErrorsBeforeGraphValidation(t *testing.T) {
 project: myapp
 resources:
   bogus:
-    type: test.not_a_real_type
+    type: fake.not_a_real_type
   guarded:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
     lifecycle:
       prevent_destroy: true
@@ -147,9 +147,9 @@ func TestCompileAccumulatesDiagnosticsWithinAStage(t *testing.T) {
 project: myapp
 resources:
   a:
-    type: test.nope_one
+    type: fake.nope_one
   b:
-    type: test.nope_two
+    type: fake.nope_two
 `)
 	_, ds := Compile(files, testRegistry(t), Options{Environment: "dev"})
 	if len(ds) < 2 {
@@ -162,7 +162,7 @@ func TestCompileAlwaysDefinesEnvironmentRegionAndAccount(t *testing.T) {
 project: myapp
 resources:
   network:
-    type: test.network
+    type: fake.network
     cidr: ${environment}/${region}/${account}
 `)
 	cfg, ds := Compile(files, testRegistry(t), Options{
@@ -187,7 +187,7 @@ func TestCompileLeavesRegionUndefinedWhenNoneWasSupplied(t *testing.T) {
 project: myapp
 resources:
   network:
-    type: test.network
+    type: fake.network
     cidr: ${region}
 `)
 	_, ds := Compile(files, testRegistry(t), Options{Environment: "dev"})
@@ -206,7 +206,7 @@ func TestCompileLeavesAccountUndefinedWhenNoneWasSupplied(t *testing.T) {
 project: myapp
 resources:
   network:
-    type: test.network
+    type: fake.network
     cidr: ${account}
 `)
 	_, ds := Compile(files, testRegistry(t), Options{Environment: "dev"})
@@ -227,7 +227,7 @@ func TestCompileWillNotLetAVarFlagRedefineTheEnvironment(t *testing.T) {
 project: myapp
 resources:
   network:
-    type: test.network
+    type: fake.network
     cidr: ${environment}
 `)
 	_, ds := Compile(files, testRegistry(t), Options{
@@ -262,7 +262,7 @@ variables:
     type: string
 resources:
   network:
-    type: test.network
+    type: fake.network
     cidr: ${environment}
 `)
 	cfg, ds := Compile(files, testRegistry(t), Options{Environment: "production"})
@@ -288,7 +288,7 @@ func TestSeededEnvironmentDoesNotCreditDashDashVar(t *testing.T) {
 project: myapp
 resources:
   network:
-    type: test.network
+    type: fake.network
     cidr: ${environment}
 `)
 	cfg, ds := Compile(files, testRegistry(t), Options{Environment: "dev"})
@@ -321,10 +321,10 @@ environments:
     replicas: 20
 resources:
   network:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
   database:
-    type: test.database
+    type: fake.database
     engine: postgres
     network: ${network.id}
     size: ${replicas}
@@ -349,7 +349,7 @@ environments:
   production: {}
 resources:
   network:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
 `)
 	_, ds := Compile(files, testRegistry(t), Options{Environment: "prod"})
@@ -379,7 +379,7 @@ environments:
     extends: a
 resources:
   network:
-    type: test.network
+    type: fake.network
     cidr: ${domain}
 `)
 	_, ds := Compile(files, testRegistry(t), Options{Environment: "a"})
@@ -413,7 +413,7 @@ environments:
     extends: a
 resources:
   network:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
 `)
 	_, ds := Compile(files, testRegistry(t), Options{Environment: "a"})
@@ -441,7 +441,7 @@ variables:
     type: string
 resources:
   network:
-    type: test.network
+    type: fake.network
     cidr: ${domain}
 `)
 	_, ds := Compile(files, testRegistry(t), Options{Environment: "dev"})
@@ -466,7 +466,7 @@ variables:
     default: from-schema-default
 resources:
   network:
-    type: test.network
+    type: fake.network
     cidr: ${name}
 `, "name: from-variables-yml\n")
 
@@ -493,7 +493,7 @@ variables:
     default: from-schema-default
 resources:
   network:
-    type: test.network
+    type: fake.network
     cidr: ${name}
 `, "name: from-variables-yml\n")
 
@@ -511,7 +511,7 @@ func TestCompileReportsStage8Diagnostics(t *testing.T) {
 project: myapp
 resources:
   database:
-    type: test.database
+    type: fake.database
     engine: postgres
 `)
 	_, ds := Compile(files, testRegistry(t), Options{Environment: "dev"})

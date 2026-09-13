@@ -31,7 +31,7 @@ const preventDestroyProject = `
 project: pd
 resources:
   guarded:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
     lifecycle:
       prevent_destroy: true
@@ -41,7 +41,7 @@ const retainProject = `
 project: rt
 resources:
   keeper:
-    type: test.network
+    type: fake.network
     cidr: 10.1.0.0/16
     lifecycle:
       retain: true
@@ -51,7 +51,7 @@ const unguardedProject = `
 project: pd
 resources:
   guarded:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
 `
 
@@ -238,7 +238,7 @@ func TestAddingRetainToAnExistingResourceReachesState(t *testing.T) {
 project: rt
 resources:
   keeper:
-    type: test.network
+    type: fake.network
     cidr: 10.1.0.0/16
 `)
 	applied(t, dir)

@@ -15,6 +15,12 @@ import (
 // THE FIRST MIGRATION EVER TO RUN. The mechanism has existed since M1 and nothing has
 // used it, which is why §21.1 argued for exercising it here rather than first on AWS.
 //
+// DO NOT let a search-and-replace near this file. Both the fixture and the inline
+// document below deliberately hold `test.*` — they are the INPUT to the rename, so
+// rewriting them to `fake.*` makes every assertion here vacuously true. A sweep during the
+// cutover did exactly that; the guards in migrationFixture caught it, which is why they
+// are there rather than assumed.
+//
 // The fixture is testdata/state-v1.json — the FROZEN GOLDEN a version-1 infrata actually
 // wrote, kept when the golden moved to v2 rather than regenerated away. Real historical
 // bytes beat a hand-written approximation of them, and this one happens to carry a
@@ -107,7 +113,7 @@ func TestTheMigrationPreservesEverythingItIsNotRewriting(t *testing.T) {
 // migration gets wrong.
 //
 // Only the IMPLICIT instance is called `test` — it takes the plugin's name. A user who
-// wrote `providers: [{plugin: test, name: main}]` has state recording `main`, and after
+// wrote `providers: [{plugin: fake, name: main}]` has state recording `main`, and after
 // the rename their configuration says `plugin: fake` while the instance is still `main`.
 // Rewriting every provider name to `fake` would break exactly those projects.
 func TestAnInstanceTheUserNamedIsLeftAlone(t *testing.T) {

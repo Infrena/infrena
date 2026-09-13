@@ -6,14 +6,14 @@ import (
 )
 
 // definitions returns the resource definitions the fake provider supports.
-// Their shapes are chosen to exercise the engine: test.network has no
-// dependencies, test.database has a ForceNew attribute plus a computed one
+// Their shapes are chosen to exercise the engine: fake.network has no
+// dependencies, fake.database has a ForceNew attribute plus a computed one
 // plus a sensitive one plus a composite one and requires a network, and
-// test.application requires a database.
+// fake.application requires a database.
 func definitions() []*schema.ResourceDefinition {
 	return []*schema.ResourceDefinition{
 		{
-			Type:        "test.network",
+			Type:        "fake.network",
 			Description: "A fake network. Has no dependencies.",
 			Attributes: map[string]schema.Attribute{
 				"cidr": {Kind: value.KindString, Required: true, ForceNew: true, Description: "Address range"},
@@ -23,7 +23,7 @@ func definitions() []*schema.ResourceDefinition {
 			ImportID:     schema.ImportSpec{Description: "the network identifier, e.g. net-1"},
 		},
 		{
-			Type:        "test.database",
+			Type:        "fake.database",
 			Description: "A fake database. Requires a network.",
 			Attributes: map[string]schema.Attribute{
 				"engine": {Kind: value.KindString, Required: true, ForceNew: true, Description: "Database engine"},
@@ -42,14 +42,14 @@ func definitions() []*schema.ResourceDefinition {
 			},
 			Requirements: []schema.Requirement{{
 				Name:        "network",
-				Types:       []string{"test.network"},
+				Types:       []string{"fake.network"},
 				Description: "A database must sit inside a network",
 			}},
 			Capabilities: schema.Capabilities{Create: true, Read: true, Update: true, Delete: true, Import: true},
 			ImportID:     schema.ImportSpec{Description: "the database identifier, e.g. db-1"},
 		},
 		{
-			Type:        "test.application",
+			Type:        "fake.application",
 			Description: "A fake application. Requires a database.",
 			Attributes: map[string]schema.Attribute{
 				"image":        {Kind: value.KindString, Required: true, Description: "Container image"},
@@ -59,7 +59,7 @@ func definitions() []*schema.ResourceDefinition {
 			},
 			Requirements: []schema.Requirement{{
 				Name:        "database",
-				Types:       []string{"test.database"},
+				Types:       []string{"fake.database"},
 				Description: "An application must have a database",
 			}},
 			Capabilities: schema.Capabilities{Create: true, Read: true, Update: true, Delete: true, Import: true},

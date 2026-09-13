@@ -30,11 +30,11 @@ project: myapp
 
 resources:
   network:
-    type: test.network
+    type: fake.network
     cidr: 10.20.0.0/16
 
   database:
-    type: test.database
+    type: fake.database
     engine: postgres
     size: 50
 `)
@@ -55,7 +55,7 @@ resources:
 	}
 
 	db := got.Resources[0]
-	if db.Type != "test.database" {
+	if db.Type != "fake.database" {
 		t.Errorf("Type = %q", db.Type)
 	}
 	size, ok := db.Attributes["size"]
@@ -78,7 +78,7 @@ func TestDecodeRecordsOrigins(t *testing.T) {
 project: myapp
 resources:
   network:
-    type: test.network
+    type: fake.network
     cidr: 10.20.0.0/16
 `)
 	got, _ := Decode(files)
@@ -96,7 +96,7 @@ func TestDecodePreservesExpressionSource(t *testing.T) {
 project: myapp
 resources:
   application:
-    type: test.application
+    type: fake.application
     image: myapp:latest
     database_url: ${database.endpoint}
 `)
@@ -118,7 +118,7 @@ func TestDecodeLifecycleAndDependsOn(t *testing.T) {
 project: myapp
 resources:
   database:
-    type: test.database
+    type: fake.database
     engine: postgres
     depends_on: [network]
     lifecycle:
@@ -153,7 +153,7 @@ func TestDecodeLifecycleAcceptsCapitalisedBooleans(t *testing.T) {
 project: myapp
 resources:
   database:
-    type: test.database
+    type: fake.database
     engine: postgres
     lifecycle:
       prevent_destroy: `+written+`
@@ -173,7 +173,7 @@ func TestDecodeLifecycleRejectsQuotedBoolean(t *testing.T) {
 project: myapp
 resources:
   database:
-    type: test.database
+    type: fake.database
     engine: postgres
     lifecycle:
       prevent_destroy: "true"
@@ -193,7 +193,7 @@ func TestDecodeAttributeBooleansAreTagAware(t *testing.T) {
 project: myapp
 resources:
   network:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
     enabled: `+written+`
 `)
@@ -216,7 +216,7 @@ func TestDecodeRejectsScalarDependsOn(t *testing.T) {
 project: myapp
 resources:
   database:
-    type: test.database
+    type: fake.database
     engine: postgres
     depends_on: network
 `)
@@ -303,15 +303,15 @@ project: myapp
 
 resources:
   database:
-    type: test.database
+    type: fake.database
     engine: postgres
 
   network:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
 
   database:
-    type: test.database
+    type: fake.database
     engine: mysql
 `)
 	_, ds := Decode(files)
@@ -340,7 +340,7 @@ project: myapp
 
 resources:
   database:
-    type: test.database
+    type: fake.database
     engine: postgres
     size: 10
     engine: mysql
@@ -389,7 +389,7 @@ project:
 
 resources:
   net:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
 `,
 			wants: []string{"`project`", "must be"},
@@ -401,7 +401,7 @@ project: [myapp]
 
 resources:
   net:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
 `,
 			wants: []string{"`project`", "must be"},
@@ -413,7 +413,7 @@ project: myapp
 
 resources:
   net:
-    type: [test.network]
+    type: [fake.network]
     cidr: 10.0.0.0/16
 `,
 			wants: []string{"`type`", "must be"},
@@ -428,10 +428,10 @@ project: myapp
 
 resources:
   net:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
   db:
-    type: test.database
+    type: fake.database
     engine: postgres
     depends_on: [[net]]
 `,
@@ -444,7 +444,7 @@ project: myapp
 
 resources:
   db:
-    type: test.database
+    type: fake.database
     engine:
 `,
 			wants: []string{"engine", "no value"},
@@ -456,10 +456,10 @@ project: myapp
 
 resources:
   net:
-    type: test.network
+    type: fake.network
     cidr: &shared 10.0.0.0/16
   db:
-    type: test.database
+    type: fake.database
     engine: *shared
 `,
 			wants: []string{"engine", "alias"},
@@ -495,10 +495,10 @@ project: myapp
 
 resources:
   net:
-    type: test.network
+    type: fake.network
     cidr: &shared 10.0.0.0/16
   db:
-    type: test.database
+    type: fake.database
     engine: *shared
 `))
 	if !ds.HasErrors() {
@@ -556,16 +556,16 @@ func TestSkipAndOnlyAcceptAScalarOrAList(t *testing.T) {
 project: p
 resources:
   a:
-    type: test.network
+    type: fake.network
     only: production
   b:
-    type: test.network
+    type: fake.network
     only: [staging, production]
   c:
-    type: test.network
+    type: fake.network
     skip: dev
   d:
-    type: test.network
+    type: fake.network
     skip: [dev, staging]
 `)
 	decl, ds := Decode(files)
@@ -614,7 +614,7 @@ func TestSkipAndOnlyTogetherIsAnError(t *testing.T) {
 project: p
 resources:
   a:
-    type: test.network
+    type: fake.network
     skip: [dev]
     only: [production]
 `)
@@ -633,14 +633,14 @@ resources:
 // TestSkipIsNotAResourceAttribute keeps the namespace honest.
 //
 // Everything the resource switch does not recognise becomes an ATTRIBUTE, so a
-// `skip` that fell through would reach stage 7 as "test.network has no
+// `skip` that fell through would reach stage 7 as "fake.network has no
 // attribute skip" — on every resource using the feature.
 func TestSkipIsNotAResourceAttribute(t *testing.T) {
 	files := writeConfig(t, `
 project: p
 resources:
   a:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
     skip: [dev]
     only: []
@@ -672,7 +672,7 @@ inputs:
     default: []
 resources:
   replica:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
     only: ${replica_in}
 `

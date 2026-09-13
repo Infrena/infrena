@@ -40,10 +40,10 @@ environments:
     replicas: 20
 resources:
   network:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
   database:
-    type: test.database
+    type: fake.database
     engine: postgres
     network: ${network.id}
     size: ${replicas}
@@ -80,7 +80,7 @@ resources:
 }
 
 func TestPlanNamesTheEnvironmentItIsPlanning(t *testing.T) {
-	// test.network has no `name` attribute (providers/test/definitions.go), so
+	// fake.network has no `name` attribute (providers/test/definitions.go), so
 	// the synthetic ${environment} is exercised through `cidr` instead — the
 	// point under test is that the variable resolves, not which attribute
 	// carries it.
@@ -88,7 +88,7 @@ func TestPlanNamesTheEnvironmentItIsPlanning(t *testing.T) {
 project: myapp
 resources:
   network:
-    type: test.network
+    type: fake.network
     cidr: net-${environment}
 `)
 	res := run(t, dir, "plan", "production")

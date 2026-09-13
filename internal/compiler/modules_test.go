@@ -43,10 +43,10 @@ inputs:
     default: 10
 resources:
   net:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
   db:
-    type: test.database
+    type: fake.database
     engine: postgres
     size: ${size}
     network: ${net.id}
@@ -129,7 +129,7 @@ resources:
   top:
     type: module.a
   typo:
-    type: test.network
+    type: fake.network
     cidr: ${nosuchresource.id}
 `,
 	})
@@ -150,7 +150,7 @@ resources:
 // reference would silently resolve to the other's — a wrong plan, not an error.
 func TestTwoModulesEachDeclaringADbResolveSeparately(t *testing.T) {
 	files, dir := moduleFixture(t, map[string]string{
-		"m/module.yml": "resources:\n  db:\n    type: test.network\n    cidr: 10.0.0.0/16\n  user:\n    type: test.database\n    engine: postgres\n    network: ${db.id}\n",
+		"m/module.yml": "resources:\n  db:\n    type: fake.network\n    cidr: 10.0.0.0/16\n  user:\n    type: fake.database\n    engine: postgres\n    network: ${db.id}\n",
 		"infra.yml": `
 project: demo
 environments: {dev: {}}
@@ -186,7 +186,7 @@ resources:
 }
 
 // TestAReferenceToAnAttributeThatDoesNotExistIsRefused closes the defect this
-// check was ruled in for. Before it, ${store.endpoint} on a test.network
+// check was ruled in for. Before it, ${store.endpoint} on a fake.network
 // validated clean, produced a clean plan, and failed halfway through apply
 // after real infrastructure existed — with a message naming the symptom.
 func TestAReferenceToAnAttributeThatDoesNotExistIsRefused(t *testing.T) {
@@ -196,10 +196,10 @@ project: demo
 environments: {dev: {}}
 resources:
   store:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
   db:
-    type: test.database
+    type: fake.database
     engine: postgres
     password: ${store.endpoint}
 `,
@@ -210,7 +210,7 @@ resources:
 	if !ds.HasErrors() {
 		t.Fatal("a reference to an attribute that does not exist must be refused at compile time")
 	}
-	for _, want := range []string{`test.network has no attribute "endpoint"`, "cidr", "id"} {
+	for _, want := range []string{`fake.network has no attribute "endpoint"`, "cidr", "id"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("diagnostic does not mention %q — it must name the type and what it DOES offer:\n%s", want, got)
 		}
@@ -228,10 +228,10 @@ project: demo
 environments: {dev: {}}
 resources:
   store:
-    type: test.network
+    type: fake.network
     cidr: 10.0.0.0/16
   db:
-    type: test.database
+    type: fake.database
     engine: postgres
     network: ${store.id}
 `,
@@ -252,7 +252,7 @@ project: demo
 environments: {dev: {}}
 resources:
   db:
-    type: test.database
+    type: fake.database
     engine: postgres
     network: ${nosuch.id}
 `,
@@ -282,7 +282,7 @@ resources:
   prod:
     type: module.app_stack
   db:
-    type: test.database
+    type: fake.database
     engine: postgres
     network: ${prod.nosuch}
 `,

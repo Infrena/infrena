@@ -23,7 +23,7 @@ func cloudWith(t *testing.T, rs map[string]*testprovider.CloudResource) *registr
 		t.Fatal(err)
 	}
 	reg := registry.New()
-	if err := reg.Register("test", testprovider.New(path)); err != nil {
+	if err := reg.Register("fake", testprovider.New(path)); err != nil {
 		t.Fatal(err)
 	}
 	return reg
@@ -33,8 +33,8 @@ func cloudWith(t *testing.T, rs map[string]*testprovider.CloudResource) *registr
 // Discover directly.
 func TestWalkNamesEverythingItFinds(t *testing.T) {
 	reg := cloudWith(t, map[string]*testprovider.CloudResource{
-		"db-9":  {Type: "test.database", Attributes: map[string]any{"engine": "postgres", "name": "orders"}},
-		"net-1": {Type: "test.network", Attributes: map[string]any{"cidr": "10.0.0.0/16"}},
+		"db-9":  {Type: "fake.database", Attributes: map[string]any{"engine": "postgres", "name": "orders"}},
+		"net-1": {Type: "fake.network", Attributes: map[string]any{"cidr": "10.0.0.0/16"}},
 	})
 
 	got, problems := Walk(context.Background(), reg, nil)
@@ -64,7 +64,7 @@ func TestWalkNamesDeterministically(t *testing.T) {
 	rs := map[string]*testprovider.CloudResource{}
 	for _, id := range []string{"db-1", "db-2", "db-3", "db-4", "db-5", "db-6"} {
 		rs[id] = &testprovider.CloudResource{
-			Type:       "test.database",
+			Type:       "fake.database",
 			Attributes: map[string]any{"engine": "postgres", "name": "orders"},
 		}
 	}
