@@ -96,12 +96,22 @@ func (t *stderrTail) String() string {
 	return strings.Join(t.lines, "\n")
 }
 
-// exitMessage explains a connection that ended, quoting the plugin's own last
-// words.
+// exitMessage explains a connection that ended, quoting the plugin's own last words.
 //
-// Without the stderr tail, a plugin that died of a missing credential reports as
-// "EOF" — true, and useless. The plugin already said what was wrong; it said it on
-// the stream the host was told to treat as a log.
+// TWO SEPARATE THINGS happen here, and the comment used to describe only the absence of
+// both — it said a plugin dying "reports as EOF", which this function's own first line
+// has already made untrue. Corrected 2026-09-13 after infrata-provider-fake's review
+// found the stale wording; it had been copied into that repository's authoring guide.
+//
+// First, io.EOF is replaced. A closed pipe is what the READER saw, not what happened:
+// "EOF" is a Go sentinel, and showing it to a user asks them to know that a plugin
+// exiting closes its stdout. "the plugin stopped responding" is the same fact in a
+// sentence.
+//
+// Second, the stderr tail is appended. That sentence is still useless on its own — a
+// plugin that died of a missing credential has already SAID so, on the stream the host
+// was told to treat as a log — and quoting its last words is the difference between an
+// error a user can act on and one that only reports that something ended.
 func (c *Client) exitMessage(err error) string {
 	msg := "the plugin stopped responding"
 	if err != nil && err.Error() != "EOF" {
