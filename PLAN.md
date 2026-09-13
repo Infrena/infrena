@@ -2319,6 +2319,25 @@ the release.
 `pkg/semver` is public so a plugin can validate its own `infrata:` field with the same
 parser infrata will check it with, rather than a second implementation that drifts.
 
+**`pkg/pluginmanifest` is that parser for the whole file** (built 2026-09-13, requested by
+the port). `Parse` returns a `Manifest` and any warnings; `Validate` checks one built in
+Go; `SpeaksProtocol`, `Supports` and `AllowsInfrata` are §31.2's three compatibility
+rules, so the installer and a plugin's own test ask the same question of the same code.
+
+It is public for the reason `pkg/semver` is, plus one practical one: reading YAML needs a
+YAML parser, and a plugin repository whose rule is "standard library plus infrata" cannot
+add `gopkg.in/yaml.v3` itself — it accepts it transitively by importing this instead.
+
+That does not breach "internal/config is the only place in the engine permitted to touch
+`yaml.Node`": this package touches no `yaml.Node`, decoding into typed structs so no
+untyped document flows anywhere. Project configuration and a plugin manifest are different
+documents with different readers, and each has exactly one door.
+
+**The format version is read in its own lenient pass, before anything else.** A manifest
+from the future carries keys this build has never heard of, and none of them may stop it
+answering "which format is this?" — the same probe-then-decode shape `state.Decode` uses
+for its own version.
+
 ---
 
 ### Where the code lives

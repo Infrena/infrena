@@ -226,6 +226,11 @@ versioned, because its reader cannot be upgraded in step with its writer. It del
 carries no checksums (they postdate the build; `SHA256SUMS` is a release asset) and no
 asset names (a convention mirrors infrata's own releases).
 
+`pkg/pluginmanifest` parses and validates that file — public so a plugin validates its own
+manifest with the same code `plugins install` will, and because a plugin repo whose rule is
+"stdlib plus infrata" cannot add a YAML parser itself. It touches no `yaml.Node`, so
+internal/config remains the only place in the engine that does.
+
 **`plugins:` constrains provider plugin versions** (§31.1), keyed by plugin because two
 instances of one plugin share one process and therefore one version. The LOADER enforces
 it — four paths load plugins, and a constraint checked in three is one nobody can rely on
@@ -263,8 +268,8 @@ internal/           config, compiler, expressions, environments, modules, variab
                     state, planner, graph, executor, discovery, importer, generator,
                     lifecycle, secrets, cli
 pkg/                provider, schema, plan, resource, pluginproto, pluginsdk, plugintest,
-                    semver   (the stable-ish interfaces; plugin authors compile against
-                    these, so §61.1's rules govern changing them)
+                    semver, pluginmanifest   (the stable-ish interfaces; plugin authors
+                    compile against these, so §61.1's rules govern changing them)
 providers/          test/ (fake provider), aws/
 tests/integration/
 ```
