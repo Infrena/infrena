@@ -241,6 +241,10 @@ type planWire struct {
 	Diagnostics []diagnosticWire `json:"diagnostics,omitempty"`
 }
 
+// EVERY resource appears here, `OpNoop` included: the artifact describes the whole
+// plan, not only what changes. A consumer counting `operations` is not counting
+// changes — Plan.HasChanges() is. Noted after infrata-provider-fake's e2e suite read
+// it the other way.
 type operationWire struct {
 	Address string `json:"address"`
 	Type    string `json:"type"`

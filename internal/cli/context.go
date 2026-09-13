@@ -49,7 +49,7 @@ func buildRegistryWithLoader(opts *GlobalOptions) (*registry.Registry, *pluginho
 		Search:  pluginhost.DefaultSearch(opts.Dir, opts.PluginDirs),
 		Dir:     opts.Dir,
 		Verbose: verboseWriter(opts),
-		Builtin: builtinPlugins(opts.Dir),
+		Builtin: builtinsFor(opts.Dir),
 		// Read here rather than passed in, because the loader must have them before
 		// the first load and a load can happen from four different places. This does
 		// NOT name any plugin — which is the thing buildRegistry deliberately does not
@@ -60,6 +60,11 @@ func buildRegistryWithLoader(opts *GlobalOptions) (*registry.Registry, *pluginho
 	reg.SetLoader(loader)
 	return reg, loader
 }
+
+// builtinsFor is a seam so a test can supply MORE THAN ONE plugin, which is the shape
+// that broke discovery and which no test could otherwise reach: the real builtin set
+// has exactly one entry, and the bug only appears at two.
+var builtinsFor = builtinPlugins
 
 // builtinPlugins are the plugins served in process because no binary exists yet.
 //
@@ -370,9 +375,16 @@ func discoveryRegistry(opts *GlobalOptions) (*registry.Registry, providers.Table
 	table, instanceDS := registerStateInstances(reg, opts.Dir)
 	ds.Extend(instanceDS)
 	if len(table) == 0 {
-		// A project that configures no instances still has one per plugin: discovery
-		// asks each about the account its own defaults point at.
-		table = providers.Implicit(reg)
+		// ONE INSTANCE PER PLUGIN, which is EveryPlugin and deliberately not Implicit.
+		//
+		// This line used to call Implicit, whose job is to pick the single instance a
+		// resource that names none belongs to — so it returns NOTHING when more than
+		// one plugin is available, rather than guess an account for a resource. That
+		// is right for binding and wrong here: with the builtin plus any installed
+		// plugin, `discover` registered no instances at all and reported "Nothing
+		// found." at exit 0, a silent empty survey. Found by infrata-provider-fake's
+		// e2e suite.
+		table = providers.EveryPlugin(reg)
 		ds.Extend(providers.Register(table, reg))
 	}
 	return reg, table, ds, loader.Close

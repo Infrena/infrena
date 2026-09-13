@@ -232,6 +232,41 @@ func knownTypes(reg *registry.Registry) string {
 // named, and the fix (`providers:`, or `provider:` on the resource) is the user's
 // to choose. Zero candidates is a registry that dispatches nothing, which the
 // unknown-type diagnostic reports first and more clearly.
+// EveryPlugin is one implicit instance per registered plugin — the table DISCOVERY
+// needs, which is not the one Implicit returns.
+//
+// The two answer different questions, and conflating them is what broke `discover`:
+//
+//   - Implicit answers "which single instance does a resource that names none belong
+//     to?", and MUST refuse to guess when there is more than one candidate: a resource
+//     landing in an account nobody chose is the failure that matters there.
+//   - EveryPlugin answers "which accounts should I survey?". More than one plugin is
+//     not an ambiguity to refuse, it is simply more to ask — `discover` exists to
+//     report what exists, including in accounts no configuration mentions.
+//
+// No instance is marked Default, because a default only decides where a RESOURCE goes
+// and discovery binds none.
+func EveryPlugin(reg *registry.Registry) Table {
+	factories := reg.Factories()
+	if len(factories) == 0 {
+		// Nothing with a factory, but a caller may have supplied constructed
+		// providers directly — every test that builds a stub does.
+		out := make(Table)
+		for _, name := range reg.InstanceNames() {
+			out[name] = Instance{Name: name, Plugin: name}
+		}
+		return out
+	}
+	out := make(Table, len(factories))
+	for _, name := range factories {
+		out[name] = Instance{Name: name, Plugin: name}
+	}
+	return out
+}
+
+// Implicit is the ONE instance a project with no `providers:` block gets, for deciding
+// where a resource that names no provider belongs. See EveryPlugin for the other
+// question, which discovery asks and which this deliberately refuses to answer.
 func Implicit(reg *registry.Registry) Table {
 	name := ""
 	switch factories := reg.Factories(); {

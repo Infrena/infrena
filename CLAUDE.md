@@ -241,7 +241,10 @@ The CLI surface to implement (§37): `init`, `validate`, `plan <env>`, `apply <e
 
 `--output` means two different things, deliberately. For `plan` it writes the plan
 ARTIFACT: one JSON document, sensitive values in cleartext, because M6 reads it back to
-apply it and needs the real values. For `validate`, `apply`, `refresh` and `destroy` it
+apply it and needs the real values. **`operations` lists EVERY resource, including
+`kind: "noop"`** — it describes the whole plan, not just its changes, so a consumer
+counting entries is not counting changes. `Plan.HasChanges()` is what decides the exit
+code. For `validate`, `apply`, `refresh` and `destroy` it
 writes a REPORT: newline-delimited JSON — a `meta` line carrying a format version, then
 `event` or `observation` lines as work happens, `diagnostic` lines keeping §44's four
 parts separate, and a final `result` line, so a consumer tails the file and reads the
