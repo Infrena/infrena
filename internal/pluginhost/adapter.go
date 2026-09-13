@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/infrata/infrata/internal/registry"
 	"github.com/infrata/infrata/pkg/pluginproto"
 	"github.com/infrata/infrata/pkg/provider"
 	"github.com/infrata/infrata/pkg/resource"
@@ -80,6 +81,17 @@ func (p *Plugin) loadSchemas(ctx context.Context) error {
 					"A plugin serves %s.* and nothing else, so that a type name says where it came "+
 					"from and two plugins cannot claim the same one.",
 				p.Name(), d.Type, p.Name())
+		}
+		if reserved := reservedAttributeOf(d); reserved != "" {
+			// prevent_destroy and retain belong to infrata's lifecycle handling and
+			// are accepted in a provider instance's `defaults:` for every resource
+			// (§12.1), so an attribute of either name would make one key mean two
+			// things. Refused here as well as in the registry, so the message names
+			// the PLUGIN and arrives when its schemas load.
+			return fmt.Errorf(
+				"the %s plugin declares attribute %q on %s, which is reserved: every "+
+					"resource accepts it as a lifecycle option",
+				p.Name(), reserved, d.Type)
 		}
 		p.byType[d.Type] = d
 	}
@@ -333,6 +345,19 @@ func (r *remoteProvider) check(def *schema.ResourceDefinition, attrs map[string]
 		out[name] = v
 	}
 	return out, nil
+}
+
+// reservedAttributeOf returns the reserved name a definition collides with, or "".
+//
+// The list comes from internal/registry, so the two checks cannot come to disagree
+// about which names the engine owns.
+func reservedAttributeOf(d *schema.ResourceDefinition) string {
+	for _, name := range registry.ReservedAttributes {
+		if _, declared := d.Attributes[name]; declared {
+			return name
+		}
+	}
+	return ""
 }
 
 func declaredNames(def *schema.ResourceDefinition) []string {

@@ -38,7 +38,22 @@ func Main(p provider.Plugin) {
 			p.Name())
 		os.Exit(2)
 	}
-	if err := Serve(p, os.Stdin, os.Stdout); err != nil && !errors.Is(err, io.EOF) {
+	// STDOUT IS THE PROTOCOL, and this is the guard that makes that survivable.
+	//
+	// The real stdout is captured first and handed to Serve; the process-wide
+	// os.Stdout is then pointed at stderr, so a stray fmt.Println anywhere in the
+	// plugin — or in a library it uses, which the author may not even know about —
+	// lands in the log instead of corrupting the stream. That is the classic
+	// failure of stdio protocols, and its symptom is a parse error in an unrelated
+	// operation much later.
+	//
+	// A direct write to fd 1 still escapes this. Nothing in Go can stop that, which
+	// is why the host also treats an unparseable line as a fatal protocol error
+	// naming the plugin rather than hanging.
+	stream := os.Stdout
+	os.Stdout = os.Stderr
+
+	if err := Serve(p, os.Stdin, stream); err != nil && !errors.Is(err, io.EOF) {
 		fmt.Fprintf(os.Stderr, "%s: %v\n", p.Name(), err)
 		os.Exit(1)
 	}

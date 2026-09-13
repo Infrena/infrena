@@ -2,11 +2,13 @@ package pluginhost
 
 import (
 	"context"
+	"io"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/infrata/infrata/pkg/address"
+	"github.com/infrata/infrata/pkg/pluginproto"
 	"github.com/infrata/infrata/pkg/provider"
 	"github.com/infrata/infrata/pkg/resource"
 	"github.com/infrata/infrata/pkg/schema"
@@ -360,5 +362,133 @@ func TestAHostSideFailureIsNeverSafeToRetry(t *testing.T) {
 	_, prov := connect(t, &badPlugin{})
 	if got := prov.ClassifyError(errorsNew("the plugin stopped responding")); got != provider.NotSafeToRetry {
 		t.Errorf("ClassifyError = %v, want NotSafeToRetry for an error the plugin did not send", got)
+	}
+}
+
+// TestAPluginDeclaringAReservedAttributeIsRefusedOnLoad.
+//
+// prevent_destroy and retain belong to infrata's lifecycle handling, and a provider
+// instance's `defaults:` accepts them for every resource (§12.1) — so an attribute
+// of either name would make one key mean two things.
+//
+// The registry refuses this too, but the message there names a provider rather than
+// a plugin and arrives later. Refusing at load means a plugin author sees it the
+// first time they run against infrata at all.
+func TestAPluginDeclaringAReservedAttributeIsRefusedOnLoad(t *testing.T) {
+	for _, name := range []string{"prevent_destroy", "retain"} {
+		_, err := InProcess(context.Background(), &reservedPlugin{attr: name}, t.TempDir())
+		if err == nil {
+			t.Errorf("a plugin declaring %q must be refused", name)
+			continue
+		}
+		for _, want := range []string{name, "reserved", "bad"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("%s: the error does not mention %q: %v", name, want, err)
+			}
+		}
+	}
+}
+
+// reservedPlugin declares one attribute named after a lifecycle option.
+type reservedPlugin struct{ attr string }
+
+func (p *reservedPlugin) Name() string { return "bad" }
+func (p *reservedPlugin) Definitions() []*schema.ResourceDefinition {
+	return []*schema.ResourceDefinition{{
+		Type: "bad.thing",
+		Attributes: map[string]schema.Attribute{
+			"name": {Kind: value.KindString, Required: true},
+			p.attr: {Kind: value.KindBool},
+		},
+		Capabilities: schema.Capabilities{Create: true, Read: true, Delete: true},
+	}}
+}
+func (p *reservedPlugin) New(string, map[string]value.Value) (provider.Provider, error) {
+	return &badProvider{p: &badPlugin{}}, nil
+}
+
+// A test named TestTheSDKKeepsAStrayPrintOffTheProtocolStream lived here and was
+// DELETED, because it passed against the guard removed entirely.
+//
+// The guard is `os.Stdout = os.Stderr` in pluginsdk.Main, and it cannot be reached
+// from here: InProcess calls Serve directly, and Serve writes to the pipe it is
+// given, so a plugin's fmt.Println goes to the test's own stdout and nowhere near
+// the stream. The test was asserting that an unrelated write was unrelated.
+//
+// The guard also cannot move into Serve, which is the obvious "fix". Under
+// InProcess, Serve runs in the HOST's process — redirecting the process-wide
+// os.Stdout there would clobber the host's own output, which is where a plan gets
+// printed.
+//
+// So it is only observable in a real subprocess, where stdout IS the pipe, and it
+// belongs to the deferred subprocess suite (PLAN.md §31.1, "Testing"): build the
+// plugin binary, have it print on startup, and run a command against it. Recorded
+// here rather than silently dropped so the gap is a known one.
+//
+// What IS reachable from here is the HOST's half of the same failure, below.
+
+// TestGarbageOnTheStreamFailsLoudlyRatherThanHanging.
+//
+// Whatever corrupts the stream — a stray print that escaped the SDK's guard by
+// writing to fd 1 directly, a plugin that crashed mid-message — the host must not
+// sit waiting for a response that can never parse. A hang gives a user nothing to
+// act on, and this is the failure mode stdio protocols are known for.
+func TestGarbageOnTheStreamFailsLoudlyRatherThanHanging(t *testing.T) {
+	// A "plugin" that handshakes correctly and then writes nonsense.
+	hostReader, pluginWriter := ioPipe()
+	pluginReader, hostWriter := ioPipe()
+	go func() {
+		defer pluginWriter.Close()
+		handshake := `{"protocol":1,"name":"bad","version":"0.0.0"}` + "\n"
+		if _, err := pluginWriter.Write([]byte(handshake)); err != nil {
+			return
+		}
+		// Serve the schemas request so the connection completes, then corrupt it.
+		schemas := `{"id":1,"result":{"definitions":[{"Type":"bad.thing",` +
+			`"Attributes":{"name":{"Kind":1,"Required":true}},` +
+			`"Capabilities":{"Create":true,"Read":true,"Delete":true}}]}}` + "\n"
+		if _, err := pluginWriter.Write([]byte(schemas)); err != nil {
+			return
+		}
+		_, _ = pluginWriter.Write([]byte("this is not JSON at all\n"))
+	}()
+
+	// Drain the request side. io.Pipe writes BLOCK until read, and with no plugin
+	// serving there is nothing to read them — so the host's own write blocks
+	// forever. That is a hang in the TEST's fake rather than in the host, and the
+	// first version of this test hit it and looked exactly like the bug it is
+	// meant to catch.
+	go func() { _, _ = io.Copy(io.Discard, pluginReader) }()
+
+	c := newTestClient(hostWriter)
+	defer pluginReader.Close()
+	if err := c.start(hostReader, "bad"); err != nil {
+		t.Fatalf("handshake: %v", err)
+	}
+	p := &Plugin{client: c}
+	if err := p.loadSchemas(context.Background()); err != nil {
+		t.Fatalf("loadSchemas: %v", err)
+	}
+
+	// The stream is now corrupt. A call must return, and say why.
+	done := make(chan error, 1)
+	go func() {
+		var out pluginproto.SchemasResult
+		done <- c.call(context.Background(), pluginproto.MethodSchemas, nil, &out)
+	}()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("a call on a corrupted stream must fail")
+		}
+		if !strings.Contains(err.Error(), "bad") {
+			t.Errorf("the error does not name the plugin: %v", err)
+		}
+		if !strings.Contains(err.Error(), "not a protocol message") {
+			t.Errorf("the error does not say what went wrong: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("the call hung; a corrupted stream must fail rather than block forever")
 	}
 }
