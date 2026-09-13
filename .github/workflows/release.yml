@@ -1,0 +1,151 @@
+name: Release
+
+# Triggered by a version tag. Builds every platform from ONE runner, because this is
+# pure Go with no cgo anywhere — cross-compilation needs no native runner, so a matrix
+# of operating systems would buy nothing but minutes.
+#
+# The version is stamped HERE and nowhere else. PLAN.md §61.1: there is no version
+# constant in the source, so a binary built without this reports 0.0.0-dev. That is
+# deliberate — a development build claiming to be a release is what turns a bug report
+# into an afternoon — and it means a broken ldflags path would ship binaries that do
+# not know what they are. The verify step below is what catches that.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  # The same checks main gets. A release cut from untested code is the one case where
+  # "the tests were green last week" is not good enough.
+  check:
+    uses: ./.github/workflows/ci.yml
+
+  build:
+    needs: check
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # to create the release
+    env:
+      GOTOOLCHAIN: local
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.27"
+
+      - name: Derive the version from the tag
+        id: v
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          version="${tag#v}"
+          echo "tag=$tag"         >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Releasing $tag as version $version"
+
+      - name: Build every platform
+        env:
+          VERSION: ${{ steps.v.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+
+          # CGO_ENABLED=0 makes each binary static, so it runs on a machine without a
+          # matching libc — which is most of the point of shipping a Go CLI.
+          #
+          # -trimpath keeps build-machine paths out of the binary.
+          #
+          # NOT -s -w. Stripping saves a couple of megabytes and removes the symbol
+          # table that makes a panic readable, and this engine deliberately lets an
+          # unrecovered panic crash the process rather than recover mid-apply (see
+          # internal/executor/apply.go). A stack trace is the whole diagnostic in that
+          # case; trading it for disk is the wrong way round.
+          build() {
+            local goos="$1" goarch="$2" goarm="${3:-}"
+            local name="infrata"
+            local suffix=""
+            if [ "$goos" = "windows" ]; then name="infrata.exe"; fi
+            if [ -n "$goarm" ]; then suffix="v$goarm"; fi
+
+            local dir="dist/infrata_${VERSION}_${goos}_${goarch}${suffix}"
+            mkdir -p "$dir"
+
+            echo "==> $goos/$goarch$suffix"
+            CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" GOARM="$goarm" \
+              go build -trimpath \
+                -ldflags "-X github.com/infrata/infrata/internal/version.version=${VERSION}" \
+                -o "$dir/$name" ./cmd/infrata
+
+            cp README.md "$dir/" 2>/dev/null || true
+
+            if [ "$goos" = "windows" ]; then
+              (cd dist && zip -qr "$(basename "$dir").zip" "$(basename "$dir")")
+            else
+              tar -czf "$dir.tar.gz" -C dist "$(basename "$dir")"
+            fi
+            rm -rf "$dir"
+          }
+
+          # Every platform anyone is plausibly running. Adding one is a line: Go
+          # cross-compiles to far more, and shipping twenty archives nobody downloads
+          # is noise rather than generosity.
+          build linux   amd64
+          build linux   arm64
+          build linux   arm   7   # Raspberry Pi and friends
+          build linux   386
+          build darwin  amd64
+          build darwin  arm64
+          build windows amd64
+          build windows arm64
+
+          ls -la dist
+
+      - name: Verify the binary knows its own version
+        env:
+          VERSION: ${{ steps.v.outputs.version }}
+        run: |
+          set -euo pipefail
+          # Rebuilt for the host so it can actually run. The point is the ldflags PATH,
+          # which is shared with every archive above: if the linker flag stopped
+          # matching internal/version's variable, every binary would silently report
+          # 0.0.0-dev and nothing else in this workflow would notice.
+          CGO_ENABLED=0 go build -trimpath \
+            -ldflags "-X github.com/infrata/infrata/internal/version.version=${VERSION}" \
+            -o /tmp/infrata ./cmd/infrata
+
+          reported="$(/tmp/infrata version | head -1)"
+          echo "$reported"
+          case "$reported" in
+            "infrata ${VERSION} "*) echo "version stamped correctly" ;;
+            *)
+              echo "::error::The release binary reports '$reported', not version ${VERSION}."
+              echo "The -ldflags path and internal/version's variable have diverged;"
+              echo "every archive in this release would report 0.0.0-dev."
+              exit 1
+              ;;
+          esac
+
+      - name: Checksums
+        run: |
+          set -euo pipefail
+          # One file over all archives, which is the form `infrata plugins install`
+          # will verify against when it lands (PLAN.md §31.1, Phase B).
+          cd dist && sha256sum ./* > SHA256SUMS && cat SHA256SUMS
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.v.outputs.tag }}
+        run: |
+          set -euo pipefail
+          # --verify-tag: refuse to invent a tag that does not exist. --generate-notes
+          # writes the changelog from the commits since the last release.
+          gh release create "$TAG" \
+            --title "$TAG" \
+            --generate-notes \
+            --verify-tag \
+            dist/*

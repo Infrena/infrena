@@ -184,7 +184,18 @@ FLOOR from `go.mod` (currently 1.24) and what `mise.toml` pins (1.27). `GOTOOLCH
 is set for the whole job, because Go otherwise downloads a newer toolchain to satisfy
 `go.mod` — which would make the floor job pass by fetching the very version it exists to
 prove unnecessary. The floor is a promise to plugin authors, and nothing on a developer's
-machine tests it. `-race` runs on the current toolchain only.
+machine tests it. `-race` runs on the current toolchain only. It also runs on
+`merge_group`, and is called by the release workflow so a release cannot skip it.
+
+**Releases** (`.github/workflows/release.yml`) fire on a `v*` tag and cross-compile eight
+platforms from one runner — this is pure Go with no cgo, so a matrix of operating systems
+would buy nothing. `CGO_ENABLED=0` for static binaries; `-trimpath`; deliberately NOT
+`-s -w`, because the engine lets an unrecovered panic crash the process rather than
+recover mid-apply, which makes the symbol table the whole diagnostic.
+
+**The version is stamped only there** (§61.1), so a release build is the only one that
+reports a real version. A step asserts the built binary says the tag — a wrong `-ldflags`
+path would otherwise ship binaries silently reporting `0.0.0-dev`.
 
 **Versioning (§61).** Six format versions already exist and stay INDEPENDENT —
 `state.CurrentVersion`, `pluginproto.Version`/`Supported`, `planner.PlanVersion`,

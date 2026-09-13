@@ -15,6 +15,13 @@ on:
   push:
     branches: [main]
   pull_request:
+  # A merge queue tests the combined result, which is the only thing that is
+  # actually about to become main. Harmless if no queue is configured.
+  merge_group:
+  # Called by release.yml, so a release cannot skip the checks. Sharing the job
+  # rather than copying its steps is the point: a duplicated check drifts, and the
+  # copy that drifts is the one guarding the artefacts people download.
+  workflow_call:
 
 permissions:
   contents: read

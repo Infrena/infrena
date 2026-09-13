@@ -17,3 +17,6 @@ coverage.*
 # SDD scratch workspace
 .superpowers/
 .claude/
+
+# Release archives built by .github/workflows/release.yml, or a local dry run of it
+dist/
