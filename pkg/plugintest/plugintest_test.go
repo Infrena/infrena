@@ -19,11 +19,16 @@ import (
 // plugin in its own module cannot reach it, and the authoring guide recommended
 // testing against it anyway — a recommendation nobody could follow.
 //
-// WHAT THIS FILE DOES NOT PROVE, stated plainly: Go's internal/ rule is per MODULE, so
-// an internal import added here would compile fine and this file would not notice. It
+// WHAT THIS FILE CANNOT PROVE, stated plainly: Go's internal/ rule is per MODULE, so an
+// internal import added here would compile fine and this file would not notice. It
 // demonstrates the intended shape and pins the behaviour; the only real check that an
-// outside module can use this package is an outside module doing so, which is
-// infrata-provider-fake's own test suite.
+// outside module can use this package is an outside module doing so.
+//
+// DISCHARGED 2026-09-13. infrata-provider-fake — a separate module — imports this
+// package in internal/fake/protocol_test.go and its suite passes (that repository's
+// 0fd8bcf). Recorded here rather than left open, so nobody re-derives the analysis:
+// what remains unprovable from inside this module is only that it STAYS true, which is
+// that suite's job to keep failing if it stops.
 
 // demo is the smallest plugin that does anything, written the way a third party would.
 type demo struct{}
