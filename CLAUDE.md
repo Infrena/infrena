@@ -170,8 +170,8 @@ The governing philosophy:
 ## Stack and commands
 
 Go 1.27 (pinned via `mise.toml`, and declared as the module floor in `go.mod`), Cobra, `gopkg.in/yaml.v3`. Those two are the **entire**
-third-party budget so far. AWS SDK v2 arrives with Phase 3, inside `providers/aws`'s OWN
-`go.mod`, so it never enters the core module (§31.1).
+third-party budget so far, and it stays that way: the AWS SDK arrives with Phase 3 inside
+`infrata-provider-aws`, a SEPARATE REPOSITORY, so it never enters this module at all (§31.1).
 
 **`mise` is not active in non-interactive shells.** Either use the `make` targets, which set
 the shim path structurally, or `export PATH="$HOME/.local/share/mise/shims:$PATH"` first.
@@ -388,9 +388,15 @@ plugin. The MVP §48 describes runs end to end, `discover` / `import` / `export`
 **Phase 3 is AWS, and it is next** (§51 — VPC, subnet, security group, S3, RDS Postgres, IAM
 role/policy attachment, ECS cluster/task definition/service, ALB, Route53; complete lifecycle
 support beats resource breadth). It is also the first thing built as a plugin from its first line
-rather than ported into one, which is why the protocol was finished first. Do not start it by
-adding AWS to this module: §31.1 puts `providers/aws` behind its own `go.mod`, so the AWS SDK
-never enters the core module's two-dependency budget.
+rather than ported into one, which is why the protocol was finished first.
+
+**It belongs in its own repository**, `infrata-provider-aws`, NOT in this one (decided
+2026-09-13, §31.1). Not merely for the dependency budget — a nested module would handle that —
+but because **Go's internal rule is by import path, not by module boundary**: a module named
+`github.com/infrata/infrata/providers/aws` can import `internal/pluginhost` and compile, while
+any outside module cannot. That was measured, not assumed. So the rule is that **a plugin's
+module path must never be under `github.com/infrata/infrata/`**, which is what keeps an official
+plugin on exactly the footing a third-party plugin has.
 
 After that, Phase 4 remote state (§52) and Phase 5 production features (§53).
 

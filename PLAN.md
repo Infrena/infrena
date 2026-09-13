@@ -2392,9 +2392,12 @@ pkg/pluginsdk/          Main(p): what a plugin's main() calls
 pkg/plugintest/         the in-process harness a plugin's OWN tests use
 pkg/semver/             the constraint syntax, public so a plugin can check its manifest
 internal/pluginhost/    launch, handshake, client, the trust rules above
-providers/test/         the fake provider, in-process and TRANSITIONAL
-providers/aws/          its own Go module (Phase 3)
+providers/test/         the engine's TEST DOUBLE (see below) — not a shipped provider
 ```
+
+**No provider ships inside this module, and no plugin belongs under this module's import
+path.** `providers/aws/` was listed here as "its own Go module (Phase 3)"; that is
+withdrawn — see the amendment below.
 
 **Amended 2026-09-13.** This section previously said `cmd/infrata-plugin-test/` — the
 fake provider as a binary inside this repository — and `providers/test/` unchanged.
@@ -2412,11 +2415,40 @@ That is not a hypothetical: the first thing the port found was that
 `internal/pluginhost.InProcess` is unreachable from another module, while the
 authoring guide recommended testing against it. `pkg/plugintest` exists because of it.
 
-**`providers/test` stays, as a BUILTIN, until that binary ships.** The loader prefers a
-binary on the search path and falls back to a builtin, and a builtin is served over
-`pluginhost.InProcess` — the same handshake, protocol and trust rules a subprocess
-gets. So it is a fallback, not a second code path, and deleting it is a one-line
-change plus the `init` scaffold and `examples/shop` moving to `fake.*`.
+**Amended 2026-09-13: AWS gets its own repository too**, `infrata-provider-aws`, building
+`infrata-plugin-aws`. This section previously put it at `providers/aws/` inside this
+repository with its own `go.mod`, on the reasoning that a separate module is enough to keep
+the AWS SDK out of the core module's dependency budget. It is enough for that, and not
+enough for the thing that actually matters, because **Go's internal rule is by import path,
+not by module boundary.**
+
+Measured, not assumed, on a scratch copy at `cd51fb7`: a nested module
+`github.com/infrata/infrata/providers/awsprobe` with `replace => ../..` COMPILES while
+importing `github.com/infrata/infrata/internal/pluginhost`, because the importing path sits
+under the parent of `internal/`. The identical file in a module named
+`example.com/outsideprobe` fails with `use of internal package
+github.com/infrata/infrata/internal/pluginhost not allowed`. So the official provider —
+the one whose code every AWS user reads and every third-party author imitates — would have
+been the single plugin able to reach engine internals, and the compiler would never have
+said so.
+
+A separate module under this module's path also keeps the `replace` problem: it compiles
+whatever is in the engine's working tree, committed or not, so its green suite proves
+nothing about committed infrata.
+
+**The rule this generalises to: a plugin's module path must not be under
+`github.com/infrata/infrata/`.** That is what puts an official plugin on exactly the footing
+a third-party plugin has, which is the only way the plugin API is tested by the plugins we
+write ourselves.
+
+**`providers/test` was a BUILTIN until that binary shipped; it is now the engine's TEST
+DOUBLE.** While it was a builtin, the loader preferred a binary on the search path and
+fell back to it, served over `pluginhost.InProcess` — the same handshake, protocol and
+trust rules a subprocess gets, so a fallback rather than a second code path. The binary
+shipped, and the fallback went with it: a shipped infrata now carries NO provider, `init`
+scaffolds `fake.*`, and the double is injected only by `internal/cli`'s `TestMain`.
+`TestAShippedBuildCarriesNoProvider` runs the binary with no plugin installed and is the
+only test that can make that claim.
 
 **Nothing names a plugin outside configuration.** A `providers:` entry's `plugin:`, a
 resource type's prefix, or a type recorded in state: those are the three things that
@@ -3145,7 +3177,9 @@ specifies it, including its own build order:
 5. The fake provider as a binary.
 6. Documentation.
 
-Phase 3 then starts with `providers/aws` as a plugin from its first commit.
+Phase 3 then starts with AWS as a plugin from its first commit, in its OWN REPOSITORY —
+`infrata-provider-aws`, building `infrata-plugin-aws`. See §31.1's amendment of
+2026-09-13 for why it is not `providers/aws/` inside this repository.
 
 ---
 
