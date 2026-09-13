@@ -52,6 +52,11 @@ func bindReferences(
 		decl := inst.Decl
 		self := inst.Address.String()
 
+		// Once, into a local: the lifecycle rung below needs the same instance the
+		// resource is recorded as belonging to, and computing it twice is how the two
+		// come to disagree.
+		instance := providerInstanceFor(inst, table, &ds)
+
 		resolved := &resource.ResolvedResource{
 			Address: inst.Address,
 			Type:    decl.Type,
@@ -60,9 +65,13 @@ func bindReferences(
 			// default is supplied, once, so a resource reaching the planner always
 			// names the instance it belongs to — and a destroy, which has only
 			// state, inherits that name from the apply that created it.
-			Provider:  providerInstanceFor(inst, table, &ds),
-			Attrs:     make(map[string]value.Value, len(decl.Attributes)),
-			Lifecycle: resource.Lifecycle{PreventDestroy: decl.Lifecycle.PreventDestroy, Retain: decl.Lifecycle.Retain},
+			Provider: instance,
+			Attrs:    make(map[string]value.Value, len(decl.Attributes)),
+			// The instance's `defaults:` may supply a lifecycle flag, and this is
+			// where the lifecycle is assembled. Stage 7 handles the SCHEMA half of
+			// §12.1's rung — a lifecycle option is not a schema attribute, so it has
+			// nothing to resolve against a definition and no business waiting for one.
+			Lifecycle: lifecycleFor(decl.Lifecycle, table[instance]),
 			Origin:    decl.Origin,
 		}
 
@@ -505,6 +514,32 @@ func providerInstanceFor(inst modules.Instance, table providers.Table, ds *diag.
 		})
 	}
 	return named
+}
+
+// lifecycleFor settles a resource's lifecycle flags against its instance's
+// `defaults:` (PLAN.md §12.1).
+//
+// WRITTEN beats DEFAULTED, which is why LifecycleDecl tracks whether each key was
+// written at all: `prevent_destroy: false` on a resource under an instance defaulting
+// it to true must win, and a bare bool cannot tell that from silence. Getting this
+// backwards refuses a destroy the user explicitly allowed, which is the direction a
+// user cannot work around.
+//
+// checkDefaults has already refused a non-boolean, so AsBool failing here means the
+// key is absent, and absent is the same as unset.
+func lifecycleFor(decl config.LifecycleDecl, inst providers.Instance) resource.Lifecycle {
+	out := resource.Lifecycle{PreventDestroy: decl.PreventDestroy, Retain: decl.Retain}
+	if !decl.PreventDestroySet {
+		if b, ok := inst.Defaults["prevent_destroy"].AsBool(); ok {
+			out.PreventDestroy = b
+		}
+	}
+	if !decl.RetainSet {
+		if b, ok := inst.Defaults["retain"].AsBool(); ok {
+			out.Retain = b
+		}
+	}
+	return out
 }
 
 // declaredInstancesDetail lists what the user could have meant.

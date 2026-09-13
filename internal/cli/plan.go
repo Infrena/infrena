@@ -78,7 +78,8 @@ func newPlanCommand(opts *GlobalOptions) *cobra.Command {
 				// dispatches to have to be built the state-only way: the names come
 				// from state, and an instance whose configuration depends on an
 				// environment that no longer exists has nothing to resolve against.
-				ds.Extend(registerStateInstances(reg, opts.Dir))
+				_, stateInstanceDiags := registerStateInstances(reg, opts.Dir)
+				ds.Extend(stateInstanceDiags)
 				cfg = teardownConfig(st, environment)
 				fmt.Fprint(cmd.OutOrStdout(), teardownNotice(environment, declared))
 			default:

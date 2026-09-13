@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/infrata/infrata/internal/diag"
+	"github.com/infrata/infrata/internal/providers"
 	"github.com/infrata/infrata/internal/registry"
 	"github.com/infrata/infrata/pkg/schema"
 	"github.com/infrata/infrata/pkg/value"
@@ -14,7 +15,9 @@ import (
 
 // bindSchemas is compiler stage 7. It resolves each resource's type to its
 // definition, validates what configuration set, and fills in defaults.
-func bindSchemas(cfg *ResolvedConfig, reg *registry.Registry, opts Options) diag.Diagnostics {
+func bindSchemas(
+	cfg *ResolvedConfig, reg *registry.Registry, opts Options, table providers.Table,
+) diag.Diagnostics {
 	var ds diag.Diagnostics
 
 	for _, addr := range cfg.Addresses() {
@@ -33,6 +36,10 @@ func bindSchemas(cfg *ResolvedConfig, reg *registry.Registry, opts Options) diag
 		}
 
 		checkConfiguredAttributes(r.Attrs, def, r.Origin, &ds)
+		// BEFORE the plugin's own defaults, because §12.1's ladder has the
+		// instance's `defaults:` beating them: whichever runs first wins, since
+		// neither overwrites a value already present.
+		applyInstanceDefaults(r.Attrs, def, table[r.Provider])
 		applyDefaults(r.Attrs, def, defaultContextFor(cfg, r.Type, opts), r.Origin, &ds)
 		checkRequired(r.Attrs, def, r.Origin, &ds)
 		markSensitive(r.Attrs, def)
@@ -188,6 +195,53 @@ func applyDefaults(attrs map[string]value.Value, def *schema.ResourceDefinition,
 		}
 		attrs[name] = v
 	}
+}
+
+// applyInstanceDefaults fills absent attributes from the instance's `defaults:`
+// block — the middle rung of §12.1's ladder.
+//
+// WHOLE, not merged: a resource writing `tags: {team: payments}` replaces the
+// instance's map rather than adding to it. That is the documented rule and the reason
+// §10.2 has `merge()` — a user who wants both writes
+// `${merge(tags, {team: payments})}` and can see, in the file, which keys they get.
+// Merging silently would mean no way to REMOVE an inherited key.
+//
+// Marked SourceDefault so a plan prints [default] and generation omits it, and
+// ScopeInstanceDefault so a reader is sent to `providers:` rather than to the plugin.
+// Shallow, so a leaf that came from a variable keeps saying so.
+//
+// Nothing is reported here. A key that fits no resource type at all is refused once,
+// per instance, by internal/providers.checkDefaults; a key that fits SOME of them is
+// correct and ordinary — `tags:` on everything taggable — so a type that does not
+// declare it is silently skipped rather than reported once per resource.
+func applyInstanceDefaults(
+	attrs map[string]value.Value, def *schema.ResourceDefinition, inst providers.Instance,
+) {
+	for _, name := range sortedDefaultKeys(inst.Defaults) {
+		attr, declared := def.Attribute(name)
+		if !declared || attr.Computed {
+			continue
+		}
+		if _, present := attrs[name]; present {
+			continue
+		}
+		v := inst.Defaults[name]
+		if v.Kind != attr.Kind {
+			continue
+		}
+		attrs[name] = v.WithSource(value.SourceDefault).WithScope(value.ScopeInstanceDefault)
+	}
+}
+
+// sortedDefaultKeys orders an instance's default keys, so that filling them is
+// deterministic even though each is independent of the others.
+func sortedDefaultKeys(defaults map[string]value.Value) []string {
+	out := make([]string, 0, len(defaults))
+	for name := range defaults {
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // fromDefault wraps a resolver's datum as a value marked SourceDefault, which

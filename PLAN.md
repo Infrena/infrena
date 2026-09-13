@@ -1224,6 +1224,32 @@ those — so the lifecycle key names are RESERVED, and a plugin declaring an
 attribute that collides with one is rejected at registration, the same place and
 for the same reason the `module.` type namespace is.
 
+A resource that WRITES a lifecycle option beats the block, in both directions.
+`prevent_destroy: false` on a resource under an instance defaulting it to true has
+to win, which is why `LifecycleDecl` records whether each key was written at all:
+in a bare bool, `false` and absent are the same value, and getting it backwards
+refuses a destroy the user explicitly allowed — the one direction a user cannot
+work around.
+
+**Where each half is decided.** The schema attributes are stage 7's, because they
+need a resource definition to check a key and a kind against. The lifecycle options
+are stage 6's, because a lifecycle option is not a schema attribute and has nothing
+to resolve against a definition. Two stages for one feature, each where its own
+thing lives.
+
+**What a plan says.** An instance default resolves as `SourceDefault` with
+`ScopeInstanceDefault`, so a plan reads `size: 200 [default, from provider instance
+default]` where a plugin's own would read `[default, from provider default]`. The
+distinction is worth a Scope constant of its own: one is something the user wrote
+and can edit, the other is something the plugin ships.
+
+**Generation omits it**, the same way §27 omits a schema default — it is not
+something the reader has to supply. Keyed by the resource's OWN instance, never by
+"any instance that defaults this name": two instances exist precisely because they
+differ, and trimming a value against the other account's block writes a file that
+plans a change the moment it is read back. `export` keeps it, because §28 is the
+opposite job.
+
 ### `default: true` overrides order
 
 Order is the fallback, not the only mechanism:

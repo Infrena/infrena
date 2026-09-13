@@ -57,7 +57,7 @@ func newDestroyCommand(opts *GlobalOptions) *cobra.Command {
 			}
 			defer closeReport()
 
-			reg, regDiags := stateOnlyRegistry(opts.Dir)
+			reg, _, regDiags := stateOnlyRegistry(opts.Dir)
 			if regDiags.HasErrors() {
 				regDiags.Render(cmd.ErrOrStderr())
 				return errProviderInstances

@@ -206,7 +206,7 @@ func Compile(files []config.File, reg *registry.Registry, opts Options) (Resolve
 		return cfg, ds
 	}
 
-	schemaDiags := bindSchemas(&cfg, reg, opts)
+	schemaDiags := bindSchemas(&cfg, reg, opts, table)
 	ds.Extend(schemaDiags)
 	if schemaDiags.HasErrors() {
 		return cfg, ds

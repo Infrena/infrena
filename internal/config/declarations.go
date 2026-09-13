@@ -53,6 +53,16 @@ type ProviderDecl struct {
 type LifecycleDecl struct {
 	PreventDestroy bool
 	Retain         bool
+	// PreventDestroySet and RetainSet record whether the resource WROTE the key,
+	// which a bare bool cannot express: absent and `false` are the same value.
+	//
+	// They exist because a provider instance's `defaults:` may supply either flag
+	// (PLAN.md §12.1), and `prevent_destroy: false` on a resource has to beat an
+	// instance default of true. Without the distinction the resource's explicit
+	// `false` would read as "said nothing" and the default would win — which is the
+	// direction that REFUSES a destroy the user asked for.
+	PreventDestroySet bool
+	RetainSet         bool
 }
 
 // ResourceDecl is one declared resource, decoded but not yet resolved.

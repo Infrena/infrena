@@ -43,9 +43,10 @@ func buildRegistry(dir string) *registry.Registry {
 
 // stateOnlyRegistry is buildRegistry plus the instances a command that never
 // compiles still has to dispatch to.
-func stateOnlyRegistry(dir string) (*registry.Registry, diag.Diagnostics) {
+func stateOnlyRegistry(dir string) (*registry.Registry, providers.Table, diag.Diagnostics) {
 	reg := buildRegistry(dir)
-	return reg, registerStateInstances(reg, dir)
+	table, ds := registerStateInstances(reg, dir)
+	return reg, table, ds
 }
 
 // registerStateInstances builds the provider instances a state-only command needs.
@@ -62,7 +63,7 @@ func stateOnlyRegistry(dir string) (*registry.Registry, diag.Diagnostics) {
 // environment has no single answer for it. What saves it is that the instance NAME
 // is recorded in state, so the resource still reaches the right account whenever
 // that account's configuration does not itself depend on an environment.
-func registerStateInstances(reg *registry.Registry, dir string) diag.Diagnostics {
+func registerStateInstances(reg *registry.Registry, dir string) (providers.Table, diag.Diagnostics) {
 	var ds diag.Diagnostics
 
 	files, err := config.Load(dir)
@@ -87,17 +88,18 @@ func registerStateInstances(reg *registry.Registry, dir string) diag.Diagnostics
 	table, resolveDS := providers.Resolve(decl.Providers, literalOnlyScope())
 	ds.Extend(resolveDS)
 	if resolveDS.HasErrors() {
-		return ds
+		return nil, ds
 	}
 	ds.Extend(providers.Register(table, reg))
-	return ds
+	return table, ds
 }
 
 // registerImplicit registers the single implicit instance of a project that
 // declares no `providers:` block.
-func registerImplicit(reg *registry.Registry, ds diag.Diagnostics) diag.Diagnostics {
-	ds.Extend(providers.Register(providers.Implicit(reg), reg))
-	return ds
+func registerImplicit(reg *registry.Registry, ds diag.Diagnostics) (providers.Table, diag.Diagnostics) {
+	table := providers.Implicit(reg)
+	ds.Extend(providers.Register(table, reg))
+	return table, ds
 }
 
 // literalOnlyScope is an empty variable scope.
@@ -138,3 +140,21 @@ func sortedAttributeKeys(attrs map[string]value.Value) []string {
 // a second telling of the same problem, in a different shape, is what makes a reader
 // go looking for two.
 var errProviderInstances = errors.New("provider instances could not be configured")
+
+// defaultsByInstance projects a provider table down to just the `defaults:` blocks,
+// keyed by instance name — what internal/generator needs and no more.
+//
+// A whole providers.Table in generator.Options would put every instance's credentials
+// within reach of a package whose job is writing files a user reads.
+func defaultsByInstance(table providers.Table) map[string]map[string]value.Value {
+	if len(table) == 0 {
+		return nil
+	}
+	out := make(map[string]map[string]value.Value, len(table))
+	for name, inst := range table {
+		if len(inst.Defaults) > 0 {
+			out[name] = inst.Defaults
+		}
+	}
+	return out
+}

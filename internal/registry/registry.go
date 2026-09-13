@@ -213,6 +213,17 @@ func (r *Registry) checkDefinitions(pluginName string, defs []*schema.ResourceDe
 			return fmt.Errorf("provider %s: resource type %q is already declared by plugin %s",
 				pluginName, d.Type, owner)
 		}
+		if reserved := reservedAttributeOf(d); reserved != "" {
+			// The LIFECYCLE names. A provider instance's `defaults:` accepts
+			// `prevent_destroy` and `retain` for every resource (PLAN.md §12.1), so a
+			// plugin declaring an attribute of either name would make one key mean two
+			// things: an engine lifecycle flag and a provider attribute. Refused here
+			// for the same reason and in the same loop as the `module.` namespace —
+			// at startup, in that provider's own tests, before anything is mutated.
+			return fmt.Errorf("provider %s: resource type %q declares attribute %q, which is "+
+				"reserved: every resource accepts it as a lifecycle option",
+				pluginName, d.Type, reserved)
+		}
 		if seen[d.Type] {
 			return fmt.Errorf("provider %s declares resource type %q more than once", pluginName, d.Type)
 		}
@@ -220,6 +231,23 @@ func (r *Registry) checkDefinitions(pluginName string, defs []*schema.ResourceDe
 	}
 
 	return nil
+}
+
+// ReservedAttributes are the attribute names the engine owns on every resource.
+//
+// Exported because internal/providers validates a `defaults:` key against the same
+// list — a key naming one of these is valid there and belongs to no schema, so the
+// two checks have to agree about which names those are.
+var ReservedAttributes = []string{"prevent_destroy", "retain"}
+
+// reservedAttributeOf returns the reserved name a definition collides with, or "".
+func reservedAttributeOf(d *schema.ResourceDefinition) string {
+	for _, name := range ReservedAttributes {
+		if _, declared := d.Attributes[name]; declared {
+			return name
+		}
+	}
+	return ""
 }
 
 // Definition returns the schema for a resource type, or false if not registered.

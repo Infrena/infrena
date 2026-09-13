@@ -254,3 +254,220 @@ resources:
 		t.Errorf("acct2 still holds %v — the destroy never reached the second account", got)
 	}
 }
+
+// resourceBlock returns the plan's block for one resource: the line naming it through to
+// the blank line that ends it.
+//
+// Per resource rather than whole-output matching, because "the plan mentions 200
+// somewhere" is true whichever resource got the default — which is the mistake this
+// milestone's tests exist to catch.
+func resourceBlock(t *testing.T, planOutput, name string) string {
+	t.Helper()
+	lines := strings.Split(planOutput, "\n")
+	for i, line := range lines {
+		if !strings.HasSuffix(strings.TrimSpace(line), "."+name) {
+			continue
+		}
+		block := []string{line}
+		for _, rest := range lines[i+1:] {
+			if strings.TrimSpace(rest) == "" {
+				break
+			}
+			block = append(block, rest)
+		}
+		return strings.Join(block, "\n")
+	}
+	t.Fatalf("no block for %q in:\n%s", name, planOutput)
+	return ""
+}
+
+// TestDefaultsReachOneInstancesResourcesAndNotTheOthers — §12.1's middle rung through
+// the binary, where a user meets it.
+//
+// Two instances of one plugin, only one carrying `defaults:`. Both halves are asserted:
+// a build that applied the block to everything and a build that applied it to nothing
+// each satisfy one of them.
+func TestDefaultsReachOneInstancesResourcesAndNotTheOthers(t *testing.T) {
+	dir := project(t, `
+project: MainApp
+variables:
+  tier:
+    type: string
+environments:
+  dev:
+    tier: shared
+providers:
+  - plugin: test
+    name: main
+    defaults:
+      size: 200
+      tags:
+        tier: ${tier}
+  - plugin: test
+    name: acct2
+resources:
+  net:
+    type: test.network
+    cidr: 10.0.0.0/16
+  here:
+    type: test.database
+    engine: postgres
+    network: ${net.id}
+  there:
+    type: test.database
+    engine: postgres
+    network: ${net.id}
+    provider: acct2
+  own:
+    type: test.database
+    engine: postgres
+    network: ${net.id}
+    size: 50
+`)
+	p := run(t, dir, "plan", "dev")
+	if p.ExitCode != 2 {
+		t.Fatalf("plan exit = %d:\n%s", p.ExitCode, p.combined())
+	}
+
+	// main's resource inherits both, and the plan says WHERE from — a reader sent to the
+	// plugin's documentation for a value in their own file has been misled.
+	here := resourceBlock(t, p.Stdout, "here")
+	if !strings.Contains(here, "size: 200") {
+		t.Errorf("`here` did not inherit main's size default:\n%s", here)
+	}
+	if !strings.Contains(here, "provider instance default") {
+		t.Errorf("the plan does not credit the instance's `defaults:`:\n%s", here)
+	}
+	if !strings.Contains(here, "shared") {
+		t.Errorf("`here` did not inherit main's tags with the variable resolved:\n%s", here)
+	}
+
+	// acct2's does not. 10 is the plugin's own schema default, which is what a resource
+	// of an instance declaring no `defaults:` falls back to.
+	there := resourceBlock(t, p.Stdout, "there")
+	if !strings.Contains(there, "size: 10") {
+		t.Errorf("`there` did not fall back to the plugin's schema default:\n%s", there)
+	}
+	if strings.Contains(there, "shared") {
+		t.Errorf("`there` picked up main's tags although it belongs to acct2:\n%s", there)
+	}
+
+	// And what the resource writes itself still wins over its instance.
+	if own := resourceBlock(t, p.Stdout, "own"); !strings.Contains(own, "size: 50") {
+		t.Errorf("`own` lost its explicit size to the instance default:\n%s", own)
+	}
+
+	// It applies and converges, which is what proves the filled values are real rather
+	// than only rendered.
+	if a := run(t, dir, "apply", "dev", "--auto-approve"); a.ExitCode != 2 {
+		t.Fatalf("apply exit = %d:\n%s", a.ExitCode, a.combined())
+	}
+	if again := run(t, dir, "plan", "dev"); again.ExitCode != 0 {
+		t.Errorf("does not converge; re-plan exit = %d:\n%s", again.ExitCode, again.combined())
+	}
+}
+
+// TestADefaultsKeyNothingAcceptsFailsValidate. `tag:` for `tags:` would otherwise apply
+// to nothing, in every environment, forever, with no output in which its absence is
+// visible.
+func TestADefaultsKeyNothingAcceptsFailsValidate(t *testing.T) {
+	dir := project(t, `
+project: MainApp
+environments:
+  dev: {}
+providers:
+  - plugin: test
+    defaults:
+      tag:
+        team: payments
+resources:
+  net:
+    type: test.network
+    cidr: 10.0.0.0/16
+`)
+	r := run(t, dir, "validate")
+	if r.ExitCode == 0 {
+		t.Fatalf("a `defaults:` key nothing accepts must fail validate:\n%s", r.combined())
+	}
+	for _, want := range []string{"tag", "tags"} {
+		if !strings.Contains(r.combined(), want) {
+			t.Errorf("the diagnostic does not mention %q:\n%s", want, r.combined())
+		}
+	}
+}
+
+// TestALifecycleDefaultProtectsEveryResourceOfItsInstance, and a resource may still opt
+// out — the pairing §12.1 exists for: prevent_destroy across an account, off for the one
+// thing you are replacing.
+func TestALifecycleDefaultProtectsEveryResourceOfItsInstance(t *testing.T) {
+	const providersBlock = `
+project: MainApp
+environments:
+  dev: {}
+providers:
+  - plugin: test
+    defaults:
+      prevent_destroy: true
+`
+	dir := project(t, providersBlock+`
+resources:
+  guarded:
+    type: test.network
+    cidr: 10.0.0.0/16
+  replaceable:
+    type: test.network
+    cidr: 10.1.0.0/16
+    lifecycle:
+      prevent_destroy: false
+`)
+	if a := run(t, dir, "apply", "dev", "--auto-approve"); a.ExitCode != 2 {
+		t.Fatalf("apply exit = %d:\n%s", a.ExitCode, a.combined())
+	}
+
+	// Remove ONLY the resource that opted out. A lifecycle default a resource cannot
+	// escape is a trap with no way out, so this half comes first.
+	rewrite(t, dir, providersBlock+`
+resources:
+  guarded:
+    type: test.network
+    cidr: 10.0.0.0/16
+`)
+	p := run(t, dir, "plan", "dev")
+	if p.ExitCode != 2 {
+		t.Fatalf("removing the opted-out resource must propose a destroy; exit = %d:\n%s",
+			p.ExitCode, p.combined())
+	}
+	if !strings.Contains(p.Stdout, "replaceable") {
+		t.Errorf("the destroy of the opted-out resource is not in the plan:\n%s", p.Stdout)
+	}
+
+	// Now the guarded one, which the instance's `defaults:` protects and which says
+	// nothing about lifecycle itself.
+	rewrite(t, dir, providersBlock+`
+resources:
+  replaceable:
+    type: test.network
+    cidr: 10.1.0.0/16
+    lifecycle:
+      prevent_destroy: false
+`)
+	r := run(t, dir, "plan", "dev")
+	if r.ExitCode == 0 {
+		t.Fatalf("removing a resource the instance protects must be refused:\n%s", r.combined())
+	}
+	if !strings.Contains(r.combined(), "guarded") {
+		t.Errorf("the refusal does not name the resource:\n%s", r.combined())
+	}
+	if !strings.Contains(r.combined(), "prevent_destroy") {
+		t.Errorf("nothing explains why, so a reader cannot find the `defaults:` block that "+
+			"caused it:\n%s", r.combined())
+	}
+}
+
+// rewrite replaces a project's infra.yml.
+func rewrite(t *testing.T, dir, body string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, "infra.yml"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}

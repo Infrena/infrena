@@ -36,6 +36,9 @@ type Resource struct {
 	Name       string
 	Type       string
 	ProviderID string
+	// Provider is the instance this resource belongs to, which is what selects the
+	// `defaults:` block Minimal measures against (PLAN.md §12.1).
+	Provider   string
 	Attributes map[string]value.Value
 }
 
@@ -64,6 +67,15 @@ type Options struct {
 	// Header is the comment block written at the top of each file. Empty means
 	// none.
 	Header string
+
+	// InstanceDefaults is each provider instance's `defaults:` block, keyed by
+	// instance name.
+	//
+	// Minimal omits a value equal to one of these for exactly the reason it omits a
+	// schema default: it is not something the reader has to supply, and a generated
+	// file that restates it is a file whose next diff is noise. Nil is the ordinary
+	// case — a project declaring no `defaults:` — and omits nothing extra.
+	InstanceDefaults map[string]map[string]value.Value
 }
 
 // MinimalOptions is what `import --generate` uses.
@@ -223,6 +235,11 @@ func renderResource(r Resource, reg *registry.Registry, ctx schema.DefaultContex
 			if opts.Minimal && equalsDefault(attr, v, ctx) {
 				continue
 			}
+			// The INSTANCE's default, which outranks the schema's (§12.1) and is
+			// just as much not the reader's job to write down.
+			if opts.Minimal && equalsInstanceDefault(opts, r.Provider, name, v) {
+				continue
+			}
 		}
 
 		// Converted to plain Go data first. v.Raw for a composite is
@@ -261,6 +278,24 @@ func renderResource(r Resource, reg *registry.Registry, ctx schema.DefaultContex
 		}
 	}
 	return node, notes, nil
+}
+
+// equalsInstanceDefault reports whether v is exactly what the resource's provider
+// instance would have supplied through `defaults:`.
+//
+// Keyed by the resource's OWN instance, never by "any instance that defaults this
+// name": two instances of one plugin exist precisely because they differ, and omitting
+// a value because the OTHER account happens to default it to that would write a file
+// that plans a change the moment it is read back.
+func equalsInstanceDefault(opts Options, instance, name string, v value.Value) bool {
+	if instance == "" {
+		return false
+	}
+	d, ok := opts.InstanceDefaults[instance][name]
+	if !ok {
+		return false
+	}
+	return v.Equal(d)
 }
 
 // equalsDefault reports whether v is exactly what this attribute would have

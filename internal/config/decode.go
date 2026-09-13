@@ -463,10 +463,12 @@ func decodeLifecycle(path string, node *yaml.Node, r *ResourceDecl, ds *diag.Dia
 		case "prevent_destroy":
 			if b, ok := decodeLifecycleBool(path, key, val, ds); ok {
 				r.Lifecycle.PreventDestroy = b
+				r.Lifecycle.PreventDestroySet = true
 			}
 		case "retain":
 			if b, ok := decodeLifecycleBool(path, key, val, ds); ok {
 				r.Lifecycle.Retain = b
+				r.Lifecycle.RetainSet = true
 			}
 		default:
 			ds.Add(diag.Diagnostic{

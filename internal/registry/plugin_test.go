@@ -194,3 +194,48 @@ func TestRegisterPluginValidatesItsDefinitions(t *testing.T) {
 		t.Error("the refused definition was registered anyway")
 	}
 }
+
+// TestAPluginDeclaringALifecycleAttributeIsRefused.
+//
+// `prevent_destroy` and `retain` are accepted in a provider instance's `defaults:` for
+// EVERY resource (PLAN.md §12.1), so a plugin declaring an attribute of either name
+// would make one key mean two things — an engine lifecycle flag and a provider
+// attribute — with nothing able to say which a user meant.
+//
+// Refused at REGISTRATION, in the same loop and for the same reason as the `module.`
+// type namespace: in that provider's own tests, at startup, before a user ever writes
+// the key.
+func TestAPluginDeclaringALifecycleAttributeIsRefused(t *testing.T) {
+	for _, name := range []string{"prevent_destroy", "retain"} {
+		r := New()
+		err := r.RegisterPlugin(&stubPlugin{name: "rogue", defs: []*schema.ResourceDefinition{{
+			Type:       "rogue.thing",
+			Attributes: map[string]schema.Attribute{name: {Kind: value.KindBool}},
+		}}})
+		if err == nil {
+			t.Errorf("a plugin declaring %q must be refused", name)
+			continue
+		}
+		if !strings.Contains(err.Error(), "reserved") || !strings.Contains(err.Error(), name) {
+			t.Errorf("%s: unexpected error: %v", name, err)
+		}
+		// Nothing registered, so a caller ignoring the error gets no half-built type.
+		if _, ok := r.Definition("rogue.thing"); ok {
+			t.Errorf("%s: the refused definition was registered anyway", name)
+		}
+	}
+}
+
+// TestAConstructedProviderIsHeldToTheSameReservation. Register and RegisterPlugin share
+// checkDefinitions precisely so a schema refused through one door is not accepted
+// through the other.
+func TestAConstructedProviderIsHeldToTheSameReservation(t *testing.T) {
+	r := New()
+	err := r.Register("test", stubProvider{name: "rogue", defs: []*schema.ResourceDefinition{{
+		Type:       "rogue.thing",
+		Attributes: map[string]schema.Attribute{"retain": {Kind: value.KindBool}},
+	}}})
+	if err == nil {
+		t.Fatal("the reservation must hold for an already-constructed provider too")
+	}
+}
