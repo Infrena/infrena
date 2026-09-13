@@ -1175,17 +1175,47 @@ around: the only production caller is `internal/cli`, and every command either
 compiles (so stage 4.5 runs) or is a state-only command that registers its instances
 explicitly.
 
-**The two state-only paths are the honest cost.** `destroy` and `refresh` never
-compile: one synthesises an empty desired configuration from state and the other
-reads state and calls `Provider.Read`. `discover` and `import` do not compile either.
-None of them has a variable scope, so none can resolve an instance's configuration —
-they read `providers:` and take LITERAL values only, reporting an instance whose
-configuration interpolates anything rather than guessing at it. `plan` and `apply` on
-an ORPHANED environment (§6.1) are the same path for the same reason. What saves this
-is that the instance NAME is recorded in state, so a resource still reaches the right
-account whenever that account's own configuration does not depend on an environment.
-An instance configured per environment cannot be destroyed by `infra destroy`, and
-the diagnostic says so rather than reaching for a default.
+**AMENDED 2026-09-13. The state-only commands resolve variables after all.** This
+section used to call that impossible and bill it as "the honest cost": `destroy`,
+`refresh`, `discover` and `import` never compile, so — the argument went — none of them
+has a variable scope, and each must read `providers:` for LITERAL values only and refuse
+an instance whose configuration interpolates anything.
+
+The premise was wrong. **Resolving variables is stages 1 to 4 and needs nothing else** —
+no registry, no plugins, no resources, no modules. `compiler.VariableScope` is those
+four stages with the rest of the compile left off, shared with `Compile` rather than
+copied, because the precedence ladder IS the product's rule (§7) and a second
+implementation of it would drift in exactly the way a user could not predict. Three of
+the four commands are handed an environment on the command line, so their scope is the
+same one `plan` would build.
+
+What the old rule actually cost was not elegance. An AWS instance supplying its region
+through `defaults: {region: ${aws_region}}` — the agreed model — could be planned and
+applied and then never refreshed or destroyed. **A project the tool cannot tear down is
+worse than one it cannot build**, and it would have shipped that way.
+
+`--var` and `--var-file` are therefore accepted by `destroy` and `refresh`, which used to
+refuse them outright. That refusal was right about its own reasoning and wrong about the
+facts: a flag that cannot affect the outcome must be refused rather than accepted and
+ignored, and this flag can affect the outcome, because an instance's configuration
+interpolates it. The concern the refusal protected still stands and is now a test: a
+`--var` naming a RESOURCE variable must not change what these commands do, since what
+they read and what they tear down comes from state.
+
+**`discover` is the one that keeps a real limit**, because it takes no environment at
+all. It resolves every rung that does not depend on one — a declared `default:`,
+`variables.yml`, `vars/default.yml`, `--var` — and an unselected chain leaves a
+per-environment variable UNKNOWN rather than erroring. An unknown must not reach a
+plugin's `Configure`: it would be read as absent and the survey would run against
+whichever account the plugin defaults to, which is the one outcome invisible in the
+output. So an instance still holding an unknown is refused by name, and the suggested
+action is `--var` — a promise the command now keeps, where before it named a flag it
+then rejected. `plan` and `apply` on an ORPHANED environment (§6.1) take the same path
+for the same reason: the environment is no longer declared, so its per-environment
+values went away with the declaration.
+
+What still saves the rest is unchanged: the instance NAME is recorded in state, so a
+resource reaches the right account even when nothing can be resolved about it.
 
 **Fail-closed is the engine's guarantee, not each plugin's.** Stage 4.5 refuses to
 construct anything when any instance's configuration did not resolve. A plugin that
@@ -2100,8 +2130,9 @@ before any request.
 
 - **The two-step registration survives unchanged.** `schemas` feeds `RegisterPlugin`
   before anything is read. `configure` is what stage 4.5 calls for `RegisterInstance`.
-  The cycle §12.1 breaks stays broken, and state-only commands still pass literal
-  configuration only.
+  The cycle §12.1 breaks stays broken. State-only commands pass RESOLVED configuration
+  too, since 2026-09-13 — `compiler.VariableScope` gives them stages 1-4 without a
+  compile (§12.1, amended).
 - `configure` passes the project directory because a plugin can no longer be handed one
   when it is constructed. The fake provider needs it: its `cloud:` defaults to a file
   under the project.
@@ -3570,11 +3601,18 @@ sharing a repository between CI and laptops actually needs.
 understand a project must say so once, rather than reporting twenty unknown-key errors
 that are all the same problem.
 
-**What it does not cover, recorded rather than hidden:** the check lives in the
-compiler, so the four commands that never compile — `destroy`, `refresh`, `discover`,
-`import` — do not apply it. They barely read configuration, which is why they are also
-the commands least likely to meet syntax they cannot parse. Revisit if that stops being
-true.
+**This gap CLOSED on 2026-09-13, as a side effect rather than a goal.** It used to read:
+the check lives in the compiler, so the four commands that never compile — `destroy`,
+`refresh`, `discover`, `import` — do not apply it. They do now: those commands build
+their provider instances through `compiler.VariableScope`, which runs the floor check as
+stage 1.5 (§12.1, amended). A binary too old to understand a project no longer refuses
+to `plan` it and then happily `refresh` it.
+
+Two boundaries on that, both tested. The floor is only enforced for a RELEASE build, as
+everywhere else — a development build is exempt. And configuration that cannot be LOADED
+still leaves the implicit instance and proceeds, because tearing down a project whose
+files are gone is half of what `destroy` is for (§6.1); only configuration that loads and
+then states a floor this build cannot meet is refused.
 
 ## 61.3 There is no separate plugin SDK version
 

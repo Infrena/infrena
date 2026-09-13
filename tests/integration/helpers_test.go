@@ -155,3 +155,50 @@ func reportedStateVersion(t *testing.T) int {
 	t.Fatalf("the version artifact reports no single state format version: %s", body)
 	return 0
 }
+
+// stampedBinary builds the CLI with a version stamped in, the way the release
+// workflow does.
+//
+// A development build is EXEMPT from a project's `infrata:` floor (§61.2), and the
+// binary every other test in this file uses is a development build reporting
+// 0.0.0-dev. So a test about the floor being enforced must stamp one, or it passes
+// against a build that never checks anything — which is the shape of a test that
+// cannot fail.
+//
+// The ldflags path is duplicated from .github/workflows/release.yml deliberately:
+// if they diverge, the release binaries report 0.0.0-dev and this test still passes.
+// What catches that is the workflow's own verification step, which runs the built
+// binary and reads its version back.
+func stampedBinary(t *testing.T, version string) string {
+	t.Helper()
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "infrata")
+	cmd := exec.Command("go", "build",
+		"-ldflags", "-X github.com/infrata/infrata/internal/version.version="+version,
+		"-o", bin, "github.com/infrata/infrata/cmd/infrata")
+	cmd.Dir = repoRoot(t)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("building a stamped CLI: %v\n%s", err, out)
+	}
+	return bin
+}
+
+// runBinary is run for a binary other than the shared one.
+func runBinary(t *testing.T, bin, dir string, args ...string) result {
+	t.Helper()
+	full := append([]string{"--chdir", dir, "--plugin-dir", fakePluginDir(t)}, args...)
+	cmd := exec.Command(bin, full...)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	code := 0
+	if err := cmd.Run(); err != nil {
+		var exitErr *exec.ExitError
+		if !errors.As(err, &exitErr) {
+			t.Fatalf("running %s %v: %v", bin, args, err)
+		}
+		code = exitErr.ExitCode()
+	}
+	return result{Stdout: stdout.String(), Stderr: stderr.String(), ExitCode: code}
+}

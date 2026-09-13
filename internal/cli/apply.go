@@ -100,7 +100,14 @@ func newApplyCommand(opts *GlobalOptions) *cobra.Command {
 				// dispatches to have to be built the state-only way: the names come
 				// from state, and an instance whose configuration depends on an
 				// environment that no longer exists has nothing to resolve against.
-				_, stateInstanceDiags := registerStateInstances(reg, opts.Dir)
+				//
+				// EMPTY ENVIRONMENT, deliberately: this environment is no longer
+				// declared, so resolving its chain would report "unknown
+				// environment" — and its per-environment variable values went away
+				// with the declaration. What a variable can still supply without an
+				// environment is resolved; anything that needed one is refused by
+				// name rather than guessed at.
+				_, stateInstanceDiags := registerStateInstances(reg, opts, "")
 				ds.Extend(stateInstanceDiags)
 				cfg = teardownConfig(st0, environment)
 				teardown = true

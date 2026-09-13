@@ -84,43 +84,13 @@ import (
 func Compile(files []config.File, reg *registry.Registry, opts Options) (ResolvedConfig, diag.Diagnostics) {
 	var ds diag.Diagnostics
 
-	project, decodeDiags := config.Decode(files)
-	ds.Extend(decodeDiags)
-	if decodeDiags.HasErrors() {
+	stage, stageDS := VariableScope(files, opts)
+	ds.Extend(stageDS)
+	if stageDS.HasErrors() {
 		return ResolvedConfig{}, ds
 	}
-
-	// BEFORE ANYTHING ELSE RUNS. A binary that cannot understand this project must
-	// say so once, rather than reporting twenty unknown-key diagnostics that are all
-	// the same problem said badly (PLAN.md §61.2).
-	if versionDiags := checkRequiredVersion(project, opts.Version); versionDiags.HasErrors() {
-		ds.Extend(versionDiags)
-		return ResolvedConfig{}, ds
-	}
-
-	chain, envDiags := environments.Resolve(project.Environments, opts.Environment)
-	ds.Extend(envDiags)
-	if envDiags.HasErrors() {
-		// A broken chain does not by itself make stage 4 noisier — an
-		// unselected Chain already resolves an unset environment-scoped
-		// variable to an unknown rather than an error (see Compile's doc
-		// comment). What this halt actually suppresses is stage 4's
-		// chain-independent checking (a malformed variable declaration or
-		// a malformed --var), which would otherwise be reported alongside
-		// a diagnostic already explaining why the chain itself failed.
-		return ResolvedConfig{}, ds
-	}
-
-	fileValues := fileVars(project, opts)
-	scope, varDiags := variables.Resolve(project.Variables, chain, fileValues, nil, opts.Vars)
-	ds.Extend(varDiags)
-	seedProcessVariables(&scope, project.Project, opts)
-	if varDiags.HasErrors() {
-		// Stage 6 would report `undefined variable` for each of the same
-		// names at each use site — the same problem told twice, with the
-		// second telling less informative than the first.
-		return ResolvedConfig{}, ds
-	}
+	project, chain, scope := stage.Project, stage.Chain, stage.Scope
+	fileValues, varDiags := stage.FileValues, stage.VarDiags
 
 	// Stage 4.5: the provider instances. AFTER variables, because an instance's
 	// configuration interpolates them — `cloud: ${path}`, `iam-role: ${role}` —
@@ -290,6 +260,91 @@ func checkRequiredVersion(project *config.ProjectDecl, current string) diag.Diag
 // a decoded project file, the other a command-line input — and they merge only
 // here, at the one rung of the precedence chain they share. The file named on
 // the command line is the more specific of the two, so it wins.
+// VariableStage is what stages 1-4 produce: the decoded project, the environment
+// chain, and the variable scope everything later interpolates against.
+type VariableStage struct {
+	Project *config.ProjectDecl
+	Chain   environments.Chain
+	Scope   variables.Scope
+
+	// FileValues is §7's file rung: variables.yml and any --var-file, merged. Kept
+	// because directoryScopes re-runs stage 4 per resources directory and must put
+	// the same rungs back underneath that directory's own values.
+	FileValues map[string]value.Value
+
+	// VarDiags is what the project-wide stage 4 reported, and it is the SUBTRACTION
+	// BASE for each directory's re-run: every rung but the directory's own is
+	// identical between them, so without this a single project-wide mistake is
+	// reported once per directory. See directoryScopes.
+	VarDiags diag.Diagnostics
+}
+
+// VariableScope runs stages 1 to 4 and stops there: decode, the `infrata:` floor,
+// the environment chain, and the variables.
+//
+// EXPORTED FOR THE COMMANDS THAT NEVER COMPILE. `discover`, `import`, `refresh` and
+// `destroy` still have to resolve `providers:`, whose configuration interpolates
+// variables — and resolving variables needs none of the rest of a compile. It needs
+// no registry, no plugins, no resources and no modules, which is why this can be
+// lifted out and why it was wrong to conclude those commands had no scope available
+// (PLAN.md §12.1, amended).
+//
+// Shared with Compile rather than reimplemented: the precedence ladder IS the
+// product's rule (§7), and a second copy of it would drift from the first in exactly
+// the way a user could not predict.
+//
+// An empty opts.Environment is valid and deliberate. It yields an unselected Chain,
+// so a variable only an environment sets becomes an UNKNOWN rather than an error —
+// which is what lets `discover`, which has no environment, still resolve everything
+// that does not depend on one. A caller that cannot use an unknown must say so
+// itself; this function does not know which of its callers those are.
+func VariableScope(files []config.File, opts Options) (VariableStage, diag.Diagnostics) {
+	var ds diag.Diagnostics
+
+	project, decodeDiags := config.Decode(files)
+	ds.Extend(decodeDiags)
+	if decodeDiags.HasErrors() {
+		return VariableStage{}, ds
+	}
+
+	// BEFORE ANYTHING ELSE RUNS. A binary that cannot understand this project must
+	// say so once, rather than reporting twenty unknown-key diagnostics that are all
+	// the same problem said badly (PLAN.md §61.2).
+	if versionDiags := checkRequiredVersion(project, opts.Version); versionDiags.HasErrors() {
+		ds.Extend(versionDiags)
+		return VariableStage{}, ds
+	}
+
+	chain, envDiags := environments.Resolve(project.Environments, opts.Environment)
+	ds.Extend(envDiags)
+	if envDiags.HasErrors() {
+		// A broken chain does not by itself make stage 4 noisier — an
+		// unselected Chain already resolves an unset environment-scoped
+		// variable to an unknown rather than an error (see Compile's doc
+		// comment). What this halt actually suppresses is stage 4's
+		// chain-independent checking (a malformed variable declaration or
+		// a malformed --var), which would otherwise be reported alongside
+		// a diagnostic already explaining why the chain itself failed.
+		return VariableStage{Project: project}, ds
+	}
+
+	fileValues := fileVars(project, opts)
+	scope, varDiags := variables.Resolve(project.Variables, chain, fileValues, nil, opts.Vars)
+	ds.Extend(varDiags)
+	seedProcessVariables(&scope, project.Project, opts)
+	if varDiags.HasErrors() {
+		// Stage 6 would report `undefined variable` for each of the same
+		// names at each use site — the same problem told twice, with the
+		// second telling less informative than the first.
+		return VariableStage{Project: project, Chain: chain}, ds
+	}
+
+	return VariableStage{
+		Project: project, Chain: chain, Scope: scope,
+		FileValues: fileValues, VarDiags: varDiags,
+	}, ds
+}
+
 func fileVars(project *config.ProjectDecl, opts Options) map[string]value.Value {
 	out := make(map[string]value.Value, len(project.VariableValues)+len(opts.FileVars))
 	maps.Copy(out, project.VariableValues)

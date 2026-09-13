@@ -537,59 +537,39 @@ resources: {}
 	}
 }
 
-// TestRefreshRejectsVarFlag pins rejectVariableFlags at the command level:
-// refresh reads state and calls Provider.Read (see newRefreshCommand's doc
-// comment), never config.Load or compiler.Compile, so a variable has nothing
-// to interpolate into and the flag must be refused, not silently accepted
-// and ignored.
-func TestRefreshRejectsVarFlag(t *testing.T) {
+// TestRefreshTakesVarForAProviderInstance.
+//
+// The inverse of the test that used to be here. `refresh --var` was refused because
+// refresh never calls config.Load or compiler.Compile, so a variable had nothing to
+// interpolate into. It does read `providers:` though, and an instance's configuration
+// interpolates variables — refresh has to construct that instance to call
+// Provider.Read against the right account. Refusing the flag left an instance
+// configured `cloud: ${cloud_file}` refreshable by nothing.
+func TestRefreshTakesVarForAProviderInstance(t *testing.T) {
 	dir := projectDir(t, `
 project: myapp
 resources: {}
 `)
-	opts := &GlobalOptions{Dir: dir, Parallelism: 4, Vars: []string{"cidr=10.0.0.0/16"}}
-	cmd := newRefreshCommand(opts)
-	cmd.SetArgs([]string{"dev"})
-	var stdout, stderr bytes.Buffer
-	cmd.SetOut(&stdout)
-	cmd.SetErr(&stderr)
+	for _, tc := range []struct {
+		name string
+		opts *GlobalOptions
+	}{
+		{"--var", &GlobalOptions{Dir: dir, Parallelism: 4, Vars: []string{"cidr=10.0.0.0/16"}}},
+		// --var-file too: a guard checking len(opts.Vars) alone would survive a
+		// test that asserted only the first.
+		{"--var-file", &GlobalOptions{Dir: dir, Parallelism: 4, VarFiles: []string{"vars.yml"}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cmd := newRefreshCommand(tc.opts)
+			cmd.SetArgs([]string{"dev"})
+			var stdout, stderr bytes.Buffer
+			cmd.SetOut(&stdout)
+			cmd.SetErr(&stderr)
 
-	err := cmd.Execute()
-	if err == nil {
-		t.Fatal("refresh --var must be refused, not silently accepted")
-	}
-	if !strings.Contains(err.Error(), "does not take --var") {
-		t.Errorf("error = %q, want it to explain --var is refused", err.Error())
-	}
-	// refresh's doc comment says the lock is taken first and held for the
-	// whole run; the guard must return before that happens, or a refused
-	// command would still leave a lock behind for the user to clear.
-	if _, statErr := os.Stat(filepath.Join(dir, ".infra", "state", "dev.lock")); !os.IsNotExist(statErr) {
-		t.Error("a refused refresh must not have taken the environment lock")
-	}
-}
-
-// TestRefreshRejectsVarFileFlag is TestRefreshRejectsVarFlag's --var-file
-// counterpart: rejectVariableFlags refuses on EITHER flag being set, and a
-// test asserting only --var would not catch a version of the guard that
-// checked len(opts.Vars) alone.
-func TestRefreshRejectsVarFileFlag(t *testing.T) {
-	dir := projectDir(t, `
-project: myapp
-resources: {}
-`)
-	opts := &GlobalOptions{Dir: dir, Parallelism: 4, VarFiles: []string{"vars.yml"}}
-	cmd := newRefreshCommand(opts)
-	cmd.SetArgs([]string{"dev"})
-	var stdout, stderr bytes.Buffer
-	cmd.SetOut(&stdout)
-	cmd.SetErr(&stderr)
-
-	err := cmd.Execute()
-	if err == nil {
-		t.Fatal("refresh --var-file must be refused, not silently accepted")
-	}
-	if !strings.Contains(err.Error(), "does not take --var") {
-		t.Errorf("error = %q, want it to explain --var-file is refused", err.Error())
+			err := cmd.Execute()
+			if err != nil && strings.Contains(err.Error(), "does not take --var") {
+				t.Errorf("%s is still refused: %v", tc.name, err)
+			}
+		})
 	}
 }

@@ -127,36 +127,56 @@ resources:
 	}
 }
 
-// TestDestroyAndRefreshRefuseVariableFlags is the CLI-level counterpart to
-// internal/cli's TestDestroyRejectsVarFlag/TestRefreshRejectsVarFlag: it
-// drives the real built binary, so it also proves the refusal happens before
-// the environment is touched at all.
-func TestDestroyAndRefreshRefuseVariableFlags(t *testing.T) {
+// TestDestroyAndRefreshAcceptVariableFlagsWithoutChangingWhatStateSays.
+//
+// These two used to REFUSE --var and --var-file, and this test asserted the refusal.
+// The refusal's premise — "a variable has nothing to interpolate into" — was true of
+// resources and false of `providers:`, so it is gone (see §12.1, amended); an instance
+// configured `cloud: ${cloud_file}` was otherwise refreshable and destroyable by
+// nothing. tests/integration/provider_variables_test.go covers what the flags now
+// reach.
+//
+// What this test keeps is the concern the refusal was protecting, which has not gone
+// away: these commands work from RECORDED STATE, so a --var naming a resource's
+// variable must not appear to change what they do. Accepting the flag is only correct
+// while that stays true — if a --var could alter a destroy's resource values, the user
+// would be editing a teardown with a flag, and the thing destroyed would not be the
+// thing recorded.
+func TestDestroyAndRefreshAcceptVariableFlagsWithoutChangingWhatStateSays(t *testing.T) {
 	dir := varProject(t, "cidr: 10.0.0.0/16\n")
 	if r := run(t, dir, "apply", "dev", "--auto-approve"); r.ExitCode != 2 {
 		t.Fatalf("apply exit = %d\n%s", r.ExitCode, r.combined())
 	}
 
-	for _, tc := range []struct {
-		args []string
-	}{
-		{[]string{"destroy", "dev", "--auto-approve", "--var", "cidr=10.1.0.0/16"}},
-		{[]string{"destroy", "dev", "--auto-approve", "--var-file", "variables.yml"}},
-		{[]string{"refresh", "dev", "--var", "cidr=10.1.0.0/16"}},
-		{[]string{"refresh", "dev", "--var-file", "variables.yml"}},
+	// cidr is a RESOURCE variable here, not a provider one. Overriding it must make
+	// no difference to either command: what refresh reads and what destroy tears
+	// down both come from state.
+	for _, args := range [][]string{
+		{"refresh", "dev", "--var", "cidr=10.9.0.0/16"},
+		{"refresh", "dev", "--var-file", "variables.yml"},
 	} {
-		r := run(t, dir, tc.args...)
-		if r.ExitCode != 1 {
-			t.Errorf("infra %v exit = %d, want 1 — a flag that cannot affect the outcome must be "+
-				"refused, not ignored\n%s", tc.args, r.ExitCode, r.combined())
+		r := run(t, dir, args...)
+		if r.ExitCode != 0 {
+			t.Errorf("infra %v exit = %d, want 0\n%s", args, r.ExitCode, r.combined())
 		}
-		requireContains(t, r.combined(), "does not take --var")
+		requireContains(t, r.combined(), "net: refreshed")
 	}
 
-	// And the environment still exists: a refused command must not have run.
+	// State still describes what was actually built, not what the flag said.
 	if r := run(t, dir, "plan", "dev"); r.ExitCode != 0 {
-		t.Errorf("plan after the refused commands exit = %d, want 0 (nothing should have changed)\n%s",
+		t.Errorf("a --var on refresh changed what state records; plan exit = %d, want 0\n%s",
 			r.ExitCode, r.combined())
+	}
+
+	destroy := run(t, dir, "destroy", "dev", "--auto-approve", "--var", "cidr=10.9.0.0/16")
+	if destroy.ExitCode != 2 {
+		t.Errorf("destroy exit = %d, want 2 (changes applied)\n%s", destroy.ExitCode, destroy.combined())
+	}
+	// The teardown came from state: the address recorded there, not a flag's value.
+	requireContains(t, destroy.combined(), "net")
+	if strings.Contains(destroy.combined(), "10.9.0.0/16") {
+		t.Errorf("a --var reached the teardown; destroy must describe what state records:\n%s",
+			destroy.combined())
 	}
 }
 

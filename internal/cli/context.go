@@ -7,15 +7,16 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
+	"github.com/infrata/infrata/internal/compiler"
 	"github.com/infrata/infrata/internal/config"
 	"github.com/infrata/infrata/internal/diag"
 	"github.com/infrata/infrata/internal/pluginhost"
 	"github.com/infrata/infrata/internal/providers"
 	"github.com/infrata/infrata/internal/registry"
 	"github.com/infrata/infrata/internal/state"
-	"github.com/infrata/infrata/internal/variables"
 	"github.com/infrata/infrata/pkg/provider"
 	"github.com/infrata/infrata/pkg/semver"
 	"github.com/infrata/infrata/pkg/value"
@@ -127,9 +128,11 @@ func verboseWriter(opts *GlobalOptions) io.Writer {
 // compiles still has to dispatch to.
 //
 // The returned close function shuts down every plugin started; callers must defer it.
-func stateOnlyRegistry(opts *GlobalOptions) (*registry.Registry, providers.Table, diag.Diagnostics, func()) {
+func stateOnlyRegistry(
+	opts *GlobalOptions, environment string,
+) (*registry.Registry, providers.Table, diag.Diagnostics, func()) {
 	reg, closePlugins := buildRegistry(opts)
-	table, ds := registerStateInstances(reg, opts.Dir)
+	table, ds := registerStateInstances(reg, opts, environment)
 	return reg, table, ds, closePlugins
 }
 
@@ -147,9 +150,12 @@ func stateOnlyRegistry(opts *GlobalOptions) (*registry.Registry, providers.Table
 // environment has no single answer for it. What saves it is that the instance NAME
 // is recorded in state, so the resource still reaches the right account whenever
 // that account's configuration does not itself depend on an environment.
-func registerStateInstances(reg *registry.Registry, dir string) (providers.Table, diag.Diagnostics) {
+func registerStateInstances(
+	reg *registry.Registry, opts *GlobalOptions, environment string,
+) (providers.Table, diag.Diagnostics) {
 	var ds diag.Diagnostics
 
+	dir := opts.Dir
 	files, err := config.Load(dir)
 	if err != nil {
 		// No readable configuration at all. `destroy` is explicitly allowed to run
@@ -189,9 +195,33 @@ func registerStateInstances(reg *registry.Registry, dir string) (providers.Table
 		return registerImplicit(reg, ds)
 	}
 
-	table, resolveDS := providers.Resolve(decl.Providers, literalOnlyScope())
+	// The variable scope, from stages 1-4 only. No compile, no modules, no
+	// resources: resolving variables needs none of them, which is what makes this
+	// available to a command that never compiles.
+	copts, optDS := compilerOptions(opts, environment)
+	ds.Extend(optDS)
+	if optDS.HasErrors() {
+		return nil, ds
+	}
+	stage, stageDS := compiler.VariableScope(files, copts)
+	ds.Extend(stageDS)
+	if stageDS.HasErrors() {
+		return nil, ds
+	}
+
+	table, resolveDS := providers.Resolve(decl.Providers, stage.Scope)
 	ds.Extend(resolveDS)
 	if resolveDS.HasErrors() {
+		return nil, ds
+	}
+	// An UNSELECTED chain (no environment: `discover`, or a teardown of an
+	// environment configuration no longer declares) leaves a per-environment
+	// variable unknown rather than erroring — see compiler.VariableScope. An
+	// unknown must not reach a plugin's Configure: it would be silently treated as
+	// absent and the command would survey or mutate whichever account the plugin
+	// defaults to, which is the one outcome nobody can see in the output.
+	ds.Extend(refuseUnresolvedInstances(table, environment))
+	if ds.HasErrors() {
 		return nil, ds
 	}
 	ds.Extend(providers.Register(table, reg))
@@ -206,12 +236,51 @@ func registerImplicit(reg *registry.Registry, ds diag.Diagnostics) (providers.Ta
 	return table, ds
 }
 
-// literalOnlyScope is an empty variable scope.
+// refuseUnresolvedInstances reports an instance whose configuration still holds an
+// unknown after resolution.
 //
-// An instance configured with `${...}` is therefore reported as an undefined
-// variable rather than silently resolved to something. That diagnostic is the point
-// — see registerStateInstances.
-func literalOnlyScope() variables.Scope { return variables.Scope{} }
+// It can only happen without a selected environment, which is `discover` (it takes
+// none) and a teardown of an environment configuration no longer declares. The value
+// is genuinely unknowable there: it differs per environment and no environment was
+// named. Refusing beats guessing, because the alternative is an account chosen by a
+// plugin default while the output says nothing about it.
+//
+// The action is --var, and unlike the old message that promise is now kept: these
+// commands accept it.
+func refuseUnresolvedInstances(table providers.Table, environment string) diag.Diagnostics {
+	var ds diag.Diagnostics
+
+	for _, name := range table.Names() {
+		inst := table[name]
+		for _, part := range []struct {
+			what   string
+			values map[string]value.Value
+		}{
+			{"configuration", inst.Config},
+			{"`defaults`", inst.Defaults},
+		} {
+			for _, key := range sortedAttributeKeys(part.values) {
+				if part.values[key].Known {
+					continue
+				}
+				detail := "Its value differs per environment, and this command does not take one."
+				if environment != "" {
+					detail = "Its value is not set for environment " + strconv.Quote(environment) + "."
+				}
+				ds.Add(diag.Diagnostic{
+					Severity: diag.SeverityError,
+					Summary: "provider " + strconv.Quote(name) + "'s " + part.what + " key " +
+						strconv.Quote(key) + " could not be resolved",
+					Detail: detail + " Running anyway would use whatever the plugin defaults to, " +
+						"which may be a different account than the one you mean.",
+					Action: "Pass the value with --var, or use a literal here.",
+					Origin: inst.Origin,
+				})
+			}
+		}
+	}
+	return ds
+}
 
 // backendFor constructs the state backend for a project directory.
 func backendFor(dir string) *state.Local {
@@ -384,7 +453,10 @@ func discoveryRegistry(opts *GlobalOptions) (*registry.Registry, providers.Table
 		}
 	}
 
-	table, instanceDS := registerStateInstances(reg, opts.Dir)
+	// NO ENVIRONMENT. `discover` is the one command whose scope configuration does
+	// not set, so everything a variable can supply without one is resolved and
+	// anything that needs one is refused by name.
+	table, instanceDS := registerStateInstances(reg, opts, "")
 	ds.Extend(instanceDS)
 	if len(table) == 0 {
 		// ONE INSTANCE PER PLUGIN, which is EveryPlugin and deliberately not Implicit.

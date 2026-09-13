@@ -1,8 +1,6 @@
 package cli
 
 import (
-	"fmt"
-
 	"github.com/infrata/infrata/internal/compiler"
 	"github.com/infrata/infrata/internal/diag"
 	"github.com/infrata/infrata/internal/version"
@@ -47,22 +45,4 @@ func compilerOptions(opts *GlobalOptions, environment string) (compiler.Options,
 		Vars:        vars,
 		FileVars:    fileVars,
 	}, ds
-}
-
-// rejectVariableFlags refuses --var and --var-file for the commands that never
-// compile configuration.
-//
-// destroy synthesises an empty ResolvedConfig from state and refresh reads
-// state and calls Provider.Read; neither calls config.Load or compiler.Compile,
-// so a variable has nothing to interpolate into and cannot change the outcome.
-// Accepting a flag that cannot change the outcome is exactly what
-// checkUnsupportedFlags refuses for an unwired flag, and the reasoning does not
-// change because the flag works elsewhere.
-func rejectVariableFlags(opts *GlobalOptions, command string) error {
-	if len(opts.Vars) == 0 && len(opts.VarFiles) == 0 {
-		return nil
-	}
-	return fmt.Errorf("%s does not take --var or --var-file: it works from recorded state rather "+
-		"than from configuration, so a variable has nothing to interpolate into. "+
-		"Use `infra plan <environment>` to see what configuration would change", command)
 }

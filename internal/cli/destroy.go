@@ -26,17 +26,18 @@ import (
 // cfg argument came from compiling YAML or was built by hand, so it is
 // reused unchanged, and destroy never calls config.Load or compiler.Compile
 // at all: the project name comes from state.State.Project, not infra.yml.
-// destroy also refuses --var and --var-file outright (rejectVariableFlags),
-// rather than accepting and silently ignoring them. There is no
-// configuration for either flag to interpolate into — see above — but
-// accepting them anyway would be exactly the advertised-and-ignored shape
-// checkUnsupportedFlags exists to prevent for an unwired flag, and that
-// reasoning does not change just because the flag works on other commands.
-// An earlier version of this comment argued the opposite ("simply
-// inapplicable ... not a broken promise"); it was wrong. A flag that cannot
-// affect the outcome and is accepted anyway is ignored, by definition, and
-// the failure a user hits is the same one either way: they believe --var did
-// something here, and it did not.
+// destroy DOES take --var and --var-file, and used to refuse them. The refusal
+// rested on "there is no configuration for a variable to interpolate into",
+// which was true of resources and never true of `providers:`: an instance's
+// own configuration interpolates variables, and destroy has to construct that
+// instance to dispatch a delete to the right account. So the flag did affect
+// the outcome, and refusing it left `defaults: {region: ${aws_region}}`
+// destroyable by nothing. Reversed 2026-09-13 with §12.1.
+//
+// The older reasoning it replaced is still right about its own case and worth
+// keeping in mind: a flag that cannot affect the outcome must be refused
+// rather than accepted and ignored, which is what checkUnsupportedFlags is
+// for. The change here is that this flag can.
 func newDestroyCommand(opts *GlobalOptions) *cobra.Command {
 	return &cobra.Command{
 		Use:           "destroy <environment>",
@@ -45,10 +46,6 @@ func newDestroyCommand(opts *GlobalOptions) *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := rejectVariableFlags(opts, "destroy"); err != nil {
-				return err
-			}
-
 			environment := args[0]
 
 			rw, closeReport, err := openReport(opts, "destroy", environment, cmd.ErrOrStderr())
@@ -57,7 +54,7 @@ func newDestroyCommand(opts *GlobalOptions) *cobra.Command {
 			}
 			defer closeReport()
 
-			reg, _, regDiags, closePlugins := stateOnlyRegistry(opts)
+			reg, _, regDiags, closePlugins := stateOnlyRegistry(opts, environment)
 			defer closePlugins()
 			if regDiags.HasErrors() {
 				regDiags.Render(cmd.ErrOrStderr())

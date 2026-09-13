@@ -51,10 +51,6 @@ func newRefreshCommand(opts *GlobalOptions) *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := rejectVariableFlags(opts, "refresh"); err != nil {
-				return err
-			}
-
 			environment := args[0]
 
 			rw, closeReport, err := openReport(opts, "refresh", environment, cmd.ErrOrStderr())
@@ -63,7 +59,7 @@ func newRefreshCommand(opts *GlobalOptions) *cobra.Command {
 			}
 			defer closeReport()
 
-			reg, _, regDiags, closePlugins := stateOnlyRegistry(opts)
+			reg, _, regDiags, closePlugins := stateOnlyRegistry(opts, environment)
 			defer closePlugins()
 			if regDiags.HasErrors() {
 				regDiags.Render(cmd.ErrOrStderr())

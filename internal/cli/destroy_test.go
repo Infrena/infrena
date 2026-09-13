@@ -800,57 +800,44 @@ resources:
 	}
 }
 
-// TestDestroyRejectsVarFlag pins rejectVariableFlags at the command level:
-// destroy compiles no configuration (see newDestroyCommand's doc comment), so
-// a variable has nothing to interpolate into and the flag must be refused,
-// not silently accepted and ignored.
-func TestDestroyRejectsVarFlag(t *testing.T) {
+// TestDestroyTakesVarForAProviderInstance.
+//
+// The inverse of the test that used to be here. `destroy --var` was refused on the
+// grounds that destroy compiles no configuration, so a variable had nothing to
+// interpolate into. That was true of resources and false of `providers:` — an
+// instance's own configuration interpolates variables, and destroy must construct
+// that instance to send a delete to the right account. So the flag did affect the
+// outcome, and refusing it made `region: ${aws_region}` destroyable by nothing.
+//
+// Asserting the absence of the old error rather than a successful destroy: this is a
+// command-level test, and what was wrong was the refusal happening before anything
+// else ran.
+func TestDestroyTakesVarForAProviderInstance(t *testing.T) {
 	dir := projectDir(t, `
 project: myapp
 resources: {}
 `)
-	opts := &GlobalOptions{Dir: dir, Parallelism: 4, Vars: []string{"cidr=10.0.0.0/16"}}
-	cmd := newDestroyCommand(opts)
-	cmd.SetArgs([]string{"dev"})
-	cmd.SetIn(strings.NewReader(""))
-	var stdout, stderr bytes.Buffer
-	cmd.SetOut(&stdout)
-	cmd.SetErr(&stderr)
+	for _, tc := range []struct {
+		name string
+		opts *GlobalOptions
+	}{
+		{"--var", &GlobalOptions{Dir: dir, Parallelism: 4, Vars: []string{"cidr=10.0.0.0/16"}}},
+		// --var-file too: a guard that checked len(opts.Vars) alone would have
+		// survived a test asserting only the first.
+		{"--var-file", &GlobalOptions{Dir: dir, Parallelism: 4, VarFiles: []string{"vars.yml"}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cmd := newDestroyCommand(tc.opts)
+			cmd.SetArgs([]string{"dev"})
+			cmd.SetIn(strings.NewReader(""))
+			var stdout, stderr bytes.Buffer
+			cmd.SetOut(&stdout)
+			cmd.SetErr(&stderr)
 
-	err := cmd.Execute()
-	if err == nil {
-		t.Fatal("destroy --var must be refused, not silently accepted")
-	}
-	if !strings.Contains(err.Error(), "does not take --var") {
-		t.Errorf("error = %q, want it to explain --var is refused", err.Error())
-	}
-	if _, statErr := os.Stat(filepath.Join(dir, ".infra", "state", "dev.lock")); !os.IsNotExist(statErr) {
-		t.Error("a refused destroy must not have taken the environment lock — the command must return before doing anything")
-	}
-}
-
-// TestDestroyRejectsVarFileFlag is TestDestroyRejectsVarFlag's --var-file
-// counterpart: rejectVariableFlags refuses on EITHER flag being set, and a
-// test asserting only --var would not catch a version of the guard that
-// checked len(opts.Vars) alone.
-func TestDestroyRejectsVarFileFlag(t *testing.T) {
-	dir := projectDir(t, `
-project: myapp
-resources: {}
-`)
-	opts := &GlobalOptions{Dir: dir, Parallelism: 4, VarFiles: []string{"vars.yml"}}
-	cmd := newDestroyCommand(opts)
-	cmd.SetArgs([]string{"dev"})
-	cmd.SetIn(strings.NewReader(""))
-	var stdout, stderr bytes.Buffer
-	cmd.SetOut(&stdout)
-	cmd.SetErr(&stderr)
-
-	err := cmd.Execute()
-	if err == nil {
-		t.Fatal("destroy --var-file must be refused, not silently accepted")
-	}
-	if !strings.Contains(err.Error(), "does not take --var") {
-		t.Errorf("error = %q, want it to explain --var-file is refused", err.Error())
+			err := cmd.Execute()
+			if err != nil && strings.Contains(err.Error(), "does not take --var") {
+				t.Errorf("%s is still refused: %v", tc.name, err)
+			}
+		})
 	}
 }
