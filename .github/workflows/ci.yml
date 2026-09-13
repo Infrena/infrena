@@ -70,7 +70,7 @@ jobs:
       # must be called that. The two have to agree, and CI is where a disagreement shows
       # up — it failed once on exactly this, when that replace still named a local
       # directory (`../ilan`) that no clone produces.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           path: infrata
 
@@ -83,13 +83,13 @@ jobs:
       # feature complete"). Create PLUGIN_REPO_TOKEN as a secret with read access to
       # infrata/infrata-provider-fake. Without it this step fails, which is deliberate:
       # see INFRATA_REQUIRE_PLUGIN below.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           repository: infrata/infrata-provider-fake
           path: infrata-provider-fake
           token: ${{ secrets.PLUGIN_REPO_TOKEN }}
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version: ${{ matrix.go }}
           # go.sum is no longer at the workspace root, since both repositories are
@@ -98,6 +98,9 @@ jobs:
           cache-dependency-path: infrata/go.sum
           # Do NOT let the toolchain silently download a newer Go to satisfy go.mod.
           # That would defeat the floor job entirely: it would pass by fetching 1.27.
+          # setup-go v6 began setting GOTOOLCHAIN=local itself, for this exact reason, so
+          # this agrees with the action rather than fighting it. The job-level GOTOOLCHAIN
+          # stays anyway: the guarantee must not rest on the action's default.
           check-latest: false
 
       - name: go.mod floor is not above this toolchain
