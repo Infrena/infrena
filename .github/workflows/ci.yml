@@ -1,0 +1,90 @@
+name: CI
+
+# Two things this exists to catch that local development cannot.
+#
+# THE DECLARED FLOOR. go.mod says `go 1.24.0`, which is a promise to every plugin
+# author that they can build against this with Go 1.24 (PLAN.md §31.1, §61). Nothing
+# on a developer's machine tests that promise — mise.toml pins a much newer toolchain —
+# so without the `floor` job below the floor drifts upward the first time someone uses
+# a newer API, and the first to find out is somebody else's build.
+#
+# THE RACE DETECTOR, which is slow enough that it is easy to stop running by hand, on a
+# codebase whose executor is concurrent by design.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: check (${{ matrix.go }})
+    runs-on: ubuntu-latest
+
+    env:
+      # NO SILENT TOOLCHAIN UPGRADES. Go 1.21+ downloads a newer toolchain on its own
+      # when go.mod asks for one, which would make the floor job pass by fetching
+      # exactly the version it exists to prove is unnecessary. `local` makes the
+      # matrix test what it says it tests.
+      GOTOOLCHAIN: local
+
+    strategy:
+      # Both versions always run. fail-fast would hide a floor break behind an
+      # unrelated failure on the newer toolchain, which is the case most worth seeing.
+      fail-fast: false
+      matrix:
+        include:
+          # The floor from go.mod. Held at the OLDEST supported minor deliberately: it
+          # is the version a plugin author may be on, not the one we develop with.
+          - go: "1.24"
+            name: floor
+          # What mise.toml pins, so a toolchain bump is caught here rather than in a
+          # developer's working tree.
+          - go: "1.27"
+            name: current
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go }}
+          # Do NOT let the toolchain silently download a newer Go to satisfy go.mod.
+          # That would defeat the floor job entirely: it would pass by fetching 1.27.
+          check-latest: false
+
+      - name: go.mod floor is not above this toolchain
+        # GOTOOLCHAIN=local (job env) already makes every later step fail if the floor
+        # rose. This runs FIRST so the failure carries the reason rather than Go's own
+        # "requires go >= …", which does not say who it breaks.
+        if: matrix.name == 'floor'
+        run: |
+          declared=$(go mod edit -json | sed -n 's/.*"Go": "\([^"]*\)".*/\1/p')
+          echo "go.mod declares $declared; this runner has $(go env GOVERSION)"
+          go build ./... || {
+            echo "::error::go.mod's floor ($declared) is above Go ${{ matrix.go }}."
+            echo "Either lower the floor, or raise this matrix entry deliberately —"
+            echo "raising it breaks every plugin author still on ${{ matrix.go }}."
+            exit 1
+          }
+
+      - name: gofmt
+        run: make fmt
+
+      - name: vet
+        run: make vet
+
+      - name: test
+        # -count=1 is not a preference: it disables the test cache, without which
+        # tests/integration can be skipped entirely because it shells out to `go build`
+        # rather than importing anything. See the Makefile.
+        run: make test
+
+      - name: test -race
+        # The executor is concurrent by design, and a data race there corrupts state.
+        # Only on the current toolchain: the race detector is slow, and a race is not
+        # version-specific.
+        if: matrix.name == 'current'
+        run: go test -count=1 -race ./...

@@ -179,6 +179,13 @@ gofmt -l .
 AWS integration tests must be opt-in (build tag or env guard) — **normal CI must not
 require AWS credentials** (§46).
 
+**CI** (`.github/workflows/ci.yml`) runs gofmt, vet and the suite on two toolchains: the
+FLOOR from `go.mod` (currently 1.24) and what `mise.toml` pins (1.27). `GOTOOLCHAIN=local`
+is set for the whole job, because Go otherwise downloads a newer toolchain to satisfy
+`go.mod` — which would make the floor job pass by fetching the very version it exists to
+prove unnecessary. The floor is a promise to plugin authors, and nothing on a developer's
+machine tests it. `-race` runs on the current toolchain only.
+
 **Versioning (§61).** Six format versions already exist and stay INDEPENDENT —
 `state.CurrentVersion`, `pluginproto.Version`/`Supported`, `planner.PlanVersion`,
 `report.Version`, and the module lockfile and cache. One shared number would mean a state
