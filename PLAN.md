@@ -1960,6 +1960,272 @@ type Provider interface {
 
 Do not let AWS-specific code leak into the core planner.
 
+## 31.1 Provider plugins are separate processes
+
+**Decided 2026-09-12, to be built before Phase 3.** A provider plugin is a separately
+distributed binary that `infrata` launches as a child process and talks to over
+stdin/stdout. That includes the official plugins: AWS ships the same way a third party's
+plugin would, and the fake provider becomes a binary too.
+
+Plugins are written in Go against an SDK this repository publishes. The protocol does not
+depend on Go, but nothing is built for any other language, and the protocol uses only the
+standard library, so **it adds no third-party dependency**.
+
+### Alternatives rejected
+
+- **Go's `plugin` package (`.so` files).** The host and every plugin must be built with
+  the exact same toolchain and the exact same version of every shared dependency. There
+  is no Windows support, and a plugin can never be unloaded. For binaries built by other
+  people this fails on every release. A panicking plugin also takes the engine down
+  mid-apply, while it holds a state lock and possibly after a real resource was created.
+- **JavaScript through goja.** A provider's job is authenticated network calls to a cloud
+  API. goja has no Node APIs, no `fetch` and no event loop, so it cannot run any cloud's
+  SDK. The host would end up re-implementing those SDKs as bindings. It would also make
+  JavaScript the only language plugins can be written in.
+- **WebAssembly (wazero).** It is pure Go, sandboxed and portable, but WASI networking is
+  immature, so the host would have to supply HTTP and TLS: goja's problem again. The
+  sandbox also buys little here, because a provider holds cloud credentials by design and
+  users choose which plugins they run. Worth revisiting if either of those changes.
+- **`hashicorp/go-plugin` with gRPC.** Proven, but it brings in grpc, protobuf and hclog,
+  far past a dependency budget that so far holds two libraries. Calls are counted in
+  dozens to thousands per run, so gRPC's performance buys nothing measurable.
+
+### Transport
+
+- A plugin named `aws` is the executable `infrata-plugin-aws`.
+- The host starts it with `INFRATA_PLUGIN_COOKIE` set to a random value. A binary run by
+  hand without that variable prints "this is an infrata plugin; it is run by infrata" and
+  exits non-zero. Without the cookie it would sit silently waiting for protocol input.
+- **stdout carries protocol messages and nothing else.** Messages are newline-delimited
+  JSON: `{"id", "method", "params"}` requests, `{"id", "result"}` or `{"id", "error"}`
+  responses, and `{"method": "cancel", "id"}` notifications.
+- **stderr is the plugin's log.** The host prefixes each line with the plugin name and
+  shows it under `--verbose`. The SDK points `os.Stdout` at stderr before plugin code runs,
+  because a stray `fmt.Println` in a plugin would otherwise corrupt the protocol stream.
+  That is the classic failure of stdio protocols.
+- Requests carry IDs and are multiplexed on one pipe. The SDK serves each request in its
+  own goroutine, so `--parallelism` works against one process. Per-provider concurrency
+  bounds (§34) stay on the host side.
+- **Cancellation is a message, not a kill.** A cancelled context sends `cancel`, the SDK
+  cancels that request's `ctx`, and the host still waits for the response. Killing a
+  plugin during `Create` can orphan a resource that was really created: the case §31's
+  non-nil-on-success rule exists to prevent.
+
+### Handshake and version
+
+The plugin's first message is `{"protocol": 1, "name": "aws", "version": "0.3.1"}`, sent
+before any request.
+
+- The host supports a SET of protocol versions and refuses anything else with a §44 error.
+  The error names the plugin and the path it was loaded from, gives both sides' versions,
+  and suggests which one to upgrade.
+- `name` must equal the `plugin:` that selected the binary. A renamed or mis-copied binary
+  otherwise serves the wrong schemas, and the first sign of that is a plan.
+- **The protocol version is the compatibility contract, not the Go types.** A plugin built
+  against an older SDK keeps working for as long as its protocol version is supported. So
+  `pkg/pluginproto` changes additively, and any removal bumps `protocol`.
+
+### Methods
+
+| Method | Carries | Replaces |
+| --- | --- | --- |
+| `schemas` | nothing → `[]ResourceDefinition` | `Plugin.Definitions` |
+| `configure` | instance, config, project dir → handle | `Plugin.New` |
+| `read` / `create` / `update` / `delete` | handle + resource | same `Provider` methods |
+| `discover` / `import` | handle + request | same `Provider` methods |
+| `shutdown` | nothing | — |
+
+- **The two-step registration survives unchanged.** `schemas` feeds `RegisterPlugin`
+  before anything is read. `configure` is what stage 4.5 calls for `RegisterInstance`.
+  The cycle §12.1 breaks stays broken, and state-only commands still pass literal
+  configuration only.
+- `configure` passes the project directory because a plugin can no longer be handed one
+  when it is constructed. The fake provider needs it: its `cloud:` defaults to a file
+  under the project.
+- **An error carries its own classification:** `{"message", "retryability"}`.
+  `ClassifyError(err error)` cannot cross a process boundary, because an `error` value does
+  not serialise. The SDK calls the plugin's `ClassifyError` on the plugin's side and sends
+  the answer. The host rebuilds a typed error, and §35's classification reads that
+  instead of calling into the provider.
+
+### Process model
+
+- **One process per plugin per command, not one per instance.** Two AWS accounts means one
+  `infrata-plugin-aws` holding two configured clients, addressed by handle.
+- The host launches the plugins named in `providers:`, and only those. A resource in state
+  whose instance names no entry is already an error before any plugin is needed.
+- **Every command launches plugins**, including `validate` and `explain`, because each
+  needs schemas. That is the main cost of this design; see below.
+- At the end of a command the host sends `shutdown`, closes stdin, waits a grace period,
+  then kills.
+- **A plugin that exits unexpectedly** fails every pending call with an error classified
+  `NotSafeToRetry`. The error message includes the last lines of the plugin's stderr. The
+  executor treats it like any other failed operation. State is written incrementally
+  (§34), so everything that completed before the crash is recorded.
+
+### What the engine stops trusting a plugin with
+
+Today several guarantees rest on each provider following a comment. A binary somebody
+else built cannot be held to a comment. Each of these moves to the host adapter
+(`internal/pluginhost`), so it holds for every plugin, the fake one included:
+
+1. **Bookkeeping is never sent, so it cannot be dropped.** The host sends `type`,
+   `provider_id` and `attributes`. It re-attaches `Address`, `Provider`, `Dependencies`,
+   `Lifecycle`, `CreatedAt` and `UpdatedAt` to whatever comes back. §31's carry-forward
+   contract on `Read` stops being a plugin obligation. Losing `Lifecycle` makes a
+   `prevent_destroy` guard vanish silently, and that is too important to delegate.
+2. **Sensitivity is forced from the schema.** A value the host receives is sensitive if
+   the plugin says so OR the schema declares the attribute sensitive. A plugin that
+   forgets the flag must not be able to put a password into a report or a generated file
+   (§36).
+3. **Provenance is the host's.** A plugin sends kind, known, raw value and sensitivity.
+   The host sets `Source` and `Scope` on returned values, so a plugin cannot claim a value
+   was written by the user.
+4. **`(nil, nil)` from `create` or `update` becomes an error.** The error says the
+   resource may exist untracked, instead of being read as "nothing happened".
+5. **A returned attribute the schema does not declare is an error**, not something
+   silently persisted into state.
+6. **Schemas are validated on load**, through the same `Definition.Validate`, reserved
+   lifecycle key names and `module.` namespace check `RegisterPlugin` already applies.
+   One new rule: **a plugin's types must be prefixed with its own name**. Plugin `aws`
+   serves `aws.*`, so two plugins cannot both claim a type, and a type name says where it
+   came from.
+
+The host adapter wraps the in-process fake provider too (see testing below), so each rule
+gets its sabotage test once, against a deliberately misbehaving plugin.
+
+### Schemas become data
+
+`schema.Attribute` holds three functions, and none of them can cross a pipe:
+
+| Field | Today | Becomes |
+| --- | --- | --- |
+| `Default DefaultFunc(DefaultContext)` | the fake provider returns constants | a static datum |
+| `Validate func(value.Value) error` | unused by any provider | removed |
+| `ImportSpec.Parse` | unused, "may be nil until Phase 2" | removed |
+
+- **A default is a value, not a function of context.** `DefaultContext` carries
+  environment, region, account and project. It existed for environment-class defaults, and
+  §13 withdrew those. A value that really varies by region or account is either a variable
+  (the user decides) or a computed attribute (the provider reports it).
+- **Validation, if a plugin needs it, is declarative:** an enum, a range, a pattern,
+  checked by the host in stage 7. It is added when the first real attribute needs it. A
+  per-attribute call into the plugin would put a round trip inside the compiler for every
+  value.
+- **Parsing an import ID is `import`'s job.** The plugin reports a malformed ID as an
+  error from `import`.
+
+**This change comes first and is in-process.** It makes the existing interface
+serialisable before any transport exists. The protocol is then only a transport for an
+interface that already needs nothing else, and a failing test at that step is about
+schemas, not pipes.
+
+### Finding a plugin: path first, installing later
+
+**Phase A (this milestone).** No downloading.
+
+- The binary is looked up, first match wins, in:
+  1. `--plugin-dir` and `INFRATA_PLUGIN_PATH`
+  2. `<project>/.infra/plugins/`
+  3. `~/.local/share/infrata/plugins/`
+  4. `$PATH`
+- `--verbose` prints the path each plugin was loaded from.
+- A missing plugin is a §44 error naming the `plugin:` entry, every place searched, and
+  where to put the binary.
+- A project may constrain versions:
+
+  ```yaml
+  plugins:
+    aws: ">= 0.3.0, < 0.4.0"
+  ```
+
+  The constraint is checked against the version the handshake reports. It is optional:
+  an unconstrained plugin runs whatever version is found, and `--verbose` says which. It
+  is a map keyed by plugin, not a key on each `providers:` entry, because two instances of
+  one plugin share one process and so necessarily share one version.
+- **`plugins:` is a new top-level key**, so it is a configuration-language change (§58).
+  It is additive, and a project without it behaves exactly as today. Constraint syntax is
+  deliberately small: comparison operators on `MAJOR.MINOR.PATCH`, comma meaning AND,
+  parsed by hand rather than by a semver library.
+
+**Phase B (later, §53).**
+
+- `infrata plugins install` fetches release binaries.
+- A committed `plugins.lock` records the resolved version and a SHA-256 per platform.
+- The host verifies the checksum on every launch once a lock file exists.
+- Phase A's search path is where install writes, so nothing moves.
+
+### Where the code lives
+
+```text
+pkg/pluginproto/        message types, protocol version: the contract
+pkg/pluginsdk/          Serve(provider.Plugin): what plugin authors import
+internal/pluginhost/    launch, handshake, client, the trust rules above
+cmd/infrata-plugin-test/  the fake provider as a binary
+providers/test/         unchanged package; a plugin like any other
+providers/aws/          its own Go module (Phase 3)
+```
+
+- **`providers/aws` gets its own `go.mod`**, so AWS SDK v2 never enters the core module's
+  dependency graph. It stays in this repository while the protocol is young, so a change to
+  both lands in one commit. Moving it to a repository of its own later changes nothing a
+  user sees.
+- `pkg/provider`, `pkg/schema`, `pkg/resource` and `pkg/value` become importable API for
+  plugin authors through the SDK. Their JSON wire forms, not their Go shapes, are what
+  compatibility is promised on.
+- `internal/cli` stops importing `providers/test`.
+
+### Testing
+
+**One code path, two ways to connect it.** `pluginhost.InProcess(p)` runs
+`pluginsdk.Serve(p)` on one end of an in-memory pipe and the host client on the other.
+
+- Unit tests and the fast integration suite register the fake provider that way. Every
+  call is encoded, decoded and passed through the trust rules without starting a process.
+- Launching a subprocess is the only thing a separate, smaller suite adds. That suite
+  builds `cmd/infrata-plugin-test` in `TestMain` and runs §48's workflow against the
+  binary.
+- There is deliberately no path that skips the host adapter. A second path is where the
+  trust rules would silently stop applying.
+
+Tests this section requires, each with a sabotage proving it can fail:
+
+- A plugin that drops `Lifecycle` from `read` still has its `prevent_destroy` enforced.
+- A plugin that returns a schema-sensitive value unflagged still shows `<sensitive>`.
+- A plugin that writes to stdout does not corrupt the session.
+- A plugin that exits during `apply` leaves state recording exactly the operations that
+  completed, and the error shows the plugin's last stderr lines.
+- A cancelled apply waits for the in-flight `create` and records its result.
+- A handshake with the wrong protocol version, the wrong name, or a version outside
+  `plugins:` is refused with a message naming what to change.
+- A plugin returning an undeclared attribute, or a type outside its own prefix, is refused.
+
+### What this costs, recorded before it is built
+
+- **Every command starts processes**, including `validate`, `explain` and `graph`. A plugin
+  with an expensive startup, like AWS SDK credential resolution, pays it on each run. The
+  fix is caching schemas keyed by the binary's SHA-256, and it is deferred until someone
+  measures it being slow.
+- **`init` scaffolds a project that uses the fake provider**, so a fresh install needs
+  `infrata-plugin-test` next to `infrata`. Releases ship both.
+- **`pkg/*` becomes something other people compile against.** Changing those packages now
+  has users outside this repository, even though the wire protocol is the real contract.
+- **Debugging crosses a process boundary.** `--verbose` plugin logs and the stderr tail on
+  a crash are the minimum that keeps this bearable.
+
+### Build order
+
+1. Schemas become data: remove the three function fields, in-process, all tests green.
+2. Trust rules move into a host adapter wrapping in-process providers, each with its
+   sabotage test.
+3. `pkg/pluginproto`, `pkg/pluginsdk`, `internal/pluginhost` over the in-memory pipe. The
+   registry registers every plugin through the host.
+4. Subprocess launch, cookie, handshake, search path, `plugins:` constraints, stderr
+   forwarding, crash and cancel handling.
+5. `cmd/infrata-plugin-test`; the subprocess suite; `internal/cli` drops its direct import.
+6. Documentation: `explain` and `validate` errors for a missing or incompatible plugin, and
+   an authoring guide for the SDK.
+
 ---
 
 # 32. Provider Resources
@@ -2265,13 +2531,18 @@ pkg/
 
 providers/
   test/
-  aws/
+  aws/          # its own go.mod (§31.1)
 
 tests/
   integration/
 ```
 
 Keep the core engine independent of AWS.
+
+Provider plugins run as separate processes (§31.1), which adds `pkg/pluginproto`
+(the wire contract), `pkg/pluginsdk` (what plugin authors import),
+`internal/pluginhost` (launch, handshake, and the rules the engine no longer trusts a
+plugin with) and `cmd/infrata-plugin-test` (the fake provider as a binary).
 
 ---
 
@@ -2583,6 +2854,21 @@ Implement:
 7. Full export.
 8. Interactive discovery.
 9. Round-trip integration tests.
+
+## 50.1 Before Phase 3: provider plugins as processes
+
+AWS is the first provider nobody would put in the core binary, so the plugin protocol
+comes BEFORE it. Otherwise AWS gets written in-process and ported afterwards. §31.1
+specifies it, including its own build order:
+
+1. Schemas become data.
+2. The trust rules move into a host adapter.
+3. Protocol and SDK, over an in-memory pipe.
+4. Subprocess, handshake and search path.
+5. The fake provider as a binary.
+6. Documentation.
+
+Phase 3 then starts with `providers/aws` as a plugin from its first commit.
 
 ---
 
