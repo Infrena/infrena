@@ -128,6 +128,17 @@ in every environment, forever, with no output in which its absence is visible.
 **Absent until Phase 3+:** reading a saved plan back, remote state, AWS. Nothing half-implements
 one of those.
 
+**Planned before Phase 3: provider plugins as separate processes** (`PLAN.md` §31.1, §50.1).
+Plugins are separately distributed Go binaries speaking newline-delimited JSON over stdio, with
+the standard library only. Official plugins, including AWS and the fake provider, ship that way
+too. Two consequences constrain work done before it lands:
+
+- **Nothing in `pkg/schema` may gain another function-typed field.** `DefaultFunc`, `Validate`
+  and `ImportSpec.Parse` are being removed because a function cannot cross a pipe.
+- **Do not add a guarantee that rests on a provider obeying a comment.** Read's carry-forward,
+  non-nil-on-success and sensitivity flags are moving into the engine's host adapter, because a
+  third-party binary cannot be held to a doc comment.
+
 ## Name
 
 The product is **Infrata** (GitHub org `infrata`, command `infrata`). The Go module path
@@ -149,7 +160,8 @@ The governing philosophy:
 ## Stack and commands
 
 Go 1.24 (pinned via `mise.toml`), Cobra, `gopkg.in/yaml.v3`. Those two are the **entire**
-third-party budget so far; AWS SDK v2 arrives with Phase 3.
+third-party budget so far. AWS SDK v2 arrives with Phase 3, inside `providers/aws`'s OWN
+`go.mod`, so it never enters the core module (§31.1).
 
 **`mise` is not active in non-interactive shells.** Either use the `make` targets, which set
 the shim path structurally, or `export PATH="$HOME/.local/share/mise/shims:$PATH"` first.
