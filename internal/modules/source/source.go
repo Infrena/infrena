@@ -383,8 +383,8 @@ func repoPath(s Source) string {
 		return s.Location
 	}
 	if _, rest, ok := splitScheme(s.Location); ok {
-		if i := strings.Index(rest, "/"); i >= 0 {
-			return rest[i+1:]
+		if _, after, ok := strings.Cut(rest, "/"); ok {
+			return after
 		}
 		return ""
 	}

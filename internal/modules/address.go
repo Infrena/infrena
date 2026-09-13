@@ -1,6 +1,8 @@
 package modules
 
 import (
+	"slices"
+
 	"github.com/infrata/infrata/internal/config"
 	"github.com/infrata/infrata/pkg/address"
 	"github.com/infrata/infrata/pkg/value"
@@ -31,8 +33,8 @@ import (
 // what breaks.
 func addressIn(module []string, name string) address.Address {
 	a := address.Address{Name: name}
-	for i := len(module) - 1; i >= 0; i-- {
-		a = a.InModule(module[i])
+	for _, m := range slices.Backward(module) {
+		a = a.InModule(m)
 	}
 	return a
 }
@@ -83,8 +85,8 @@ func instantiateDecl(decl *config.ResourceDecl, module []string) *config.Resourc
 func originInPath(o value.Origin, module []string) value.Origin {
 	// Applied outermost-last, because Origin.InModule PREPENDS: walking the
 	// path backwards leaves it in the same order as the address it belongs to.
-	for i := len(module) - 1; i >= 0; i-- {
-		o = o.InModule(module[i])
+	for _, m := range slices.Backward(module) {
+		o = o.InModule(m)
 	}
 	return o
 }

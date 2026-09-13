@@ -176,7 +176,7 @@ func (g gitRunner) lsRemoteCommit(ctx context.Context, location, ref string) (st
 	}
 
 	var peeled, plain string
-	for _, line := range strings.Split(out, "\n") {
+	for line := range strings.SplitSeq(out, "\n") {
 		hash, name, ok := strings.Cut(strings.TrimSpace(line), "\t")
 		if !ok {
 			continue

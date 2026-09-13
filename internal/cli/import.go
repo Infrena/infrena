@@ -286,7 +286,7 @@ func resourceBlocks(s string) []genBlock {
 	var cur *genBlock
 	var pending []string
 
-	for _, line := range strings.Split(s, "\n") {
+	for line := range strings.SplitSeq(s, "\n") {
 		if name, ok := resourceKey(line); ok {
 			out = append(out, genBlock{})
 			cur = &out[len(out)-1]
@@ -338,7 +338,7 @@ func resourceKey(line string) (string, bool) {
 
 func declaredNames(s string) map[string]bool {
 	out := map[string]bool{}
-	for _, line := range strings.Split(s, "\n") {
+	for line := range strings.SplitSeq(s, "\n") {
 		if name, ok := resourceKey(line); ok {
 			out[name] = true
 		}

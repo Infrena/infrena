@@ -483,7 +483,7 @@ func TestConventionalDirectoriesAreSortedOnce(t *testing.T) {
 		"resources/mid.yml":   "resources:\n  m:\n    type: test.network\n    cidr: 10.3.0.0/16\n",
 	})
 	var first string
-	for i := 0; i < 20; i++ {
+	for i := range 20 {
 		files, err := Load(dir)
 		if err != nil {
 			t.Fatal(err)

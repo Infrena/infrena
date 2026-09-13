@@ -152,7 +152,7 @@ func renderFile(resources []Resource, reg *registry.Registry, opts Options) ([]b
 	}}
 
 	var buf bytes.Buffer
-	for _, line := range strings.Split(opts.Header, "\n") {
+	for line := range strings.SplitSeq(opts.Header, "\n") {
 		if opts.Header == "" {
 			break
 		}

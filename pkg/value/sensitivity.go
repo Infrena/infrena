@@ -15,6 +15,8 @@ package value
 // reference — exists only in the engine, and is lost the moment the engine
 // records what the provider returned instead of what it knew.
 
+import "slices"
+
 // CarrySensitivity returns dst carrying any sensitivity src has, per leaf.
 //
 // It only ever ADDS. Nothing here can clear a flag: a value that is already
@@ -133,10 +135,8 @@ func HasSensitive(v Value) bool {
 		if !ok {
 			return false
 		}
-		for _, item := range items {
-			if HasSensitive(item) {
-				return true
-			}
+		if slices.ContainsFunc(items, HasSensitive) {
+			return true
 		}
 	}
 	return false

@@ -379,7 +379,7 @@ func TestApplyBoundsGlobalParallelism(t *testing.T) {
 	}
 
 	var ops []planner.Operation
-	for i := 0; i < 6; i++ {
+	for i := range 6 {
 		ops = append(ops, op(addr(fmt.Sprintf("r%d", i)), "test.thing", planner.OpCreate))
 	}
 	plan := planWith(ops...)

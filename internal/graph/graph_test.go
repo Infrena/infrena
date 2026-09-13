@@ -84,7 +84,7 @@ func TestCycleIsDeterministicAcrossRuns(t *testing.T) {
 		{"d", "a"}, {"a", "b"}, {"b", "c"}, {"c", "a"},
 	})
 	first := g.Cycle()
-	for i := 0; i < 20; i++ {
+	for range 20 {
 		if got := g.Cycle(); strings.Join(got, ",") != strings.Join(first, ",") {
 			t.Fatalf("Cycle() = %v, want %v on every run — map iteration is randomised", got, first)
 		}
@@ -149,7 +149,7 @@ func TestLayersIsDeterministicAcrossRuns(t *testing.T) {
 		t.Fatalf("Layers: %v", err)
 	}
 	want := render(first)
-	for i := 0; i < 20; i++ {
+	for range 20 {
 		got, err := g.Layers()
 		if err != nil {
 			t.Fatalf("Layers: %v", err)

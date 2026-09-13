@@ -1,6 +1,7 @@
 package compiler
 
 import (
+	"maps"
 	"strings"
 	"testing"
 
@@ -69,9 +70,7 @@ resources:
     network: ${net.id}
 `,
 	}
-	for path, body := range extra {
-		files[path] = body
-	}
+	maps.Copy(files, extra)
 	return moduleFixture(t, files)
 }
 

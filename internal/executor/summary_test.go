@@ -89,7 +89,7 @@ func TestRenderSortsFailedAndSkippedRegardlessOfInputOrder(t *testing.T) {
 		"  - destroy mango\n" +
 		"  - update zebra\n"
 
-	for i := 0; i < 20; i++ {
+	for i := range 20 {
 		got := Render(r, RenderOptions{})
 		if got != want {
 			t.Fatalf("Render() iteration %d =\n%q\nwant\n%q", i, got, want)
@@ -180,7 +180,7 @@ func TestRenderSortsAttributeNamesRegardlessOfMapOrder(t *testing.T) {
 		"      region: \"us-east-1\"\n" +
 		"      zone: \"us-east-1a\"\n"
 
-	for i := 0; i < 20; i++ {
+	for i := range 20 {
 		got := Render(r, RenderOptions{})
 		if got != want {
 			t.Fatalf("Render() iteration %d =\n%q\nwant\n%q", i, got, want)

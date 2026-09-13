@@ -150,7 +150,7 @@ func TestConcurrentLockAttemptsElectExactlyOneWinner(t *testing.T) {
 		)
 		start := make(chan struct{})
 
-		for i := 0; i < goroutines; i++ {
+		for range goroutines {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
@@ -225,7 +225,7 @@ func TestConcurrentInspectNeverObservesAPartiallyWrittenLock(t *testing.T) {
 		var wg sync.WaitGroup
 		stop := make(chan struct{})
 
-		for i := 0; i < inspectors; i++ {
+		for range inspectors {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()

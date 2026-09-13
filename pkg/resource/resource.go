@@ -8,6 +8,7 @@ package resource
 
 import (
 	"fmt"
+	"maps"
 	"sort"
 	"time"
 
@@ -121,9 +122,7 @@ func (s *ResourceState) Clone() *ResourceState {
 	}
 	out := *s
 	out.Attributes = make(map[string]value.Value, len(s.Attributes))
-	for k, v := range s.Attributes {
-		out.Attributes[k] = v
-	}
+	maps.Copy(out.Attributes, s.Attributes)
 	out.Dependencies = append([]address.Address(nil), s.Dependencies...)
 	return &out
 }

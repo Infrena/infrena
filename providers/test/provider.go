@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"sort"
 	"strings"
 	"sync"
@@ -136,9 +137,7 @@ func (p *Provider) Create(ctx context.Context, d *resource.DesiredResource) (*re
 	for name, v := range d.Attrs {
 		attrs[name] = toRaw(v)
 	}
-	for name, computed := range p.computedFor(d.Type, id) {
-		attrs[name] = computed
-	}
+	maps.Copy(attrs, p.computedFor(d.Type, id))
 
 	c.Resources[id] = &CloudResource{Type: d.Type, Address: d.Address.String(), Attributes: attrs}
 	if err := c.Save(p.cloudPath); err != nil {

@@ -1,6 +1,7 @@
 package modules
 
 import (
+	"maps"
 	"strings"
 	"testing"
 
@@ -16,9 +17,7 @@ import (
 func declIn(t *testing.T, body string, extra map[string]string) (*config.ProjectDecl, string) {
 	t.Helper()
 	files := map[string]string{"infra.yml": body}
-	for k, v := range extra {
-		files[k] = v
-	}
+	maps.Copy(files, extra)
 	return fixture(t, files)
 }
 

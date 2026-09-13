@@ -1,6 +1,7 @@
 package modules
 
 import (
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -45,13 +46,7 @@ func (w *walker) excluded(r *config.ResourceDecl, scope *Scope, env Env) (bool, 
 	}
 	w.checkDeclared(names, decl, env)
 
-	listed := false
-	for _, n := range names {
-		if n == env.Name {
-			listed = true
-			break
-		}
-	}
+	listed := slices.Contains(names, env.Name)
 	// `only` keeps what is listed; `skip` drops it. Written as one comparison
 	// rather than two branches so the two keys cannot drift apart.
 	if isOnly {

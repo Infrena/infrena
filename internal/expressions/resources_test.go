@@ -1,6 +1,7 @@
 package expressions
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/infrata/infrata/pkg/value"
@@ -165,11 +166,11 @@ func TestResolveDeferredKeepsAnUnresolvedValueExactlyAsItWas(t *testing.T) {
 func TestResolveDeferredIsSortedOverManyAttributes(t *testing.T) {
 	attrs := map[string]value.Value{}
 	want := []string{"a", "b", "c", "d", "e", "f", "g", "h"}
-	for i := len(want) - 1; i >= 0; i-- {
-		attrs[want[i]] = deferredRef(t, "${nowhere.id}")
+	for _, w := range slices.Backward(want) {
+		attrs[w] = deferredRef(t, "${nowhere.id}")
 	}
 
-	for i := 0; i < 50; i++ {
+	for i := range 50 {
 		_, unresolved, _ := ResolveDeferred(attrs, ResourceScope{})
 		if len(unresolved) != len(want) {
 			t.Fatalf("run %d: unresolved = %v, want %v", i, unresolved, want)

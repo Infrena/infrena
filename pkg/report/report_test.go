@@ -30,11 +30,11 @@ func TestWriterSerializesConcurrentWrites(t *testing.T) {
 	const perGoroutine = 50
 
 	var wg sync.WaitGroup
-	for g := 0; g < goroutines; g++ {
+	for g := range goroutines {
 		wg.Add(1)
 		go func(g int) {
 			defer wg.Done()
-			for i := 0; i < perGoroutine; i++ {
+			for range perGoroutine {
 				_ = w.WriteEvent(Event{
 					Event:   "started",
 					Address: "network",

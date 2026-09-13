@@ -41,7 +41,7 @@ func TestHashIsStableAcrossRuns(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Hash: %v", err)
 	}
-	for i := 0; i < 20; i++ {
+	for range 20 {
 		next, err := c.Hash()
 		if err != nil {
 			t.Fatalf("Hash: %v", err)
@@ -363,7 +363,7 @@ func TestHashIsIndependentOfDependencyOrder(t *testing.T) {
 	// every map the encoding walks must be canonicalised, not merely
 	// self-consistent within a single call.
 	c := cfg(deps(orders[0]...))
-	for i := 0; i < 50; i++ {
+	for i := range 50 {
 		got, err := c.Hash()
 		if err != nil {
 			t.Fatalf("Hash: %v", err)

@@ -122,7 +122,7 @@ func ParseConstraint(s string) (Constraint, error) {
 		return Constraint{}, fmt.Errorf("a version constraint is required")
 	}
 
-	for _, part := range strings.Split(c.text, ",") {
+	for part := range strings.SplitSeq(c.text, ",") {
 		part = strings.TrimSpace(part)
 		if part == "" {
 			return Constraint{}, fmt.Errorf("%q has an empty term; use `>= 1.0, < 2.0`", s)

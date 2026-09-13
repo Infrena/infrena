@@ -2,6 +2,7 @@ package expressions
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
@@ -68,10 +69,8 @@ func sensitiveAnywhere(v value.Value) bool {
 			// corrupt value is recoverable, leaking a secret is not.
 			return true
 		}
-		for _, item := range items {
-			if sensitiveAnywhere(item) {
-				return true
-			}
+		if slices.ContainsFunc(items, sensitiveAnywhere) {
+			return true
 		}
 	case value.KindMap:
 		m, ok := v.Raw.(map[string]value.Value)
@@ -95,12 +94,7 @@ func sensitiveAnywhere(v value.Value) bool {
 // string — which let a secret search term reveal its own position through an
 // unclassified result.
 func anySensitive(args ...value.Value) bool {
-	for _, a := range args {
-		if sensitiveAnywhere(a) {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(args, sensitiveAnywhere)
 }
 
 // stringFunc lifts a string transform into a Func, preserving sensitivity:

@@ -147,7 +147,7 @@ func TestGenerationIsDeterministic(t *testing.T) {
 	}
 
 	var first string
-	for i := 0; i < 20; i++ {
+	for i := range 20 {
 		files, err := Generate(rs, testRegistry(t), MinimalOptions())
 		if err != nil {
 			t.Fatal(err)

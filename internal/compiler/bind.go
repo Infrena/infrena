@@ -1,6 +1,7 @@
 package compiler
 
 import (
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -183,12 +184,7 @@ type refTarget struct {
 }
 
 func (t refTarget) has(name string) bool {
-	for _, n := range t.names {
-		if n == name {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(t.names, name)
 }
 
 func targetFor(inst modules.Instance, reg *registry.Registry) refTarget {

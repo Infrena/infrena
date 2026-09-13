@@ -4,6 +4,7 @@
 package environments
 
 import (
+	"slices"
 	"strconv"
 	"strings"
 
@@ -116,8 +117,7 @@ func Resolve(decls []config.EnvironmentDecl, name string) (Chain, diag.Diagnosti
 	// order is leaf-first because the walk goes parent-ward; reverse it once,
 	// here, so no consumer has to know that.
 	layers := make([]Layer, 0, len(order))
-	for i := len(order) - 1; i >= 0; i-- {
-		d := order[i]
+	for i, d := range slices.Backward(order) {
 		scope := value.ScopeEnvironmentInherit
 		if i == 0 {
 			scope = value.ScopeEnvironmentVar

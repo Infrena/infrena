@@ -310,7 +310,7 @@ func TestAttemptStopsWhenSleepIsInterrupted(t *testing.T) {
 func TestDefaultJitterStaysWithinZeroToD(t *testing.T) {
 	d := 100 * time.Millisecond
 	seen := map[time.Duration]bool{}
-	for i := 0; i < 50; i++ {
+	for range 50 {
 		got := defaultJitter(d)
 		if got < 0 || got > d {
 			t.Fatalf("defaultJitter(%v) = %v, want within [0, %v]", d, got, d)

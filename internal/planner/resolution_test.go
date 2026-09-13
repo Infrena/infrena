@@ -141,7 +141,7 @@ func TestPlanConvergesWhenAReferencedAttributeIsAlreadyKnown(t *testing.T) {
 	// Run repeatedly rather than once. Every input here reaches Compute
 	// through a Go map, and Go randomises map iteration, so a single green
 	// run cannot distinguish "converges" from "converged this time".
-	for i := 0; i < 50; i++ {
+	for i := range 50 {
 		p, ds := Compute(cfg, stateOf(live...), present(live...), planOpts(t))
 		if ds.HasErrors() {
 			t.Fatalf("run %d: unexpected errors:\n%s", i, rendered(t, ds))
@@ -415,7 +415,7 @@ func TestPlanIsUnchangedForAConfigurationThatWasNeverApplied(t *testing.T) {
 	// Invariant 6, on the path this change added: identical inputs, identical
 	// plan, repeatedly, so that a resolution order derived from map iteration
 	// would show up rather than passing by luck.
-	for i := 0; i < 50; i++ {
+	for i := range 50 {
 		p, ds := Compute(cfg, nil, nil, planOpts(t))
 		if ds.HasErrors() {
 			t.Fatalf("run %d: unexpected errors:\n%s", i, rendered(t, ds))
@@ -458,7 +458,7 @@ func TestPlanIsDeterministicWhenReferencesResolve(t *testing.T) {
 	}
 
 	var want string
-	for i := 0; i < 50; i++ {
+	for i := range 50 {
 		p, ds := Compute(cfg, stateOf(live...), present(live...), planOpts(t))
 		if ds.HasErrors() {
 			t.Fatalf("run %d: unexpected errors:\n%s", i, rendered(t, ds))
@@ -491,7 +491,7 @@ func TestResolutionOrderPutsDependenciesFirst(t *testing.T) {
 		}, "zeta"),
 	)
 
-	for i := 0; i < 50; i++ {
+	for i := range 50 {
 		got := names(resolutionOrder(cfg, nil))
 		want := []string{"zeta", "alpha"}
 		if !equalStrings(got, want) {
@@ -512,7 +512,7 @@ func TestResolutionOrderIncludesAddressesOnlyInState(t *testing.T) {
 		recorded("alsogone", "test.database", map[string]value.Value{"engine": str("postgres")}),
 	)
 
-	for i := 0; i < 50; i++ {
+	for i := range 50 {
 		got := names(resolutionOrder(cfg, st))
 		want := []string{"network", "alsogone", "gone"}
 		if !equalStrings(got, want) {
@@ -560,7 +560,7 @@ func TestOperationsAreEmittedInAddressOrder(t *testing.T) {
 	wantDecided := []string{"zeta", "alpha", "mu"}
 	wantEmitted := []string{"alpha", "mu", "zeta"}
 
-	for i := 0; i < 50; i++ {
+	for i := range 50 {
 		if got := names(resolutionOrder(cfg, st)); !equalStrings(got, wantDecided) {
 			t.Fatalf("run %d: resolution order = %v, want %v — this fixture only pins emission order while the two disagree",
 				i, got, wantDecided)
@@ -595,7 +595,7 @@ func TestDiagnosticsAreEmittedInAddressOrder(t *testing.T) {
 		dependent("alpha", "test.nosuchtype", map[string]value.Value{"engine": str("postgres")}, "zeta"),
 	)
 
-	for i := 0; i < 50; i++ {
+	for i := range 50 {
 		_, ds := Compute(cfg, nil, nil, planOpts(t))
 		if len(ds) != 2 {
 			t.Fatalf("run %d: got %d diagnostics, want 2:\n%s", i, len(ds), rendered(t, ds))

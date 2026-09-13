@@ -112,7 +112,7 @@ func (ds Diagnostics) Render(w io.Writer) {
 		}
 		if d.Detail != "" {
 			fmt.Fprintln(w)
-			for _, line := range strings.Split(d.Detail, "\n") {
+			for line := range strings.SplitSeq(d.Detail, "\n") {
 				fmt.Fprintf(w, "  %s\n", line)
 			}
 		}

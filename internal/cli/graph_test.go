@@ -84,7 +84,7 @@ func TestGraphIsDeterministic(t *testing.T) {
 		m[k] = v
 	}
 	var first string
-	for i := 0; i < 20; i++ {
+	for i := range 20 {
 		var sb strings.Builder
 		renderGraph(&sb, m)
 		if i == 0 {

@@ -2,6 +2,7 @@ package providers
 
 import (
 	"context"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -329,12 +330,7 @@ func checkDefaultFits(inst Instance, key string, v value.Value, attrs []schema.A
 
 // isReserved reports whether a `defaults:` key is a lifecycle option.
 func isReserved(key string) bool {
-	for _, name := range registry.ReservedAttributes {
-		if key == name {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(registry.ReservedAttributes, key)
 }
 
 // acceptedKeys lists what a `defaults:` key may be, schema attributes and lifecycle

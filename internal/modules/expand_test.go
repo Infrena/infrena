@@ -204,7 +204,7 @@ func chain(depth int) map[string]string {
 	files := map[string]string{
 		"infra.yml": "project: demo\nmodules:\n  - ./m0\nresources:\n  top:\n    type: module.m0\n",
 	}
-	for i := 0; i < depth; i++ {
+	for i := range depth {
 		if i < depth-1 {
 			files[fmt.Sprintf("m%d/module.yml", i)] = fmt.Sprintf(
 				"modules:\n  - ../m%d\nresources:\n  step:\n    type: module.m%d\n", i+1, i+1)
@@ -261,7 +261,7 @@ func TestManySiblingModulesNeverTripTheDepthBound(t *testing.T) {
 	files := map[string]string{}
 	var res strings.Builder
 	res.WriteString("project: demo\nresources:\n")
-	for i := 0; i < n; i++ {
+	for i := range n {
 		files[fmt.Sprintf("m%d/module.yml", i)] = "resources:\n  leaf:\n    type: test.thing\n"
 		fmt.Fprintf(&res, "  c%02d:\n    type: module.m%d\n", i, i)
 	}
@@ -364,7 +364,7 @@ func deepCycle() map[string]string {
 	files := map[string]string{
 		"infra.yml": "project: demo\nmodules:\n  - ./m0\nresources:\n  top:\n    type: module.m0\n",
 	}
-	for i := 0; i < MaxDepth; i++ {
+	for i := range MaxDepth {
 		next := fmt.Sprintf("m%d", i+1)
 		if i+1 == MaxDepth {
 			next = "m0" // close the loop instead of terminating

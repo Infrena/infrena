@@ -3,6 +3,7 @@ package planner
 import (
 	"bytes"
 	"errors"
+	"maps"
 	"strings"
 	"testing"
 	"time"
@@ -96,9 +97,7 @@ func absent(addrs ...address.Address) refresh.Observations {
 func merge(sets ...refresh.Observations) refresh.Observations {
 	out := refresh.Observations{}
 	for _, set := range sets {
-		for k, v := range set {
-			out[k] = v
-		}
+		maps.Copy(out, set)
 	}
 	return out
 }
@@ -1012,7 +1011,7 @@ func TestPlanIsDeterministicAcrossTwentyRuns(t *testing.T) {
 		t.Fatalf("Canonical: %v", err)
 	}
 
-	for i := 0; i < 20; i++ {
+	for i := range 20 {
 		next, _ := Compute(cfg, st, obs, opts)
 		got, err := next.Canonical()
 		if err != nil {

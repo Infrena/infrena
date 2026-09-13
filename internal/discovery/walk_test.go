@@ -71,7 +71,7 @@ func TestWalkNamesDeterministically(t *testing.T) {
 	reg := cloudWith(t, rs)
 
 	var first []string
-	for i := 0; i < 20; i++ {
+	for i := range 20 {
 		got, _ := Walk(context.Background(), reg, nil)
 		var names []string
 		for _, r := range got {

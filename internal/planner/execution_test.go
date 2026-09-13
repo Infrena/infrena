@@ -196,7 +196,7 @@ func TestOrderingIsDeterministic(t *testing.T) {
 	}
 	first := strings.Join(orderOf(t, g), ",")
 
-	for i := 0; i < 20; i++ {
+	for range 20 {
 		g, err := BuildExecution(p, deps)
 		if err != nil {
 			t.Fatalf("BuildExecution: %v", err)

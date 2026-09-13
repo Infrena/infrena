@@ -509,8 +509,8 @@ func LoadModule(dir string) (File, error) {
 // user discovers as "unknown environment" while looking straight at the file.
 func environmentNameFor(base string) (string, bool) {
 	for _, ext := range []string{".yml", ".yaml"} {
-		if strings.HasSuffix(base, ext) {
-			name := strings.TrimSuffix(base, ext)
+		if before, ok := strings.CutSuffix(base, ext); ok {
+			name := before
 			if name == "" {
 				// A file literally named ".yml" names no environment.
 				return "", false

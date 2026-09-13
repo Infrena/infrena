@@ -144,7 +144,7 @@ func TestEncodeIsStableAcrossRuns(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Encode: %v", err)
 	}
-	for i := 0; i < 20; i++ {
+	for range 20 {
 		next, err := s.Encode()
 		if err != nil {
 			t.Fatalf("Encode: %v", err)

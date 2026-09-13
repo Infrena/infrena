@@ -2,6 +2,7 @@ package executor
 
 import (
 	"context"
+	"maps"
 	"testing"
 	"time"
 
@@ -71,9 +72,7 @@ func (p *realisticProvider) Definitions() []*schema.ResourceDefinition {
 // key correctly" from "there was never a computed key".
 func (p *realisticProvider) Create(_ context.Context, d *resource.DesiredResource) (*resource.ResourceState, error) {
 	attrs := map[string]value.Value{}
-	for k, v := range d.Attrs {
-		attrs[k] = v
-	}
+	maps.Copy(attrs, d.Attrs)
 	attrs["id"] = value.String(d.Address.Name+"-1", value.SourceProvider)
 	attrs["endpoint"] = value.String(d.Address.Name+".example", value.SourceProvider)
 	return &resource.ResourceState{

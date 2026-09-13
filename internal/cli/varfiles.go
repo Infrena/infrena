@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"maps"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -63,9 +64,7 @@ func loadVarFiles(dir string, paths []string) (map[string]value.Value, diag.Diag
 		}
 		vals, fds := config.DecodeVariableFile(f, value.ScopeCLIOverride)
 		ds.Extend(fds)
-		for name, v := range vals {
-			out[name] = v
-		}
+		maps.Copy(out, vals)
 	}
 	return out, ds
 }

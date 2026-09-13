@@ -1,6 +1,7 @@
 package compiler
 
 import (
+	"maps"
 	"sort"
 	"strconv"
 
@@ -291,12 +292,8 @@ func checkRequiredVersion(project *config.ProjectDecl, current string) diag.Diag
 // the command line is the more specific of the two, so it wins.
 func fileVars(project *config.ProjectDecl, opts Options) map[string]value.Value {
 	out := make(map[string]value.Value, len(project.VariableValues)+len(opts.FileVars))
-	for name, v := range project.VariableValues {
-		out[name] = v
-	}
-	for name, v := range opts.FileVars {
-		out[name] = v
-	}
+	maps.Copy(out, project.VariableValues)
+	maps.Copy(out, opts.FileVars)
 	return out
 }
 

@@ -170,7 +170,7 @@ func TestNamingIsDeterministic(t *testing.T) {
 		"tags": value.Map(map[string]value.Value{"Name": str("tagged"), "name": str("also")}, value.SourceProvider),
 	})
 	first := Name(r)
-	for i := 0; i < 50; i++ {
+	for i := range 50 {
 		if got := Name(r); got != first {
 			t.Fatalf("run %d named it %q, first run said %q", i, got, first)
 		}

@@ -524,7 +524,7 @@ func TestOperationsOverlapRatherThanSerialise(t *testing.T) {
 	)
 
 	states := make([]*resource.ResourceState, 0, resources)
-	for i := 0; i < resources; i++ {
+	for i := range resources {
 		st, err := p.Create(ctx, desired(fmt.Sprintf("net%d", i), "test.network", map[string]value.Value{
 			"cidr": value.String("10.0.0.0/16", value.SourceExplicit),
 		}))
@@ -647,7 +647,7 @@ func TestDiscoverIsDeterministic(t *testing.T) {
 	writeCloud(t, path, c)
 
 	var first []string
-	for i := 0; i < 20; i++ {
+	for i := range 20 {
 		got, err := p.Discover(context.Background(), provider.DiscoverRequest{})
 		if err != nil {
 			t.Fatal(err)

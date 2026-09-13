@@ -2,6 +2,8 @@ package planner
 
 import (
 	"fmt"
+	"maps"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -278,10 +280,8 @@ func hasUnknown(v value.Value) bool {
 		if !ok {
 			return true
 		}
-		for _, item := range items {
-			if hasUnknown(item) {
-				return true
-			}
+		if slices.ContainsFunc(items, hasUnknown) {
+			return true
 		}
 	case value.KindMap:
 		entries, ok := v.Raw.(map[string]value.Value)
@@ -305,9 +305,7 @@ func hasUnknown(v value.Value) bool {
 // is built afresh, so they are unknown until the provider reports them.
 func afterAttributes(def *schema.ResourceDefinition, desired, actual map[string]value.Value, kind OpKind) map[string]value.Value {
 	out := make(map[string]value.Value, len(desired))
-	for name, v := range desired {
-		out[name] = v
-	}
+	maps.Copy(out, desired)
 	if def == nil {
 		return out
 	}
@@ -333,9 +331,7 @@ func afterAttributes(def *schema.ResourceDefinition, desired, actual map[string]
 // was built from. Refresh and planning must not mutate what was loaded.
 func copyAttrs(attrs map[string]value.Value) map[string]value.Value {
 	out := make(map[string]value.Value, len(attrs))
-	for name, v := range attrs {
-		out[name] = v
-	}
+	maps.Copy(out, attrs)
 	return out
 }
 

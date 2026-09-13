@@ -201,7 +201,7 @@ func TestDeclaredNamesPreservesDeclOrderNotSorted(t *testing.T) {
 	// about three times out of four BY LUCK, not because it preserves
 	// order. 30 independent calls inside one process drop the chance of a
 	// map-based implementation slipping through to well under 0.1%.
-	for i := 0; i < 30; i++ {
+	for i := range 30 {
 		_, ds := Resolve(decls, "alpha")
 		if !ds.HasErrors() {
 			t.Fatalf("iteration %d: `alpha` extends undeclared `missing` and must be reported", i)

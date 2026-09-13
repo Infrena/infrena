@@ -15,6 +15,7 @@ package pluginproto
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 
 	"github.com/infrata/infrata/pkg/resource"
 	"github.com/infrata/infrata/pkg/schema"
@@ -32,12 +33,7 @@ var Supported = []int{1}
 
 // IsSupported reports whether a plugin's protocol version can be spoken here.
 func IsSupported(v int) bool {
-	for _, s := range Supported {
-		if s == v {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(Supported, v)
 }
 
 // CookieEnv is the environment variable the host sets when launching a plugin.

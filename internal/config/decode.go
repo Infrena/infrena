@@ -1,6 +1,7 @@
 package config
 
 import (
+	"maps"
 	"sort"
 	"strconv"
 	"strings"
@@ -1150,9 +1151,7 @@ func decodeDefault(path, name string, node *yaml.Node, kind value.Kind, d declNo
 func decodeVariableValues(f File, out *ProjectDecl, ds *diag.Diagnostics) {
 	vals, fds := DecodeVariableFile(f, value.ScopeUnset)
 	ds.Extend(fds)
-	for name, v := range vals {
-		out.VariableValues[name] = v
-	}
+	maps.Copy(out.VariableValues, vals)
 }
 
 // retagSource rewrites a decoded value's provenance recursively.

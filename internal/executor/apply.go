@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"strings"
 	"time"
 
@@ -301,9 +302,7 @@ func (r *run) launch(node planner.OpNode, providerName string) {
 // view of state as of the moment it was taken.
 func (r *run) snapshot() map[string]*resource.ResourceState {
 	out := make(map[string]*resource.ResourceState, len(r.st.Resources))
-	for k, v := range r.st.Resources {
-		out[k] = v
-	}
+	maps.Copy(out, r.st.Resources)
 	return out
 }
 

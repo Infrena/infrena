@@ -195,10 +195,7 @@ func defaultJitter(d time.Duration) time.Duration {
 // around the attempt that was about to be retried, without making a
 // further call to fn.
 func Attempt(ctx context.Context, verb Verb, policy RetryPolicy, classify func(error) provider.Retryability, fn func() error) error {
-	maxAttempts := policy.MaxAttempts
-	if maxAttempts < 1 {
-		maxAttempts = 1
-	}
+	maxAttempts := max(policy.MaxAttempts, 1)
 
 	var lastErr error
 	for attempt := 1; attempt <= maxAttempts; attempt++ {

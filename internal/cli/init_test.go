@@ -83,7 +83,7 @@ func TestInitRefusesWhenAnyScaffoldFileExists(t *testing.T) {
 // must not come from Go's map iteration.
 func TestInitIsDeterministic(t *testing.T) {
 	var first []string
-	for i := 0; i < 20; i++ {
+	for i := range 20 {
 		got, err := scaffold(t.TempDir())
 		if err != nil {
 			t.Fatal(err)

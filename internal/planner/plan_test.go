@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"github.com/infrata/infrata/pkg/resource"
+	"maps"
 	"strings"
 	"testing"
 	"time"
@@ -173,7 +174,7 @@ func TestCanonicalIsStableAcrossRepeatedCalls(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Canonical: %v", err)
 	}
-	for i := 0; i < 20; i++ {
+	for i := range 20 {
 		next, err := p.Canonical()
 		if err != nil {
 			t.Fatalf("Canonical: %v", err)
@@ -467,9 +468,7 @@ func TestTheArtifactsKeysAreFrozen(t *testing.T) {
 	// create, so no single operation carries every key.
 	union := map[string]json.RawMessage{}
 	for _, op := range ops {
-		for k, v := range op {
-			union[k] = v
-		}
+		maps.Copy(union, op)
 	}
 	assertKeys(t, "an operation", union, []string{
 		"address", "type", "provider", "kind", "before", "after",

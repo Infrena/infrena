@@ -154,7 +154,7 @@ func TestRenderScopedValuesShowPrecedence(t *testing.T) {
 // single lucky render.
 func TestRenderScopedPlanIsDeterministicAcrossRepeatedCalls(t *testing.T) {
 	want := Render(scopedPlan(), RenderOptions{})
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		if got := Render(scopedPlan(), RenderOptions{}); got != want {
 			t.Fatalf("Render(scopedPlan()) is not deterministic; iteration %d differs.\n--- first ---\n%s--- iteration %d ---\n%s",
 				i, want, i, got)
@@ -636,7 +636,7 @@ func TestRenderIsDeterministicAcrossRepeatedCalls(t *testing.T) {
 	if !strings.Contains(want, `network: "net-1" -> "net-2"`) {
 		t.Fatalf("fixture did not reach the attribute-diff loop:\n%s", want)
 	}
-	for i := 0; i < 30; i++ {
+	for i := range 30 {
 		if got := Render(plan(), RenderOptions{}); got != want {
 			t.Fatalf("Render is not deterministic; iteration %d differs.\n--- first ---\n%s--- iteration %d ---\n%s",
 				i, want, i, got)
@@ -777,7 +777,7 @@ func TestRenderDoesNotNoteADestroyWithNoMatchingCreate(t *testing.T) {
 func lineContainingInRender(t *testing.T, out, needle string) string {
 	t.Helper()
 	var found []string
-	for _, l := range strings.Split(out, "\n") {
+	for l := range strings.SplitSeq(out, "\n") {
 		if strings.Contains(l, needle) {
 			found = append(found, l)
 		}

@@ -1,6 +1,7 @@
 package expressions
 
 import (
+	"slices"
 	"strings"
 
 	"github.com/infrata/infrata/pkg/value"
@@ -102,12 +103,7 @@ func HasUnknownLeaf(v value.Value) bool {
 		if !ok {
 			return false
 		}
-		for _, item := range items {
-			if HasUnknownLeaf(item) {
-				return true
-			}
-		}
-		return false
+		return slices.ContainsFunc(items, HasUnknownLeaf)
 	case value.KindMap:
 		m, ok := v.Raw.(map[string]value.Value)
 		if !ok {

@@ -109,7 +109,6 @@ func Refresh(ctx context.Context, st *state.State, reg *registry.Registry, paral
 
 	var wg sync.WaitGroup
 	for i, addr := range addrs {
-		i, addr := i, addr
 		wg.Add(1)
 		sem <- struct{}{}
 		if ps := perProviderSem[providerOf[i]]; ps != nil {

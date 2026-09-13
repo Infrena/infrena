@@ -246,7 +246,7 @@ func TestMultiplePutsSucceedUnderOneHeldLock(t *testing.T) {
 	}
 
 	s := New("myapp", "dev")
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		if err := b.Put(ctx, "dev", s); err != nil {
 			t.Fatalf("Put #%d while holding the lock: %v", i+1, err)
 		}

@@ -407,7 +407,7 @@ func TestRefreshBoundsConcurrentReads(t *testing.T) {
 	}
 
 	st := state.New("myapp", "dev")
-	for i := 0; i < 8; i++ {
+	for i := range 8 {
 		name := fmt.Sprintf("r%d", i)
 		st.Set(&resource.ResourceState{
 			Provider:   "test",
@@ -458,7 +458,7 @@ func TestRefreshBoundsReadsPerProviderIndependentlyOfGlobalParallelism(t *testin
 	}
 
 	st := state.New("myapp", "dev")
-	for i := 0; i < 8; i++ {
+	for i := range 8 {
 		name := fmt.Sprintf("r%d", i)
 		st.Set(&resource.ResourceState{
 			Provider:   "test",
@@ -618,7 +618,7 @@ func TestRefreshDoesNotExposeLiveStateToProviderRead(t *testing.T) {
 // already cancelled, rather than depending on the provider to notice.
 type countingReadProvider struct {
 	resourceType string
-	calls        int32
+	calls        atomic.Int32
 }
 
 func (p *countingReadProvider) Name() string { return "counting" }
@@ -628,7 +628,7 @@ func (p *countingReadProvider) Definitions() []*schema.ResourceDefinition {
 }
 
 func (p *countingReadProvider) Read(ctx context.Context, current *resource.ResourceState) (*resource.ResourceState, error) {
-	atomic.AddInt32(&p.calls, 1)
+	p.calls.Add(1)
 	return current.Clone(), nil
 }
 
@@ -667,7 +667,7 @@ func TestRefreshSkipsProviderReadWhenContextAlreadyCancelled(t *testing.T) {
 	}
 
 	st := state.New("myapp", "dev")
-	for i := 0; i < 4; i++ {
+	for i := range 4 {
 		name := fmt.Sprintf("r%d", i)
 		st.Set(&resource.ResourceState{Address: address.Address{Name: name}, Type: resourceType, Provider: "test", ProviderID: name})
 	}
@@ -690,7 +690,7 @@ func TestRefreshSkipsProviderReadWhenContextAlreadyCancelled(t *testing.T) {
 			t.Errorf("%s: State must be nil — cancellation is never treated as deletion", addr)
 		}
 	}
-	if calls := atomic.LoadInt32(&prov.calls); calls != 0 {
+	if calls := prov.calls.Load(); calls != 0 {
 		t.Errorf("provider Read was called %d times; want 0 — Refresh must check ctx before dispatching, not rely on the provider to notice", calls)
 	}
 }

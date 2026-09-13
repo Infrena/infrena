@@ -403,7 +403,7 @@ resources:
     depends_on: [zulu, yankee, xray, whiskey]
 `
 	want := []string{"whiskey", "xray", "yankee", "zulu"}
-	for i := 0; i < 20; i++ {
+	for i := range 20 {
 		resolved, ds := Compile(loadFiles(t, body), testRegistry(t), Options{Environment: "dev"})
 		if ds.HasErrors() {
 			t.Fatalf("unexpected diagnostics: %+v", ds)

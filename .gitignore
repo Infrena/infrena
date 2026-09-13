@@ -16,3 +16,4 @@ coverage.*
 
 # SDD scratch workspace
 .superpowers/
+.claude/

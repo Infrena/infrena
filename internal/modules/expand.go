@@ -32,6 +32,7 @@ package modules
 
 import (
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -785,8 +786,8 @@ func (w *walker) depthDiagnostic(r *config.ResourceDecl, lm loadedModule) diag.D
 func inModulePath(ds diag.Diagnostics, module []string) diag.Diagnostics {
 	// Outermost-last, for the same reason as originInPath: Diagnostics.InModule
 	// prepends one name at a time.
-	for i := len(module) - 1; i >= 0; i-- {
-		ds = ds.InModule(module[i])
+	for _, m := range slices.Backward(module) {
+		ds = ds.InModule(m)
 	}
 	return ds
 }

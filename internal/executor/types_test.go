@@ -60,12 +60,12 @@ func TestEventCarriesNoValueType(t *testing.T) {
 		name string
 		typ  reflect.Type
 	}{
-		{"direct value.Value", reflect.TypeOf(withDirect{})},
-		{"[]value.Value", reflect.TypeOf(withSlice{})},
-		{"map[string]value.Value", reflect.TypeOf(withMap{})},
-		{"*value.Value", reflect.TypeOf(withPointer{})},
-		{"nested struct with value.Value", reflect.TypeOf(withNested{})},
-		{"any field", reflect.TypeOf(withAny{})},
+		{"direct value.Value", reflect.TypeFor[withDirect]()},
+		{"[]value.Value", reflect.TypeFor[withSlice]()},
+		{"map[string]value.Value", reflect.TypeFor[withMap]()},
+		{"*value.Value", reflect.TypeFor[withPointer]()},
+		{"nested struct with value.Value", reflect.TypeFor[withNested]()},
+		{"any field", reflect.TypeFor[withAny]()},
 	}
 
 	for _, shape := range leakyShapes {
@@ -75,7 +75,7 @@ func TestEventCarriesNoValueType(t *testing.T) {
 	}
 
 	// Now verify the real Event passes the check.
-	if containsValueType(reflect.TypeOf(Event{})) {
+	if containsValueType(reflect.TypeFor[Event]()) {
 		t.Errorf("Event contains a value.Value leaf — every field on Event must already be pre-formatted text, or a future OnEvent can print an unredacted secret")
 	}
 }
@@ -103,7 +103,7 @@ func containsValueTypeRec(typ reflect.Type, visited map[reflect.Type]bool) bool 
 	}
 	visited[typ] = true
 
-	valueType := reflect.TypeOf(value.Value{})
+	valueType := reflect.TypeFor[value.Value]()
 
 	// Direct match.
 	if typ == valueType {

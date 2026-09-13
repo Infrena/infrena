@@ -20,7 +20,7 @@ import (
 func lineContaining(t *testing.T, out, needle string) string {
 	t.Helper()
 	var found []string
-	for _, l := range strings.Split(out, "\n") {
+	for l := range strings.SplitSeq(out, "\n") {
 		if strings.Contains(l, needle) {
 			found = append(found, l)
 		}
@@ -37,7 +37,7 @@ func lineContaining(t *testing.T, out, needle string) string {
 // the assertion survives Tasks 4-7 choosing their own words.
 func firstDiagnosticLine(t *testing.T, out string) string {
 	t.Helper()
-	for _, l := range strings.Split(out, "\n") {
+	for l := range strings.SplitSeq(out, "\n") {
 		if strings.HasPrefix(l, "Error: ") {
 			return l
 		}
@@ -457,7 +457,7 @@ resources:
 	// The assertion. A dependents warning on the decoy means `app` depends on
 	// it, which can only happen if the module output's ${store.endpoint}
 	// resolved to the root `store` instead of the module's own.
-	for _, line := range strings.Split(r.Stdout, "\n") {
+	for line := range strings.SplitSeq(r.Stdout, "\n") {
 		if strings.Contains(line, "dependent") {
 			t.Errorf("the decoy has dependents (%q) — a module output's reference escaped its module and "+
 				"bound to a root resource of the same name:\n%s", strings.TrimSpace(line), r.Stdout)
@@ -710,7 +710,7 @@ resources:
 func TestExcessiveModuleNestingIsItsOwnDiagnostic(t *testing.T) {
 	const depth = 40 // comfortably past the bound of 32 (spec §7.2)
 	files := map[string]string{}
-	for i := 0; i < depth; i++ {
+	for i := range depth {
 		files[fmt.Sprintf("modules/n%d/module.yml", i)] = fmt.Sprintf(
 			"modules:\n  - ../n%d\nresources:\n  deeper:\n    type: module.n%d\n", i+1, i+1)
 	}
