@@ -1600,7 +1600,22 @@ State locking is mandatory for remote operation.
 
 ## 21.1 Migrating `test.*` state to `fake.*`
 
-**Open, with a recommendation.** Renaming the fake provider from `test` to `fake`
+**WRITTEN 2026-09-13** (`internal/state/migrations.go`), version 1 → 2, and the first use
+the migration mechanism has ever had. The reasoning below is kept because it is why.
+
+The step rewrites every resource's `type` prefix unconditionally — a type belongs to the
+plugin — and the recorded `provider` ONLY where it is `test`, the name the implicit
+instance takes from its plugin. A user who wrote `providers: [{plugin: test, name: main}]`
+has state recording `main`, and rewriting every provider name would point their resources
+at an instance that does not exist. That asymmetry is the whole care in the function.
+
+`testdata/state-v1.json` — the frozen golden a version-1 build actually wrote — is KEPT as
+the migration's fixture rather than regenerated, and the golden is now named for the
+version it freezes so the next bump is additive. Real historical bytes beat a hand-written
+approximation, and there is exactly one chance to keep them. That file also carries a
+2^53+1 integer, so the migration test proves the non-lossy decode on a real file.
+
+**Originally recorded as open, with a recommendation:** Renaming the fake provider from `test` to `fake`
 renames every resource type it serves, and a state file recording `test.network` names
 a type no loaded plugin offers. Today that is refused with "no provider registers that
 type" — correct, and a dead end for anyone holding such a file.

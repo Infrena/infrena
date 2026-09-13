@@ -13,7 +13,16 @@ import (
 )
 
 // CurrentVersion is the state schema version this build writes.
-const CurrentVersion = 1
+//
+// 2 since 2026-09-13: the fake provider became a separately distributed plugin named
+// `fake`, so the types in state moved from `test.*` to `fake.*` (PLAN.md §21.1, §31.2).
+// internal/state/migrations.go carries the step.
+//
+// This is the FIRST bump, and it was deferred twice for a reason that no longer holds:
+// Decode routed every older file through map[string]any and rounded any integer past
+// 2^53, so bumping cost silent precision loss on every existing file. UseNumber fixed
+// that, which is what made this an ordinary change.
+const CurrentVersion = 2
 
 // State represents the record of what infra manages.
 type State struct {

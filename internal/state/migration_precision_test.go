@@ -47,7 +47,10 @@ func withNoOpMigration(t *testing.T) {
 	original := migrations
 	t.Cleanup(func() { migrations = original })
 	migrations = nil
-	RegisterMigration(Migration{From: 0, To: 1, Apply: func(map[string]any) error { return nil }})
+	// To CurrentVersion, not to 1: this test is about what the migration PATH does to a
+	// document, not about any particular version, and pinning 1 broke it the first time
+	// CurrentVersion moved.
+	RegisterMigration(Migration{From: 0, To: CurrentVersion, Apply: func(map[string]any) error { return nil }})
 }
 
 // TestMigrationPreservesLargeIntegers. 2^53+1 is the smallest positive integer float64
@@ -117,7 +120,7 @@ func TestAMigrationSeesNumbersAsJSONNumber(t *testing.T) {
 
 	var seen any
 	migrations = nil
-	RegisterMigration(Migration{From: 0, To: 1, Apply: func(raw map[string]any) error {
+	RegisterMigration(Migration{From: 0, To: CurrentVersion, Apply: func(raw map[string]any) error {
 		seen = raw["serial"]
 		return nil
 	}})
@@ -142,7 +145,7 @@ func TestAMigrationMaySetANumberTheOrdinaryWay(t *testing.T) {
 	t.Cleanup(func() { migrations = original })
 
 	migrations = nil
-	RegisterMigration(Migration{From: 0, To: 1, Apply: func(raw map[string]any) error {
+	RegisterMigration(Migration{From: 0, To: CurrentVersion, Apply: func(raw map[string]any) error {
 		raw["serial"] = 42
 		return nil
 	}})

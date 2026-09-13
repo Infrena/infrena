@@ -81,12 +81,15 @@ func TestDecodeRejectsFutureVersion(t *testing.T) {
 	}
 }
 
+// The migrations these tests register go from 0 to CurrentVersion in one step, rather
+// than to 1. They are about the CHAIN's behaviour, not about any particular version, and
+// pinning `To: 1` broke every one of them the first time CurrentVersion moved.
 func TestDecodeRunsMigrations(t *testing.T) {
 	original := migrations
 	t.Cleanup(func() { migrations = original })
 
 	migrations = nil
-	RegisterMigration(Migration{From: 0, To: 1, Apply: func(raw map[string]any) error {
+	RegisterMigration(Migration{From: 0, To: CurrentVersion, Apply: func(raw map[string]any) error {
 		raw["project"] = "migrated"
 		return nil
 	}})
@@ -121,7 +124,7 @@ func TestDecodeRunsMultiStepChain(t *testing.T) {
 	t.Cleanup(func() { migrations = original })
 
 	migrations = nil
-	RegisterMigration(Migration{From: 0, To: 1, Apply: func(raw map[string]any) error {
+	RegisterMigration(Migration{From: 0, To: CurrentVersion, Apply: func(raw map[string]any) error {
 		raw["project"] = "step-one"
 		return nil
 	}})

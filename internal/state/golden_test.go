@@ -3,6 +3,7 @@ package state
 import (
 	"bytes"
 	"flag"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -13,9 +14,14 @@ import (
 	"github.com/infrata/infrata/pkg/value"
 )
 
-// updateGolden regenerates testdata/state-v1.json. Run with
+// updateGolden regenerates the current golden. Run with
 // `go test ./internal/state -run TestStateFileFormatIsFrozen -update` after a
 // deliberate, version-bumped format change — never to make a red test go green.
+//
+// EVERY OLD GOLDEN IS KEPT, not regenerated: testdata/state-v1.json is the real bytes a
+// version-1 infrata wrote, and it is what internal/state/migrate_fake_test.go migrates.
+// A hand-written approximation of an old format is worth much less than the format
+// itself, and there is exactly one chance to keep the real thing.
 var updateGolden = flag.Bool("update", false, "rewrite the golden state file from the current encoder")
 
 // goldenState builds a state exercising every shape the format has to carry:
@@ -32,8 +38,8 @@ func goldenState() *State {
 
 	s.Set(&resource.ResourceState{
 		Address:    address.Address{Name: "db"},
-		Type:       "test.database",
-		Provider:   "test",
+		Type:       "fake.database",
+		Provider:   "fake",
 		ProviderID: "db-1",
 		Attributes: map[string]value.Value{
 			"engine":   value.String("postgres", value.SourceProvider),
@@ -52,8 +58,8 @@ func goldenState() *State {
 
 	s.Set(&resource.ResourceState{
 		Address:    address.Address{Name: "orphan"},
-		Type:       "test.network",
-		Provider:   "test",
+		Type:       "fake.network",
+		Provider:   "fake",
 		ProviderID: "net-9",
 		Attributes: map[string]value.Value{},
 	})
@@ -69,7 +75,9 @@ func goldenState() *State {
 // The format is a versioned contract from the first release; renaming a Go
 // field must break this test rather than silently rewrite everyone's state.
 func TestStateFileFormatIsFrozen(t *testing.T) {
-	golden := filepath.Join("testdata", "state-v1.json")
+	// Named for the version it freezes, so adding the next one is additive and the
+	// previous stays available as a migration fixture.
+	golden := filepath.Join("testdata", fmt.Sprintf("state-v%d.json", CurrentVersion))
 
 	got, err := goldenState().Encode()
 	if err != nil {

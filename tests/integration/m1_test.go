@@ -84,7 +84,12 @@ func writeState(t *testing.T, dir, environment string) {
 		t.Fatalf("MkdirAll: %v", err)
 	}
 	doc := map[string]any{
-		"version":     1,
+		// CURRENT, not 1. A fixture written at an older version is MIGRATED on load, and
+		// version 1 → 2 rewrites test.* to fake.* — so a hand-written version-1 fixture
+		// silently becomes a project whose types no loaded plugin serves. Use the
+		// version this build writes unless the test is about migration itself, which
+		// internal/state/migrate_fake_test.go is.
+		"version":     stateVersion,
 		"serial":      1,
 		"project":     "myapp",
 		"environment": environment,
