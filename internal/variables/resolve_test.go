@@ -723,3 +723,47 @@ func TestProcessVariablesMatchesWhatOverrideDocuments(t *testing.T) {
 		}
 	}
 }
+
+// TestTheUnsetMessageNamesTheDirectoryLayoutToo.
+//
+// §44 requires a diagnostic's suggested action to be one the user can actually
+// take, and this message used to list three places — variables.yml,
+// environments/<env>.yml and --var — while omitting `vars/`, which M7 made the
+// CONVENTIONAL layout. A project laid out that way was told three places to fix
+// it, none of them the place it was using. The file form is not a second-class
+// alternative: `vars/default.yml` genuinely satisfies a variable with no
+// `default`, so leaving it out sent a reader to edit a file they do not have.
+//
+// Both scopes are asserted, because the all-environments file and the
+// per-environment one are separate rungs (§7) and a message naming only the
+// second tells an all-environments project the wrong thing.
+func TestTheUnsetMessageNamesTheDirectoryLayoutToo(t *testing.T) {
+	decls := []config.VariableDecl{{
+		Name:   "who",
+		Type:   value.KindString,
+		Origin: value.Origin{File: "infra.yml", Line: 5, Column: 3},
+	}}
+	chain, _ := environments.Resolve([]config.EnvironmentDecl{{Name: "dev"}}, "dev")
+
+	_, ds := Resolve(decls, chain, nil, nil, nil)
+
+	var action string
+	for _, d := range ds {
+		if strings.Contains(d.Summary, "is not set") {
+			action = d.Action
+		}
+	}
+	if action == "" {
+		t.Fatalf("no `is not set` diagnostic was reported: %v", ds)
+	}
+	for _, want := range []string{
+		"vars/default.yml", // every environment
+		"vars/dev.yml",     // this one alone
+		"variables.yml",    // what `init` scaffolds, still true
+		"--var who=",       // the one that needs no file at all
+	} {
+		if !strings.Contains(action, want) {
+			t.Errorf("the suggested action omits %q, so a project using it is told to edit files it does not have:\n  %s", want, action)
+		}
+	}
+}

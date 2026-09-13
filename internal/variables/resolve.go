@@ -403,8 +403,15 @@ func checkAgainstSchemas(schemas map[string]Schema, out *Scope, chain environmen
 			Detail: strconv.Quote(name) + " is declared at " + s.Origin.String() +
 				" with no `default`, and nothing set it while resolving environment " +
 				strconv.Quote(chain.Name) + ".",
-			Action: "Give it a `default`, set it in variables.yml or environments/" +
-				chain.Name + ".yml, or pass --var " + name + "=<value>.",
+			// Both layouts, because both work and a reader has only one of
+			// them: variables.yml / environments/<env>.yml is the single-file
+			// form `init` scaffolds, vars/default.yml / vars/<env>.yml the
+			// conventional directory form (§4.1). Naming only the first told a
+			// project using directories to edit files it does not have — a
+			// suggested action has to be one the reader can take (§44).
+			Action: "Give it a `default`, set it for every environment in variables.yml or " +
+				"vars/default.yml, set it for this one in environments/" + chain.Name +
+				".yml or vars/" + chain.Name + ".yml, or pass --var " + name + "=<value>.",
 			Origin: s.Origin,
 		})
 		// Left absent rather than filled with a poison value: stage 6 will
