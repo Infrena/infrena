@@ -2247,12 +2247,19 @@ What that costs, so nobody re-derives it:
   the org. `AGENT.md`, §31.2 and the reference plugin all exist to invite outside plugins,
   and that invitation is on hold rather than withdrawn.
 - **The one consumer uses `replace`.** `infrata-provider-fake` carries
-  `replace github.com/infrata/infrata => ../ilan`, so every contributor needs a sibling
-  checkout and its release workflow needs a token to fetch this repository beside it.
+  `replace github.com/infrata/infrata => ../infrata`, so every contributor needs a sibling
+  checkout named `infrata` — the directory a clone produces — and its release workflow needs
+  a token to fetch this repository beside it. It said `../ilan` until 2026-09-13, a local
+  folder name no clone creates, which broke CI the first time it needed the plugin.
 - **A `replace` means that repository builds against a WORKING TREE, not a version.** Its
   tests run against whatever is uncommitted here, which is how it saw a stale
   `internal/semver` that had been moved. That is a fast loop while both repositories change
   together daily, and a correctness hazard once they do not.
+
+  **v0.1.0 (2026-09-13) is the exit.** There is now a tag to require, so a plugin repository
+  can drop the `replace` in CI — `GOPRIVATE=github.com/infrata/*` plus a token, requiring the
+  released version — and keep it only for local work. Until a release existed this was not
+  available at any price: every build reported `0.0.0-dev`.
 
 **A semver tag is worth cutting anyway**, and is independent of visibility: with
 `GOPRIVATE` set, a tagged version lets the plugin `require github.com/infrata/infrata

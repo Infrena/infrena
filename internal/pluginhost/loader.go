@@ -41,14 +41,18 @@ type Loader struct {
 	// nobody can rely on.
 	Constraints map[string]semver.Constraint
 
-	// Builtin is a fallback for plugins that have no binary yet.
+	// Builtin serves a plugin from inside this process instead of a binary.
 	//
-	// TRANSITIONAL. The fake provider still lives inside this module while
-	// infrata-provider-fake is built; registering it here keeps every existing
-	// project working without a second code path, because a builtin is served over
-	// pluginhost.InProcess and therefore goes through the same protocol, the same
-	// handshake and the same trust rules a subprocess does. Delete this field, and
-	// the entry in internal/cli, once the binary ships.
+	// A SHIPPED BUILD REGISTERS NOTHING HERE. This was transitional while
+	// infrata-provider-fake was being built; the binary shipped, the fallback went
+	// with it, and the field survives as the seam the engine's own tests inject the
+	// fake double through (internal/cli's TestMain). It is not dead code and it is
+	// not a second code path: a builtin is served over pluginhost.InProcess, so it
+	// goes through the same protocol, handshake and trust rules a subprocess does,
+	// which is what makes testing through it worth anything.
+	//
+	// The loader still prefers a binary on the search path, so a builtin cannot
+	// shadow an installed plugin.
 	Builtin map[string]provider.Plugin
 
 	mu      sync.Mutex
