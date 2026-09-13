@@ -1063,18 +1063,37 @@ different account per environment:
 providers:
   - plugin: aws
     iam-role: ${aws_role}
-    region: ${region}
+    region: ${aws_region}
 ```
 
 ```yaml
 # vars/production.yml
 aws_role: arn:aws:iam::111111111111:role/deploy
+aws_region: us-east-1
 ```
 
 ```yaml
 # vars/dev.yml
 aws_role: arn:aws:iam::222222222222:role/deploy
+aws_region: us-west-2
 ```
+
+**`${aws_region}` is an ORDINARY DECLARED VARIABLE, and these examples used to write
+`${region}` as though it were supplied by the process.** It is not. `region` and
+`account` are named as process variables in §12/§43 alongside `environment` and
+`project`, and `compiler.Options.Region` exists and is read — but nothing anywhere
+assigns it, so `${region}` reports `undefined variable "region"` today (checked against
+the built binary, 2026-09-13). `provider.DiscoverRequest.Region` is inert in the same
+way: `internal/discovery/walk.go` builds the request without it and no flag sets it, so
+a plugin author implementing against `DiscoverParams.Region` reads `""` forever.
+
+Two dead fields and a documented variable that does not exist. **Phase 3 decides it**:
+either a `--region` flag that fills all three, or region is ordinary configuration and
+the fields come out. The AWS plugin's agreed model (2026-09-13) needs none of them —
+every regional type declares `region` as Required and ForceNew, an instance supplies it
+through `defaults:`, and `discover` takes its scan list from the instance's own
+`config:` — which is evidence for removal rather than for the flag. Until it is decided,
+no example here may use `${region}`.
 
 **Variables only — never a resource reference.** A provider's configuration is
 needed before any resource exists, so `iam-role: ${some_resource.arn}` cannot be
@@ -1130,7 +1149,7 @@ now discharged, the migration included — see §21.1):
 ### A plugin is not a provider: the factory split
 
 An instance's configuration may interpolate a variable — that is the whole point of
-`region: ${region}` — and that creates a cycle. Constructing a provider needs its
+`region: ${aws_region}` — and that creates a cycle. Constructing a provider needs its
 configuration; resolving the configuration needs variables; resolving variables needs
 a compile; and a compile needs the provider's SCHEMAS. Something has to come first.
 
@@ -1186,7 +1205,7 @@ An instance may also default attributes on every resource that uses it:
 providers:
   - plugin: aws
     iam-role: some-role
-    region: ${region}
+    region: ${aws_region}
     defaults:
       tags: ${tags}
       prevent_destroy: ${protect}
