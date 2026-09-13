@@ -194,8 +194,7 @@ func Apply(ctx context.Context, p *planner.Plan, g *graph.Graph[planner.OpNode],
 			// is worse than one reported badly: the run looks like it did
 			// nothing. It is a failure, so it belongs in Failed, and its
 			// dependents are stranded, so they belong in Skipped.
-			var noState *noResourceStateError
-			if errors.As(err, &noState) {
+			if _, ok := errors.AsType[*noResourceStateError](err); ok {
 				tr.recordFailureWith(w, res.node, err, &ds, d)
 				continue
 			}

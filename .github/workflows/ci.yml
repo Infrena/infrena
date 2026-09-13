@@ -2,11 +2,15 @@ name: CI
 
 # Two things this exists to catch that local development cannot.
 #
-# THE DECLARED FLOOR. go.mod says `go 1.24.0`, which is a promise to every plugin
-# author that they can build against this with Go 1.24 (PLAN.md §31.1, §61). Nothing
-# on a developer's machine tests that promise — mise.toml pins a much newer toolchain —
-# so without the `floor` job below the floor drifts upward the first time someone uses
-# a newer API, and the first to find out is somebody else's build.
+# THE DECLARED FLOOR. go.mod's `go` line is a promise to every plugin author about
+# which Go they need (PLAN.md §31.1, §61), and nothing on a developer's machine tests
+# it. It currently MATCHES mise.toml's pin, so there is one meaningful toolchain and the
+# matrix has one entry — the floor step below still asserts go.mod has not drifted ABOVE
+# it, which is the failure that would otherwise be masked by Go silently downloading a
+# newer toolchain.
+#
+# The moment go.mod declares something older than mise.toml pins, add that version as a
+# second matrix entry: two toolchains is the only way the older promise is ever tested.
 #
 # THE RACE DETECTOR, which is slow enough that it is easy to stop running by hand, on a
 # codebase whose executor is concurrent by design.
@@ -44,12 +48,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # The floor from go.mod. Held at the OLDEST supported minor deliberately: it
-          # is the version a plugin author may be on, not the one we develop with.
-          - go: "1.24"
-            name: floor
-          # What mise.toml pins, so a toolchain bump is caught here rather than in a
-          # developer's working tree.
+          # What mise.toml pins AND what go.mod declares — currently the same version,
+          # so one entry. See the note at the top before adding another.
           - go: "1.27"
             name: current
     steps:
@@ -66,7 +66,6 @@ jobs:
         # GOTOOLCHAIN=local (job env) already makes every later step fail if the floor
         # rose. This runs FIRST so the failure carries the reason rather than Go's own
         # "requires go >= …", which does not say who it breaks.
-        if: matrix.name == 'floor'
         run: |
           declared=$(go mod edit -json | sed -n 's/.*"Go": "\([^"]*\)".*/\1/p')
           echo "go.mod declares $declared; this runner has $(go env GOVERSION)"
@@ -91,7 +90,4 @@ jobs:
 
       - name: test -race
         # The executor is concurrent by design, and a data race there corrupts state.
-        # Only on the current toolchain: the race detector is slow, and a race is not
-        # version-specific.
-        if: matrix.name == 'current'
         run: go test -count=1 -race ./...

@@ -98,9 +98,7 @@ func TestConcurrentCreatesDoNotLoseUpdates(t *testing.T) {
 	var wg sync.WaitGroup
 	errs := make([]error, n)
 	for i := range n {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			_, errs[i] = p.Create(context.Background(), &resource.DesiredResource{
 				Address: address.Address{Name: fmt.Sprintf("net%02d", i)},
 				Type:    "test.network",
@@ -108,7 +106,7 @@ func TestConcurrentCreatesDoNotLoseUpdates(t *testing.T) {
 					"cidr": value.String("10.0.0.0/16", value.SourceExplicit),
 				},
 			})
-		}()
+		})
 	}
 	wg.Wait()
 
@@ -149,9 +147,7 @@ func TestConcurrentReadsSeeWholeFiles(t *testing.T) {
 	var wg sync.WaitGroup
 	errs := make([]error, 32)
 	for i := range errs {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			st, err := p.Read(context.Background(), seed)
 			if err != nil {
 				errs[i] = err
@@ -160,7 +156,7 @@ func TestConcurrentReadsSeeWholeFiles(t *testing.T) {
 			if st == nil {
 				errs[i] = fmt.Errorf("concurrent Read reported the resource gone")
 			}
-		}()
+		})
 	}
 	wg.Wait()
 	for i, err := range errs {

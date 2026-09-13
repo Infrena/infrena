@@ -2,6 +2,7 @@ package providers
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"sort"
 	"strconv"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/infrata/infrata/internal/config"
 	"github.com/infrata/infrata/internal/diag"
+	"github.com/infrata/infrata/internal/pluginhost"
 	"github.com/infrata/infrata/internal/registry"
 	"github.com/infrata/infrata/internal/variables"
 	"github.com/infrata/infrata/pkg/schema"
@@ -92,9 +94,27 @@ func load(ctx context.Context, project *config.ProjectDecl, reg *registry.Regist
 		}
 	}
 
+	ds.Extend(checkDeadConstraints(project, names))
+
 	for _, name := range names {
 		err, failed := failures[name]
 		if !failed {
+			continue
+		}
+		// A plugin that LOADED but failed its `plugins:` constraint is a different
+		// problem from one that is missing, and the generic message got it backwards:
+		// it said "not available" about a binary sitting right there, and advised
+		// installing it. The version is the thing to act on.
+		if verr, ok := errorsAsVersion(err); ok {
+			ds.Add(diag.Diagnostic{
+				Severity: diag.SeverityError,
+				Summary: "the " + name + " plugin does not satisfy this project's `plugins` " +
+					"constraint" + neededBySummary(neededBy[name]),
+				Detail: err.Error(),
+				Action: "Install a version matching " + verr.Constraint.String() + ", or widen " +
+					"the constraint once you have confirmed this one works.",
+				Origin: constraintOrigin(project, name, wanted[name]),
+			})
 			continue
 		}
 		ds.Add(diag.Diagnostic{
@@ -119,6 +139,68 @@ func neededBySummary(reasons []string) string {
 		return ""
 	}
 	return ", and it is needed by " + strings.Join(reasons, ", ")
+}
+
+// errorsAsVersion reports whether a load failed its version constraint.
+func errorsAsVersion(err error) (*pluginhost.VersionError, bool) {
+	return errors.AsType[*pluginhost.VersionError](err)
+}
+
+// constraintOrigin points a version failure at the `plugins:` line that caused it,
+// rather than at whatever asked for the plugin: the constraint is the thing to change.
+func constraintOrigin(project *config.ProjectDecl, name string, fallback value.Origin) value.Origin {
+	if c, ok := project.Plugins[name]; ok && c.Origin.File != "" {
+		return c.Origin
+	}
+	return fallback
+}
+
+// checkDeadConstraints refuses a `plugins:` entry naming a plugin this project does
+// not use (PLAN.md §31.1).
+//
+// Same reasoning as a `defaults:` key nothing declares (§12.1): `plugins: {awz: ">= 1"}`
+// constrains nothing, in every environment, forever, and there is no output in which its
+// absence is visible. The user believes they have pinned a version and they have not.
+//
+// Checked HERE rather than in the loader, because only a compile knows the whole set a
+// project uses — a state-only command derives its plugins from state, and discovery
+// loads everything available, so neither could tell a dead constraint from one that
+// simply does not apply to what it is doing.
+func checkDeadConstraints(project *config.ProjectDecl, used []string) diag.Diagnostics {
+	var ds diag.Diagnostics
+	if len(project.Plugins) == 0 {
+		return ds
+	}
+	inUse := make(map[string]bool, len(used))
+	for _, name := range used {
+		inUse[name] = true
+	}
+
+	names := make([]string, 0, len(project.Plugins))
+	for name := range project.Plugins {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	for _, name := range names {
+		if inUse[name] {
+			continue
+		}
+		detail := "Nothing in this project uses it: no `providers:` entry names it, and no " +
+			"resource type is prefixed " + strconv.Quote(name+".") + "."
+		if len(used) > 0 {
+			detail += "\n\nPlugins this project uses:\n  " + strings.Join(used, "\n  ")
+		}
+		ds.Add(diag.Diagnostic{
+			Severity: diag.SeverityError,
+			Summary:  "`plugins` constrains " + strconv.Quote(name) + ", which this project does not use",
+			Detail:   detail,
+			Action: "Correct the name, or remove the constraint: as written it pins nothing, " +
+				"and nothing would say so.",
+			Origin: project.Plugins[name].Origin,
+		})
+	}
+	return ds
 }
 
 // knownTypes lists what the plugins that DID load offer.

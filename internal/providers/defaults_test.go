@@ -169,3 +169,63 @@ providers:
 		t.Errorf("environment = %v, want the variable resolved", m["environment"])
 	}
 }
+
+// TestAConstraintOnAPluginThisProjectDoesNotUseIsRefused — PLAN.md §31.1.
+//
+// Same reasoning as a `defaults:` key nothing declares: `plugins: {awz: ">= 1"}`
+// constrains nothing, in every environment, forever, with no output in which its absence
+// is visible. The user believes they have pinned a version and they have not.
+func TestAConstraintOnAPluginThisProjectDoesNotUseIsRefused(t *testing.T) {
+	out := defaultsDiags(t, `
+project: p
+plugins:
+  awz: ">= 1.0"
+resources:
+  net:
+    type: test.network
+    cidr: 10.0.0.0/16
+`)
+	if out == "" {
+		t.Fatal("a constraint on a plugin nothing uses must be refused")
+	}
+	if !strings.Contains(out, "awz") {
+		t.Errorf("the diagnostic does not name the key:\n%s", out)
+	}
+	// And it lists what the project DOES use, because the next move is to pick the
+	// right name.
+	if !strings.Contains(out, "test") {
+		t.Errorf("the diagnostic does not list the plugins in use:\n%s", out)
+	}
+}
+
+// TestAConstraintOnAPluginThisProjectDoesUseIsAccepted is the boundary, and the half
+// that keeps the rule above from making `plugins:` unusable.
+//
+// BOTH sources count as "uses it": a `providers:` entry naming the plugin, and a
+// resource type prefixed with it.
+func TestAConstraintOnAPluginThisProjectDoesUseIsAccepted(t *testing.T) {
+	for _, body := range []string{
+		// Named by a resource type's prefix only.
+		`
+project: p
+plugins:
+  test: ">= 0.0.0"
+resources:
+  net:
+    type: test.network
+    cidr: 10.0.0.0/16
+`,
+		// Named by a `providers:` entry only.
+		`
+project: p
+plugins:
+  test: ">= 0.0.0"
+providers:
+  - plugin: test
+`,
+	} {
+		if out := defaultsDiags(t, body); out != "" {
+			t.Errorf("a constraint on a plugin the project uses must be accepted:\n%s", out)
+		}
+	}
+}

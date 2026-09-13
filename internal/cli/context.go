@@ -14,6 +14,7 @@ import (
 	"github.com/infrata/infrata/internal/pluginhost"
 	"github.com/infrata/infrata/internal/providers"
 	"github.com/infrata/infrata/internal/registry"
+	"github.com/infrata/infrata/internal/semver"
 	"github.com/infrata/infrata/internal/state"
 	"github.com/infrata/infrata/internal/variables"
 	"github.com/infrata/infrata/pkg/provider"
@@ -49,6 +50,11 @@ func buildRegistryWithLoader(opts *GlobalOptions) (*registry.Registry, *pluginho
 		Dir:     opts.Dir,
 		Verbose: verboseWriter(opts),
 		Builtin: builtinPlugins(opts.Dir),
+		// Read here rather than passed in, because the loader must have them before
+		// the first load and a load can happen from four different places. This does
+		// NOT name any plugin — which is the thing buildRegistry deliberately does not
+		// do; it only says which versions are acceptable if one is asked for.
+		Constraints: pluginConstraints(opts.Dir),
 	}
 	reg := registry.New()
 	reg.SetLoader(loader)
@@ -67,6 +73,29 @@ func buildRegistryWithLoader(opts *GlobalOptions) (*registry.Registry, *pluginho
 // Delete this function, and pluginhost.Loader.Builtin, once that binary ships.
 func builtinPlugins(dir string) map[string]provider.Plugin {
 	return map[string]provider.Plugin{"test": test.NewPlugin(dir)}
+}
+
+// pluginConstraints reads the project's `plugins:` block (PLAN.md §31.1).
+//
+// Decoding errors are IGNORED, the same concession registerStateInstances makes: this
+// runs before any diagnostic can be rendered properly, and reporting a malformed file
+// twice gives a reader two problems to reconcile instead of one. A project whose
+// configuration will not decode has a worse problem than an unchecked constraint, and
+// the compile that follows reports it.
+func pluginConstraints(dir string) map[string]semver.Constraint {
+	files, err := config.Load(dir)
+	if err != nil {
+		return nil
+	}
+	decl, ds := config.Decode(files)
+	if ds.HasErrors() || len(decl.Plugins) == 0 {
+		return nil
+	}
+	out := make(map[string]semver.Constraint, len(decl.Plugins))
+	for name, c := range decl.Plugins {
+		out[name] = c.Constraint
+	}
+	return out
 }
 
 // verboseWriter is where plugin logs go, or nil when --verbose is off.

@@ -2172,6 +2172,29 @@ schemas, not pipes.
   an unconstrained plugin runs whatever version is found, and `--verbose` says which. It
   is a map keyed by plugin, not a key on each `providers:` entry, because two instances of
   one plugin share one process and so necessarily share one version.
+
+  **BUILT 2026-09-13.** Three rules, each with a reason it is not the obvious thing:
+
+  - **The LOADER enforces it**, not the callers. Four paths load plugins — a compile,
+    the state-only commands, `explain`, and discovery's load-everything — and a
+    constraint checked in three of them is a constraint nobody can rely on.
+  - **A plugin reporting no version satisfies nothing**, and gets its own message. The
+    SDK answers `0.0.0` when a plugin does not implement `Version()`, so it fails any
+    constraint above that — correct, and useless said as "0.0.0 does not satisfy
+    >= 0.3.0", which sends an author looking for a version they never set. Note the
+    ASYMMETRY with §61.2's `infrata:` floor, which EXEMPTS a 0.0.0 build: there the
+    unversioned binary is the user's own development build and the complaint is not
+    actionable; here it is a third-party plugin they installed, and it is.
+  - **A constraint on a plugin the project does not use is an ERROR**, listing the ones
+    it does. Same reasoning as a `defaults:` key nothing declares (§12.1): it pins
+    nothing, in every environment, forever, and the user believes they have pinned a
+    version. Checked in the compiler rather than the loader, because only a compile
+    knows the whole set a project uses.
+
+  A refused plugin is shut down rather than left running: the command is going to fail,
+  and leaving a child to be reaped at exit is how a refusal becomes a hang on a plugin
+  that ignores stdin closing. The refusal is cached, so a project naming one bad plugin
+  on twenty resources hears about it once.
 - **`plugins:` is a new top-level key**, so it is a configuration-language change (§58).
   It is additive, and a project without it behaves exactly as today. Constraint syntax is
   deliberately small: comparison operators on `MAJOR.MINOR.PATCH`, comma meaning AND,

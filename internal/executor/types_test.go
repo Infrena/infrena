@@ -126,8 +126,8 @@ func containsValueTypeRec(typ reflect.Type, visited map[reflect.Type]bool) bool 
 		return containsValueTypeRec(typ.Key(), visited) || containsValueTypeRec(typ.Elem(), visited)
 	case reflect.Struct:
 		// Check all fields recursively.
-		for i := 0; i < typ.NumField(); i++ {
-			if containsValueTypeRec(typ.Field(i).Type, visited) {
+		for field := range typ.Fields() {
+			if containsValueTypeRec(field.Type, visited) {
 				return true
 			}
 		}

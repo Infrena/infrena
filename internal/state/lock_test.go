@@ -151,9 +151,7 @@ func TestConcurrentLockAttemptsElectExactlyOneWinner(t *testing.T) {
 		start := make(chan struct{})
 
 		for range goroutines {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
+			wg.Go(func() {
 				<-start // release together, to maximise contention
 				_, err := b.Lock(ctx, "production")
 
@@ -167,7 +165,7 @@ func TestConcurrentLockAttemptsElectExactlyOneWinner(t *testing.T) {
 				default:
 					t.Errorf("round %d: unexpected lock error: %v", round, err)
 				}
-			}()
+			})
 		}
 		close(start)
 		wg.Wait()
@@ -226,9 +224,7 @@ func TestConcurrentInspectNeverObservesAPartiallyWrittenLock(t *testing.T) {
 		stop := make(chan struct{})
 
 		for range inspectors {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
+			wg.Go(func() {
 				for {
 					select {
 					case <-stop:
@@ -239,13 +235,12 @@ func TestConcurrentInspectNeverObservesAPartiallyWrittenLock(t *testing.T) {
 					if err == nil {
 						continue
 					}
-					var syntaxErr *json.SyntaxError
-					if errors.As(err, &syntaxErr) {
+					if _, ok := errors.AsType[*json.SyntaxError](err); ok {
 						t.Errorf("round %d: Inspect observed a partially written lock file: %v", round, err)
 						return
 					}
 				}
-			}()
+			})
 		}
 
 		if _, err := b.Lock(ctx, "production"); err != nil {

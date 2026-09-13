@@ -2,6 +2,8 @@ package pluginhost
 
 import (
 	"fmt"
+
+	"github.com/infrata/infrata/internal/semver"
 	"strconv"
 	"strings"
 	"sync"
@@ -120,4 +122,36 @@ func indent(s string) string {
 		lines[i] = "  " + l
 	}
 	return strings.Join(lines, "\n")
+}
+
+// VersionError is a plugin outside the range a project's `plugins:` block accepts.
+type VersionError struct {
+	Plugin     string
+	Reported   string
+	Constraint semver.Constraint
+	Path       string
+	// Unversioned distinguishes "this plugin does not report a version" from "this
+	// version is wrong". The SDK answers 0.0.0 for a plugin that does not implement
+	// Version(), and telling its author that 0.0.0 fails `>= 0.3.0` sends them looking
+	// for a version they never set.
+	Unversioned bool
+}
+
+func (e *VersionError) Error() string {
+	where := e.Path
+	if where == "" {
+		where = "(in process)"
+	}
+	if e.Unversioned {
+		return fmt.Sprintf(
+			"the %s plugin does not report a version, so it cannot satisfy %s\n"+
+				"  loaded from: %s\n"+
+				"A plugin reports its version by implementing Version() string; without one there "+
+				"is nothing to check a constraint against.",
+			e.Plugin, e.Constraint, where)
+	}
+	return fmt.Sprintf(
+		"the %s plugin is version %s, which does not satisfy %s\n"+
+			"  loaded from: %s",
+		e.Plugin, e.Reported, e.Constraint, where)
 }

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/infrata/infrata/internal/semver"
 	"github.com/infrata/infrata/pkg/provider"
 )
 
@@ -30,6 +31,15 @@ type Loader struct {
 	// Verbose, when set, receives each plugin's stderr and a line naming the path
 	// each was loaded from.
 	Verbose io.Writer
+
+	// Constraints are the version ranges a project accepts, keyed by plugin name
+	// (PLAN.md §31.1). Absent means unconstrained.
+	//
+	// Enforced HERE rather than at each call site, because four different paths load
+	// plugins — a compile, the state-only commands, `explain`, and discovery's
+	// load-everything — and a constraint checked in three of them is a constraint
+	// nobody can rely on.
+	Constraints map[string]semver.Constraint
 
 	// Builtin is a fallback for plugins that have no binary yet.
 	//
@@ -76,7 +86,17 @@ func (l *Loader) load(ctx context.Context, name string) (*Plugin, error) {
 	}
 
 	p, err := l.open(ctx, name)
+	if err == nil {
+		err = l.checkVersion(name, p)
+	}
 	if err != nil {
+		// A plugin that loaded but does not satisfy its constraint is shut down
+		// rather than left running: the command is going to fail, and leaving a
+		// child process behind to be reaped at exit is how a refusal becomes a
+		// hang on a plugin that ignores stdin closing.
+		if p != nil {
+			_ = p.Close()
+		}
 		l.failed[name] = err
 		return nil, err
 	}
@@ -104,6 +124,40 @@ func (l *Loader) open(ctx context.Context, name string) (*Plugin, error) {
 
 	_ = searched
 	return nil, findErr
+}
+
+// checkVersion refuses a plugin outside the range the project accepts.
+//
+// A plugin that reports no version at all reports 0.0.0 — the SDK's answer when a
+// plugin does not implement Version() — and cannot satisfy any constraint above it.
+// That is the right answer and needs its own message: "0.0.0 does not satisfy >= 0.3.0"
+// would send an author looking for a version they never set.
+//
+// Note the ASYMMETRY with infrata's own `infrata:` floor (§61.2), which EXEMPTS a
+// 0.0.0 build. There the unversioned binary is the user's own development build and a
+// complaint about it is not something they can act on. Here it is a third-party plugin
+// they chose to install, and they can act: install a versioned build, or drop the
+// constraint.
+func (l *Loader) checkVersion(name string, p *Plugin) error {
+	constraint, ok := l.Constraints[name]
+	if !ok || constraint.IsZero() {
+		return nil
+	}
+	reported := p.Version()
+	got, err := semver.Parse(reported)
+	if err != nil {
+		return &VersionError{Plugin: name, Reported: reported, Constraint: constraint, Path: p.client.Path()}
+	}
+	if constraint.Allows(got) {
+		return nil
+	}
+	return &VersionError{
+		Plugin:      name,
+		Reported:    reported,
+		Unversioned: got.Major == 0 && got.Minor == 0 && got.Patch == 0 && reported == "0.0.0",
+		Constraint:  constraint,
+		Path:        p.client.Path(),
+	}
 }
 
 // Close shuts down every plugin this loader started.

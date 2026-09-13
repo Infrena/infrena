@@ -140,8 +140,7 @@ func (r *remoteProvider) Definitions() []*schema.ResourceDefinition { return r.p
 // pipe, a plugin that died — is exactly the case where retrying a Create could
 // create a second resource.
 func (r *remoteProvider) ClassifyError(err error) provider.Retryability {
-	var pe *ProviderError
-	if errors.As(err, &pe) {
+	if pe, ok := errors.AsType[*ProviderError](err); ok {
 		return pe.Retryability
 	}
 	return provider.NotSafeToRetry

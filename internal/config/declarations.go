@@ -14,6 +14,12 @@ import (
 	"strings"
 )
 
+// PluginConstraint is one plugin's accepted version range, and where it was written.
+type PluginConstraint struct {
+	Constraint semver.Constraint
+	Origin     value.Origin
+}
+
 // AttributeDecl is one configured attribute.
 //
 // In M1, Value holds the literal datum, and any string containing "${" is kept
@@ -226,6 +232,14 @@ type ProjectDecl struct {
 	// written before the key existed.
 	RequiredVersion       semver.Constraint
 	RequiredVersionOrigin value.Origin
+	// Plugins constrains provider plugin versions, keyed by plugin name
+	// (PLAN.md §31.1). Absent means unconstrained: whatever is found runs, and
+	// `--verbose` says which.
+	//
+	// Keyed by PLUGIN, not by `providers:` entry, because two instances of one plugin
+	// share one process and therefore necessarily share one version. A per-instance
+	// constraint could ask for two versions of one binary.
+	Plugins map[string]PluginConstraint
 
 	Resources    []*ResourceDecl   // sorted by Name
 	Variables    []VariableDecl    // sorted by Name

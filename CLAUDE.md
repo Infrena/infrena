@@ -159,7 +159,7 @@ The governing philosophy:
 
 ## Stack and commands
 
-Go 1.24 (pinned via `mise.toml`), Cobra, `gopkg.in/yaml.v3`. Those two are the **entire**
+Go 1.27 (pinned via `mise.toml`, and declared as the module floor in `go.mod`), Cobra, `gopkg.in/yaml.v3`. Those two are the **entire**
 third-party budget so far. AWS SDK v2 arrives with Phase 3, inside `providers/aws`'s OWN
 `go.mod`, so it never enters the core module (§31.1).
 
@@ -179,12 +179,13 @@ gofmt -l .
 AWS integration tests must be opt-in (build tag or env guard) — **normal CI must not
 require AWS credentials** (§46).
 
-**CI** (`.github/workflows/ci.yml`) runs gofmt, vet and the suite on two toolchains: the
-FLOOR from `go.mod` (currently 1.24) and what `mise.toml` pins (1.27). `GOTOOLCHAIN=local`
-is set for the whole job, because Go otherwise downloads a newer toolchain to satisfy
-`go.mod` — which would make the floor job pass by fetching the very version it exists to
-prove unnecessary. The floor is a promise to plugin authors, and nothing on a developer's
-machine tests it. `-race` runs on the current toolchain only. It also runs on
+**CI** (`.github/workflows/ci.yml`) runs gofmt, vet, the suite and `-race`.
+`GOTOOLCHAIN=local` is set for the whole job, because Go otherwise downloads a newer
+toolchain to satisfy `go.mod` and a floor break would pass by fetching the very version
+it should have failed on. `go.mod`'s floor currently MATCHES `mise.toml`, so the matrix
+has one entry; the moment the floor drops below the pin, add the older version as a
+second entry — two toolchains is the only way the older promise is ever tested. The floor
+is a promise to plugin authors, and a plugin repo must declare at least it. It also runs on
 `merge_group`, and is called by the release workflow so a release cannot skip it.
 
 **Releases** (`.github/workflows/release.yml`) fire on a `v*` tag and cross-compile eight
@@ -215,6 +216,14 @@ already fails closed on unknown keys, so a version integer would buy only a bett
 while costing a key in every file that is wrong by default. Instead an optional
 `infrata: ">= 0.4"` floor, sharing its constraint syntax with `plugins:`, checked
 immediately after decoding so a binary that cannot understand a project says so once.
+
+**`plugins:` constrains provider plugin versions** (§31.1), keyed by plugin because two
+instances of one plugin share one process and therefore one version. The LOADER enforces
+it — four paths load plugins, and a constraint checked in three is one nobody can rely on
+— while the compiler refuses a constraint naming a plugin the project does not use. A
+plugin reporting no version (`0.0.0`, the SDK's answer when `Version()` is absent)
+satisfies nothing and says so in its own words; that is deliberately the opposite of
+§61.2's `infrata:` floor, which exempts a 0.0.0 build because it is the user's own.
 
 The CLI surface to implement (§37): `init`, `validate`, `plan <env>`, `apply <env>`,
 `destroy <env>`, `state` / `state show <address>`, `refresh <env>`, `import`, `export`,

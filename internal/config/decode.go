@@ -261,12 +261,14 @@ func decodeDocument(path string, doc *yaml.Node, out *ProjectDecl, ds *diag.Diag
 			decodeModuleLoads(path, val, &out.Modules, ds, seenModules)
 		case "infrata":
 			decodeRequiredVersion(path, key, val, out, ds)
+		case "plugins":
+			decodePluginConstraints(path, val, out, ds)
 		default:
 			ds.Add(diag.Diagnostic{
 				Severity: diag.SeverityWarning,
 				Summary:  "unrecognised top-level key " + strconv.Quote(key.Value),
-				Detail: ProjectFileName + " understands `project`, `infrata`, `resources`, " +
-					"`variables`, `environments`, `providers` and `modules`.",
+				Detail: ProjectFileName + " understands `project`, `infrata`, `plugins`, " +
+					"`resources`, `variables`, `environments`, `providers` and `modules`.",
 				Origin: originOf(path, key),
 			})
 		}
@@ -316,6 +318,66 @@ func decodeRequiredVersion(path string, key, node *yaml.Node, out *ProjectDecl, 
 	}
 	out.RequiredVersion = constraint
 	out.RequiredVersionOrigin = origin
+}
+
+// decodePluginConstraints reads `plugins:`, a map of plugin name to version
+// constraint (PLAN.md §31.1).
+//
+//	plugins:
+//	  aws: ">= 0.3.0, < 0.4.0"
+//
+// A MAPPING, unlike `providers:`, and for the opposite reason: `providers:` is a list
+// because a project may declare two instances of one plugin, while a plugin has exactly
+// one version however many instances use it — they share one process.
+func decodePluginConstraints(path string, node *yaml.Node, out *ProjectDecl, ds *diag.Diagnostics) {
+	if node.Kind != yaml.MappingNode {
+		ds.Add(diag.Diagnostic{
+			Severity: diag.SeverityError,
+			Summary:  "`plugins` must be a mapping of plugin name to version constraint",
+			Detail:   "For example:\n  plugins:\n    aws: \">= 0.3.0, < 0.4.0\"",
+			Origin:   originOf(path, node),
+		})
+		return
+	}
+
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		key, val := node.Content[i], node.Content[i+1]
+		origin := originOf(path, key)
+
+		if existing, declared := out.Plugins[key.Value]; declared {
+			ds.Add(diag.Diagnostic{
+				Severity: diag.SeverityError,
+				Summary:  "plugin " + strconv.Quote(key.Value) + " is constrained twice",
+				Detail: "The first is at " + describeOrigin(existing.Origin) +
+					". Two constraints on one plugin could contradict each other, and taking " +
+					"whichever was read last would make the answer depend on the order files " +
+					"are loaded.",
+				Action: "Keep one constraint per plugin.",
+				Origin: origin,
+			})
+			continue
+		}
+
+		text, ok := requireScalar(path, "the constraint for plugin "+strconv.Quote(key.Value), val, ds)
+		if !ok {
+			continue
+		}
+		constraint, err := semver.ParseConstraint(text)
+		if err != nil {
+			ds.Add(diag.Diagnostic{
+				Severity: diag.SeverityError,
+				Summary:  "plugin " + strconv.Quote(key.Value) + " has an invalid constraint: " + err.Error(),
+				Detail: "A constraint is comparison operators on MAJOR.MINOR.PATCH, with a comma " +
+					"meaning AND — `>= 0.3.0`, or `>= 0.3.0, < 0.4.0`.",
+				Origin: origin,
+			})
+			continue
+		}
+		if out.Plugins == nil {
+			out.Plugins = make(map[string]PluginConstraint)
+		}
+		out.Plugins[key.Value] = PluginConstraint{Constraint: constraint, Origin: origin}
+	}
 }
 
 func decodeResources(path string, node *yaml.Node, dst *[]*ResourceDecl, ds *diag.Diagnostics, seen map[string]value.Origin) {

@@ -66,8 +66,7 @@ func (p *Provider) Definitions() []*schema.ResourceDefinition { return p.defs }
 // ClassifyError classifies an injected failure for retryability. Any other
 // error is treated as not safe to retry.
 func (p *Provider) ClassifyError(err error) provider.Retryability {
-	var injected *ErrInjected
-	if errors.As(err, &injected) {
+	if injected, ok := errors.AsType[*ErrInjected](err); ok {
 		return injected.Retryability.Classify()
 	}
 	return provider.NotSafeToRetry
