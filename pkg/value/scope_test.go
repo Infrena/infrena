@@ -145,28 +145,26 @@ func TestScopeRoundTripsAtEveryDepth(t *testing.T) {
 // before them.
 //
 // M7 added scoped_vars and did NOT bump state.CurrentVersion, against this
-// test's original advice, having tried it. Bumping requires a no-op migration
-// from 1 to 2, and Decode routes every non-current file through
-// json.Unmarshal into map[string]any — where a number becomes a float64 and an
-// integer beyond 2^53 comes back WRONG. internal/state's own golden test
-// catches it: 9007199254740993 read back as 9007199254740992.
+// test's original advice, having tried it: Decode routed every non-current file
+// through json.Unmarshal into map[string]any, where a number became a float64
+// and an integer beyond 2^53 came back WRONG — 9007199254740993 as
+// 9007199254740992. So the bump bought a better message for a version 1 build
+// reading a version 2 file and cost silent precision loss on every existing
+// file, which is the wrong way round for a file whose whole job is fidelity.
 //
-// So the bump buys a better message for a version 1 build reading a version 2
-// file ("written by a newer version" rather than "unknown scope"), and costs
-// silent precision loss when THIS build reads any existing file. That trade is
-// the wrong way round for a file whose whole job is fidelity, and the message
-// only matters once more than one build exists in the world.
+// THAT DEFECT IS FIXED. state.Decode now decodes the migration path with
+// json.Decoder.UseNumber(), so a number keeps its exact text through the
+// generic representation (internal/state's migration_precision_test.go pins
+// it). A version bump is an ordinary change again, and the next Scope added
+// here should make one rather than re-reading this paragraph a fourth time.
 //
-// M11 added instance_default on the same reasoning, having re-read the above.
-// The trade has not changed: the migration path is still lossy (the
-// UseNumber() fix is still a follow-up), so the cost of bumping is still
-// silent precision loss on every existing file and the benefit is still only
-// a better message for a build that does not exist yet.
+// The two scopes added while the defect stood — scoped_vars (M7) and
+// instance_default (M11) — stay at version 1. Bumping now would migrate every
+// existing file to say the same thing it already says: ScopeUnset is omitted
+// from the wire, so no file written before either of them contains a scope
+// that needs translating.
 //
-// Revisit when the state format changes for a real reason: fixing the
-// migration path to use json.Decoder.UseNumber() removes the cost, and is
-// recorded as a follow-up. The
-// literals below are duplicated deliberately — deriving them from
+// The literals below are duplicated deliberately — deriving them from
 // scopeWireNames would assert nothing.
 func TestScopeWireNamesAreFrozen(t *testing.T) {
 	frozen := map[Scope]string{

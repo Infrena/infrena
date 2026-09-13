@@ -2,6 +2,7 @@
 package state
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"sort"
@@ -77,6 +78,14 @@ func (s *State) Encode() ([]byte, error) {
 // Migration transforms a decoded state document from one version to the next.
 // It operates on the generic document rather than the typed struct, because the
 // typed struct only ever describes CurrentVersion.
+//
+// NUMBERS ARRIVE AS json.Number, not float64. The document is decoded with
+// json.Decoder.UseNumber() so that an integer beyond float64's exact range —
+// 2^53 and up — survives the round trip through this representation; see Decode.
+// A migration inspecting one calls its Int64/Float64/String methods rather than
+// asserting float64. Assigning a plain int or float64 is fine: only the values
+// a migration LEAVES ALONE need to be exact, and those are the ones already
+// carrying json.Number.
 type Migration struct {
 	From  int
 	To    int
@@ -92,9 +101,18 @@ func RegisterMigration(m Migration) { migrations = append(migrations, m) }
 //
 // A document already at CurrentVersion is unmarshalled straight into the typed
 // struct. The generic map[string]any representation is reserved for the
-// migration path, which is the only thing that needs it: JSON numbers become
-// float64 in that intermediate, so routing every load through it silently
-// rounds any integer beyond 2^53 — in the one file whose whole job is fidelity.
+// migration path, which is the only thing that needs it.
+//
+// That path decodes with UseNumber, so a number becomes a json.Number — its
+// original text — rather than a float64. Without it, re-marshalling the document
+// rounds every integer beyond 2^53, in the one file whose whole job is fidelity,
+// and does it silently: the value comes back one less, a plan proposes an update
+// to a number the user never changed, and applying it writes the rounded value
+// back as though it were desired.
+//
+// This was a recorded defect for two milestones. M7 and M11 each declined to bump
+// CurrentVersion because doing so would route every existing file through here;
+// with UseNumber that cost is gone, and a version bump is now an ordinary change.
 func Decode(data []byte) (*State, error) {
 	var probe struct {
 		Version int `json:"version"`
@@ -109,9 +127,9 @@ func Decode(data []byte) (*State, error) {
 		return decodeCurrent(data)
 	}
 
-	var raw map[string]any
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return nil, fmt.Errorf("state is not valid JSON: %w", err)
+	raw, err := decodeGeneric(data)
+	if err != nil {
+		return nil, err
 	}
 	version := probe.Version
 
@@ -130,7 +148,11 @@ func Decode(data []byte) (*State, error) {
 			return nil, fmt.Errorf("migrating state from version %d to %d: %w", m.From, m.To, err)
 		}
 		version = m.To
-		raw["version"] = float64(version)
+		// A plain int, deliberately. UseNumber is about numbers that came FROM the
+		// document, whose text must survive untouched; a Go int marshals exactly at
+		// any magnitude, so there is nothing here to preserve. Measured: writing it
+		// as a json.Number instead changes no behaviour, so the simpler form wins.
+		raw["version"] = version
 	}
 
 	normalised, err := json.Marshal(raw)
@@ -138,6 +160,23 @@ func Decode(data []byte) (*State, error) {
 		return nil, err
 	}
 	return decodeCurrent(normalised)
+}
+
+// decodeGeneric decodes a state document into the generic representation
+// migrations operate on, preserving every number's exact text.
+//
+// json.Unmarshal has no equivalent: the option lives on the Decoder. Which is why
+// this is a function rather than one line inline — the two-step dance is the whole
+// point, and a later edit reaching for json.Unmarshal because it is shorter would
+// silently restore the rounding.
+func decodeGeneric(data []byte) (map[string]any, error) {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.UseNumber()
+	var raw map[string]any
+	if err := dec.Decode(&raw); err != nil {
+		return nil, fmt.Errorf("state is not valid JSON: %w", err)
+	}
+	return raw, nil
 }
 
 // decodeCurrent unmarshals a document already at CurrentVersion into the typed
