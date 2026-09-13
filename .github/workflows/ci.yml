@@ -39,7 +39,7 @@ jobs:
       run:
         # Everything below runs in this repository; the plugin is checked out beside it,
         # which is where tests/integration looks for a sibling.
-        working-directory: infrata
+        working-directory: ilan
 
     env:
       # A CI RUN THAT SKIPS ITS INTEGRATION SUITE REPORTS GREEN FOR TESTS THAT NEVER RAN.
@@ -65,9 +65,17 @@ jobs:
           - go: "1.27"
             name: current
     steps:
+      # CHECKED OUT AS `ilan`, not `infrata`, and the name is load-bearing:
+      # infrata-provider-fake's go.mod says `replace github.com/infrata/infrata =>
+      # ../ilan`, so the directory beside it must be called that. `git clone` of
+      # infrata/infrata produces `infrata/`, which is why this is spelled out rather
+      # than left to the default — CI failed on exactly this.
+      #
+      # The real fix is in the plugin's go.mod (`../ilan` names a local accident, not
+      # anything a clone produces); until then this matches it.
       - uses: actions/checkout@v4
         with:
-          path: infrata
+          path: ilan
 
       # THE FAKE PROVIDER IS A SEPARATE REPOSITORY (§31.1), and tests/integration builds
       # it: a shipped infrata carries no provider, so the integration suite runs the same
@@ -87,6 +95,10 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: ${{ matrix.go }}
+          # go.sum is no longer at the workspace root, since both repositories are
+          # checked out into subdirectories. Without this the cache step warns and
+          # caches nothing.
+          cache-dependency-path: ilan/go.sum
           # Do NOT let the toolchain silently download a newer Go to satisfy go.mod.
           # That would defeat the floor job entirely: it would pass by fetching 1.27.
           check-latest: false
