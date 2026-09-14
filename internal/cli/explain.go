@@ -69,10 +69,17 @@ func explain(w io.Writer, def *schema.ResourceDefinition) {
 
 	// Grouped as §30 groups them. An attribute is in exactly one group, so a
 	// reader counting them sees the whole surface.
-	var required, optional, computed []string
+	// An attribute is in exactly one group, so a reader counting them sees the whole
+	// surface. An optional+computed attribute (§14.1) gets its OWN group rather than
+	// being filed under Optional or Computed, because it is neither: a reader told
+	// "Computed" would not know they may set it, and one told "Optional" would not know
+	// a value appears if they do not.
+	var required, optional, chosen, computed []string
 	for _, name := range sortedAttrNames(def.Attributes) {
 		a := def.Attributes[name]
 		switch {
+		case a.Computed && a.Optional:
+			chosen = append(chosen, name)
 		case a.Computed:
 			computed = append(computed, name)
 		case a.Required:
@@ -84,6 +91,7 @@ func explain(w io.Writer, def *schema.ResourceDefinition) {
 
 	section(w, "Required", required, def)
 	section(w, "Optional", optional, def)
+	section(w, "Optional, chosen by the provider if unset", chosen, def)
 	section(w, "Computed", computed, def)
 
 	if len(def.Requirements) > 0 {
@@ -120,6 +128,11 @@ func section(w io.Writer, title string, names []string, def *schema.ResourceDefi
 		}
 		if a.Description != "" {
 			line += " " + a.Description
+		}
+		// Every accepted spelling. `explain` is where a user finds out what they may
+		// write, and an alias nothing lists is an alias nobody uses.
+		if spellings := def.Spellings(name); len(spellings) > 1 {
+			notes = append(notes, "also "+strings.Join(spellings[1:], ", "))
 		}
 		if len(notes) > 0 {
 			line += "  (" + strings.Join(notes, "; ") + ")"

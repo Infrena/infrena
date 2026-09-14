@@ -225,7 +225,19 @@ func renderResource(r Resource, reg *registry.Registry, opts Options) (*yaml.Nod
 				// resource is still worth writing without it.
 				continue
 			}
-			if attr.Computed {
+			// A purely computed attribute cannot be set, so emitting it writes a
+			// file that does not load. An optional+computed one CAN be set, and
+			// whether to write it depends on what it is (PLAN.md §14.1):
+			//
+			//   ForceNew  — the resource's IDENTITY: a bucket name, a role name, a
+			//               subnet's availability zone. Omitting it writes "cloud,
+			//               pick a name", which is a different request from the one
+			//               just imported, and a later explicit value would REPLACE
+			//               the resource.
+			//   otherwise — a setting with a cloud default (EnableDnsSupport,
+			//               MaxSessionDuration). Writing it pins every default into
+			//               the file as noise, against §27's minimal-generation rule.
+			if attr.Computed && !(attr.Optional && attr.ForceNew) {
 				continue
 			}
 			if attr.Sensitive {
