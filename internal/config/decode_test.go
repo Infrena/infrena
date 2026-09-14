@@ -701,3 +701,13 @@ resources:
 			"would treat it as the literal name \"${var.replica_in}\"")
 	}
 }
+
+func TestAResourceNamedVarIsRefused(t *testing.T) {
+	var ds diag.Diagnostics
+	if checkResourceName("resources", "var", value.Origin{}, &ds) {
+		t.Fatal("a resource named var must be refused: it makes ${var.x} mean two things")
+	}
+	if !strings.Contains(ds[0].Summary, "reserved") {
+		t.Errorf("Summary = %q, want it to say reserved", ds[0].Summary)
+	}
+}

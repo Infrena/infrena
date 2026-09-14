@@ -123,7 +123,7 @@ func (s *Scope) Qualify(e *value.Expr) *value.Expr {
 	switch b.Kind {
 	case BindsResource:
 		out := *e
-		out.Ref = value.Reference{Target: b.Address, Attribute: e.Ref.Attribute}
+		out.Ref = value.Reference{Target: b.Address, Attribute: e.Ref.Attribute, Path: e.Ref.Path}
 		return &out
 
 	case BindsModule:

@@ -235,7 +235,7 @@ func parseExpr(src string, origin value.Origin, ds *diag.Diagnostics) *value.Exp
 				"function call is expected. YAML already expresses maps and lists, so the " +
 				"language does not.",
 			Action: "Write the value as YAML, or pass it to a function: " +
-				"`${merge(tags, " + src + ")}`.",
+				"`${merge(var.tags, " + src + ")}`.",
 			Origin: origin,
 		})
 		return nil
@@ -269,7 +269,7 @@ func parseArgument(src string, origin value.Origin, ds *diag.Diagnostics) *value
 // means the string "payments", which is what the YAML around it would mean and
 // what anyone writing it expects. Treating it as a reference would make the
 // obvious spelling silently resolve to something else — and there is no need
-// for it, because a variable belongs in another argument: `merge(tags, {...})`.
+// for it, because a variable belongs in another argument: `merge(var.tags, {...})`.
 //
 // Keys are text, unquoted and uninterpolated, for the reason §10.1 gives: a
 // configuration's shape must not depend on a value.
@@ -571,18 +571,16 @@ func parseReference(src string, origin value.Origin, ds *diag.Diagnostics) *valu
 		return &value.Expr{Op: value.OpVarRef, Ref: ref, Origin: origin}
 	}
 
-	// One segment is a variable; two or more is a resource attribute. The
-	// compiler resolves each against a different scope.
-	//
-	// Both are SCOPE-RELATIVE: the parser has no scope, so it cannot know
-	// whether it is reading a module file or infra.yml, and a reference
-	// written inside a module is re-rooted by stage 5 rather than here.
 	if len(segments) == 1 {
-		return &value.Expr{
-			Op:     value.OpVarRef,
-			Ref:    value.VarRef(segments[0]),
+		ds.Add(diag.Diagnostic{
+			Severity: diag.SeverityError,
+			Summary:  "${" + src + "} is not a reference",
+			Detail: "Variables are written ${var." + src + "}. A resource reference needs an " +
+				"attribute, as ${" + src + ".id}.",
+			Action: "Add the `var.` prefix, or name an attribute.",
 			Origin: origin,
-		}
+		})
+		return nil
 	}
 
 	// FIRST segment is the resource, SECOND is the attribute, the rest is a

@@ -74,7 +74,7 @@ production still gets everything else from `default.yml`.
   `${var.environment}` and `${var.project}` come from the invocation, so `plan production` shows
   different values with no second copy of the map anywhere. It cannot live in a variables file:
   a variable is resolved before any expression scope exists, so `${...}` there has nothing to
-  refer to. To combine it with another map, `${merge(a, {team: storefront})}` — quoted, because
+  refer to. To combine it with another map, `${merge(var.a, {team: storefront})}` — quoted, because
   YAML ends a plain scalar at `: `.
 
 Precedence runs: provider default → `vars/**` and `variables.yml` → `resources/<dir>/vars/**` →

@@ -333,6 +333,23 @@ func identifierSegment(s string) bool {
 // It serves module files too, because decodeResources is shared: a resource
 // inside a module is no freer to name itself `module.x` than a root one.
 func checkResourceName(path, name string, origin value.Origin, ds *diag.Diagnostics) bool {
+	// `var` is the variable namespace. A resource so named makes ${var.x} mean
+	// two things — the reference is ambiguous at parse time, where there is no
+	// scope to disambiguate with — so it is refused HERE, at the declaration,
+	// which is where the fix is.
+	if name == "var" {
+		ds.Add(diag.Diagnostic{
+			Severity: diag.SeverityError,
+			Summary:  "resource name \"var\" is reserved",
+			Detail: "`var` is the namespace every variable reference begins with, so a resource " +
+				"called `var` would make ${var.x} mean either that resource's `x` attribute or " +
+				"the variable `x`.",
+			Action: "Rename the resource.",
+			Origin: origin,
+		})
+		return false
+	}
+
 	if identifierSegment(name) {
 		return true
 	}

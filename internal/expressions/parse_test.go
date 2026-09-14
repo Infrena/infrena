@@ -303,15 +303,17 @@ func TestVarPrefixParsesAsAVariable(t *testing.T) {
 	}
 }
 
-func TestABareNameStillParsesAsAVariableDuringExpand(t *testing.T) {
-	// Removed in the contract task. Here it pins that the expand step is
-	// additive: nothing that worked stops working.
-	e, ds := Parse("${var.region}", value.Origin{})
-	if ds.HasErrors() {
-		t.Fatalf("unexpected errors: %v", ds)
+func TestABareSingleSegmentIsNotAReference(t *testing.T) {
+	_, ds := Parse("${region}", value.Origin{})
+	if !ds.HasErrors() {
+		t.Fatal("a bare single segment must be an error: variables are var.-prefixed and a resource reference needs an attribute")
 	}
-	if e.Op != value.OpVarRef || e.Ref.VarName() != "region" {
-		t.Errorf("got %v/%q, want OpVarRef/region", e.Op, e.Ref.VarName())
+	d := ds[0]
+	if !strings.Contains(d.Detail, "${var.region}") {
+		t.Errorf("Detail = %q, want it to name the fix", d.Detail)
+	}
+	if !strings.Contains(d.Detail, "attribute") {
+		t.Errorf("Detail = %q, want it to mention the resource-reference form too", d.Detail)
 	}
 }
 

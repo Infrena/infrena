@@ -69,7 +69,7 @@ func TestEvaluateConcat(t *testing.T) {
 }
 
 func TestEvaluateCall(t *testing.T) {
-	got, _ := evalSrc(t, "${upper(project)}", compileScope())
+	got, _ := evalSrc(t, "${upper(var.project)}", compileScope())
 	if s, _ := got.AsString(); s != "MYAPP" {
 		t.Errorf("= %q, want \"MYAPP\"", s)
 	}
@@ -177,7 +177,7 @@ func TestUnknownFunctionIsAnErrorNamingTheAlternatives(t *testing.T) {
 }
 
 func TestFunctionErrorBecomesADiagnostic(t *testing.T) {
-	_, d := evalSrc(t, "${lower(project, region)}", compileScope())
+	_, d := evalSrc(t, "${lower(var.project, var.region)}", compileScope())
 	if !d.HasErrors() {
 		t.Error("wrong arity must surface as a diagnostic, not a panic or a silent result")
 	}
@@ -352,7 +352,7 @@ func TestFoldedSensitiveLiteralRedactsInStringRendering(t *testing.T) {
 // is the exact ConfigHash blindness Task 3 exists to close, left open for
 // calls.
 func TestDeferredCallFoldsResolvedArgs(t *testing.T) {
-	got, ds := evalSrc(t, `${replace(network.id, "old", prefix)}`, foldScope())
+	got, ds := evalSrc(t, `${replace(network.id, "old", var.prefix)}`, foldScope())
 	if ds.HasErrors() {
 		t.Fatalf("unexpected diagnostics: %+v", ds)
 	}
@@ -391,7 +391,7 @@ func TestDefaultsUnknownFallbackDeferralStillCarriesTheWholeCall(t *testing.T) {
 	scope := testScope{vars: map[string]value.Value{
 		"blank": value.String("", value.SourceVariable),
 	}}
-	got, ds := evalSrc(t, "${default(blank, network.id)}", scope)
+	got, ds := evalSrc(t, "${default(var.blank, network.id)}", scope)
 	if ds.HasErrors() {
 		t.Fatalf("unexpected diagnostics: %+v", ds)
 	}

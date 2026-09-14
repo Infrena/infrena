@@ -699,7 +699,7 @@ database_url: ${database.connection_string}
 A small set of pure helper functions may eventually be supported:
 
 ```yaml
-name: ${lower(project_name)}-${var.environment}
+name: ${lower(var.project_name)}-${var.environment}
 ```
 
 Do not initially build a Terraform/HCL-like programming language.
@@ -781,7 +781,7 @@ written into a tag.
 A map or list literal may appear as a function ARGUMENT, and nowhere else:
 
 ```yaml
-tags: "${merge(tags, {team: payments, project: billing})}"
+tags: "${merge(var.tags, {team: payments, project: billing})}"
 ```
 
 Not as a value on its own, because YAML already does that job. Bounding it to
@@ -789,7 +789,7 @@ argument position is what keeps this from being the first step toward a
 programming language.
 
 **The quotes are required, and not by us.** YAML itself rejects the unquoted
-form: a plain scalar may not contain `: `, so `tags: ${merge(a, {b: c})}` fails
+form: a plain scalar may not contain `: `, so `tags: ${merge(var.a, {b: c})}` fails
 with "mapping values are not allowed in this context" before any of this code
 sees it. That message says nothing about quoting, so the loader detects this
 shape and says what to do.

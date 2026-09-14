@@ -22,8 +22,8 @@ func TestParseShapesAreUnchangedByTheScannerRewrite(t *testing.T) {
 		src   string
 		// want is the first diagnostic summary, or "" for no diagnostics.
 		want string
-		// refs is the RESOURCE reference targets parsed, joined by ",". A bare
-		// name with no dot is a VARIABLE and does not appear here — which is
+		// refs is the RESOURCE reference targets parsed, joined by ",". A
+		// var.-prefixed name is a VARIABLE and does not appear here — which is
 		// itself behaviour worth recording, and it is why the fixtures below use
 		// dotted targets wherever the extraction is the thing being pinned.
 		refs string

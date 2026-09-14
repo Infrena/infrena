@@ -86,7 +86,7 @@ resources:
     type: fake.database
     engine: postgres
     network: ${net.id}
-    tags: "${merge(base_tags, {team: payments, project: billing})}"
+    tags: "${merge(var.base_tags, {team: payments, project: billing})}"
 `, map[string]string{
 		"variables.yml": "base_tags:\n  owner: platform\n  team: unassigned\n",
 	})
