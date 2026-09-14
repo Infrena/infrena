@@ -584,6 +584,12 @@ func planAddresses(cfg compiler.ResolvedConfig, st *state.State) []address.Addre
 // hashState fingerprints state so that M6 can detect a saved plan going stale.
 // State.Encode is byte-stable for identical input, which is what makes the
 // fingerprint meaningful.
+// HashState fingerprints a state file, exported so a command applying a saved plan can
+// ask whether the state has moved since the plan was made without reimplementing the
+// hash — two implementations of one fingerprint would disagree eventually, and the
+// disagreement would read as "the state moved" on a state that had not.
+func HashState(st *state.State) (string, error) { return hashState(st) }
+
 func hashState(st *state.State) (string, error) {
 	data, err := st.Encode()
 	if err != nil {

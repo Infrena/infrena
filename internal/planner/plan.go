@@ -195,6 +195,13 @@ type Plan struct {
 	ConfigHash string
 	// StateSerial and StateHash fingerprint the state this plan was made
 	// against, for the same reason.
+	//
+	// THE FINGERPRINT IS OF STATE AS LOADED, before any in-memory change a command
+	// makes to it. `infrata plan` hashes what came off disk; `apply` stamps the project
+	// name into state before planning (see cli.computePlan), which changes the bytes.
+	// So a command comparing a saved plan's hash against state must take its own hash
+	// BEFORE mutating anything, or it compares two different states and reports a
+	// change nobody made. That cost one debugging round the first time --plan ran.
 	StateSerial uint64
 	StateHash   string
 	// Operations are sorted by canonical address, never by execution order:
@@ -510,18 +517,10 @@ func (e *StaleError) Error() string { return e.Reason + "\n" + e.Action }
 // plan after editing configuration, and applying one after a colleague applied theirs
 // need completely different sentences.
 func (p *Plan) CheckApplicable(project, environment, configHash string, st staleState) error {
+	if err := p.CheckIdentity(project, environment); err != nil {
+		return err
+	}
 	switch {
-	case p.Project != project:
-		return &StaleError{
-			Reason: fmt.Sprintf("this plan was made for project %q and this is %q", p.Project, project),
-			Action: "Apply it where it was made, or re-run `infrata plan` here.",
-		}
-	case p.Environment != environment:
-		return &StaleError{
-			Reason: fmt.Sprintf("this plan was made for environment %q, not %q",
-				p.Environment, environment),
-			Action: "Apply it to " + p.Environment + ", or re-run `infrata plan " + environment + "`.",
-		}
 	case configHash != "" && p.ConfigHash != "" && p.ConfigHash != configHash:
 		return &StaleError{
 			Reason: "the configuration has changed since this plan was made, so the plan no " +
@@ -534,6 +533,78 @@ func (p *Plan) CheckApplicable(project, environment, configHash string, st stale
 				"— something else has applied in the meantime, so this plan's before-values are "+
 				"no longer what is out there", p.StateSerial, st.Serial),
 			Action: "Re-run `infrata plan " + environment + "` and review the new plan.",
+		}
+	}
+	return nil
+}
+
+// UnappliableFromFile reports the operations that cannot be applied from a saved plan,
+// each with the operation it depends on that makes it so.
+//
+// THE CASE THIS CATCHES WOULD OTHERWISE BE SILENT, which is the only reason it exists.
+// When a resource references another resource created in the same plan — `network:
+// ${net.id}` — the referencing attribute is UNKNOWN at plan time and carries the
+// expression that will produce it. The executor evaluates that expression during the
+// apply, once the dependency exists (internal/executor.resolveAfter).
+//
+// `value.Value.Expr` is not serialized, so the expression does not survive the artifact.
+// A decoded value is then an unknown with no expression, which resolveAfter deliberately
+// DROPS — correctly, because that is also exactly what a computed attribute looks like.
+// The two cases are indistinguishable after decoding, so the apply would succeed, report
+// success, and leave the attribute absent. Measured: `db.network` came back `(absent)`
+// and the next plan proposed an update, breaking invariant 2.
+//
+// So it is detected from structure instead: an operation that depends on another
+// operation IN THIS PLAN which creates the thing it depends on. That is conservative — an
+// explicit `depends_on` with no reference is refused too — and conservative is the right
+// direction, because the alternative is applying a plan that quietly does less than it
+// says.
+//
+// The fix that removes this restriction is to serialize the expression, which is a change
+// to pkg/value's wire format (shared with state and reports) and is deliberately not made
+// here.
+func (p *Plan) UnappliableFromFile() []string {
+	creates := map[string]bool{}
+	for _, op := range p.Operations {
+		switch op.Kind {
+		case OpCreate, OpReplace:
+			creates[op.Address.String()] = true
+		}
+	}
+
+	var out []string
+	for _, op := range p.Operations {
+		for _, dep := range op.DependsOn {
+			if creates[dep.String()] {
+				out = append(out, op.Address.String()+" depends on "+dep.String())
+				break
+			}
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// CheckIdentity refuses a plan that belongs to a different project or environment.
+//
+// SEPARATE FROM THE REST because of WHEN it can be checked. Identity cannot change
+// under the caller, so it is answerable immediately, before the plan is even rendered —
+// and it should be, since rendering another environment's plan and then refusing it asks
+// a reader to study a plan that was never going to run. Staleness is the opposite: it
+// must be checked as late as possible, inside the lock, because that is precisely what
+// can change between deciding and executing.
+func (p *Plan) CheckIdentity(project, environment string) error {
+	switch {
+	case p.Project != project:
+		return &StaleError{
+			Reason: fmt.Sprintf("this plan was made for project %q and this is %q", p.Project, project),
+			Action: "Apply it where it was made, or re-run `infrata plan` here.",
+		}
+	case p.Environment != environment:
+		return &StaleError{
+			Reason: fmt.Sprintf("this plan was made for environment %q, not %q",
+				p.Environment, environment),
+			Action: "Apply it to " + p.Environment + ", or re-run `infrata plan " + environment + "`.",
 		}
 	}
 	return nil

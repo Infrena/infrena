@@ -1,0 +1,203 @@
+package cli
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"strings"
+
+	"github.com/spf13/cobra"
+
+	"github.com/infrata/infrata/internal/config"
+	"github.com/infrata/infrata/internal/executor"
+	"github.com/infrata/infrata/internal/planner"
+	"github.com/infrata/infrata/pkg/report"
+)
+
+// applySavedPlan applies a plan artifact written earlier by `infrata plan --output`.
+//
+// THIS PATH DOES NOT COMPILE, and that is its whole purpose. The artifact is the
+// executor's complete instruction set, so applying it runs exactly what was reviewed
+// rather than whatever configuration happens to say now. Recompiling would make the
+// review worthless: the thing approved and the thing executed could differ.
+//
+// It therefore also does not REFRESH. A saved plan's before-values came from the refresh
+// that ran when the plan was made, and re-reading provider reality would produce
+// different before-values from the ones the plan was reviewed against. What stands in for
+// both the recompile and the refresh is the staleness check below.
+//
+// The normal apply path re-plans INSIDE the lock, because "apply must never execute
+// against state or provider reality gathered before the lock was held". A saved plan
+// cannot be re-planned without defeating itself, so it gets the equivalent guarantee in
+// the other direction: the state is read inside the lock and the plan is REFUSED if that
+// state is not the state it was made against. Verifying the premise replaces recomputing
+// the conclusion.
+func applySavedPlan(
+	cmd *cobra.Command, opts *GlobalOptions, environment, planPath string, rw *report.Writer,
+) error {
+	// A saved plan is already resolved, so a variable cannot reach it. Unlike refresh
+	// and destroy — which DO take --var, because they read `providers:` and an instance's
+	// configuration interpolates — there is nothing here for one to affect: the provider
+	// instances come from the artifact's own `provider` field. Accepting a flag that
+	// cannot change the outcome is the advertised-and-ignored shape checkUnsupportedFlags
+	// exists to refuse.
+	if len(opts.Vars) > 0 || len(opts.VarFiles) > 0 {
+		return finishApply(cmd.ErrOrStderr(), rw, report.ApplyResult{}, errors.New(
+			"--plan does not combine with --var or --var-file: a saved plan is already "+
+				"resolved, so a variable cannot change what it does.\n"+
+				"Re-run `infrata plan` with those variables and save the plan that produces"))
+	}
+
+	data, err := os.ReadFile(planPath)
+	if err != nil {
+		return finishApply(cmd.ErrOrStderr(), rw, report.ApplyResult{}, err)
+	}
+	p, err := planner.DecodePlan(data)
+	if err != nil {
+		return finishApply(cmd.ErrOrStderr(), rw, report.ApplyResult{},
+			fmt.Errorf("reading %s: %w", planPath, err))
+	}
+
+	// The state-only registry, for the same reason `destroy` uses it: nothing here
+	// compiles, so stage 4.5 never runs and the instances the plan dispatches to have to
+	// be built from `providers:` directly. It resolves variables for this environment,
+	// so an instance configured per environment works here too.
+	reg, _, regDiags, closePlugins := stateOnlyRegistry(opts, environment)
+	defer closePlugins()
+	if regDiags.HasErrors() {
+		regDiags.Render(cmd.ErrOrStderr())
+		return finishApply(cmd.ErrOrStderr(), rw, report.ApplyResult{}, errProviderInstances)
+	}
+
+	// The project name from CONFIGURATION, decoded and not compiled. It is what the
+	// plan's own `project` is checked against, so that applying dev's plan inside
+	// another project's directory is refused — the mistake a shared artifact makes easy.
+	// Unreadable configuration is not fatal: the plan carries everything needed to
+	// execute, and refusing to apply a reviewed plan because a file was edited would be
+	// the recompile this path exists to avoid, arriving by the back door.
+	project := projectNameFor(opts.Dir)
+	if project == "" {
+		project = p.Project
+	}
+
+	// Refused before rendering, like the identity check, and for a stronger reason: this
+	// one is a limitation of the format rather than a mistake by the user, so the message
+	// has to explain rather than accuse. See planner.UnappliableFromFile.
+	if blocked := p.UnappliableFromFile(); len(blocked) > 0 {
+		return finishApply(cmd.ErrOrStderr(), rw, report.ApplyResult{}, fmt.Errorf(
+			"this plan cannot be applied from a file: it creates resources that other "+
+				"resources in it refer to, and a saved plan cannot carry the expressions that "+
+				"get resolved while applying.\n  %s\n"+
+				"Run `infrata apply %s` without --plan, which resolves them as it goes. Applying "+
+				"this file would leave those attributes unset and report success",
+			strings.Join(blocked, "\n  "), environment))
+	}
+
+	// REFUSED BEFORE THE PLAN IS RENDERED. Identity cannot change under us, so there is
+	// no reason to make a reader study a plan that was never going to run here — which
+	// is what happened before this check moved up: a wrong-environment plan printed in
+	// full and was then refused.
+	if err := p.CheckIdentity(project, environment); err != nil {
+		return finishApply(cmd.ErrOrStderr(), rw, report.ApplyResult{}, err)
+	}
+
+	backend := backendFor(opts.Dir)
+
+	// Shown before the confirmation, and rendered from the artifact rather than
+	// recomputed: what the user is asked to approve has to be what will run.
+	fmt.Fprint(cmd.OutOrStdout(), planner.Render(p, planner.RenderOptions{Verbose: opts.Verbose}))
+
+	if !p.HasChanges() {
+		fmt.Fprintln(cmd.OutOrStdout(), "This plan proposes no changes.")
+		return finishApply(cmd.ErrOrStderr(), rw, report.ApplyResult{}, nil)
+	}
+
+	if !opts.AutoApprove {
+		if !confirm(cmd, applyPrompt, "yes") {
+			return finishApply(cmd.ErrOrStderr(), rw, report.ApplyResult{},
+				errors.New("apply cancelled: you must type \"yes\" to approve"))
+		}
+	}
+
+	return withLockedEnvironment(environment, "apply", backend, cmd.ErrOrStderr(), func(ctx context.Context) error {
+		st, err := backend.Get(ctx, environment)
+		if err != nil {
+			return finishApply(cmd.ErrOrStderr(), rw, report.ApplyResult{}, err)
+		}
+
+		// FINGERPRINT BEFORE MUTATING, and the order is load-bearing rather than
+		// tidy. `infrata plan` hashes the state exactly as it came off disk, so the
+		// hash recorded in the artifact is of unmodified state. Stamping the project
+		// first — which the line below does, and which computePlan does on the normal
+		// path — changes the bytes and therefore the hash, and the comparison would
+		// then fail on a state nothing had touched. Measured, not reasoned: the first
+		// end-to-end run of --plan refused itself with "the state has changed (serial
+		// 0, now 0)" for exactly this reason.
+		//
+		// INSIDE THE LOCK. Checking before taking it would leave a window in which
+		// another apply lands between the check and the execution — which is the
+		// specific thing this check exists to prevent.
+		hash, err := planner.HashState(st)
+		if err != nil {
+			return finishApply(cmd.ErrOrStderr(), rw, report.ApplyResult{},
+				fmt.Errorf("fingerprinting state: %w", err))
+		}
+		// NO CONFIGURATION HASH is passed, deliberately. Computing one requires the
+		// compile this path exists to skip, and a plan applied after configuration
+		// changed is not a mistake: reviewing a plan and then applying it is the
+		// workflow --plan is for. What must not have moved is the STATE the plan's
+		// before-values describe.
+		if err := p.CheckApplicable(project, environment, "", planner.StateFingerprint(st.Serial, hash)); err != nil {
+			return finishApply(cmd.ErrOrStderr(), rw, report.ApplyResult{}, err)
+		}
+
+		// STAMP THE PROJECT, exactly as computePlan does on the normal path, and only
+		// now that the fingerprint has been taken. Nothing else here sets it, so
+		// without this line applying a saved plan writes a state file whose project is
+		// "" — the bug computePlan's comment records as fixed, reappearing on this path
+		// alone. The plan is the authority: it was made from configuration, so it
+		// carries the name configuration gave.
+		st.Project = p.Project
+
+		g, err := planner.BuildExecution(p, dependentsOf(p))
+		if err != nil {
+			return finishApply(cmd.ErrOrStderr(), rw, report.ApplyResult{},
+				fmt.Errorf("building execution graph: %w", err))
+		}
+
+		execOpts := executorOptions(opts, reg, backend, environment)
+		if rw != nil {
+			execOpts.OnEvent = func(e executor.Event) { _ = rw.WriteEvent(toReportEvent(e)) }
+		}
+
+		res, execDiags := executor.Apply(ctx, p, g, st, execOpts)
+		renderDiagnostics(cmd.ErrOrStderr(), rw, execDiags)
+		fmt.Fprint(cmd.OutOrStdout(), executor.Render(res, executor.RenderOptions{Verbose: opts.Verbose}))
+
+		result := applyResultFrom(res)
+		if execDiags.HasErrors() || len(res.Failed) > 0 {
+			return finishApply(cmd.ErrOrStderr(), rw, result, errors.New("apply completed with failures"))
+		}
+		return finishApply(cmd.ErrOrStderr(), rw, result, errChanges)
+	})
+}
+
+// projectNameFor reads a project's name without compiling it.
+//
+// Decode only: the name is a literal in infra.yml, so nothing needs resolving, and a
+// path that exists to skip compilation must not compile in order to learn one string.
+// An empty return means "could not tell", which every caller must treat as a reason to
+// carry on rather than a reason to stop — a project whose configuration cannot be read is
+// exactly the case `destroy` is allowed to serve.
+func projectNameFor(dir string) string {
+	files, err := config.Load(dir)
+	if err != nil {
+		return ""
+	}
+	decl, ds := config.Decode(files)
+	if ds.HasErrors() || decl == nil {
+		return ""
+	}
+	return decl.Project
+}

@@ -41,7 +41,9 @@ const applyPrompt = "\nDo you want to perform these actions?\n" +
 // newApplyCommand builds `infra apply <environment>`: compile, refresh,
 // plan, show it, take approval, execute. Spec §16, §9.2, §10.
 func newApplyCommand(opts *GlobalOptions) *cobra.Command {
-	return &cobra.Command{
+	var planPath string
+
+	cmd := &cobra.Command{
 		Use:           "apply <environment>",
 		Short:         "Reconcile real infrastructure with the configured desired state",
 		Args:          cobra.ExactArgs(1),
@@ -55,6 +57,14 @@ func newApplyCommand(opts *GlobalOptions) *cobra.Command {
 				return err
 			}
 			defer closeReport()
+
+			// A saved plan takes an entirely separate path rather than branching
+			// through the one below: it compiles nothing, refreshes nothing, and
+			// re-plans nothing, so almost every step here would have to be skipped.
+			// See applySavedPlan.
+			if planPath != "" {
+				return applySavedPlan(cmd, opts, environment, planPath, rw)
+			}
 
 			copts, cds := compilerOptions(opts, environment)
 			if cds.HasErrors() {
@@ -225,6 +235,13 @@ func newApplyCommand(opts *GlobalOptions) *cobra.Command {
 			})
 		},
 	}
+
+	// The backticked word is cobra's argument placeholder, so there is exactly one of
+	// them and it is the one a user types. A second pair would print literal backticks.
+	cmd.Flags().StringVar(&planPath, "plan", "",
+		"apply the plan artifact in `file`, written earlier by infrata plan --output, "+
+			"instead of compiling configuration")
+	return cmd
 }
 
 // computePlan runs the same unlocked, side-effect-free sequence `infra
