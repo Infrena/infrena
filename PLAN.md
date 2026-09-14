@@ -2555,11 +2555,28 @@ source: https://github.com/infrata/infrata-provider-fake
 | `manifest` | yes | the format version of THIS FILE. Checked first, before any other key. |
 | `name` | yes | the plugin's name: the binary is `infrata-plugin-<name>`, `Plugin.Name()` returns it, and every resource type is prefixed with it. The host already refuses a mismatch between the last two. |
 | `version` | yes | `MAJOR.MINOR.PATCH`, and it must equal the tag this file is read at. |
-| `protocol` | yes | every plugin protocol version the plugin can speak, as a list, because the host accepts a SET (`pluginproto.Supported`). |
+| `protocol` | yes | the plugin protocol versions THIS RELEASE'S BINARY can speak. For a plugin built with `pkg/pluginsdk` that is exactly one — the `pluginproto.Version` of the infrata it was built against. A list only for a plugin that hand-rolls the protocol and genuinely negotiates several. |
 | `platforms` | yes | `GOOS/GOARCH` for every published build. |
 | `description` | yes | one line, for a search result to show. |
 | `infrata` | no | the infrata releases this plugin is known to work with, in `pkg/semver`'s syntax. ABSENT means unconstrained. |
 | `source` | no | where the plugin lives, for a search result to link. |
+
+**Amended 2026-09-14: defined by the RELEASE, not by capability.** It said "every plugin
+protocol version the plugin can speak", which invites exactly the wrong answer. An author
+reads the host's `Supported` — `{2, 1}` since §14.1 — or remembers an older release, and
+writes `[2, 1]`. The binary still announces one number, so the manifest then claims a
+protocol that binary cannot speak. Raised by the `infrata-provider-fake` session, which
+met it the day the protocol moved.
+
+Three consequences follow, and they are the reassuring ones:
+
+1. **The field is fixed per release and never goes stale.** v0.1.1's `protocol: [1]` was
+   true when written and stays true forever: that binary announces 1 and always will.
+2. **A host protocol bump forces no re-release.** The old version stays in `Supported`, so
+   an existing plugin release keeps working and keeps describing itself correctly.
+3. **The NEXT release changes `protocol:` in the same commit as its infrata `require`
+   bump**, because the rebuilt binary announces the new number. A plugin's own manifest
+   test and its release gate are what enforce that, which is how this was caught.
 
 ### READ IT AT THE TAG, never at the default branch
 
