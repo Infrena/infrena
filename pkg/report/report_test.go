@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/infrata/infrata/pkg/value"
+	"github.com/infrena/infrena/pkg/value"
 )
 
 // TestWriterSerializesConcurrentWrites is the concurrency test the design

@@ -5,13 +5,13 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/infrata/infrata/internal/planner"
-	"github.com/infrata/infrata/pkg/address"
-	"github.com/infrata/infrata/pkg/provider"
-	"github.com/infrata/infrata/pkg/resource"
-	"github.com/infrata/infrata/pkg/schema"
-	"github.com/infrata/infrata/pkg/value"
-	testprovider "github.com/infrata/infrata/providers/test"
+	"github.com/infrena/infrena/internal/planner"
+	"github.com/infrena/infrena/pkg/address"
+	"github.com/infrena/infrena/pkg/provider"
+	"github.com/infrena/infrena/pkg/resource"
+	"github.com/infrena/infrena/pkg/schema"
+	"github.com/infrena/infrena/pkg/value"
+	testprovider "github.com/infrena/infrena/providers/test"
 )
 
 // poisonProvider is a Provider double whose every method fails the test

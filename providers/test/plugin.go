@@ -7,9 +7,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/infrata/infrata/pkg/provider"
-	"github.com/infrata/infrata/pkg/schema"
-	"github.com/infrata/infrata/pkg/value"
+	"github.com/infrena/infrena/pkg/provider"
+	"github.com/infrena/infrena/pkg/schema"
+	"github.com/infrena/infrena/pkg/value"
 )
 
 // Plugin is the fake provider as a PLUGIN: its schemas, which need no

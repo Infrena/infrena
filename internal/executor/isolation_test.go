@@ -7,15 +7,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/infrata/infrata/internal/diag"
-	"github.com/infrata/infrata/internal/graph"
-	"github.com/infrata/infrata/internal/planner"
-	"github.com/infrata/infrata/internal/registry"
-	"github.com/infrata/infrata/internal/state"
-	"github.com/infrata/infrata/pkg/address"
-	"github.com/infrata/infrata/pkg/resource"
-	"github.com/infrata/infrata/pkg/value"
-	testprovider "github.com/infrata/infrata/providers/test"
+	"github.com/infrena/infrena/internal/diag"
+	"github.com/infrena/infrena/internal/graph"
+	"github.com/infrena/infrena/internal/planner"
+	"github.com/infrena/infrena/internal/registry"
+	"github.com/infrena/infrena/internal/state"
+	"github.com/infrena/infrena/pkg/address"
+	"github.com/infrena/infrena/pkg/resource"
+	"github.com/infrena/infrena/pkg/value"
+	testprovider "github.com/infrena/infrena/providers/test"
 )
 
 func opnode(name string) planner.OpNode {

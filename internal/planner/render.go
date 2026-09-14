@@ -6,8 +6,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/infrata/infrata/pkg/schema"
-	"github.com/infrata/infrata/pkg/value"
+	"github.com/infrena/infrena/pkg/schema"
+	"github.com/infrena/infrena/pkg/value"
 )
 
 // RenderOptions controls how a Plan is rendered to text.
@@ -180,7 +180,7 @@ func renderOperationLines(op Operation, moveCandidates []string, opts RenderOpti
 // happen and conclude the edit failed. Both need the schema, which is why RenderOptions
 // carries a lookup at all.
 //
-// The note is deliberately NOT "no longer set in configuration". infrata cannot know
+// The note is deliberately NOT "no longer set in configuration". infrena cannot know
 // that: every attribute in state records source=provider, including ones configuration
 // set explicitly, because state records what the provider RETURNED. Saying what is true
 // regardless of history still does the job.

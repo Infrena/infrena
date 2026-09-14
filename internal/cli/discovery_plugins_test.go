@@ -5,19 +5,19 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/infrata/infrata/internal/providers"
-	"github.com/infrata/infrata/pkg/provider"
-	"github.com/infrata/infrata/pkg/resource"
-	"github.com/infrata/infrata/pkg/schema"
-	"github.com/infrata/infrata/pkg/value"
-	testprovider "github.com/infrata/infrata/providers/test"
+	"github.com/infrena/infrena/internal/providers"
+	"github.com/infrena/infrena/pkg/provider"
+	"github.com/infrena/infrena/pkg/resource"
+	"github.com/infrena/infrena/pkg/schema"
+	"github.com/infrena/infrena/pkg/value"
+	testprovider "github.com/infrena/infrena/providers/test"
 )
 
 // `discover` and `import` ask EVERY available plugin, because their scope is not set by
 // configuration — they report what exists, including in accounts nothing mentions.
 //
-// Reported by infrata-provider-fake's e2e suite: with the builtin `test` plus a real
-// infrata-plugin-fake on --plugin-dir, `discover` printed "Nothing found." at exit 0
+// Reported by infrena-provider-fake's e2e suite: with the builtin `test` plus a real
+// infrena-plugin-fake on --plugin-dir, `discover` printed "Nothing found." at exit 0
 // while the fake cloud held resources. discoveryRegistry called providers.Implicit,
 // whose job is to pick the ONE instance a resource that names none belongs to — so it
 // correctly returns nothing when more than one plugin is available, and registered no

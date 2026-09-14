@@ -7,12 +7,12 @@ import (
 	"runtime/debug"
 	"strings"
 
-	"github.com/infrata/infrata/pkg/semver"
+	"github.com/infrena/infrena/pkg/semver"
 )
 
 // version is set at build time for a tagged release:
 //
-//	go build -ldflags "-X github.com/infrata/infrata/internal/version.version=0.4.1"
+//	go build -ldflags "-X github.com/infrena/infrena/internal/version.version=0.4.1"
 //
 // Left EMPTY by default, on purpose. A hand-maintained version constant is wrong by
 // the second commit after a release, and a development build claiming to be 0.4.1 is
@@ -26,7 +26,7 @@ const DevelopmentVersion = "0.0.0-dev"
 // Version returns this build's version.
 //
 // From the linker flag if a release set one; otherwise from the module's own build
-// information, which `go install github.com/infrata/infrata/cmd/infrata@v0.4.1`
+// information, which `go install github.com/infrena/infrena/cmd/infrena@v0.4.1`
 // records without anyone having to remember. Only when neither exists — a plain
 // `go build` from a checkout — does it admit to being a development build.
 func Version() string {
@@ -45,7 +45,7 @@ func Version() string {
 //
 // `go build` in a checkout with a VCS remote reports a pseudo-version —
 // `0.0.0-20260913163216-b7f0de604428+dirty` — which is not a release and must not be
-// treated as one: it parses as 0.0.0, and a project stating `infrata: ">= 0.4"` would
+// treated as one: it parses as 0.0.0, and a project stating `infrena: ">= 0.4"` would
 // then refuse a developer's own build. Measured on this repository, which is how the
 // case was found.
 //
@@ -73,7 +73,7 @@ func releaseVersion(v string) string {
 // Semver is Version parsed, for comparing against a constraint.
 //
 // A version that does not parse compares as 0.0.0 rather than failing: a development
-// build must not be able to make `infrata: ">= 0.4"` fail with a message about the
+// build must not be able to make `infrena: ">= 0.4"` fail with a message about the
 // binary's own version string, which is a problem the user cannot act on. Being
 // treated as older than everything is the honest reading — it is not a release.
 func Semver() semver.Version {
@@ -102,7 +102,7 @@ func Revision() string {
 }
 
 // NOTHING ENGINE-SPECIFIC IS IMPORTED HERE, and that is load-bearing rather than
-// tidy: the compiler checks a project's `infrata:` floor, so this package is imported
+// tidy: the compiler checks a project's `infrena:` floor, so this package is imported
 // by the compiler — and a Formats() living here that read planner.PlanVersion made an
 // import cycle immediately. The list of formats is assembled by internal/cli, which
 // already imports every package that owns one. See versionCommand.
@@ -115,7 +115,7 @@ type Format struct {
 	Versions []int `json:"versions"`
 }
 
-// Info is everything `infrata version` reports.
+// Info is everything `infrena version` reports.
 type Info struct {
 	Version  string   `json:"version"`
 	Revision string   `json:"revision,omitempty"`
@@ -127,7 +127,7 @@ type Info struct {
 // Describe returns this build, given the formats its caller knows about.
 //
 // The formats are PASSED IN rather than read here, and that is load-bearing rather
-// than tidy: the compiler checks a project's `infrata:` floor, so this package is
+// than tidy: the compiler checks a project's `infrena:` floor, so this package is
 // imported by the compiler — and reading planner.PlanVersion here made an import cycle
 // immediately. internal/cli assembles the list, since it already imports every package
 // that owns a format.

@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/infrata/infrata/pkg/address"
-	"github.com/infrata/infrata/pkg/value"
+	"github.com/infrena/infrena/pkg/address"
+	"github.com/infrena/infrena/pkg/value"
 )
 
 // Version 1 → 2: the fake provider's rename from `test` to `fake`. PLAN.md §21.1.
@@ -21,7 +21,7 @@ import (
 // cutover did exactly that; the guards in migrationFixture caught it, which is why they
 // are there rather than assumed.
 //
-// The fixture is testdata/state-v1.json — the FROZEN GOLDEN a version-1 infrata actually
+// The fixture is testdata/state-v1.json — the FROZEN GOLDEN a version-1 infrena actually
 // wrote, kept when the golden moved to v2 rather than regenerated away. Real historical
 // bytes beat a hand-written approximation of them, and this one happens to carry a
 // 2^53+1 integer, so it also proves the non-lossy migration decode on a real file.

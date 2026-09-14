@@ -8,10 +8,10 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/infrata/infrata/pkg/schema"
+	"github.com/infrena/infrena/pkg/schema"
 )
 
-// newExplainCommand builds `infrata explain <resource-type>` (spec §30).
+// newExplainCommand builds `infrena explain <resource-type>` (spec §30).
 //
 // It renders from the REGISTRY, which is the whole point: §30 asks for a
 // resource type to be discoverable without consulting documentation, and
@@ -31,7 +31,7 @@ func newExplainCommand(opts *GlobalOptions) *cobra.Command {
 
 			// THE TYPE NAMES THE PLUGIN. A plugin serves `<name>.*` and nothing
 			// else, so `explain aws.instance` is itself the instruction to load
-			// infrata-plugin-aws — and explain therefore works with no project and
+			// infrena-plugin-aws — and explain therefore works with no project and
 			// no configuration at all, which is most of what it is for.
 			//
 			// The project's own plugins are loaded too, so `explain` in a project

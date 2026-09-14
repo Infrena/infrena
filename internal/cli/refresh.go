@@ -8,9 +8,9 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/infrata/infrata/internal/refresh"
-	"github.com/infrata/infrata/internal/state"
-	"github.com/infrata/infrata/pkg/report"
+	"github.com/infrena/infrena/internal/refresh"
+	"github.com/infrena/infrena/internal/state"
+	"github.com/infrena/infrena/pkg/report"
 )
 
 // newRefreshCommand builds `infra refresh <environment>`: read every

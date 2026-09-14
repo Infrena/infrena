@@ -10,15 +10,15 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/infrata/infrata/pkg/provider"
-	"github.com/infrata/infrata/pkg/semver"
+	"github.com/infrena/infrena/pkg/provider"
+	"github.com/infrena/infrena/pkg/semver"
 )
 
 // Loader turns a plugin NAME into a running plugin.
 //
 // It exists because nothing should have to be told which plugins to load:
 // configuration already says. A `providers:` entry naming `plugin: aws` is the
-// instruction to go and find infrata-plugin-aws, and a resource of type
+// instruction to go and find infrena-plugin-aws, and a resource of type
 // `aws.instance` is the same instruction said another way. The CLI holds no list.
 //
 // ONE PROCESS PER PLUGIN PER COMMAND, which is what the cache is for: two accounts
@@ -44,7 +44,7 @@ type Loader struct {
 	// Builtin serves a plugin from inside this process instead of a binary.
 	//
 	// A SHIPPED BUILD REGISTERS NOTHING HERE. This was transitional while
-	// infrata-provider-fake was being built; the binary shipped, the fallback went
+	// infrena-provider-fake was being built; the binary shipped, the fallback went
 	// with it, and the field survives as the seam the engine's own tests inject the
 	// fake double through (internal/cli's TestMain). It is not dead code and it is
 	// not a second code path: a builtin is served over pluginhost.InProcess, so it
@@ -114,14 +114,14 @@ func (l *Loader) open(ctx context.Context, name string) (*Plugin, error) {
 	path, searched, findErr := Find(name, l.Search)
 	if findErr == nil {
 		if l.Verbose != nil {
-			fmt.Fprintf(l.Verbose, "[infrata] plugin %s loaded from %s\n", name, path)
+			fmt.Fprintf(l.Verbose, "[infrena] plugin %s loaded from %s\n", name, path)
 		}
 		return Launch(ctx, name, path, l.Dir, l.Verbose)
 	}
 
 	if builtin, ok := l.Builtin[name]; ok {
 		if l.Verbose != nil {
-			fmt.Fprintf(l.Verbose, "[infrata] plugin %s served in process (no binary found)\n", name)
+			fmt.Fprintf(l.Verbose, "[infrena] plugin %s served in process (no binary found)\n", name)
 		}
 		return InProcess(ctx, builtin, l.Dir)
 	}
@@ -137,7 +137,7 @@ func (l *Loader) open(ctx context.Context, name string) (*Plugin, error) {
 // That is the right answer and needs its own message: "0.0.0 does not satisfy >= 0.3.0"
 // would send an author looking for a version they never set.
 //
-// Note the ASYMMETRY with infrata's own `infrata:` floor (§61.2), which EXEMPTS a
+// Note the ASYMMETRY with infrena's own `infrena:` floor (§61.2), which EXEMPTS a
 // 0.0.0 build. There the unversioned binary is the user's own development build and a
 // complaint about it is not something they can act on. Here it is a third-party plugin
 // they chose to install, and they can act: install a versioned build, or drop the
@@ -189,7 +189,7 @@ func (l *Loader) Close() {
 func DefaultSearch(dir string, explicit []string) SearchOptions {
 	opts := SearchOptions{ProjectDir: dir}
 	opts.Explicit = append(opts.Explicit, explicit...)
-	if env := os.Getenv("INFRATA_PLUGIN_PATH"); env != "" {
+	if env := os.Getenv("INFRENA_PLUGIN_PATH"); env != "" {
 		opts.Explicit = append(opts.Explicit, splitPathList(env)...)
 	}
 	if home, err := os.UserHomeDir(); err == nil {
@@ -198,7 +198,7 @@ func DefaultSearch(dir string, explicit []string) SearchOptions {
 	return opts
 }
 
-// splitPathList splits an INFRATA_PLUGIN_PATH the way the platform lists paths,
+// splitPathList splits an INFRENA_PLUGIN_PATH the way the platform lists paths,
 // dropping empty entries so a trailing separator is not a search of "".
 func splitPathList(s string) []string {
 	var out []string
@@ -215,7 +215,7 @@ func splitPathList(s string) []string {
 //
 // For DISCOVERY, which is the one command whose scope configuration does not set.
 // Every other command knows which plugins it needs because the project says so — a
-// `providers:` entry, or a resource type's prefix — but `infrata discover` asks what
+// `providers:` entry, or a resource type's prefix — but `infrena discover` asks what
 // EXISTS, including resources no configuration mentions, so the only sensible scope
 // is everything available to ask.
 func (l *Loader) Available() []string {
@@ -251,7 +251,7 @@ func (l *Loader) Available() []string {
 
 // pluginNameOf recovers a plugin's name from its binary's filename.
 func pluginNameOf(filename string) (string, bool) {
-	const prefix = "infrata-plugin-"
+	const prefix = "infrena-plugin-"
 	name := strings.TrimSuffix(filename, ".exe")
 	if !strings.HasPrefix(name, prefix) {
 		return "", false

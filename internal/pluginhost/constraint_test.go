@@ -5,10 +5,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/infrata/infrata/pkg/provider"
-	"github.com/infrata/infrata/pkg/schema"
-	"github.com/infrata/infrata/pkg/semver"
-	"github.com/infrata/infrata/pkg/value"
+	"github.com/infrena/infrena/pkg/provider"
+	"github.com/infrena/infrena/pkg/schema"
+	"github.com/infrena/infrena/pkg/semver"
+	"github.com/infrena/infrena/pkg/value"
 )
 
 // PLAN.md §31.1: a project may constrain a plugin's version, and the LOADER enforces it
@@ -81,7 +81,7 @@ func TestAVersionOutsideTheConstraintIsRefused(t *testing.T) {
 // any constraint above 0.0.0 — which is correct, and unhelpful said as "0.0.0 does not
 // satisfy >= 0.3.0": that sends an author looking for a version they never set.
 //
-// Note the asymmetry with infrata's OWN `infrata:` floor, which exempts a 0.0.0 build.
+// Note the asymmetry with infrena's OWN `infrena:` floor, which exempts a 0.0.0 build.
 // There the unversioned binary is the user's development build and a complaint is not
 // actionable. Here it is a third-party plugin they installed, and it is.
 func TestAPluginReportingNoVersionGetsItsOwnMessage(t *testing.T) {

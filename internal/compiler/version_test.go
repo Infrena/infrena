@@ -4,15 +4,15 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/infrata/infrata/internal/config"
-	"github.com/infrata/infrata/pkg/semver"
+	"github.com/infrena/infrena/internal/config"
+	"github.com/infrena/infrena/pkg/semver"
 )
 
-// PLAN.md §61.2: the optional `infrata:` floor.
+// PLAN.md §61.2: the optional `infrena:` floor.
 
 const versionedProject = `
 project: p
-infrata: "%s"
+infrena: "%s"
 environments:
   dev: {}
 resources:
@@ -105,7 +105,7 @@ func TestAnUnparseableBuildVersionSatisfiesEveryFloor(t *testing.T) {
 func TestCompileChecksTheFloorAndStopsBeforeAnythingElse(t *testing.T) {
 	files := loadFiles(t, `
 project: p
-infrata: ">= 9.0"
+infrena: ">= 9.0"
 environments:
   dev: {}
 resources:
@@ -132,7 +132,7 @@ resources:
 func TestCompileWithNoVersionSuppliedChecksNothing(t *testing.T) {
 	files := loadFiles(t, `
 project: p
-infrata: ">= 9.0"
+infrena: ">= 9.0"
 environments:
   dev: {}
 resources:

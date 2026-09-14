@@ -3,9 +3,9 @@ package modules
 import (
 	"slices"
 
-	"github.com/infrata/infrata/internal/config"
-	"github.com/infrata/infrata/pkg/address"
-	"github.com/infrata/infrata/pkg/value"
+	"github.com/infrena/infrena/internal/config"
+	"github.com/infrena/infrena/pkg/address"
+	"github.com/infrena/infrena/pkg/value"
 )
 
 // addressIn builds a resource's canonical address from the instantiation path.

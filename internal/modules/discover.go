@@ -7,8 +7,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/infrata/infrata/internal/config"
-	"github.com/infrata/infrata/internal/diag"
+	"github.com/infrena/infrena/internal/config"
+	"github.com/infrena/infrena/internal/diag"
 )
 
 // skipDirs are never descended into. `.git` holds thousands of files and no

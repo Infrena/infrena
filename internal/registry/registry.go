@@ -9,9 +9,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/infrata/infrata/pkg/provider"
-	"github.com/infrata/infrata/pkg/schema"
-	"github.com/infrata/infrata/pkg/value"
+	"github.com/infrena/infrena/pkg/provider"
+	"github.com/infrena/infrena/pkg/schema"
+	"github.com/infrena/infrena/pkg/value"
 )
 
 // Registry maps resource types to their definitions, and (type, instance) pairs to
@@ -49,7 +49,7 @@ type Registry struct {
 	// This is what makes plugin loading follow from CONFIGURATION rather than from a
 	// list somebody maintains: `plugin: aws` in a `providers:` block, or a resource
 	// of type `aws.instance`, is itself the instruction to go and find
-	// infrata-plugin-aws. Nothing in the CLI names a plugin.
+	// infrena-plugin-aws. Nothing in the CLI names a plugin.
 	//
 	// nil in tests that hand over their own providers directly, which is why every
 	// use of it is guarded rather than assumed.

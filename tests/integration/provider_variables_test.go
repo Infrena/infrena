@@ -149,7 +149,7 @@ resources:
 // TestTheVersionFloorNowReachesTheStateOnlyCommands.
 //
 // A consequence of sharing stages 1-4 rather than a goal of it, and worth a test
-// precisely because nobody set out to get it. §61.2 recorded the gap: the `infrata:`
+// precisely because nobody set out to get it. §61.2 recorded the gap: the `infrena:`
 // floor check lived in the compiler, so the four commands that never compile did not
 // apply it — a binary too old to understand the project would refuse to `plan` it and
 // then happily `refresh` it. VariableScope runs the check, so they apply it now.
@@ -162,7 +162,7 @@ func TestTheVersionFloorNowReachesTheStateOnlyCommands(t *testing.T) {
 
 	dir := project(t, `
 project: floor
-infrata: ">= 99.0"
+infrena: ">= 99.0"
 environments:
   dev: {}
 providers:
@@ -181,10 +181,10 @@ resources:
 	} {
 		got := runBinary(t, stamped, dir, args...)
 		if got.ExitCode == 0 {
-			t.Errorf("infrata %v ran against a project whose floor it cannot meet:\n%s",
+			t.Errorf("infrena %v ran against a project whose floor it cannot meet:\n%s",
 				args, got.combined())
 		}
-		requireContains(t, got.combined(), "requires infrata >= 99.0")
+		requireContains(t, got.combined(), "requires infrena >= 99.0")
 	}
 }
 

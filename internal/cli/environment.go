@@ -5,9 +5,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/infrata/infrata/internal/compiler"
-	"github.com/infrata/infrata/internal/config"
-	"github.com/infrata/infrata/internal/state"
+	"github.com/infrena/infrena/internal/compiler"
+	"github.com/infrena/infrena/internal/config"
+	"github.com/infrena/infrena/internal/state"
 )
 
 // disposition is how PLAN.md §6.1's rule resolves for one command invocation:

@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/infrata/infrata/internal/config"
-	"github.com/infrata/infrata/internal/diag"
+	"github.com/infrena/infrena/internal/config"
+	"github.com/infrena/infrena/internal/diag"
 )
 
 // moduleFixture writes a project and returns the files and its directory.

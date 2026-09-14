@@ -6,9 +6,9 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/infrata/infrata/internal/diag"
-	"github.com/infrata/infrata/internal/modules/source"
-	"github.com/infrata/infrata/pkg/value"
+	"github.com/infrena/infrena/internal/diag"
+	"github.com/infrena/infrena/internal/modules/source"
+	"github.com/infrena/infrena/pkg/value"
 )
 
 // ModuleTypePrefix marks a resource type that instantiates a loaded module

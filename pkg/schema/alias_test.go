@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/infrata/infrata/pkg/value"
+	"github.com/infrena/infrena/pkg/value"
 )
 
 func aliasDef() *ResourceDefinition {
@@ -147,7 +147,7 @@ func TestDisplayAndSpellings(t *testing.T) {
 }
 
 // TestAliasesSurviveTheWire. A plugin declares them; the host learns them the same way it
-// learns everything else. infrata holds no mapping of its own, so if they did not cross
+// learns everything else. infrena holds no mapping of its own, so if they did not cross
 // the wire they would not exist at all.
 func TestAliasesSurviveTheWire(t *testing.T) {
 	before := Attribute{Kind: value.KindString, Computed: true, Optional: true, Aliases: []string{"cidr"}}

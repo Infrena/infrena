@@ -5,16 +5,16 @@ import (
 	"sort"
 	"strconv"
 
-	"github.com/infrata/infrata/internal/config"
-	"github.com/infrata/infrata/internal/diag"
-	"github.com/infrata/infrata/internal/environments"
-	"github.com/infrata/infrata/internal/modules"
-	"github.com/infrata/infrata/internal/modules/source"
-	"github.com/infrata/infrata/internal/providers"
-	"github.com/infrata/infrata/internal/registry"
-	"github.com/infrata/infrata/internal/variables"
-	"github.com/infrata/infrata/pkg/semver"
-	"github.com/infrata/infrata/pkg/value"
+	"github.com/infrena/infrena/internal/config"
+	"github.com/infrena/infrena/internal/diag"
+	"github.com/infrena/infrena/internal/environments"
+	"github.com/infrena/infrena/internal/modules"
+	"github.com/infrena/infrena/internal/modules/source"
+	"github.com/infrena/infrena/internal/providers"
+	"github.com/infrena/infrena/internal/registry"
+	"github.com/infrena/infrena/internal/variables"
+	"github.com/infrena/infrena/pkg/semver"
+	"github.com/infrena/infrena/pkg/value"
 )
 
 // Compile runs the full compiler pipeline — decode, reference binding,
@@ -198,7 +198,7 @@ func Compile(files []config.File, reg *registry.Registry, opts Options) (Resolve
 	return cfg, ds
 }
 
-// checkRequiredVersion enforces the optional `infrata:` floor a project states.
+// checkRequiredVersion enforces the optional `infrena:` floor a project states.
 //
 // A DEVELOPMENT BUILD IS EXEMPT, deliberately. It reports 0.0.0-dev, which satisfies
 // no floor at all, so every `go build` from a checkout would refuse every project that
@@ -242,13 +242,13 @@ func checkRequiredVersion(project *config.ProjectDecl, current string) diag.Diag
 	}
 	ds.Add(diag.Diagnostic{
 		Severity: diag.SeverityError,
-		Summary: "this project requires infrata " + project.RequiredVersion.String() +
+		Summary: "this project requires infrena " + project.RequiredVersion.String() +
 			", and this is " + current,
-		Detail: "`infrata:` in the configuration states which versions of the tool the " +
+		Detail: "`infrena:` in the configuration states which versions of the tool the " +
 			"project is known to work with. Running an older one risks misreading syntax it " +
 			"does not have; running a newer one may be fine, and the constraint can be " +
 			"widened to say so.",
-		Action: "Upgrade infrata, or widen `infrata:` once you have confirmed this version works.",
+		Action: "Upgrade infrena, or widen `infrena:` once you have confirmed this version works.",
 		Origin: project.RequiredVersionOrigin,
 	})
 	return ds
@@ -279,7 +279,7 @@ type VariableStage struct {
 	VarDiags diag.Diagnostics
 }
 
-// VariableScope runs stages 1 to 4 and stops there: decode, the `infrata:` floor,
+// VariableScope runs stages 1 to 4 and stops there: decode, the `infrena:` floor,
 // the environment chain, and the variables.
 //
 // EXPORTED FOR THE COMMANDS THAT NEVER COMPILE. `discover`, `import`, `refresh` and

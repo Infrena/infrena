@@ -77,7 +77,7 @@ func TestExplainMarksSensitiveAndForceNew(t *testing.T) {
 // TestExplainATypeWhoseProviderIsNotInstalledSaysWhereToPutIt.
 //
 // `explain` needs no project: the TYPE names the plugin, so `explain aws.rds` is
-// itself the instruction to load infrata-plugin-aws. When that binary is not there,
+// itself the instruction to load infrena-plugin-aws. When that binary is not there,
 // nothing can list aws's types — nothing has ever seen them — so the actionable
 // answer is the plugin, every place that was searched, and what to do about it.
 //
@@ -91,7 +91,7 @@ func TestExplainATypeWhoseProviderIsNotInstalledSaysWhereToPutIt(t *testing.T) {
 		t.Fatal("a type whose plugin is not installed must be an error")
 	}
 	msg := err.Error() + out
-	for _, want := range []string{"aws.rds", "infrata-plugin-aws", "--plugin-dir"} {
+	for _, want := range []string{"aws.rds", "infrena-plugin-aws", "--plugin-dir"} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("the error does not mention %q, so a reader cannot act on it:\n%s", want, msg)
 		}

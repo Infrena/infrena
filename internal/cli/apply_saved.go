@@ -8,13 +8,13 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/infrata/infrata/internal/config"
-	"github.com/infrata/infrata/internal/executor"
-	"github.com/infrata/infrata/internal/planner"
-	"github.com/infrata/infrata/pkg/report"
+	"github.com/infrena/infrena/internal/config"
+	"github.com/infrena/infrena/internal/executor"
+	"github.com/infrena/infrena/internal/planner"
+	"github.com/infrena/infrena/pkg/report"
 )
 
-// applySavedPlan applies a plan artifact written earlier by `infrata plan --output`.
+// applySavedPlan applies a plan artifact written earlier by `infrena plan --output`.
 //
 // THIS PATH DOES NOT COMPILE, and that is its whole purpose. The artifact is the
 // executor's complete instruction set, so applying it runs exactly what was reviewed
@@ -45,7 +45,7 @@ func applySavedPlan(
 		return finishApply(cmd.ErrOrStderr(), rw, report.ApplyResult{}, errors.New(
 			"--plan does not combine with --var or --var-file: a saved plan is already "+
 				"resolved, so a variable cannot change what it does.\n"+
-				"Re-run `infrata plan` with those variables and save the plan that produces"))
+				"Re-run `infrena plan` with those variables and save the plan that produces"))
 	}
 
 	data, err := os.ReadFile(planPath)
@@ -113,7 +113,7 @@ func applySavedPlan(
 		}
 
 		// FINGERPRINT BEFORE MUTATING, and the order is load-bearing rather than
-		// tidy. `infrata plan` hashes the state exactly as it came off disk, so the
+		// tidy. `infrena plan` hashes the state exactly as it came off disk, so the
 		// hash recorded in the artifact is of unmodified state. Stamping the project
 		// first — which the line below does, and which computePlan does on the normal
 		// path — changes the bytes and therefore the hash, and the comparison would

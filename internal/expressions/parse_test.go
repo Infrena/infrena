@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/infrata/infrata/pkg/value"
+	"github.com/infrena/infrena/pkg/value"
 )
 
 func mustParse(t *testing.T, src string) *value.Expr {

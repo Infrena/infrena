@@ -10,17 +10,17 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/infrata/infrata/internal/compiler"
-	"github.com/infrata/infrata/internal/config"
-	"github.com/infrata/infrata/internal/diag"
-	"github.com/infrata/infrata/internal/pluginhost"
-	"github.com/infrata/infrata/internal/providers"
-	"github.com/infrata/infrata/internal/registry"
-	"github.com/infrata/infrata/internal/state"
-	"github.com/infrata/infrata/pkg/provider"
-	"github.com/infrata/infrata/pkg/semver"
-	"github.com/infrata/infrata/pkg/value"
-	"github.com/infrata/infrata/providers/test"
+	"github.com/infrena/infrena/internal/compiler"
+	"github.com/infrena/infrena/internal/config"
+	"github.com/infrena/infrena/internal/diag"
+	"github.com/infrena/infrena/internal/pluginhost"
+	"github.com/infrena/infrena/internal/providers"
+	"github.com/infrena/infrena/internal/registry"
+	"github.com/infrena/infrena/internal/state"
+	"github.com/infrena/infrena/pkg/provider"
+	"github.com/infrena/infrena/pkg/semver"
+	"github.com/infrena/infrena/pkg/value"
+	"github.com/infrena/infrena/providers/test"
 )
 
 // StateDirName is the per-project directory holding state, locks and, for the
@@ -64,8 +64,8 @@ func buildRegistryWithLoader(opts *GlobalOptions) (*registry.Registry, *pluginho
 
 // builtinsFor supplies plugins served in process rather than as a binary.
 //
-// EMPTY IN A SHIPPED BUILD, since 2026-09-13: infrata carries no provider, and a project
-// using the fake provider installs infrata-plugin-fake like any other. That is the whole
+// EMPTY IN A SHIPPED BUILD, since 2026-09-13: infrena carries no provider, and a project
+// using the fake provider installs infrena-plugin-fake like any other. That is the whole
 // point of §31.1 — a provider is a separate binary, including the official ones.
 //
 // It is a variable rather than a constant because it is the one seam the test suites use,
@@ -79,7 +79,7 @@ func buildRegistryWithLoader(opts *GlobalOptions) (*registry.Registry, *pluginho
 //     build now has none, so that shape is reachable no other way.
 //
 // tests/integration deliberately does NOT use this: it shells out to the built binary and
-// builds the real infrata-plugin-fake, so the path a user actually runs is proved
+// builds the real infrena-plugin-fake, so the path a user actually runs is proved
 // somewhere.
 var builtinsFor = func(string) map[string]provider.Plugin { return nil }
 
@@ -87,7 +87,7 @@ var builtinsFor = func(string) map[string]provider.Plugin { return nil }
 // binary.
 //
 // Not a second implementation of anything shipped: it is the ENGINE'S TEST DOUBLE, and it
-// shares an origin with infrata-plugin-fake only because that binary was ported from it.
+// shares an origin with infrena-plugin-fake only because that binary was ported from it.
 // What keeps the two honest is that tests/integration runs the real one.
 func fakeDouble(dir string) map[string]provider.Plugin {
 	return map[string]provider.Plugin{"fake": test.NewPlugin(dir)}
@@ -481,7 +481,7 @@ func discoveryRegistry(
 		// one plugin is available, rather than guess an account for a resource. That
 		// is right for binding and wrong here: with the builtin plus any installed
 		// plugin, `discover` registered no instances at all and reported "Nothing
-		// found." at exit 0, a silent empty survey. Found by infrata-provider-fake's
+		// found." at exit 0, a silent empty survey. Found by infrena-provider-fake's
 		// e2e suite.
 		table = providers.EveryPlugin(reg)
 		ds.Extend(providers.Register(table, reg))

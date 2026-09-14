@@ -8,9 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/infrata/infrata/internal/modules/source"
-	"github.com/infrata/infrata/pkg/address"
-	"github.com/infrata/infrata/pkg/value"
+	"github.com/infrena/infrena/internal/modules/source"
+	"github.com/infrena/infrena/pkg/address"
+	"github.com/infrena/infrena/pkg/value"
 )
 
 // lineContaining returns the single output line containing needle. Asserting
@@ -599,7 +599,7 @@ resources:
 }
 
 // TestAReferenceToANonexistentAttributeFailsAtValidate. The measured failure
-// was not "a confusing message" — it was `infrata apply` CREATING REAL
+// was not "a confusing message" — it was `infrena apply` CREATING REAL
 // INFRASTRUCTURE and then failing partway through on a typo that `validate`
 // had passed. So the assertions are: validate refuses it, and apply creates
 // nothing.

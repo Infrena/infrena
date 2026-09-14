@@ -4,9 +4,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/infrata/infrata/internal/config"
-	"github.com/infrata/infrata/pkg/provider"
-	"github.com/infrata/infrata/pkg/value"
+	"github.com/infrena/infrena/internal/config"
+	"github.com/infrena/infrena/pkg/provider"
+	"github.com/infrena/infrena/pkg/value"
 )
 
 func discovered(id string, attrs map[string]value.Value) provider.DiscoveredResource {

@@ -6,12 +6,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/infrata/infrata/internal/registry"
-	"github.com/infrata/infrata/internal/variables"
-	"github.com/infrata/infrata/pkg/provider"
-	"github.com/infrata/infrata/pkg/schema"
-	"github.com/infrata/infrata/pkg/value"
-	testprovider "github.com/infrata/infrata/providers/test"
+	"github.com/infrena/infrena/internal/registry"
+	"github.com/infrena/infrena/internal/variables"
+	"github.com/infrena/infrena/pkg/provider"
+	"github.com/infrena/infrena/pkg/schema"
+	"github.com/infrena/infrena/pkg/value"
+	testprovider "github.com/infrena/infrena/providers/test"
 )
 
 // Prepare is stage 4.5: resolve the declarations, then CONSTRUCT each instance from

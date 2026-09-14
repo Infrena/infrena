@@ -19,10 +19,10 @@ import (
 	"os"
 	"sync"
 
-	"github.com/infrata/infrata/pkg/address"
-	"github.com/infrata/infrata/pkg/pluginproto"
-	"github.com/infrata/infrata/pkg/provider"
-	"github.com/infrata/infrata/pkg/resource"
+	"github.com/infrena/infrena/pkg/address"
+	"github.com/infrena/infrena/pkg/pluginproto"
+	"github.com/infrena/infrena/pkg/provider"
+	"github.com/infrena/infrena/pkg/resource"
 )
 
 // Main is the whole of a plugin's main(). It never returns.
@@ -33,8 +33,8 @@ import (
 func Main(p provider.Plugin) {
 	if os.Getenv(pluginproto.CookieEnv) == "" {
 		fmt.Fprintf(os.Stderr,
-			"%s is an infrata provider plugin: it is run by infrata, not directly.\n"+
-				"Put it where infrata looks for plugins and name it in your `providers:` block.\n",
+			"%s is an infrena provider plugin: it is run by infrena, not directly.\n"+
+				"Put it where infrena looks for plugins and name it in your `providers:` block.\n",
 			p.Name())
 		os.Exit(2)
 	}

@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/infrata/infrata/pkg/address"
-	"github.com/infrata/infrata/pkg/resource"
+	"github.com/infrena/infrena/pkg/address"
+	"github.com/infrena/infrena/pkg/resource"
 )
 
 func res(addr, typ string, deps ...string) (string, *resource.ResolvedResource) {

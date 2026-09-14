@@ -5,9 +5,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/infrata/infrata/internal/config"
-	"github.com/infrata/infrata/internal/variables"
-	"github.com/infrata/infrata/pkg/value"
+	"github.com/infrena/infrena/internal/config"
+	"github.com/infrena/infrena/internal/variables"
+	"github.com/infrena/infrena/pkg/value"
 )
 
 // PLAN.md §6.2, stage 5: resolve `skip`/`only` and MARK. The dropping is Task 7's.

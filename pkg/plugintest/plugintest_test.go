@@ -5,11 +5,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/infrata/infrata/pkg/plugintest"
-	"github.com/infrata/infrata/pkg/provider"
-	"github.com/infrata/infrata/pkg/resource"
-	"github.com/infrata/infrata/pkg/schema"
-	"github.com/infrata/infrata/pkg/value"
+	"github.com/infrena/infrena/pkg/plugintest"
+	"github.com/infrena/infrena/pkg/provider"
+	"github.com/infrena/infrena/pkg/resource"
+	"github.com/infrena/infrena/pkg/schema"
+	"github.com/infrena/infrena/pkg/value"
 )
 
 // package plugintest_test, not plugintest: an EXTERNAL test package, importing only
@@ -24,7 +24,7 @@ import (
 // demonstrates the intended shape and pins the behaviour; the only real check that an
 // outside module can use this package is an outside module doing so.
 //
-// DISCHARGED 2026-09-13. infrata-provider-fake — a separate module — imports this
+// DISCHARGED 2026-09-13. infrena-provider-fake — a separate module — imports this
 // package in internal/fake/protocol_test.go and its suite passes (that repository's
 // 0fd8bcf). Recorded here rather than left open, so nobody re-derives the analysis:
 // what remains unprovable from inside this module is only that it STAYS true, which is

@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/infrata/infrata/internal/discovery"
+	"github.com/infrena/infrena/internal/discovery"
 )
 
 func result(typ, id, name string) discovery.Result {

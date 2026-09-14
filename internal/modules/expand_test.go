@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/infrata/infrata/internal/diag"
-	"github.com/infrata/infrata/internal/modules/source"
-	"github.com/infrata/infrata/internal/variables"
+	"github.com/infrena/infrena/internal/diag"
+	"github.com/infrena/infrena/internal/modules/source"
+	"github.com/infrena/infrena/internal/variables"
 )
 
 // Amendment 18: stage 5 COLLECTS resolutions and never writes them.

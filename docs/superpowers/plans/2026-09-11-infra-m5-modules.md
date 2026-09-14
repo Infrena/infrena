@@ -258,7 +258,7 @@ reasons, in descending weight:
    `s[(address.Address{Name: ref.Resource}).String()]` becomes `s[ref.Target.String()]` —
    the construction whose comment names this bug disappears.
 4. **The edge is acyclic and free.** Verified at HEAD: `go list -deps ./pkg/address | grep
-   infrata` prints only `pkg/address` itself, so `pkg/value` importing `pkg/address`
+   infrena` prints only `pkg/address` itself, so `pkg/value` importing `pkg/address`
    introduces no cycle and no third-party dependency.
 
 **The root case stays a one-liner.** `value.LocalRef("db", "id")` replaces
@@ -429,7 +429,7 @@ package value
 import (
 	"testing"
 
-	"github.com/infrata/infrata/pkg/address"
+	"github.com/infrena/infrena/pkg/address"
 )
 
 // TestReferenceStringIncludesTheModulePath pins the whole point of Ruling 1:
@@ -539,7 +539,7 @@ failure this step is looking for — the type does not carry a module path yet.
 
 #### 1.2 — Change the type, and fix `pkg/value` only
 
-In `pkg/value/expr.go`, add `"github.com/infrata/infrata/pkg/address"` to the import block
+In `pkg/value/expr.go`, add `"github.com/infrena/infrena/pkg/address"` to the import block
 and replace the `Reference` type and its `String` method:
 
 ```go
@@ -803,7 +803,7 @@ resource, not an address"):
 ```
 
 `address` is now unused in that file — it was imported for that one construction — so delete
-`"github.com/infrata/infrata/pkg/address"` from its import block, or the package will not
+`"github.com/infrena/infrena/pkg/address"` from its import block, or the package will not
 compile.
 
 `internal/compiler/bind.go`, in `bindAttribute`'s reference loop — bind the canonical target
@@ -1250,7 +1250,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/infrata/infrata/pkg/value"
+	"github.com/infrena/infrena/pkg/value"
 )
 
 var testOrigin = value.Origin{File: "infra.yml", Line: 4, Column: 5}
@@ -1625,8 +1625,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/infrata/infrata/internal/diag"
-	"github.com/infrata/infrata/pkg/value"
+	"github.com/infrena/infrena/internal/diag"
+	"github.com/infrena/infrena/pkg/value"
 )
 
 // Kind is how a module source names its content.
@@ -2232,7 +2232,7 @@ func (r *testRepo) write(t *testing.T, files map[string]string) {
 
 func (r *testRepo) commitAll(t *testing.T, msg string) {
 	t.Helper()
-	r.git(t, r.work, "-c", "user.email=test@infrata.invalid", "-c", "user.name=test",
+	r.git(t, r.work, "-c", "user.email=test@infrena.invalid", "-c", "user.name=test",
 		"-c", "commit.gpgsign=false", "commit", "-q", "-m", msg)
 	r.Commit = r.gitOut(t, r.work, "rev-parse", "HEAD")
 }
@@ -2243,7 +2243,7 @@ func (r *testRepo) commitAll(t *testing.T, msg string) {
 func (r *testRepo) Tag(t *testing.T, name string, annotated bool) {
 	t.Helper()
 	if annotated {
-		r.git(t, r.work, "-c", "user.email=test@infrata.invalid", "-c", "user.name=test",
+		r.git(t, r.work, "-c", "user.email=test@infrena.invalid", "-c", "user.name=test",
 			"tag", "-f", "-a", name, "-m", name)
 	} else {
 		r.git(t, r.work, "tag", "-f", name)
@@ -3079,7 +3079,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/infrata/infrata/pkg/value"
+	"github.com/infrena/infrena/pkg/value"
 )
 
 func TestResolveAPathSourceAgainstTheFileThatDeclaredIt(t *testing.T) {
@@ -3412,7 +3412,7 @@ func TestResolveIsSafeWhenCallersRace(t *testing.T) {
 }
 ```
 
-`cache_test.go` needs `"github.com/infrata/infrata/internal/diag"` for that last test.
+`cache_test.go` needs `"github.com/infrena/infrena/internal/diag"` for that last test.
 
 #### 13.5 Run them, see them fail
 
@@ -3444,7 +3444,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/infrata/infrata/internal/diag"
+	"github.com/infrena/infrena/internal/diag"
 )
 
 const (
@@ -4118,7 +4118,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/infrata/infrata/pkg/value"
+	"github.com/infrena/infrena/pkg/value"
 )
 
 func writeLockfileFixture(t *testing.T, project string, body string) {
@@ -4497,8 +4497,8 @@ import (
 	"sort"
 	"strconv"
 
-	"github.com/infrata/infrata/internal/diag"
-	"github.com/infrata/infrata/pkg/value"
+	"github.com/infrena/infrena/internal/diag"
+	"github.com/infrena/infrena/pkg/value"
 )
 
 // lockfileName sits beside infra.yml and IS committed — unlike .infra/, which
@@ -4774,7 +4774,7 @@ export PATH="$HOME/.local/share/mise/shims:$PATH"
 go test -count=1 ./...
 go test -count=1 -race ./internal/modules/source/
 go vet ./... && gofmt -l .
-go list -deps ./internal/modules/source/ | grep infrata   # must NOT list internal/config
+go list -deps ./internal/modules/source/ | grep infrena   # must NOT list internal/config
 git diff --stat go.mod go.sum          # must print nothing
 grep -rn "yaml\." --include=*.go internal/ pkg/ cmd/ | grep -v "^internal/config/"   # must print nothing
 grep -rn "<sensitive>" --include=*.go internal/ pkg/ | grep -v _test.go              # must name only pkg/value/format.go
@@ -5489,9 +5489,9 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/infrata/infrata/internal/diag"
-	"github.com/infrata/infrata/internal/modules/source"
-	"github.com/infrata/infrata/pkg/value"
+	"github.com/infrena/infrena/internal/diag"
+	"github.com/infrena/infrena/internal/modules/source"
+	"github.com/infrena/infrena/pkg/value"
 )
 
 // ModuleTypePrefix marks a resource type that instantiates a loaded module
@@ -6250,7 +6250,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/infrata/infrata/pkg/value"
+	"github.com/infrena/infrena/pkg/value"
 )
 
 // writeModule writes one module.yml into a temp directory and loads it, so every
@@ -6698,7 +6698,7 @@ In `internal/config/load.go`, after `EnvironmentsDirName`:
 // `outputs`, no `project` — and two names make the shapes distinguishable by
 // construction: neither decoder accepts the other's keys, so four bespoke
 // rejection rules never have to exist. It also stops a module directory looking
-// like a project: under a shared name, `infrata plan dev` run inside
+// like a project: under a shared name, `infrena plan dev` run inside
 // modules/networking/ would find a valid infra.yml and TRY, producing a pile of
 // "variable not set" errors describing a situation that is not a mistake.
 const ModuleFileName = "module.yml"
@@ -6903,8 +6903,8 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/infrata/infrata/internal/diag"
-	"github.com/infrata/infrata/pkg/value"
+	"github.com/infrena/infrena/internal/diag"
+	"github.com/infrena/infrena/pkg/value"
 )
 
 // OutputDecl is one value a module publishes to its caller (PLAN.md §11.3).
@@ -7502,9 +7502,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/infrata/infrata/internal/config"
-	"github.com/infrata/infrata/internal/diag"
-	"github.com/infrata/infrata/internal/modules/source"
+	"github.com/infrena/infrena/internal/config"
+	"github.com/infrena/infrena/internal/diag"
+	"github.com/infrena/infrena/internal/modules/source"
 )
 
 // writeTree writes a fixture project under dir, creating parent directories.
@@ -7602,9 +7602,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/infrata/infrata/internal/diag"
-	"github.com/infrata/infrata/internal/modules/source"
-	"github.com/infrata/infrata/internal/variables"
+	"github.com/infrena/infrena/internal/diag"
+	"github.com/infrena/infrena/internal/modules/source"
+	"github.com/infrena/infrena/internal/variables"
 )
 
 // Amendment 18: stage 5 COLLECTS resolutions and never writes them.
@@ -7997,10 +7997,10 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/infrata/infrata/internal/config"
-	"github.com/infrata/infrata/internal/diag"
-	"github.com/infrata/infrata/internal/variables"
-	"github.com/infrata/infrata/pkg/value"
+	"github.com/infrena/infrena/internal/config"
+	"github.com/infrena/infrena/internal/diag"
+	"github.com/infrena/infrena/internal/variables"
+	"github.com/infrena/infrena/pkg/value"
 )
 
 // MaxDepth bounds module nesting at 32 instantiations (spec §7.2). The root
@@ -8571,8 +8571,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/infrata/infrata/internal/config"
-	"github.com/infrata/infrata/internal/diag"
+	"github.com/infrena/infrena/internal/config"
+	"github.com/infrena/infrena/internal/diag"
 )
 
 // skipDirs are never descended into. `.git` holds thousands of files and no
@@ -8674,7 +8674,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/infrata/infrata/internal/variables"
+	"github.com/infrena/infrena/internal/variables"
 )
 
 func TestADirectoryHoldingAModuleFileIsLoadedWithoutAModulesEntry(t *testing.T) {
@@ -8986,8 +8986,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/infrata/infrata/internal/variables"
-	"github.com/infrata/infrata/pkg/value"
+	"github.com/infrena/infrena/internal/variables"
+	"github.com/infrena/infrena/pkg/value"
 )
 
 // scopeOf returns the scope the named resource was instantiated at.
@@ -9588,11 +9588,11 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/infrata/infrata/internal/config"
-	"github.com/infrata/infrata/internal/diag"
-	"github.com/infrata/infrata/internal/expressions"
-	"github.com/infrata/infrata/internal/variables"
-	"github.com/infrata/infrata/pkg/value"
+	"github.com/infrena/infrena/internal/config"
+	"github.com/infrena/infrena/internal/diag"
+	"github.com/infrena/infrena/internal/expressions"
+	"github.com/infrena/infrena/internal/variables"
+	"github.com/infrena/infrena/pkg/value"
 )
 
 // Scope is the name environment inside one module instantiation: the variables
@@ -9970,7 +9970,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/infrata/infrata/internal/variables"
+	"github.com/infrena/infrena/internal/variables"
 )
 
 func addresses(exp *Expansion) []string {
@@ -10207,9 +10207,9 @@ package modules
 import (
 	"sort"
 
-	"github.com/infrata/infrata/internal/config"
-	"github.com/infrata/infrata/pkg/address"
-	"github.com/infrata/infrata/pkg/value"
+	"github.com/infrena/infrena/internal/config"
+	"github.com/infrena/infrena/pkg/address"
+	"github.com/infrena/infrena/pkg/value"
 )
 
 // addressIn builds a resource's canonical address from the instantiation path.
@@ -10451,7 +10451,7 @@ func (w *walker) plainTargets(
 	}, ds
 ```
 
-Add `"sort"` and `"github.com/infrata/infrata/pkg/address"` to `expand.go`'s imports.
+Add `"sort"` and `"github.com/infrena/infrena/pkg/address"` to `expand.go`'s imports.
 
 #### 6.5 Run them, see them pass
 
@@ -10675,10 +10675,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/infrata/infrata/internal/diag"
-	"github.com/infrata/infrata/internal/expressions"
-	"github.com/infrata/infrata/internal/variables"
-	"github.com/infrata/infrata/pkg/value"
+	"github.com/infrena/infrena/internal/diag"
+	"github.com/infrena/infrena/internal/expressions"
+	"github.com/infrena/infrena/internal/variables"
+	"github.com/infrena/infrena/pkg/value"
 )
 
 // evalAt parses, qualifies and evaluates src in the named resource's scope —
@@ -11227,12 +11227,12 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/infrata/infrata/internal/config"
-	"github.com/infrata/infrata/internal/diag"
-	"github.com/infrata/infrata/internal/expressions"
-	"github.com/infrata/infrata/internal/graph"
-	"github.com/infrata/infrata/pkg/address"
-	"github.com/infrata/infrata/pkg/value"
+	"github.com/infrena/infrena/internal/config"
+	"github.com/infrena/infrena/internal/diag"
+	"github.com/infrena/infrena/internal/expressions"
+	"github.com/infrena/infrena/internal/graph"
+	"github.com/infrena/infrena/pkg/address"
+	"github.com/infrena/infrena/pkg/value"
 )
 
 // BindingKind says which of the two things a bare name in ${name.attr} refers
@@ -11712,7 +11712,7 @@ grep -rn "yaml\." --include=*.go internal/ pkg/ cmd/ | grep -v "^internal/config
 
 # internal/graph still imports no other infra package (this task imports graph,
 # not the other way round). Must print only internal/graph itself.
-go list -deps ./internal/graph | grep infrata
+go list -deps ./internal/graph | grep infrena
 
 # Still exactly two third-party dependencies.
 grep -c "^	" go.mod
@@ -11994,7 +11994,7 @@ outputs:
 }
 ```
 
-`compile_test.go` will need `"github.com/infrata/infrata/pkg/address"` and, for
+`compile_test.go` will need `"github.com/infrena/infrena/pkg/address"` and, for
 `loadFilesInDir`, `"os"` and `"path/filepath"` — check what it already imports rather
 than assuming.
 
@@ -12065,7 +12065,7 @@ add after it:
 // its cost.
 ```
 
-Add `"github.com/infrata/infrata/internal/modules"` to the imports.
+Add `"github.com/infrena/infrena/internal/modules"` to the imports.
 
 In `internal/cli/varopts.go`, `compilerOptions` returns:
 
@@ -12221,7 +12221,7 @@ git commit -m "M5 task 8: pin what the stage-5 halt suppresses" -- internal/comp
 
 ```bash
 export PATH="$HOME/.local/share/mise/shims:$PATH"
-go build ./cmd/infrata
+go build ./cmd/infrena
 go test -count=1 ./...
 go vet ./...
 gofmt -l .
@@ -12629,7 +12629,7 @@ func bindReferences(expansion modules.Expansion, opts Options) (ResolvedConfig, 
 	// And it carries the TARGET rather than a bool, because a reference has
 	// two axes and only one of them was ever checked: that the resource exists
 	// (checked since M1) and that the attribute exists on it (Amendment 11,
-	// unchecked since M2 and the reason an `infrata apply` could create real
+	// unchecked since M2 and the reason an `infrena apply` could create real
 	// infrastructure and then fail on a typo).
 	declared := make(map[string]refTarget, len(expansion.Instances))
 	for _, inst := range expansion.Instances {
@@ -12785,7 +12785,7 @@ testing the thing that produces one, which is the mistake M4's Task 7 called out
 
 ```bash
 export PATH="$HOME/.local/share/mise/shims:$PATH"
-go build ./cmd/infrata
+go build ./cmd/infrena
 go test -count=1 ./...
 go vet ./...
 gofmt -l .
@@ -13469,7 +13469,7 @@ func TestAModuleDiagnosticNamesOnlyTheFailingInstantiation(t *testing.T) {
 }
 ```
 
-`compile_test.go` will need `"github.com/infrata/infrata/internal/diag"`.
+`compile_test.go` will need `"github.com/infrena/infrena/internal/diag"`.
 
 The fixture's `size: {}` is an input declared with no type — PLAN.md §9 calls variable
 schemas optional and contract Ruling 3 says an input's type is checked the same way a
@@ -13636,7 +13636,7 @@ gofmt -l .
 ### Why this task exists
 
 Everything M5 claims is user-visible, so everything M5 claims is provable by driving
-the binary. `tests/integration` builds `cmd/infrata` with `go build` and runs it; no
+the binary. `tests/integration` builds `cmd/infrena` with `go build` and runs it; no
 test here calls an internal package's function to assert a milestone criterion.
 
 It is also where the second cost of flattening gets written down. Spec §7.2:
@@ -13686,7 +13686,7 @@ copies.
 
 ### Interfaces
 
-**Consumes:** the built `cmd/infrata` binary and, for the renderer step,
+**Consumes:** the built `cmd/infrena` binary and, for the renderer step,
 `planner.Plan`, `planner.Operation`, `planner.OpDestroy`, `planner.OpCreate`,
 `address.Address` — all existing.
 
@@ -13726,7 +13726,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/infrata/infrata/pkg/address"
+	"github.com/infrena/infrena/pkg/address"
 )
 
 // lineContaining returns the single output line containing needle. Asserting
@@ -14512,7 +14512,7 @@ something the compiler should do generally.
 
 ```go
 // TestAReferenceToANonexistentAttributeFailsAtValidate. The measured failure
-// was not "a confusing message" — it was `infrata apply` CREATING REAL
+// was not "a confusing message" — it was `infrena apply` CREATING REAL
 // INFRASTRUCTURE and then failing partway through on a typo that `validate`
 // had passed. So the assertions are: validate refuses it, and apply creates
 // nothing.
@@ -15285,7 +15285,7 @@ func lineContainingInRender(t *testing.T, out, needle string) string {
 ```
 
 `render_test.go` will need `"strings"` and
-`"github.com/infrata/infrata/pkg/address"` if it does not already import them.
+`"github.com/infrena/infrena/pkg/address"` if it does not already import them.
 
 ```bash
 export PATH="$HOME/.local/share/mise/shims:$PATH"
@@ -15556,9 +15556,9 @@ go test -race -count=1 ./...
 git diff --stat go.mod go.sum                                          # prints nothing: still cobra + yaml.v3
 grep -rn '"<sensitive>"' --include=*.go . | grep -v _test.go           # only pkg/value/format.go
 grep -rn "yaml\." --include=*.go internal/ pkg/ cmd/ | grep -v "^internal/config/"   # prints nothing
-go list -deps github.com/infrata/infrata/internal/graph | grep infrata/ # only the module path itself
-go list -deps github.com/infrata/infrata/providers/test | grep infrata/internal/     # prints nothing
-go list -deps github.com/infrata/infrata/internal/executor | grep infrata/internal/cli  # prints nothing
+go list -deps github.com/infrena/infrena/internal/graph | grep infrena/ # only the module path itself
+go list -deps github.com/infrena/infrena/providers/test | grep infrena/internal/     # prints nothing
+go list -deps github.com/infrena/infrena/internal/executor | grep infrena/internal/cli  # prints nothing
 ```
 
 ### Definition of Done
@@ -15763,8 +15763,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/infrata/infrata/internal/modules/source"
-	"github.com/infrata/infrata/pkg/value"
+	"github.com/infrena/infrena/internal/modules/source"
+	"github.com/infrena/infrena/pkg/value"
 )
 
 // prepopulateCache creates a valid cache entry for a hash-pinned source inside

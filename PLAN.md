@@ -4,9 +4,31 @@
 
 ### Name
 
-The product is named **Infrata** (*infra* + *strata*: layers of infrastructure), with the GitHub organization `github.com/infrata` and the domain `infrata.dev`. The command is `infrata`, installed with `go install github.com/infrata/infrata/cmd/infrata@latest`.
+The product is named **Infrena**, with the GitHub organization `github.com/infrena`. The command is `infrena`, installed with `go install github.com/infrena/infrena/cmd/infrena@latest`.
 
-The Go module is `github.com/infrata/infrata` and the binary is `cmd/infrata`; the rename landed 2026-09-11, between M4 and M5.
+**RENAMED 2026-09-14, from Infrata**, after a legal collision on that name. The etymology this
+line used to give — *infra* + *strata* — belonged to the old name and is not carried over.
+
+What the rename moved: the module path (`github.com/infrata/infrata` →
+`github.com/infrena/infrena`), the CLI binary, the plugin binary the host searches for
+(`infrata-plugin-<name>` → `infrena-plugin-<name>`), the `INFRATA_*` environment variables, a
+project's `infrata:` version floor, and `plugin.yaml`'s `infrata:` field — the last being a
+manifest FORMAT change, so `pluginmanifest` goes to 2.
+
+What it did NOT move, which is more than expected: `.infra/`, so every existing state file keeps
+working; resource type prefixes, since a prefix is the plugin's name and not the product's; and
+every `pluginproto` message shape.
+
+**Releases v0.1.0 to v0.3.0 were published as `infrata`** and declare the OLD module path
+permanently. They are not reachable as `github.com/infrena/infrena`, and no amount of GitHub
+redirecting changes what a `go.mod` inside a tag says. v0.4.0 is the first release under the new
+name, and a plugin moves to it directly rather than bumping.
+
+Because the plugin BINARY NAME changed too, an infrata-era plugin and an infrena-era host can
+never meet — the host does not look for the old name. There is no mixed pair to support, which is
+what makes this a cutover rather than a migration.
+
+The Go module is `github.com/infrena/infrena` and the binary is `cmd/infrena`; the rename landed 2026-09-11, between M4 and M5.
 
 ---
 
@@ -1428,7 +1450,7 @@ Resources must define:
 
 ## 14.1 Provider-chosen attributes and attribute aliases
 
-**Agreed 2026-09-14**, from the AWS plugin's requirements (`infrata-provider-aws`,
+**Agreed 2026-09-14**, from the AWS plugin's requirements (`infrena-provider-aws`,
 `docs/investigations/2026-09-13-generic-aws-provider.md` §5 and §8). Two changes to
 `pkg/schema`, designed and landed TOGETHER so plugin authors meet one contract change
 rather than two.
@@ -1507,7 +1529,7 @@ currently the provider's. If the `--verbose` output proves noisy on a large sche
 threshold is the dial to revisit.
 
 **It does not say "no longer set in configuration", and that is a correction to the
-original proposal rather than a wording preference.** infrata cannot know it. Every
+original proposal rather than a wording preference.** infrena cannot know it. Every
 attribute in a state file records `source=provider` — including ones configuration set
 explicitly, because state records what the provider RETURNED. Checked against a real state
 file rather than assumed. Answering "was this ever configured?" would mean recording
@@ -1518,8 +1540,8 @@ re-planned sees the attribute now reads as provider-chosen, so their edit change
 
 **Accepted cost: drift on an unset optional+computed attribute is invisible to `plan`.**
 Someone flips `EnableDnsHostnames` in the console on a VPC that never configured it and no
-plan reports it. That is the right trade — an attribute infrata does not manage is not
-infrata's to report as drift — and it remains visible through `refresh` and `state show`,
+plan reports it. That is the right trade — an attribute infrena does not manage is not
+infrena's to report as drift — and it remains visible through `refresh` and `state show`,
 which is where someone investigating a console change looks.
 
 ### `import --generate` emits the ForceNew ones and omits the rest
@@ -1549,12 +1571,12 @@ REFUSES a definition whose names fold together — two attributes, or an attribu
 alias, or two aliases — which turns the collision hazard into a plugin that will not load
 rather than a silent runtime surprise for whichever spelling wins.
 
-**THE ALIASES ARE THE PLUGIN'S, AND CROSS THE WIRE.** infrata contains no mapping, no
+**THE ALIASES ARE THE PLUGIN'S, AND CROSS THE WIRE.** infrena contains no mapping, no
 table and no file: it learns every type, attribute and alias from the schema a plugin
 hands over at load, exactly as it already learns everything else. A curated overlay
-belongs in the plugin's own repository at its codegen time, where infrata never sees it.
+belongs in the plugin's own repository at its codegen time, where infrena never sees it.
 
-Considered and REJECTED: a configuration file infrata reads. It would need a version and a
+Considered and REJECTED: a configuration file infrena reads. It would need a version and a
 compatibility story (§61), a defined location, and rules for reconciling a file that
 disagrees with the schema — and a stale entry would silently map to an attribute the
 plugin no longer declares. The schema already crosses the wire and is already validated
@@ -1613,7 +1635,7 @@ function of the schema, with no storage consequence.
 ### Out of scope, recorded so each is a decision
 
 - **Keys inside map- and list-valued attributes** (`Tags[].Key`,
-  `PrivateDnsNameOptionsOnLaunch.HostnameType`). infrata does not validate nested keys at
+  `PrivateDnsNameOptionsOnLaunch.HostnameType`). infrena does not validate nested keys at
   all, so a plugin translates those itself.
 - **Nested create-only pointers** (37 on VPC alone) and **`conditionalCreateOnly`**. Real,
   and neither is blocked by this.
@@ -1624,7 +1646,7 @@ function of the schema, with no storage consequence.
 
 ## 14.2 `ignore_changes`: attributes something else owns
 
-**Agreed 2026-09-14.** A resource may name attributes whose drift infrata does not propose
+**Agreed 2026-09-14.** A resource may name attributes whose drift infrena does not propose
 to revert:
 
 ```yaml
@@ -1637,7 +1659,7 @@ resources:
 ```
 
 **The case it exists for.** A CI pipeline deploys by setting an ECS service's task
-revision. infrata computes its plan from configuration, so the next `plan` proposes
+revision. infrena computes its plan from configuration, so the next `plan` proposes
 reverting the revision to whatever the file says, and the next `apply` undoes the
 deployment. The two systems fight, and the one that ran most recently wins. `ignore_changes`
 is the user saying: that attribute is not mine.
@@ -1682,8 +1704,8 @@ byte-stable however it was written.
 ### Versions this moved, checked rather than assumed
 
 - **State** gained `ignore_changes` inside `lifecycle`, additively and `omitempty`. **No
-  version bump**: an older infrata ignores the key and has no ignore feature to get wrong,
-  and a newer infrata reading older state finds nothing, which is correct. The planner
+  version bump**: an older infrena ignores the key and has no ignore feature to get wrong,
+  and a newer infrena reading older state finds nothing, which is correct. The planner
   reads the list from compiled CONFIGURATION, never from state, so state's copy is
   bookkeeping.
 - **The plan artifact** gained the same key, additively. **No version bump.** The
@@ -2342,7 +2364,7 @@ Do not let AWS-specific code leak into the core planner.
 ## 31.1 Provider plugins are separate processes
 
 **Decided 2026-09-12, to be built before Phase 3.** A provider plugin is a separately
-distributed binary that `infrata` launches as a child process and talks to over
+distributed binary that `infrena` launches as a child process and talks to over
 stdin/stdout. That includes the official plugins: AWS ships the same way a third party's
 plugin would, and the fake provider becomes a binary too.
 
@@ -2371,9 +2393,9 @@ standard library, so **it adds no third-party dependency**.
 
 ### Transport
 
-- A plugin named `aws` is the executable `infrata-plugin-aws`.
-- The host starts it with `INFRATA_PLUGIN_COOKIE` set to a random value. A binary run by
-  hand without that variable prints "this is an infrata plugin; it is run by infrata" and
+- A plugin named `aws` is the executable `infrena-plugin-aws`.
+- The host starts it with `INFRENA_PLUGIN_COOKIE` set to a random value. A binary run by
+  hand without that variable prints "this is an infrena plugin; it is run by infrena" and
   exits non-zero. Without the cookie it would sit silently waiting for protocol input.
 - **stdout carries protocol messages and nothing else.** Messages are newline-delimited
   JSON: `{"id", "method", "params"}` requests, `{"id", "result"}` or `{"id", "error"}`
@@ -2431,7 +2453,7 @@ before any request.
 ### Process model
 
 - **One process per plugin per command, not one per instance.** Two AWS accounts means one
-  `infrata-plugin-aws` holding two configured clients, addressed by handle.
+  `infrena-plugin-aws` holding two configured clients, addressed by handle.
 - The host launches the plugins named in `providers:`, and only those. A resource in state
   whose instance names no entry is already an error before any plugin is needed.
 - **Every command launches plugins**, including `validate` and `explain`, because each
@@ -2505,9 +2527,9 @@ schemas, not pipes.
 **Phase A (this milestone).** No downloading.
 
 - The binary is looked up, first match wins, in:
-  1. `--plugin-dir` and `INFRATA_PLUGIN_PATH`
+  1. `--plugin-dir` and `INFRENA_PLUGIN_PATH`
   2. `<project>/.infra/plugins/`
-  3. `~/.local/share/infrata/plugins/`
+  3. `~/.local/share/infrena/plugins/`
   4. `$PATH`
 - `--verbose` prints the path each plugin was loaded from.
 - A missing plugin is a §44 error naming the `plugin:` entry, every place searched, and
@@ -2533,7 +2555,7 @@ schemas, not pipes.
     SDK answers `0.0.0` when a plugin does not implement `Version()`, so it fails any
     constraint above that — correct, and useless said as "0.0.0 does not satisfy
     >= 0.3.0", which sends an author looking for a version they never set. Note the
-    ASYMMETRY with §61.2's `infrata:` floor, which EXEMPTS a 0.0.0 build: there the
+    ASYMMETRY with §61.2's `infrena:` floor, which EXEMPTS a 0.0.0 build: there the
     unversioned binary is the user's own development build and the complaint is not
     actionable; here it is a third-party plugin they installed, and it is.
   - **A constraint on a plugin the project does not use is an ERROR**, listing the ones
@@ -2553,35 +2575,36 @@ schemas, not pipes.
 
 ### The repository stays PRIVATE until feature complete
 
-**Ruled 2026-09-13.** `github.com/infrata/infrata` is not a fetchable module and will not
+**Ruled 2026-09-13.** `github.com/infrena/infrena` is not a fetchable module and will not
 be until the product is feature complete. Requested by the fake-provider port, decided
 against for now; do not re-raise it as a blocker.
 
 What that costs, so nobody re-derives it:
 
 - **There are no third-party plugin authors yet**, and cannot be. A plugin needs either a
-  checkout of a private repository or `GOPRIVATE=github.com/infrata/*` plus credentials to
+  checkout of a private repository or `GOPRIVATE=github.com/infrena/*` plus credentials to
   the org. `AGENT.md`, §31.2 and the reference plugin all exist to invite outside plugins,
   and that invitation is on hold rather than withdrawn.
-- **The one consumer uses `replace`.** `infrata-provider-fake` carries
-  `replace github.com/infrata/infrata => ../infrata`, so every contributor needs a sibling
-  checkout named `infrata` — the directory a clone produces — and its release workflow needs
-  a token to fetch this repository beside it. It said `../ilan` until 2026-09-13, a local
-  folder name no clone creates, which broke CI the first time it needed the plugin.
+- **The one consumer uses `replace`.** `infrena-provider-fake` carries
+  `replace github.com/infrena/infrena => ../infrena`, so every contributor needs a sibling
+  checkout named `infrena` — the directory a clone produces — and its release workflow needs
+  a token to fetch this repository beside it. It has been renamed twice: it said `../ilan`
+  until 2026-09-13, a local folder name no clone creates, which broke CI the first time it
+  needed the plugin; and `../infrata` until the 2026-09-14 rename above.
 - **A `replace` means that repository builds against a WORKING TREE, not a version.** Its
   tests run against whatever is uncommitted here, which is how it saw a stale
   `internal/semver` that had been moved. That is a fast loop while both repositories change
   together daily, and a correctness hazard once they do not.
 
   **v0.1.0 (2026-09-13) is the exit.** There is now a tag to require, so a plugin repository
-  can drop the `replace` in CI — `GOPRIVATE=github.com/infrata/*` plus a token, requiring the
+  can drop the `replace` in CI — `GOPRIVATE=github.com/infrena/*` plus a token, requiring the
   released version — and keep it only for local work. Until a release existed this was not
   available at any price: every build reported `0.0.0-dev`.
 
 **A semver tag is worth cutting anyway**, and is independent of visibility: with
-`GOPRIVATE` set, a tagged version lets the plugin `require github.com/infrata/infrata
+`GOPRIVATE` set, a tagged version lets the plugin `require github.com/infrena/infrena
 vX.Y.Z` and drop the `replace`, which removes the sibling-checkout requirement and pins
-the build to something reproducible. It also makes `infrata version` report a real version
+the build to something reproducible. It also makes `infrena version` report a real version
 instead of `0.0.0-dev` (§61.1).
 
 **Revisit when:** the product is feature complete. That is the stated gate, and going
@@ -2590,13 +2613,13 @@ public is the only thing that makes an outside plugin author possible.
 **Phase B — now designed in full in §31.3, which supersedes these four bullets and moves
 them out of §53.** In outline:
 
-- `infrata plugins install` fetches release binaries.
+- `infrena plugins install` fetches release binaries.
 - A committed `plugins.lock` records the resolved version, the source, and a SHA-256 per
   platform.
 - The host verifies the checksum on every launch once a lock file exists.
 - Phase A's search path is where install writes, so nothing moves.
 
-§31.3 adds what this omitted: where infrata LOOKS (the `infrata-provider-*` naming
+§31.3 adds what this omitted: where infrena LOOKS (the `infrena-provider-*` naming
 convention, plus sources a user trusts), the rule that a project may NAME a source but only
 a user may TRUST one, and the offer to install a plugin a project references and the machine
 does not have. It ships behind Phase 3 rather than in Phase 5, because AWS is the point at
@@ -2604,7 +2627,7 @@ which hand-placing a binary stops being a reasonable ask.
 
 ## 31.2 The plugin manifest: `plugin.yaml`
 
-**Agreed 2026-09-13**, from a proposal by the `infrata-provider-fake` port
+**Agreed 2026-09-13**, from a proposal by the `infrena-provider-fake` port
 (`docs/proposals/2026-09-13-plugin-manifest.md` in that repository), amended as below.
 
 A plugin repository ships one file saying what the plugin is and what it works with.
@@ -2619,27 +2642,27 @@ name: fake
 version: 0.1.0
 protocol: [1]
 platforms: [linux/amd64, linux/arm64, darwin/arm64, windows/amd64]
-description: A fake provider for testing infrata without a cloud account.
-infrata: ">= 0.2.0"
-source: https://github.com/infrata/infrata-provider-fake
+description: A fake provider for testing infrena without a cloud account.
+infrena: ">= 0.2.0"
+source: https://github.com/infrena/infrena-provider-fake
 ```
 
 | Key | Required | Meaning |
 | --- | --- | --- |
 | `manifest` | yes | the format version of THIS FILE. Checked first, before any other key. |
-| `name` | yes | the plugin's name: the binary is `infrata-plugin-<name>`, `Plugin.Name()` returns it, and every resource type is prefixed with it. The host already refuses a mismatch between the last two. |
+| `name` | yes | the plugin's name: the binary is `infrena-plugin-<name>`, `Plugin.Name()` returns it, and every resource type is prefixed with it. The host already refuses a mismatch between the last two. |
 | `version` | yes | `MAJOR.MINOR.PATCH`, and it must equal the tag this file is read at. |
-| `protocol` | yes | the plugin protocol versions THIS RELEASE'S BINARY can speak. For a plugin built with `pkg/pluginsdk` that is exactly one — the `pluginproto.Version` of the infrata it was built against. A list only for a plugin that hand-rolls the protocol and genuinely negotiates several. |
+| `protocol` | yes | the plugin protocol versions THIS RELEASE'S BINARY can speak. For a plugin built with `pkg/pluginsdk` that is exactly one — the `pluginproto.Version` of the infrena it was built against. A list only for a plugin that hand-rolls the protocol and genuinely negotiates several. |
 | `platforms` | yes | `GOOS/GOARCH` for every published build. |
 | `description` | yes | one line, for a search result to show. |
-| `infrata` | no | the infrata releases this plugin is known to work with, in `pkg/semver`'s syntax. ABSENT means unconstrained. |
+| `infrena` | no | the infrena releases this plugin is known to work with, in `pkg/semver`'s syntax. ABSENT means unconstrained. |
 | `source` | no | where the plugin lives, for a search result to link. |
 
 **Amended 2026-09-14: defined by the RELEASE, not by capability.** It said "every plugin
 protocol version the plugin can speak", which invites exactly the wrong answer. An author
 reads the host's `Supported` — `{2, 1}` since §14.1 — or remembers an older release, and
 writes `[2, 1]`. The binary still announces one number, so the manifest then claims a
-protocol that binary cannot speak. Raised by the `infrata-provider-fake` session, which
+protocol that binary cannot speak. Raised by the `infrena-provider-fake` session, which
 met it the day the protocol moved.
 
 Three consequences follow, and they are the reassuring ones:
@@ -2648,7 +2671,7 @@ Three consequences follow, and they are the reassuring ones:
    true when written and stays true forever: that binary announces 1 and always will.
 2. **A host protocol bump forces no re-release.** The old version stays in `Supported`, so
    an existing plugin release keeps working and keeps describing itself correctly.
-3. **The NEXT release changes `protocol:` in the same commit as its infrata `require`
+3. **The NEXT release changes `protocol:` in the same commit as its infrena `require`
    bump**, because the rebuilt binary announces the new number. A plugin's own manifest
    test and its release gate are what enforce that, which is how this was caught.
 
@@ -2666,17 +2689,17 @@ raw.githubusercontent.com/<owner>/<repo>/refs/tags/v0.3.1/plugin.yaml
 
 The manifest answers two questions with different lifetimes — IDENTITY (`name`,
 `description`, `source`), which is the same on every ref, and THE COMPATIBILITY OF ONE
-VERSION (`version`, `protocol`, `platforms`, `infrata`), which differs per release. One
+VERSION (`version`, `protocol`, `platforms`, `infrena`), which differs per release. One
 file serves both only because it is always read at a tag.
 
 ### Compatible means three things
 
 1. **Format:** `manifest` is a version this build understands. Checked FIRST, so a newer
-   manifest reports "this plugin needs a newer infrata to describe itself" rather than a
+   manifest reports "this plugin needs a newer infrena to describe itself" rather than a
    parse error about a key nobody recognises.
 2. **Protocol:** `protocol` shares at least one version with the build's own
    `pluginproto.Supported`. Already enforced at runtime by the handshake.
-3. **Release:** `infrata`, if stated, allows the running build. A development build is
+3. **Release:** `infrena`, if stated, allows the running build. A development build is
    EXEMPT, the same exemption §61.2 gives a project's own floor and for the same reason.
 
 ### Why the format is versioned, when configuration is not
@@ -2686,9 +2709,9 @@ The distinction is who reads the file and when:
 
 - Configuration is written and read by the same person at the same time, on one machine,
   and fails closed on an unknown key — which catches their typo.
-- A manifest is written by a plugin author and read by every infrata build for years
+- A manifest is written by a plugin author and read by every infrena build for years
   afterwards, over the network, with no way to upgrade the reader in step with the
-  writer. Refusing unknown keys there means a 2026 infrata cannot install a 2027 plugin.
+  writer. Refusing unknown keys there means a 2026 infrena cannot install a 2027 plugin.
 
 So: fail closed on unknown keys for a `manifest` version this build knows, and
 tolerate-with-a-warning for one it does not.
@@ -2697,25 +2720,25 @@ tolerate-with-a-warning for one it does not.
 
 - **Checksums.** They cannot exist until after the build, so a hand-written,
   checked-in manifest cannot carry them honestly. `SHA256SUMS` is published as a release
-  asset (infrata's own release workflow already does this), and §31.1 Phase B's
+  asset (infrena's own release workflow already does this), and §31.1 Phase B's
   `plugins.lock` is what records them per platform.
-- **Asset names or download URLs.** A CONVENTION instead, mirroring infrata's own
-  releases: `infrata-plugin-<name>_<version>_<goos>_<goarch>.tar.gz`, `.zip` on Windows.
+- **Asset names or download URLs.** A CONVENTION instead, mirroring infrena's own
+  releases: `infrena-plugin-<name>_<version>_<goos>_<goarch>.tar.gz`, `.zip` on Windows.
   Install constructs the URL. One convention beats a field every author can get wrong.
 - **Resource types.** `name` already implies them — a plugin serves `<name>.*` and the
   host refuses anything else — so "which plugin provides `aws.instance`?" is answerable
   from `name` alone.
 
-### Where infrata reads it
+### Where infrena reads it
 
-**At install (Phase B).** `infrata plugins install` reads the manifest from the tag,
+**At install (Phase B).** `infrena plugins install` reads the manifest from the tag,
 refuses a plugin failing any of the three rules, and only then fetches and checksums the
 binary. A plugin with NO manifest installs with a warning rather than being refused:
 Phase A is hand-placed binaries, which is every plugin today.
 
 **Not in the handshake, for now.** That would catch a hand-placed binary too, and the
 cheap form needs no manifest embedding — the handshake already sends
-`{protocol, name, version}`, so `infrata` is one more optional string supplied the way
+`{protocol, name, version}`, so `infrena` is one more optional string supplied the way
 `Version()` is. Deferred because with the protocol at 1 and one plugin in existence,
 rule 3 has nothing to catch yet. Recorded so it is not re-derived.
 
@@ -2723,21 +2746,21 @@ rule 3 has nothing to catch yet. Recorded so it is not re-derived.
 
 Its release workflow must assert that THREE things agree: the git tag, the manifest's
 `version`, and the binary's `Version()`. That is the shape of the check already in
-infrata's own release workflow, which builds for the host and refuses to publish a binary
+infrena's own release workflow, which builds for the host and refuses to publish a binary
 that does not report the tag. A drift test between the manifest and the code is the
 weaker substitute — it is a test someone can delete, where the release assertion blocks
 the release.
 
-`pkg/semver` is public so a plugin can validate its own `infrata:` field with the same
-parser infrata will check it with, rather than a second implementation that drifts.
+`pkg/semver` is public so a plugin can validate its own `infrena:` field with the same
+parser infrena will check it with, rather than a second implementation that drifts.
 
 **`pkg/pluginmanifest` is that parser for the whole file** (built 2026-09-13, requested by
 the port). `Parse` returns a `Manifest` and any warnings; `Validate` checks one built in
-Go; `SpeaksProtocol`, `Supports` and `AllowsInfrata` are §31.2's three compatibility
+Go; `SpeaksProtocol`, `Supports` and `AllowsInfrena` are §31.2's three compatibility
 rules, so the installer and a plugin's own test ask the same question of the same code.
 
 It is public for the reason `pkg/semver` is, plus one practical one: reading YAML needs a
-YAML parser, and a plugin repository whose rule is "standard library plus infrata" cannot
+YAML parser, and a plugin repository whose rule is "standard library plus infrena" cannot
 add `gopkg.in/yaml.v3` itself — it accepts it transitively by importing this instead.
 
 That does not breach "internal/config is the only place in the engine permitted to touch
@@ -2767,12 +2790,12 @@ providers/test/         the engine's TEST DOUBLE (see below) — not a shipped p
 path.** `providers/aws/` was listed here as "its own Go module (Phase 3)"; that is
 withdrawn — see the amendment below.
 
-**Amended 2026-09-13.** This section previously said `cmd/infrata-plugin-test/` — the
+**Amended 2026-09-13.** This section previously said `cmd/infrena-plugin-test/` — the
 fake provider as a binary inside this repository — and `providers/test/` unchanged.
 Neither is what happened, and the difference is deliberate.
 
-**The fake provider gets its OWN REPOSITORY**, `infrata-provider-fake`, building
-`infrata-plugin-fake`. It has two jobs, and the second is why it moved out: it is the
+**The fake provider gets its OWN REPOSITORY**, `infrena-provider-fake`, building
+`infrena-plugin-fake`. It has two jobs, and the second is why it moved out: it is the
 only plugin whose source anyone can read, so it is also the reference implementation
 every plugin author copies. A plugin living inside the engine's module can quietly
 depend on something an external author cannot have — an internal package, a shared
@@ -2783,29 +2806,29 @@ That is not a hypothetical: the first thing the port found was that
 `internal/pluginhost.InProcess` is unreachable from another module, while the
 authoring guide recommended testing against it. `pkg/plugintest` exists because of it.
 
-**Amended 2026-09-13: AWS gets its own repository too**, `infrata-provider-aws`, building
-`infrata-plugin-aws`. This section previously put it at `providers/aws/` inside this
+**Amended 2026-09-13: AWS gets its own repository too**, `infrena-provider-aws`, building
+`infrena-plugin-aws`. This section previously put it at `providers/aws/` inside this
 repository with its own `go.mod`, on the reasoning that a separate module is enough to keep
 the AWS SDK out of the core module's dependency budget. It is enough for that, and not
 enough for the thing that actually matters, because **Go's internal rule is by import path,
 not by module boundary.**
 
 Measured, not assumed, on a scratch copy at `cd51fb7`: a nested module
-`github.com/infrata/infrata/providers/awsprobe` with `replace => ../..` COMPILES while
-importing `github.com/infrata/infrata/internal/pluginhost`, because the importing path sits
+`github.com/infrena/infrena/providers/awsprobe` with `replace => ../..` COMPILES while
+importing `github.com/infrena/infrena/internal/pluginhost`, because the importing path sits
 under the parent of `internal/`. The identical file in a module named
 `example.com/outsideprobe` fails with `use of internal package
-github.com/infrata/infrata/internal/pluginhost not allowed`. So the official provider —
+github.com/infrena/infrena/internal/pluginhost not allowed`. So the official provider —
 the one whose code every AWS user reads and every third-party author imitates — would have
 been the single plugin able to reach engine internals, and the compiler would never have
 said so.
 
 A separate module under this module's path also keeps the `replace` problem: it compiles
 whatever is in the engine's working tree, committed or not, so its green suite proves
-nothing about committed infrata.
+nothing about committed infrena.
 
 **The rule this generalises to: a plugin's module path must not be under
-`github.com/infrata/infrata/`.** That is what puts an official plugin on exactly the footing
+`github.com/infrena/infrena/`.** That is what puts an official plugin on exactly the footing
 a third-party plugin has, which is the only way the plugin API is tested by the plugins we
 write ourselves.
 
@@ -2813,7 +2836,7 @@ write ourselves.
 DOUBLE.** While it was a builtin, the loader preferred a binary on the search path and
 fell back to it, served over `pluginhost.InProcess` — the same handshake, protocol and
 trust rules a subprocess gets, so a fallback rather than a second code path. The binary
-shipped, and the fallback went with it: a shipped infrata now carries NO provider, `init`
+shipped, and the fallback went with it: a shipped infrena now carries NO provider, `init`
 scaffolds `fake.*`, and the double is injected only by `internal/cli`'s `TestMain`.
 `TestAShippedBuildCarriesNoProvider` runs the binary with no plugin installed and is the
 only test that can make that claim.
@@ -2834,7 +2857,7 @@ own module.
 - Unit tests and the fast integration suite register the fake provider that way. Every
   call is encoded, decoded and passed through the trust rules without starting a process.
 - Launching a subprocess is the only thing a separate, smaller suite adds. That suite
-  builds `infrata-plugin-fake` from its own repository in `TestMain` and runs §48's
+  builds `infrena-plugin-fake` from its own repository in `TestMain` and runs §48's
   workflow against the binary. Still outstanding: it is the only place the SDK's
   `os.Stdout` redirect is observable, because in process `Serve` writes to the pipe it
   is given and a plugin's `fmt.Println` goes somewhere else entirely.
@@ -2860,7 +2883,7 @@ Tests this section requires, each with a sabotage proving it can fail:
   fix is caching schemas keyed by the binary's SHA-256, and it is deferred until someone
   measures it being slow.
 - **`init` scaffolds a project that uses the fake provider**, so once the builtin is
-  deleted a fresh install needs `infrata-plugin-fake` next to `infrata`. Releases ship
+  deleted a fresh install needs `infrena-plugin-fake` next to `infrena`. Releases ship
   both. Until then the builtin means a fresh install needs nothing.
 - **`pkg/*` becomes something other people compile against.** Changing those packages now
   has users outside this repository, even though the wire protocol is the real contract.
@@ -2876,9 +2899,9 @@ Tests this section requires, each with a sabotage proving it can fail:
    registry registers every plugin through the host.
 4. Subprocess launch, cookie, handshake, search path, `plugins:` constraints, stderr
    forwarding, crash and cancel handling.
-5. **DONE 2026-09-13.** `infrata-provider-fake` builds `infrata-plugin-fake` (v0.1.1, 8
+5. **DONE 2026-09-13.** `infrena-provider-fake` builds `infrena-plugin-fake` (v0.1.1, 8
    platforms); the state migration landed (§21.1); the `init` scaffold and `examples/shop`
-   use `fake.*`; and **a shipped infrata carries no provider at all.**
+   use `fake.*`; and **a shipped infrena carries no provider at all.**
 
    How the test suites divide, which is the part worth knowing:
 
@@ -2892,10 +2915,10 @@ Tests this section requires, each with a sabotage proving it can fail:
      which is what §31.1's Testing section always said: the unit and fast suites register
      the fake provider over `pluginhost.InProcess`.
    - `providers/test` SURVIVES as the engine's test double, not as a shipped provider. It
-     shares an origin with infrata-plugin-fake only because that binary was ported from
+     shares an origin with infrena-plugin-fake only because that binary was ported from
      it, and what keeps the two honest is that tests/integration runs the real one.
 
-   CI checks out both repositories and sets `INFRATA_REQUIRE_PLUGIN`, which turns the
+   CI checks out both repositories and sets `INFRENA_REQUIRE_PLUGIN`, which turns the
    integration suite's skip into a failure: a run that silently skips its integration suite
    reports green for tests that never executed. It needs a `PLUGIN_REPO_TOKEN` secret,
    because the plugin repository is private.
@@ -2913,7 +2936,7 @@ wrong.** The moment a real provider exists, every user hand-places a binary, and
 thing they hand-place is the thing that touches their production account. This ships behind
 Phase 3, not two phases later.
 
-The goal in one sentence: **a project says which plugins it uses, and infrata can find,
+The goal in one sentence: **a project says which plugins it uses, and infrena can find,
 check, and install them without the user hunting for a URL.**
 
 ### What the manifest already bought
@@ -2921,36 +2944,36 @@ check, and install them without the user hunting for a URL.**
 §31.2 designed `plugin.yaml` for exactly this and the reasoning holds, so it is not
 re-argued here — only the consequence. The manifest is fetched over HTTP at the git **tag**,
 before any binary is downloaded, and it carries `name`, `version`, `protocol`, `platforms`,
-`description` and an optional `infrata` constraint. So **"is this plugin compatible with
+`description` and an optional `infrena` constraint. So **"is this plugin compatible with
 what I am running, and is there a build for my machine" is answerable from one small text
 file**, which is what makes search possible without a registry, a server or an index.
 
 Everything below is plumbing around that one fact.
 
-### Sources: what infrata will look at
+### Sources: what infrena will look at
 
 ```yaml
-# ~/.config/infrata/plugins.yml — the user's own, global
+# ~/.config/infrena/plugins.yml — the user's own, global
 sources:
   - github.com/mycorp                       # an owner: search it
-  - github.com/someone/infrata-provider-hetzner   # one exact repository
+  - github.com/someone/infrena-provider-hetzner   # one exact repository
 ```
 
 Two forms, and the distinction is whether a repository is named:
 
 - **An owner** (`github.com/<owner>`, user or organisation) means *search this owner for
-  repositories named `infrata-provider-*`*.
-- **A repository** (`github.com/<owner>/infrata-provider-<name>`) means *this one, exactly*.
+  repositories named `infrena-provider-*`*.
+- **A repository** (`github.com/<owner>/infrena-provider-<name>`) means *this one, exactly*.
 
-**`github.com/infrata` is always searched and cannot be removed.** It is where the official
+**`github.com/infrena` is always searched and cannot be removed.** It is where the official
 plugins live, and a user who wants to avoid it can simply not name a plugin that lives
 there. It is not a configurable default because a configurable default is a thing that gets
 misconfigured into an empty list, after which `plugin: aws` reports that nothing matches —
 a failure whose cause is invisible.
 
 **THE NAMING CONVENTION IS LOAD-BEARING.** An owner search works by repository name, so a
-plugin must live in a repository called `infrata-provider-<name>`, and `<name>` must equal
-the manifest's `name` and the binary's `infrata-plugin-<name>`. This is the whole of the
+plugin must live in a repository called `infrena-provider-<name>`, and `<name>` must equal
+the manifest's `name` and the binary's `infrena-plugin-<name>`. This is the whole of the
 "registry": no index, no server, no publishing step, no account. The cost is that a plugin
 in a differently-named repository is only findable by naming the repository exactly, which
 is the second form above and is why that form exists.
@@ -2961,8 +2984,8 @@ This is the security decision, and it is the one place the design refuses the ob
 thing.
 
 A project's configuration is checked into git and travels to whoever clones it. If project
-configuration could grant a download source, then `git clone && infrata plan` would be
-enough for a repository to introduce a place infrata fetches executables from. The prompt
+configuration could grant a download source, then `git clone && infrena plan` would be
+enough for a repository to introduce a place infrena fetches executables from. The prompt
 would show the URL — and a prompt that appears routinely is a prompt people stop reading.
 
 So:
@@ -2973,7 +2996,7 @@ plugins:
   aws: ">= 0.3.0, < 0.4.0"              # today's form, unchanged
   hetzner:                               # the new mapping form
     version: ">= 1.2"
-    source: github.com/someone/infrata-provider-hetzner
+    source: github.com/someone/infrena-provider-hetzner
 ```
 
 - **`plugins:` keeps accepting a bare constraint string.** The mapping form is additive and
@@ -2989,9 +3012,9 @@ plugins:
   starts trusting a new binary publisher is the failure this whole subsection exists to
   prevent.
 
-`github.com/infrata` is trusted from the start, because the binary making the decision came
+`github.com/infrena` is trusted from the start, because the binary making the decision came
 from there. That is not a claim that we are trustworthy; it is the observation that a user
-who does not trust us has already lost by running `infrata`.
+who does not trust us has already lost by running `infrena`.
 
 ### Detecting what is missing, and offering it
 
@@ -3004,13 +3027,13 @@ When a plugin is missing **and** stdin is a terminal **and** searching is not di
    matches.
 2. Filter to what can actually run here: `manifest` format supported, `protocol`
    intersecting `pluginproto.Supported`, `platforms` containing this `GOOS/GOARCH`,
-   `infrata` allowing this build, and any `plugins:` version constraint satisfied.
+   `infrena` allowing this build, and any `plugins:` version constraint satisfied.
 3. Print every survivor — owner, version, description — and ask.
 4. On confirmation, install, then **stop and say so**.
 
 **Step 4 does not continue the command**, and that is deliberate. Installing a plugin
 mid-`plan` means the first half of the run happened under different conditions from the
-second, and the registry is already built by then. "Installed `infrata-plugin-aws` 0.4.1;
+second, and the registry is already built by then. "Installed `infrena-plugin-aws` 0.4.1;
 re-run your command" is one extra keystroke and leaves nothing to reason about.
 
 **Every filtered-out candidate is still worth mentioning, with the reason.** A user whose
@@ -3019,13 +3042,13 @@ plugin exists but has no `darwin/arm64` build must be told that, not told nothin
 darwin/arm64" send a reader to completely different places.
 
 **With no TTY, nothing changes**: the existing error is printed, plus the one-line
-`infrata plugins install` command that would fix it. Never block on input that cannot come.
+`infrena plugins install` command that would fix it. Never block on input that cannot come.
 
 ### The network is never on the hot path
 
 `validate`, `plan`, `apply`, `destroy`, `refresh`, `discover`, `import`, `graph`, `explain`
 and `state` **must not make a network request**, ever, for plugin discovery. Searching
-happens in `infrata plugins search` / `install`, and in the interactive prompt above, which
+happens in `infrena plugins search` / `install`, and in the interactive prompt above, which
 is a user answering a question rather than a command reaching out on its own.
 
 This is a hard rule and not a performance preference. A `plan` that consults the network is
@@ -3042,7 +3065,7 @@ version: 1
 plugins:
   aws:
     version: 0.4.1
-    source: github.com/infrata/infrata-provider-aws
+    source: github.com/infrena/infrena-provider-aws
     checksums:
       linux/amd64: sha256:...
       darwin/arm64: sha256:...
@@ -3083,9 +3106,9 @@ Unauthenticated GitHub allows 60 requests an hour. An owner search costs one req
 repositories, plus one per candidate for its latest release, plus one per manifest. Two
 owners with several repositories each can exhaust that in a single invocation.
 
-- **Search results are cached on disk** under `~/.cache/infrata/plugins/` with a TTL, so a
+- **Search results are cached on disk** under `~/.cache/infrena/plugins/` with a TTL, so a
   repeated search is free. `--refresh` bypasses it.
-- **A token is accepted**, from `INFRATA_GITHUB_TOKEN` or `GITHUB_TOKEN`, and raises the
+- **A token is accepted**, from `INFRENA_GITHUB_TOKEN` or `GITHUB_TOKEN`, and raises the
   limit. It is optional and only read for search.
 - **A rate limit must never be reported as "not found".** This is the specific mistake to
   avoid: both come back from the same API call, and conflating them tells a user their
@@ -3096,14 +3119,14 @@ owners with several repositories each can exhaust that in a single invocation.
 
 Deliberately four:
 
-- `infrata plugins list` — what is installed, its version, and where it was loaded from.
+- `infrena plugins list` — what is installed, its version, and where it was loaded from.
   Answers "what am I actually running" with no network.
-- `infrata plugins search <name>` — every match across every source, with why any was
+- `infrena plugins search <name>` — every match across every source, with why any was
   rejected.
-- `infrata plugins install <name>[@version]` — resolve, check, download, verify, write the
-  lock. Writes to `<project>/.infra/plugins/`, or `~/.local/share/infrata/plugins/` with
+- `infrena plugins install <name>[@version]` — resolve, check, download, verify, write the
+  lock. Writes to `<project>/.infra/plugins/`, or `~/.local/share/infrena/plugins/` with
   `--global`.
-- `infrata plugins verify` — re-check installed binaries against `plugins.lock`. What CI
+- `infrena plugins verify` — re-check installed binaries against `plugins.lock`. What CI
   runs.
 
 **Phase A's search path is where install writes, so nothing moves** (§31.1). Install is a
@@ -3133,11 +3156,11 @@ Recorded so that each is a decision rather than an oversight:
 
 ### Build order within this section
 
-1. `plugins.lock` and `infrata plugins verify` — the parts with no network at all.
-2. `infrata plugins list` — no network, immediate value, exercises the loader's reporting.
-3. Manifest fetch plus `infrata plugins search` — the first network code, read-only, and
+1. `plugins.lock` and `infrena plugins verify` — the parts with no network at all.
+2. `infrena plugins list` — no network, immediate value, exercises the loader's reporting.
+3. Manifest fetch plus `infrena plugins search` — the first network code, read-only, and
    the place where compatibility filtering and its messages get written.
-4. `infrata plugins install`, download and checksum verification.
+4. `infrena plugins install`, download and checksum verification.
 5. The interactive offer on a missing plugin, which is everything above plus a prompt.
 
 The order is not arbitrary: each step is useful alone, the network arrives after the file
@@ -3461,7 +3484,7 @@ Provider plugins run as separate processes (§31.1), which adds `pkg/pluginproto
 (the wire contract), `pkg/pluginsdk` (what plugin authors import),
 `internal/pluginhost` (launch, handshake, and the rules the engine no longer trusts a
 plugin with), `pkg/plugintest` (the harness a plugin's own tests use), and
-`infrata-provider-fake` — a separate repository — for the fake provider as a binary.
+`infrena-provider-fake` — a separate repository — for the fake provider as a binary.
 
 ---
 
@@ -3788,7 +3811,7 @@ specifies it, including its own build order:
 6. Documentation.
 
 Phase 3 then starts with AWS as a plugin from its first commit, in its OWN REPOSITORY —
-`infrata-provider-aws`, building `infrata-plugin-aws`. See §31.1's amendment of
+`infrena-provider-aws`, building `infrena-plugin-aws`. See §31.1's amendment of
 2026-09-13 for why it is not `providers/aws/` inside this repository.
 
 **Then §31.3, finding and installing plugins, before anything in Phase 4 or 5.** The
@@ -3838,7 +3861,7 @@ Implement:
 
 # 53. Phase 5 — Production Features
 
-**`infrata plugins install` has MOVED OUT of this phase** — it is designed in §31.3 and
+**`infrena plugins install` has MOVED OUT of this phase** — it is designed in §31.3 and
 ships behind Phase 3. It was filed here while the fake provider was the only plugin, when
 hand-placing a binary was a reasonable ask; AWS is the point at which it stops being one.
 
@@ -4110,6 +4133,7 @@ The most important engineering goal is to make the **core reconciliation engine 
 | `report.Version` | `pkg/report` | `--output` reports | additive |
 | lockfile `Version` | `internal/modules/source` | `modules.lock` | internal |
 | `plugins.lock` `version` | Phase B (§31.3) | the resolved plugins and their checksums | internal |
+| `pluginmanifest.Version`, `Supported` | `pkg/pluginmanifest` | `plugin.yaml` | **At 2 since the 2026-09-14 rename** — `infrata:` became `infrena:`, a renamed key rather than an added one. 1 stays readable, so a pre-rename release keeps meaning what it meant |
 | cache `Version` | `internal/modules/source` | module cache metadata | internal |
 
 **They stay independent, and that is the decision.** Each guards a different boundary
@@ -4119,7 +4143,7 @@ Nothing may collapse them.
 
 ## 61.1 The product version
 
-`infrata` itself is SEMVER, `v0.x.y` until the configuration language stops moving.
+`infrena` itself is SEMVER, `v0.x.y` until the configuration language stops moving.
 It is not a seventh format version; it is the release, and its bumps are DEFINED in
 terms of the table above, because otherwise "minor" means nothing:
 
@@ -4172,7 +4196,7 @@ person adding a feature is not the person who remembers to raise it.
 **Instead, an OPTIONAL floor**, reusing the constraint syntax `plugins:` already needs:
 
 ```yaml
-infrata: ">= 0.4"
+infrena: ">= 0.4"
 
 plugins:
   aws: ">= 0.3.0, < 0.4.0"
@@ -4181,7 +4205,7 @@ plugins:
 Comparison operators on `MAJOR.MINOR.PATCH`, comma meaning AND, parsed by hand rather
 than by a semver library (§31.1). Absent means no constraint, so every project written
 before this key behaves exactly as it did. Present, it turns "unknown key `foo`" into
-"this project needs infrata >= 0.4; this is 0.3.1", which is the message a team
+"this project needs infrena >= 0.4; this is 0.3.1", which is the message a team
 sharing a repository between CI and laptops actually needs.
 
 **Checked immediately after decoding**, before anything else runs: a binary that cannot
@@ -4208,20 +4232,20 @@ the wire. **The protocol version is the compatibility contract, not the Go types
 (§31.1), so:
 
 - a plugin built against an older SDK keeps working for as long as its protocol version
-  is in `Supported`, and never needs rebuilding for an infrata release;
+  is in `Supported`, and never needs rebuilding for an infrena release;
 - the SDK's Go API rides the module's own semver, which is what a plugin's `go.mod`
   pins, and which therefore follows §61.1's rules like any other package.
 
 Two numbers, already present, doing different jobs. A third — an "SDK version" — would
 have to agree with one of them, and would eventually not.
 
-## 61.4 `infrata version`
+## 61.4 `infrena version`
 
 Nothing currently tells a user, or a bug report, which formats a binary speaks:
 
 ```text
-$ infrata version
-infrata 0.4.1 (a1b2c3d, go1.24.13, linux/amd64)
+$ infrena version
+infrena 0.4.1 (a1b2c3d, go1.24.13, linux/amd64)
 
 formats
   state             1
@@ -4238,7 +4262,7 @@ and it is why the format versions are exported rather than package-private.
 
 # 60. Open Source and Commercial Model
 
-Infrata will be sold as a commercial product built around an open-source core.
+Infrena will be sold as a commercial product built around an open-source core.
 
 **The core stays open source permanently.** This is a commitment to users, not a phase: the core is never relicensed, and no feature is ever moved out of the core into the paid product.
 
@@ -4246,7 +4270,7 @@ Infrata will be sold as a commercial product built around an open-source core.
 
 The open core permanently contains:
 
-* The `infrata` CLI and every command in §37.
+* The `infrena` CLI and every command in §37.
 * The engine: compiler, planner, executor, state, graph, discovery, import and generation.
 * All providers, including AWS.
 * Local and S3 state backends with locking (§21, §22, §52).
@@ -4266,7 +4290,7 @@ The dividing line: **what one engineer needs is free; what a team needs to coord
 
 ### Differentiated features
 
-A hosted run interface alone is a crowded market. These features use data only Infrata's engine has, and are where the commercial product competes:
+A hosted run interface alone is a crowded market. These features use data only Infrena's engine has, and are where the commercial product competes:
 
 * **Environment matrix and promotion.** Status per environment, diffs between environments, and promoting a change applied in one environment to the next (relies on `extends`, §7).
 * **Provenance in the plan UI.** Every value shows where it came from and what it overrode (§43).
@@ -4280,7 +4304,7 @@ A hosted run interface alone is a crowded market. These features use data only I
 
 * SSO (SAML/OIDC), SCIM, and per-environment RBAC separating plan, apply and approve.
 * Server-enforced approvals: N approvers for production, named approvers for destructive changes. The CLI's protections (§38) stay free; the commercial product makes them impossible to bypass, because production credentials exist only on the runner.
-* Policy checks at advisory, soft-mandatory (overridable with a reason) and hard levels: simple declarative rules plus OPA integration. Infrata still does not grow a complex policy language of its own (§54).
+* Policy checks at advisory, soft-mandatory (overridable with a reason) and hard levels: simple declarative rules plus OPA integration. Infrena still does not grow a complex policy language of its own (§54).
 * Change windows, freeze periods, and break-glass access with a recorded justification.
 * An immutable audit log exportable to a SIEM, and signed plan attestations.
 * Cost estimates in plans, and cost-based policies.
@@ -4297,7 +4321,7 @@ A hosted run interface alone is a crowded market. These features use data only I
 
 The commercial product is a separate, proprietary codebase. It is built on the open core's public contracts, never on a fork. That imposes constraints on the core now:
 
-1. **The CLI's machine-readable output is a product API.** The commercial runner invokes the `infrata` binary, as Terraform Cloud agents invoke `terraform`, rather than importing the engine; the engine's packages live under `internal/` and cannot be imported from another module anyway. The JSON plan artifact, a JSON event stream and exit codes are held to the same compatibility standard as the configuration language (§58).
+1. **The CLI's machine-readable output is a product API.** The commercial runner invokes the `infrena` binary, as Terraform Cloud agents invoke `terraform`, rather than importing the engine; the engine's packages live under `internal/` and cannot be imported from another module anyway. The JSON plan artifact, a JSON event stream and exit codes are held to the same compatibility standard as the configuration language (§58).
 2. **Redaction stays in the engine.** Executor events carry only pre-redacted text, so no integration ever receives a raw attribute (§36).
 3. **The actor is recorded.** Plans and state record who made a change, so an audit trail never has to be retrofitted.
 4. **Plan and apply keep a seam between them** where policy checks and approvals attach.
@@ -4310,7 +4334,7 @@ HashiCorp relicensed Terraform in 2023 after years as open source, and the commu
 
 * **Publish an open-core policy** stating the dividing line and that features never move from free to paid, before the commercial product exists.
 * **Accept contributions under a DCO sign-off, not a CLA.** A permissive license already lets contributed code ship inside the commercial product. A CLA would only add the right to relicense, which is exactly what is promised never to happen.
-* **Trademark "Infrata".** The code is open; the name is controlled. A trademark policy lets forks use the code but not the name.
+* **Trademark "Infrena".** The code is open; the name is controlled. A trademark policy lets forks use the code but not the name.
 
 ## Accepted risk
 
@@ -4321,6 +4345,6 @@ A permissive core means competitors such as Spacelift, env0 and Scalr can build 
 * **License.** Apache 2.0 is recommended: it carries a patent grant and enterprise legal teams approve it without review. MPL 2.0 is acceptable. AGPL is ruled out, since enterprises commonly ban it and the commercial product depends on adoption.
 * **Copyright holder**, an individual or a company. Settle before anything is sold.
 * **Contribution sign-off.** DCO is recommended, above.
-* **Module path.** `github.com/infrata/infrata`, or a vanity path `infrata.dev/infrata`, which keeps import paths stable if hosting ever moves off GitHub.
+* **Module path.** `github.com/infrena/infrena`, or a vanity path `infrena.dev/infrena`, which keeps import paths stable if hosting ever moves off GitHub.
 * **Trademark registration.**
 * **Pricing model.** Avoid pricing per resource under management, which was widely unpopular for HCP Terraform.

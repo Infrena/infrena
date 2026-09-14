@@ -4,10 +4,10 @@ import (
 	"sort"
 	"strconv"
 
-	"github.com/infrata/infrata/internal/config"
-	"github.com/infrata/infrata/internal/diag"
-	"github.com/infrata/infrata/internal/environments"
-	"github.com/infrata/infrata/pkg/value"
+	"github.com/infrena/infrena/internal/config"
+	"github.com/infrena/infrena/internal/diag"
+	"github.com/infrena/infrena/internal/environments"
+	"github.com/infrena/infrena/pkg/value"
 )
 
 // Scope is the resolved variable scope: every variable name mapped to the

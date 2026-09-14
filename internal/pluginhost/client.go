@@ -1,4 +1,4 @@
-// Package pluginhost is infrata's side of the plugin protocol: it launches a
+// Package pluginhost is infrena's side of the plugin protocol: it launches a
 // plugin, speaks to it, and — most of the work here — refuses to trust it.
 //
 // PLAN.md §31.1. Several guarantees used to rest on each provider following a
@@ -16,8 +16,8 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/infrata/infrata/pkg/pluginproto"
-	"github.com/infrata/infrata/pkg/provider"
+	"github.com/infrena/infrena/pkg/pluginproto"
+	"github.com/infrena/infrena/pkg/provider"
 )
 
 // Client is a connection to one running plugin process.

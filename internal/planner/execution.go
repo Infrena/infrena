@@ -3,8 +3,8 @@ package planner
 import (
 	"fmt"
 
-	"github.com/infrata/infrata/internal/graph"
-	"github.com/infrata/infrata/pkg/address"
+	"github.com/infrena/infrena/internal/graph"
+	"github.com/infrena/infrena/pkg/address"
 )
 
 // Phase distinguishes the two halves of a replacement, which is the one

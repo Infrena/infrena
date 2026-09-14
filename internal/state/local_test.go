@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/infrata/infrata/pkg/address"
+	"github.com/infrena/infrena/pkg/address"
 )
 
 func TestGetMissingEnvironmentReturnsEmptyState(t *testing.T) {

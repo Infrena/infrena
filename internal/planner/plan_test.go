@@ -3,15 +3,15 @@ package planner
 import (
 	"bytes"
 	"encoding/json"
-	"github.com/infrata/infrata/pkg/resource"
+	"github.com/infrena/infrena/pkg/resource"
 	"maps"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/infrata/infrata/internal/diag"
-	"github.com/infrata/infrata/pkg/address"
-	"github.com/infrata/infrata/pkg/value"
+	"github.com/infrena/infrena/internal/diag"
+	"github.com/infrena/infrena/pkg/address"
+	"github.com/infrena/infrena/pkg/value"
 )
 
 // addr and str are shared with planner_test.go; they are declared here because

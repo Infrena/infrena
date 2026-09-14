@@ -8,13 +8,13 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/infrata/infrata/internal/config"
-	"github.com/infrata/infrata/internal/diag"
-	"github.com/infrata/infrata/internal/pluginhost"
-	"github.com/infrata/infrata/internal/registry"
-	"github.com/infrata/infrata/internal/variables"
-	"github.com/infrata/infrata/pkg/schema"
-	"github.com/infrata/infrata/pkg/value"
+	"github.com/infrena/infrena/internal/config"
+	"github.com/infrena/infrena/internal/diag"
+	"github.com/infrena/infrena/internal/pluginhost"
+	"github.com/infrena/infrena/internal/registry"
+	"github.com/infrena/infrena/internal/variables"
+	"github.com/infrena/infrena/pkg/schema"
+	"github.com/infrena/infrena/pkg/value"
 )
 
 // Prepare resolves the `providers:` block and constructs one provider per
@@ -31,7 +31,7 @@ func Prepare(
 ) (Table, diag.Diagnostics) {
 	decls := project.Providers
 	// LOAD FIRST, from what configuration says. `plugin: aws` in a `providers:`
-	// entry is the instruction to go and find infrata-plugin-aws; so is a resource
+	// entry is the instruction to go and find infrena-plugin-aws; so is a resource
 	// of type `aws.instance` in a project that declares no `providers:` block at
 	// all. Nothing outside configuration names a plugin.
 	ds := load(ctx, project, reg)

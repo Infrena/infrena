@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/infrata/infrata/pkg/provider"
-	"github.com/infrata/infrata/pkg/value"
+	"github.com/infrena/infrena/pkg/provider"
+	"github.com/infrena/infrena/pkg/value"
 )
 
 // cloudPathOf builds an instance and reports which file it opens, which is the only

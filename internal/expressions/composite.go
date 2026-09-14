@@ -4,7 +4,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/infrata/infrata/pkg/value"
+	"github.com/infrena/infrena/pkg/value"
 )
 
 // HasInterpolation reports whether s contains an interpolation to resolve.

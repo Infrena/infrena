@@ -12,8 +12,8 @@ import (
 	"sort"
 	"time"
 
-	"github.com/infrata/infrata/pkg/address"
-	"github.com/infrata/infrata/pkg/value"
+	"github.com/infrena/infrena/pkg/address"
+	"github.com/infrena/infrena/pkg/value"
 )
 
 // Lifecycle defines immutability constraints on a resource.
@@ -29,7 +29,7 @@ type Lifecycle struct {
 	// revert (PLAN.md §14.2): the real resource keeps whatever it has, and the plan
 	// says so rather than staying silent.
 	//
-	// The case it exists for: something outside infrata owns one attribute. A CI
+	// The case it exists for: something outside infrena owns one attribute. A CI
 	// pipeline sets an ECS service's task revision on every deploy, so a plan computed
 	// from configuration would revert it on the next apply and undo the deployment.
 	//

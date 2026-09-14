@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/infrata/infrata/pkg/value"
+	"github.com/infrena/infrena/pkg/value"
 )
 
 var testOrigin = value.Origin{File: "infra.yml", Line: 4, Column: 5}

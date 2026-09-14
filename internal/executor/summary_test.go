@@ -5,10 +5,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/infrata/infrata/internal/state"
-	"github.com/infrata/infrata/pkg/address"
-	"github.com/infrata/infrata/pkg/resource"
-	"github.com/infrata/infrata/pkg/value"
+	"github.com/infrena/infrena/internal/state"
+	"github.com/infrena/infrena/pkg/address"
+	"github.com/infrena/infrena/pkg/resource"
+	"github.com/infrena/infrena/pkg/value"
 )
 
 func summaryRS(name string, attrs map[string]value.Value) *resource.ResourceState {

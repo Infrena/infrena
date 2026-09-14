@@ -8,10 +8,10 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/infrata/infrata/internal/discovery"
+	"github.com/infrena/infrena/internal/discovery"
 )
 
-// newDiscoverCommand builds `infrata discover [type...]` (spec §25).
+// newDiscoverCommand builds `infrena discover [type...]` (spec §25).
 //
 // READ-ONLY, and it says so where a user looks: nothing is written, nothing is
 // adopted into state, and no configuration is generated. It answers "what is
@@ -29,7 +29,7 @@ func newDiscoverCommand(opts *GlobalOptions) *cobra.Command {
 		Short:         "List infrastructure that exists, without changing anything",
 		Long: "Ask every provider what exists and show it, including resources this project " +
 			"never created.\n\nNothing is written: no state, no configuration. Pass one or more " +
-			"resource types to narrow the question.\n\nThe `name` column is what `infrata import` " +
+			"resource types to narrow the question.\n\nThe `name` column is what `infrena import` " +
 			"would call each resource, so a collision is visible here rather than after the fact.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			reg, _, regDiags, closePlugins := discoveryRegistry(opts, "")
@@ -71,7 +71,7 @@ func renderDiscovered(w io.Writer, found []discovery.Result, types []string) {
 
 	fmt.Fprintf(w, "\n%d resource%s found. Nothing has been imported.\n",
 		len(found), plural(len(found)))
-	fmt.Fprintln(w, "Run `infrata import <environment> --generate` to adopt them.")
+	fmt.Fprintln(w, "Run `infrena import <environment> --generate` to adopt them.")
 }
 
 func plural(n int) string {

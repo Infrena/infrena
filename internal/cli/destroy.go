@@ -7,10 +7,10 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/infrata/infrata/internal/compiler"
-	"github.com/infrata/infrata/internal/executor"
-	"github.com/infrata/infrata/internal/planner"
-	"github.com/infrata/infrata/pkg/report"
+	"github.com/infrena/infrena/internal/compiler"
+	"github.com/infrena/infrena/internal/executor"
+	"github.com/infrena/infrena/internal/planner"
+	"github.com/infrena/infrena/pkg/report"
 )
 
 // newDestroyCommand builds `infra destroy <environment>`: plan the removal

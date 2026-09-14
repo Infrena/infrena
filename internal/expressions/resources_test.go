@@ -4,7 +4,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/infrata/infrata/pkg/value"
+	"github.com/infrena/infrena/pkg/value"
 )
 
 func origin() value.Origin { return value.Origin{File: "infra.yml", Line: 3} }

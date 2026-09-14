@@ -14,9 +14,9 @@ import (
 
 // THE REAL PLUGIN, not an in-process double. PLAN.md §31.1.
 //
-// A shipped infrata carries no provider, so the binary this suite runs has none either —
+// A shipped infrena carries no provider, so the binary this suite runs has none either —
 // which is the whole point of the cutover. Every other suite in this repository registers
-// the fake provider in process; this one builds `infrata-plugin-fake` from its own
+// the fake provider in process; this one builds `infrena-plugin-fake` from its own
 // repository and puts it on the search path, so the path a USER takes is proved somewhere:
 // a subprocess, a handshake, a cookie, stderr forwarding, and the host's trust rules over
 // a real pipe.
@@ -26,7 +26,7 @@ import (
 // somewhere harmless.
 
 // pluginRepoEnv lets a checkout elsewhere be named explicitly.
-const pluginRepoEnv = "INFRATA_PLUGIN_FAKE_REPO"
+const pluginRepoEnv = "INFRENA_PLUGIN_FAKE_REPO"
 
 // requireEnv turns the skip below into a FAILURE.
 //
@@ -35,7 +35,7 @@ const pluginRepoEnv = "INFRATA_PLUGIN_FAKE_REPO"
 // never executed, and the day the plugin checkout breaks is the day nobody notices. A
 // contributor without the plugin cloned still gets a skip, because that is a setup problem
 // rather than a defect.
-const requireEnv = "INFRATA_REQUIRE_PLUGIN"
+const requireEnv = "INFRENA_REQUIRE_PLUGIN"
 
 var (
 	pluginOnce sync.Once
@@ -43,7 +43,7 @@ var (
 	pluginErr  error
 )
 
-// fakePluginDir returns a directory holding a freshly built infrata-plugin-fake, for
+// fakePluginDir returns a directory holding a freshly built infrena-plugin-fake, for
 // passing to --plugin-dir.
 //
 // SKIPS rather than fails when the repository is absent: this suite's other reason to
@@ -56,8 +56,8 @@ func fakePluginDir(t *testing.T) string {
 	if pluginErr == nil {
 		return pluginDir
 	}
-	message := fmt.Sprintf("infrata-plugin-fake is not available, so this suite cannot run: %v\n"+
-		"Clone github.com/infrata/infrata-provider-fake beside this repository, or set %s.",
+	message := fmt.Sprintf("infrena-plugin-fake is not available, so this suite cannot run: %v\n"+
+		"Clone github.com/infrena/infrena-provider-fake beside this repository, or set %s.",
 		pluginErr, pluginRepoEnv)
 	if os.Getenv(requireEnv) != "" {
 		t.Fatalf("%s\n%s is set, so this is a failure rather than a skip.", message, requireEnv)
@@ -79,27 +79,27 @@ func buildFakePlugin() {
 		// first version of this looked inside the repo itself — which the skip message
 		// named, and is why it names it.
 		root := filepath.Dir(filepath.Dir(wd))
-		repo = filepath.Join(filepath.Dir(root), "infrata-provider-fake")
+		repo = filepath.Join(filepath.Dir(root), "infrena-provider-fake")
 	}
 	if _, err := os.Stat(filepath.Join(repo, "go.mod")); err != nil {
 		pluginErr = fmt.Errorf("no Go module at %s", repo)
 		return
 	}
 
-	out, err := os.MkdirTemp("", "infrata-plugin-*")
+	out, err := os.MkdirTemp("", "infrena-plugin-*")
 	if err != nil {
 		pluginErr = err
 		return
 	}
 	// The binary NAME is how the host finds it (§31.1), so this is not arbitrary.
-	bin := filepath.Join(out, "infrata-plugin-fake")
+	bin := filepath.Join(out, "infrena-plugin-fake")
 
-	cmd := exec.Command("go", "build", "-o", bin, "./cmd/infrata-plugin-fake")
+	cmd := exec.Command("go", "build", "-o", bin, "./cmd/infrena-plugin-fake")
 	// Built from the PLUGIN's module, not this one: it is a separate module with its own
 	// go.mod, and `go build` of a path outside the main module is refused.
 	cmd.Dir = repo
 	if combined, err := cmd.CombinedOutput(); err != nil {
-		pluginErr = fmt.Errorf("building infrata-plugin-fake in %s: %v\n%s", repo, err, combined)
+		pluginErr = fmt.Errorf("building infrena-plugin-fake in %s: %v\n%s", repo, err, combined)
 		return
 	}
 	pluginDir = out
@@ -126,7 +126,7 @@ func TestAShippedBuildCarriesNoProvider(t *testing.T) {
 			"one compiled in:\n%s", r.combined())
 	}
 	// And the error is the one a user can act on: which plugin, where it looked, what to do.
-	for _, want := range []string{"fake plugin is not available", "infrata-plugin-fake", "--plugin-dir"} {
+	for _, want := range []string{"fake plugin is not available", "infrena-plugin-fake", "--plugin-dir"} {
 		if !strings.Contains(r.combined(), want) {
 			t.Errorf("the error does not mention %q:\n%s", want, r.combined())
 		}
@@ -144,7 +144,7 @@ func runWithoutPlugin(t *testing.T, dir string, args ...string) result {
 	if err := cmd.Run(); err != nil {
 		var exitErr *exec.ExitError
 		if !errors.As(err, &exitErr) {
-			t.Fatalf("running infrata %v: %v", args, err)
+			t.Fatalf("running infrena %v: %v", args, err)
 		}
 		code = exitErr.ExitCode()
 	}

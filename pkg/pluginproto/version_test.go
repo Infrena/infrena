@@ -41,7 +41,7 @@ func TestOlderPluginsKeepWorking(t *testing.T) {
 // TestThisBuildCanTalkToItself.
 //
 // The invariant that makes the pair coherent: a host must accept the version its own SDK
-// announces, or infrata would refuse a plugin built from the very same tree — which is
+// announces, or infrena would refuse a plugin built from the very same tree — which is
 // exactly what the integration suite does on every run.
 func TestThisBuildCanTalkToItself(t *testing.T) {
 	if !IsSupported(Version) {

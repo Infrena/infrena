@@ -11,9 +11,9 @@ import (
 	"sort"
 	"strconv"
 
-	"github.com/infrata/infrata/pkg/address"
-	"github.com/infrata/infrata/pkg/resource"
-	"github.com/infrata/infrata/pkg/value"
+	"github.com/infrena/infrena/pkg/address"
+	"github.com/infrena/infrena/pkg/resource"
+	"github.com/infrena/infrena/pkg/value"
 )
 
 // ResolvedConfig is fully-resolved desired state for one environment.
@@ -43,7 +43,7 @@ type Options struct {
 
 	Environment string
 
-	// Version is the running build, for a project's `infrata:` floor to be checked
+	// Version is the running build, for a project's `infrena:` floor to be checked
 	// against (PLAN.md §61.2). Empty means a development build, which every floor
 	// exempts.
 	//

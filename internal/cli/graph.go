@@ -9,12 +9,12 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/infrata/infrata/internal/compiler"
-	"github.com/infrata/infrata/internal/config"
-	"github.com/infrata/infrata/pkg/resource"
+	"github.com/infrena/infrena/internal/compiler"
+	"github.com/infrena/infrena/internal/config"
+	"github.com/infrena/infrena/pkg/resource"
 )
 
-// newGraphCommand builds `infrata graph <environment>` (spec §40).
+// newGraphCommand builds `infrena graph <environment>` (spec §40).
 //
 // It compiles exactly as `plan` does and renders the dependency structure
 // instead of diffing it — so what it shows is what the executor will obey, not

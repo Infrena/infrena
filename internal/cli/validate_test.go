@@ -10,9 +10,9 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/infrata/infrata/internal/compiler"
-	"github.com/infrata/infrata/internal/diag"
-	"github.com/infrata/infrata/pkg/value"
+	"github.com/infrena/infrena/internal/compiler"
+	"github.com/infrena/infrena/internal/diag"
+	"github.com/infrena/infrena/pkg/value"
 )
 
 func projectDir(t *testing.T, body string) string {

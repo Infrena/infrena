@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/infrata/infrata/pkg/value"
+	"github.com/infrena/infrena/pkg/value"
 )
 
 // leafStr builds a string leaf. Named to avoid colliding with funcs_test.go's

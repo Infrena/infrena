@@ -13,10 +13,10 @@ GO ?= go
 #
 #   make build VERSION=0.4.1
 VERSION ?=
-LDFLAGS := $(if $(VERSION),-X github.com/infrata/infrata/internal/version.version=$(VERSION),)
+LDFLAGS := $(if $(VERSION),-X github.com/infrena/infrena/internal/version.version=$(VERSION),)
 
 build:
-	$(GO) build $(if $(LDFLAGS),-ldflags "$(LDFLAGS)",) -o bin/infrata ./cmd/infrata
+	$(GO) build $(if $(LDFLAGS),-ldflags "$(LDFLAGS)",) -o bin/infrena ./cmd/infrena
 
 # -count=1 is not a preference, it disables the test cache — and without it
 # `make check` can pass while tests/integration has never run against the

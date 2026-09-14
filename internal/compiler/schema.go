@@ -6,12 +6,12 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/infrata/infrata/internal/diag"
-	"github.com/infrata/infrata/internal/providers"
-	"github.com/infrata/infrata/internal/registry"
-	"github.com/infrata/infrata/pkg/resource"
-	"github.com/infrata/infrata/pkg/schema"
-	"github.com/infrata/infrata/pkg/value"
+	"github.com/infrena/infrena/internal/diag"
+	"github.com/infrena/infrena/internal/providers"
+	"github.com/infrena/infrena/internal/registry"
+	"github.com/infrena/infrena/pkg/resource"
+	"github.com/infrena/infrena/pkg/schema"
+	"github.com/infrena/infrena/pkg/value"
 )
 
 // bindSchemas is compiler stage 7. It resolves each resource's type to its

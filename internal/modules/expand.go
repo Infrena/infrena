@@ -37,12 +37,12 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/infrata/infrata/internal/config"
-	"github.com/infrata/infrata/internal/diag"
-	"github.com/infrata/infrata/internal/modules/source"
-	"github.com/infrata/infrata/internal/variables"
-	"github.com/infrata/infrata/pkg/address"
-	"github.com/infrata/infrata/pkg/value"
+	"github.com/infrena/infrena/internal/config"
+	"github.com/infrena/infrena/internal/diag"
+	"github.com/infrena/infrena/internal/modules/source"
+	"github.com/infrena/infrena/internal/variables"
+	"github.com/infrena/infrena/pkg/address"
+	"github.com/infrena/infrena/pkg/value"
 )
 
 // MaxDepth bounds module nesting at 32 instantiations (spec §7.2). The root

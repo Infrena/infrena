@@ -9,7 +9,7 @@ import (
 //
 // `go build` in a checkout with a VCS remote makes debug.ReadBuildInfo report a
 // pseudo-version, which parses as 0.0.0. Reporting one as this build's version made
-// every project stating an `infrata:` floor refuse a developer's own build — measured
+// every project stating an `infrena:` floor refuse a developer's own build — measured
 // on this repository, which is how the case was found.
 func TestAPseudoVersionIsNotARelease(t *testing.T) {
 	for _, in := range []string{

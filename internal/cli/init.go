@@ -9,10 +9,10 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/infrata/infrata/internal/config"
+	"github.com/infrena/infrena/internal/config"
 )
 
-// newInitCommand builds `infrata init` (spec §37, layout §4).
+// newInitCommand builds `infrena init` (spec §37, layout §4).
 //
 // What it writes must pass `infra validate` immediately. An init whose output
 // does not validate is worse than no init at all: it teaches the language
@@ -32,7 +32,7 @@ func newInitCommand(opts *GlobalOptions) *cobra.Command {
 			for _, f := range created {
 				fmt.Fprintf(cmd.OutOrStdout(), "created %s\n", f)
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "\nNext: infrata validate, then infrata plan dev\n")
+			fmt.Fprintf(cmd.OutOrStdout(), "\nNext: infrena validate, then infrena plan dev\n")
 			return nil
 		},
 	}

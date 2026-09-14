@@ -7,11 +7,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/infrata/infrata/internal/planner"
-	"github.com/infrata/infrata/internal/state"
-	"github.com/infrata/infrata/internal/version"
-	"github.com/infrata/infrata/pkg/pluginproto"
-	"github.com/infrata/infrata/pkg/report"
+	"github.com/infrena/infrena/internal/planner"
+	"github.com/infrena/infrena/internal/state"
+	"github.com/infrena/infrena/internal/version"
+	"github.com/infrena/infrena/pkg/pluginproto"
+	"github.com/infrena/infrena/pkg/report"
 )
 
 // PLAN.md §61.4. The formats matter more than the version number: "which version do I

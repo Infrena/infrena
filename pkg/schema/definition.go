@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/infrata/infrata/pkg/value"
+	"github.com/infrena/infrena/pkg/value"
 )
 
 // Requirement declares infrastructure a resource needs in order to exist. The

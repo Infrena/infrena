@@ -7,8 +7,8 @@ import (
 
 // TestMain supplies the in-process fake provider for every test in this package.
 //
-// A shipped infrata carries no provider (§31.1): a project installs
-// infrata-plugin-fake like any other binary. These tests run commands IN THIS PROCESS,
+// A shipped infrena carries no provider (§31.1): a project installs
+// infrena-plugin-fake like any other binary. These tests run commands IN THIS PROCESS,
 // so a binary on a search path is not what they need — §31.1's Testing section says the
 // unit and fast suites register the fake provider in process, over pluginhost.InProcess,
 // which is the same handshake, protocol and trust rules a subprocess gets.
@@ -18,7 +18,7 @@ import (
 // named fake" — an error about infrastructure, for a test about something else.
 //
 // tests/integration does the opposite deliberately: it builds and runs the REAL
-// infrata-plugin-fake, so the path a user actually takes is proved somewhere.
+// infrena-plugin-fake, so the path a user actually takes is proved somewhere.
 func TestMain(m *testing.M) {
 	builtinsFor = fakeDouble
 	os.Exit(m.Run())

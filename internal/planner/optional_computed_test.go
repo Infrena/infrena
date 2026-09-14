@@ -4,10 +4,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/infrata/infrata/pkg/address"
-	"github.com/infrata/infrata/pkg/resource"
-	"github.com/infrata/infrata/pkg/schema"
-	"github.com/infrata/infrata/pkg/value"
+	"github.com/infrena/infrena/pkg/address"
+	"github.com/infrena/infrena/pkg/resource"
+	"github.com/infrena/infrena/pkg/schema"
+	"github.com/infrena/infrena/pkg/value"
 )
 
 // azDefinition is a resource type with the shape §14.1 adds: an attribute configuration
@@ -45,7 +45,7 @@ func subnetState(az string) *resource.ResourceState {
 // The bug §14.1 exists to fix, and it was reproduced against the real binary before the
 // design: the planner read a returned value that configuration does not set as "removed
 // from configuration" and proposed to unset it. So the cloud picks an availability zone,
-// infrata proposes unsetting it, the apply succeeds, the cloud picks again — and the
+// infrena proposes unsetting it, the apply succeeds, the cloud picks again — and the
 // project never converges. Invariant 2, broken for every attribute of this shape, of
 // which a generic AWS provider has one on almost every resource.
 func TestAProviderChosenValueIsNotProposedForRemoval(t *testing.T) {
@@ -59,21 +59,21 @@ func TestAProviderChosenValueIsNotProposedForRemoval(t *testing.T) {
 	}
 }
 
-// TestAProviderChosenValueChangingOutsideInfrataIsNotDrift.
+// TestAProviderChosenValueChangingOutsideInfrenaIsNotDrift.
 //
 // The accepted cost, asserted so that it is a decision rather than an accident: an
-// attribute infrata does not manage is not infrata's to report. Someone moves the subnet
+// attribute infrena does not manage is not infrena's to report. Someone moves the subnet
 // or flips a console setting, and a plan says nothing — it is still visible through
 // `refresh` and `state show`. Without this test, "no diff" could later be narrowed to
 // "no diff only when the values happen to match" and nothing would notice.
-func TestAProviderChosenValueChangingOutsideInfrataIsNotDrift(t *testing.T) {
+func TestAProviderChosenValueChangingOutsideInfrenaIsNotDrift(t *testing.T) {
 	desired := map[string]value.Value{"cidr": value.String("10.0.0.0/24", value.SourceExplicit)}
 
 	ops, _ := diffAttributes(address.Address{Name: "net"}, azDefinition(), desired,
 		subnetState("eu-west-1c").Attributes, nil)
 	if len(ops) != 0 {
 		t.Errorf("an unset optional+computed attribute is unmanaged, so a change to it is not "+
-			"drift infrata reports; got %v", ops)
+			"drift infrena reports; got %v", ops)
 	}
 }
 

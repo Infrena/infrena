@@ -14,10 +14,10 @@ different lesson, needing its own cloud file and its own explanation, and this w
 about the layout, variables and modules you meet first.
 
 ```bash
-infrata validate
-infrata plan dev
-infrata apply dev --auto-approve
-infrata plan dev            # nothing to do
+infrena validate
+infrena plan dev
+infrena apply dev --auto-approve
+infrena plan dev            # nothing to do
 ```
 
 ## The layout
@@ -87,8 +87,8 @@ every file, and `--var` beats everything.
 then:
 
 ```bash
-infrata refresh dev
-infrata plan dev            # size: 999 -> 50
+infrena refresh dev
+infrena plan dev            # size: 999 -> 50
 ```
 
 **Removal.** Delete the `web:` block from `resources/app/app.yml` and re-plan: a destroy is
@@ -103,7 +103,7 @@ Error: undefined variable "size"
   at resources/app/app.yml:7:5
 ```
 
-**A production apply.** `infrata plan production` takes `db_password` from
+**A production apply.** `infrena plan production` takes `db_password` from
 `vars/production.yml` and leaves everything else exactly as `dev` has it. That is the point:
 environments hold the same infrastructure and differ only in what their variables say. If you
 want production to differ in some other way, set that value in `vars/production.yml` too —
@@ -132,8 +132,8 @@ A module depends only on what it declares, so the same module works in another p
 ## Other commands
 
 ```bash
-infrata graph dev               # the dependency tree, module structure included
-infrata explain test.database   # the resource type, read out of the schema itself
-infrata state list dev
-infrata destroy dev --auto-approve
+infrena graph dev               # the dependency tree, module structure included
+infrena explain test.database   # the resource type, read out of the schema itself
+infrena state list dev
+infrena destroy dev --auto-approve
 ```

@@ -6,11 +6,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/infrata/infrata/internal/compiler"
-	"github.com/infrata/infrata/internal/config"
-	"github.com/infrata/infrata/internal/registry"
-	"github.com/infrata/infrata/pkg/value"
-	testprovider "github.com/infrata/infrata/providers/test"
+	"github.com/infrena/infrena/internal/compiler"
+	"github.com/infrena/infrena/internal/config"
+	"github.com/infrena/infrena/internal/registry"
+	"github.com/infrena/infrena/pkg/value"
+	testprovider "github.com/infrena/infrena/providers/test"
 )
 
 func testRegistry(t *testing.T) *registry.Registry {

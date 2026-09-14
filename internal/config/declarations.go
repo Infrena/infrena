@@ -7,9 +7,9 @@ package config
 import (
 	"slices"
 
-	"github.com/infrata/infrata/internal/modules/source"
-	"github.com/infrata/infrata/pkg/semver"
-	"github.com/infrata/infrata/pkg/value"
+	"github.com/infrena/infrena/internal/modules/source"
+	"github.com/infrena/infrena/pkg/semver"
+	"github.com/infrena/infrena/pkg/value"
 	"sort"
 	"strings"
 )
@@ -235,7 +235,7 @@ type ModuleLoadDecl struct {
 // ProjectDecl is the decoded, still-unresolved configuration.
 type ProjectDecl struct {
 	Project string
-	// RequiredVersion is the optional `infrata:` floor a project states on the tool
+	// RequiredVersion is the optional `infrena:` floor a project states on the tool
 	// itself (PLAN.md §61.2). Zero means unconstrained, which is every project
 	// written before the key existed.
 	RequiredVersion       semver.Constraint

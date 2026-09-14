@@ -3,7 +3,7 @@ package pluginhost
 import (
 	"fmt"
 
-	"github.com/infrata/infrata/pkg/semver"
+	"github.com/infrena/infrena/pkg/semver"
 	"strconv"
 	"strings"
 	"sync"
@@ -27,7 +27,7 @@ func (e *IncompatibleError) Error() string {
 	}
 	// Which side to upgrade, said plainly: a user reading "protocol 2 vs 1" has to
 	// work out which of two programs is behind, and will guess wrong half the time.
-	advice := "Upgrade infrata."
+	advice := "Upgrade infrena."
 	newest := 0
 	for _, v := range e.Supported {
 		if v > newest {
@@ -38,9 +38,9 @@ func (e *IncompatibleError) Error() string {
 		advice = "Upgrade the plugin."
 	}
 	return fmt.Sprintf(
-		"the %s plugin speaks protocol version %d, which this build of infrata does not understand\n"+
+		"the %s plugin speaks protocol version %d, which this build of infrena does not understand\n"+
 			"  loaded from: %s\n"+
-			"  infrata speaks: %s\n"+
+			"  infrena speaks: %s\n"+
 			"%s",
 		e.Plugin, e.Theirs, e.pathOrUnknown(), strings.Join(versions, ", "), advice)
 }
@@ -63,7 +63,7 @@ func (e *WrongPluginError) Error() string {
 			"  loaded from: %s\n"+
 			"A renamed or mis-copied binary serves the wrong schemas, and the first sign of that "+
 			"is a plan proposing something nobody asked for.\n"+
-			"Either rename the binary to infrata-plugin-%s, or write `plugin: %s` in your "+
+			"Either rename the binary to infrena-plugin-%s, or write `plugin: %s` in your "+
 			"`providers:` block.",
 		e.Expected, e.Actual, e.Path, e.Expected, e.Actual)
 }
@@ -100,7 +100,7 @@ func (t *stderrTail) String() string {
 //
 // TWO SEPARATE THINGS happen here, and the comment used to describe only the absence of
 // both — it said a plugin dying "reports as EOF", which this function's own first line
-// has already made untrue. Corrected 2026-09-13 after infrata-provider-fake's review
+// has already made untrue. Corrected 2026-09-13 after infrena-provider-fake's review
 // found the stale wording; it had been copied into that repository's authoring guide.
 //
 // First, io.EOF is replaced. A closed pipe is what the READER saw, not what happened:

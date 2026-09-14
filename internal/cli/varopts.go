@@ -1,9 +1,9 @@
 package cli
 
 import (
-	"github.com/infrata/infrata/internal/compiler"
-	"github.com/infrata/infrata/internal/diag"
-	"github.com/infrata/infrata/internal/version"
+	"github.com/infrena/infrena/internal/compiler"
+	"github.com/infrena/infrena/internal/diag"
+	"github.com/infrena/infrena/internal/version"
 )
 
 // compilerOptions builds the compiler options for a command that compiles
@@ -38,7 +38,7 @@ func compilerOptions(opts *GlobalOptions, environment string) (compiler.Options,
 	// else, which is the worst combination to debug.
 	return compiler.Options{
 		Dir: opts.Dir,
-		// The running build, for a project's `infrata:` floor. The compiler takes it
+		// The running build, for a project's `infrena:` floor. The compiler takes it
 		// as an input rather than reading it, so this is the one place it is supplied.
 		Version:     version.Version(),
 		Environment: environment,

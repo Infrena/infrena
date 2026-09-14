@@ -49,7 +49,7 @@ func (r *testRepo) write(t *testing.T, files map[string]string) {
 
 func (r *testRepo) commitAll(t *testing.T, msg string) {
 	t.Helper()
-	r.git(t, r.work, "-c", "user.email=test@infrata.invalid", "-c", "user.name=test",
+	r.git(t, r.work, "-c", "user.email=test@infrena.invalid", "-c", "user.name=test",
 		"-c", "commit.gpgsign=false", "commit", "-q", "-m", msg)
 	r.Commit = r.gitOut(t, r.work, "rev-parse", "HEAD")
 }
@@ -60,7 +60,7 @@ func (r *testRepo) commitAll(t *testing.T, msg string) {
 func (r *testRepo) Tag(t *testing.T, name string, annotated bool) {
 	t.Helper()
 	if annotated {
-		r.git(t, r.work, "-c", "user.email=test@infrata.invalid", "-c", "user.name=test",
+		r.git(t, r.work, "-c", "user.email=test@infrena.invalid", "-c", "user.name=test",
 			"tag", "-f", "-a", name, "-m", name)
 	} else {
 		r.git(t, r.work, "tag", "-f", name)

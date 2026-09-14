@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/infrata/infrata/pkg/value"
+	"github.com/infrena/infrena/pkg/value"
 )
 
 // Func is a built-in expression function. Every one is pure, total and

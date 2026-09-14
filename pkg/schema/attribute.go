@@ -9,7 +9,7 @@
 // default and validate against it with nothing but what came down the wire.
 package schema
 
-import "github.com/infrata/infrata/pkg/value"
+import "github.com/infrena/infrena/pkg/value"
 
 // Attribute describes a resource attribute.
 type Attribute struct {

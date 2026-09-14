@@ -3,7 +3,7 @@ package cli
 import (
 	"testing"
 
-	"github.com/infrata/infrata/internal/registry"
+	"github.com/infrena/infrena/internal/registry"
 )
 
 // mustRegistry is testRegistryFor with the plugin shutdown registered as cleanup, so

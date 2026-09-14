@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/infrata/infrata/pkg/value"
+	"github.com/infrena/infrena/pkg/value"
 )
 
 // writeModule writes one module.yml into a temp directory and loads it, so every

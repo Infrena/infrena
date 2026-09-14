@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/infrata/infrata/pkg/value"
+	"github.com/infrena/infrena/pkg/value"
 )
 
 func writeLockfileFixture(t *testing.T, project string, body string) {

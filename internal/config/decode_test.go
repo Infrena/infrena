@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/infrata/infrata/internal/diag"
-	"github.com/infrata/infrata/pkg/value"
+	"github.com/infrena/infrena/internal/diag"
+	"github.com/infrena/infrena/pkg/value"
 )
 
 func writeConfig(t *testing.T, body string) []File {

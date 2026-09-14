@@ -84,7 +84,7 @@ resources:
 // refuse rather than pick.
 //
 // The fixture writes both cloud files by hand, because two accounts holding the same
-// provider ID is exactly what infrata cannot produce itself — it allocates IDs per
+// provider ID is exactly what infrena cannot produce itself — it allocates IDs per
 // cloud file, so this is pre-existing infrastructure, which is the only way the
 // situation arises and precisely the situation `import` is for.
 func TestImportRefusesAnIDTwoAccountsBothHold(t *testing.T) {

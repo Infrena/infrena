@@ -24,7 +24,7 @@ jobs:
     uses: ./.github/workflows/ci.yml
     # A called workflow gets NO secrets unless they are passed. Without this,
     # ci.yml's PLUGIN_REPO_TOKEN is empty, its checkout of the private
-    # infrata-provider-fake fails, and because INFRATA_REQUIRE_PLUGIN turns a
+    # infrena-provider-fake fails, and because INFRENA_REQUIRE_PLUGIN turns a
     # skipped integration suite into a failure, the release stops here — on its
     # first tag, with nothing built. `inherit` rather than naming the one secret,
     # so adding a second to ci.yml does not silently break releases again.
@@ -73,19 +73,19 @@ jobs:
           # case; trading it for disk is the wrong way round.
           build() {
             local goos="$1" goarch="$2" goarm="${3:-}"
-            local name="infrata"
+            local name="infrena"
             local suffix=""
-            if [ "$goos" = "windows" ]; then name="infrata.exe"; fi
+            if [ "$goos" = "windows" ]; then name="infrena.exe"; fi
             if [ -n "$goarm" ]; then suffix="v$goarm"; fi
 
-            local dir="dist/infrata_${VERSION}_${goos}_${goarch}${suffix}"
+            local dir="dist/infrena_${VERSION}_${goos}_${goarch}${suffix}"
             mkdir -p "$dir"
 
             echo "==> $goos/$goarch$suffix"
             CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" GOARM="$goarm" \
               go build -trimpath \
-                -ldflags "-X github.com/infrata/infrata/internal/version.version=${VERSION}" \
-                -o "$dir/$name" ./cmd/infrata
+                -ldflags "-X github.com/infrena/infrena/internal/version.version=${VERSION}" \
+                -o "$dir/$name" ./cmd/infrena
 
             cp README.md "$dir/" 2>/dev/null || true
 
@@ -121,13 +121,13 @@ jobs:
           # matching internal/version's variable, every binary would silently report
           # 0.0.0-dev and nothing else in this workflow would notice.
           CGO_ENABLED=0 go build -trimpath \
-            -ldflags "-X github.com/infrata/infrata/internal/version.version=${VERSION}" \
-            -o /tmp/infrata ./cmd/infrata
+            -ldflags "-X github.com/infrena/infrena/internal/version.version=${VERSION}" \
+            -o /tmp/infrena ./cmd/infrena
 
-          reported="$(/tmp/infrata version | head -1)"
+          reported="$(/tmp/infrena version | head -1)"
           echo "$reported"
           case "$reported" in
-            "infrata ${VERSION} "*) echo "version stamped correctly" ;;
+            "infrena ${VERSION} "*) echo "version stamped correctly" ;;
             *)
               echo "::error::The release binary reports '$reported', not version ${VERSION}."
               echo "The -ldflags path and internal/version's variable have diverged;"
@@ -139,7 +139,7 @@ jobs:
       - name: Checksums
         run: |
           set -euo pipefail
-          # One file over all archives, which is the form `infrata plugins install`
+          # One file over all archives, which is the form `infrena plugins install`
           # will verify against when it lands (PLAN.md §31.1, Phase B).
           cd dist && sha256sum ./* > SHA256SUMS && cat SHA256SUMS
 

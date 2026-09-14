@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/infrata/infrata/pkg/pluginmanifest"
-	"github.com/infrata/infrata/pkg/pluginproto"
+	"github.com/infrena/infrena/pkg/pluginmanifest"
+	"github.com/infrena/infrena/pkg/pluginproto"
 )
 
 // PLAN.md §31.2. An EXTERNAL test package, importing only what a plugin author can —
@@ -13,14 +13,14 @@ import (
 // `plugins install` will, so it must be usable exactly that way.
 
 const valid = `
-manifest: 1
+manifest: 2
 name: fake
 version: 0.1.0
 protocol: [1]
 platforms: [linux/amd64, linux/arm64, darwin/arm64, windows/amd64]
-description: A fake provider for testing infrata without a cloud account.
-infrata: ">= 0.2.0"
-source: https://github.com/infrata/infrata-provider-fake
+description: A fake provider for testing infrena without a cloud account.
+infrena: ">= 0.2.0"
+source: https://github.com/infrena/infrena-provider-fake
 `
 
 func parse(t *testing.T, body string) (*pluginmanifest.Manifest, []string) {
@@ -64,7 +64,7 @@ name: futuristic
 version: 2.0.0
 protocol: [1]
 platforms: [linux/amd64]
-description: From a later infrata.
+description: From a later infrena.
 something_invented_later: {a: b}
 `)
 	if len(warnings) == 0 {
@@ -99,7 +99,10 @@ func TestAMissingFormatVersionIsRefused(t *testing.T) {
 	if err == nil {
 		t.Fatal("a manifest with no `manifest:` key must be refused")
 	}
-	for _, want := range []string{"manifest", "1"} {
+	// "2" is the CURRENT format, which the message must name so a reader knows what to
+	// write. A literal rather than pluginmanifest.Version, which would assert the constant
+	// equals itself; updating it when the format moves is the deliberate act.
+	for _, want := range []string{"manifest", "2"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("the error does not mention %q: %v", want, err)
 		}
@@ -129,23 +132,23 @@ func TestEveryRequiredKeyIsRequired(t *testing.T) {
 	}
 }
 
-// TestInfrataAndSourceAreOptional. §31.2 makes `infrata` optional deliberately: absence
+// TestInfrenaAndSourceAreOptional. §31.2 makes `infrena` optional deliberately: absence
 // means unconstrained, where `">= 0.0.0"` would be a value shaped like a constraint that
 // constrains nothing.
-func TestInfrataAndSourceAreOptional(t *testing.T) {
+func TestInfrenaAndSourceAreOptional(t *testing.T) {
 	m, _ := parse(t, `
-manifest: 1
+manifest: 2
 name: fake
 version: 0.1.0
 protocol: [1]
 platforms: [linux/amd64]
 description: No constraint stated.
 `)
-	if !m.Infrata.IsZero() {
-		t.Errorf("an absent `infrata` must be the zero constraint, got %q", m.Infrata)
+	if !m.Infrena.IsZero() {
+		t.Errorf("an absent `infrena` must be the zero constraint, got %q", m.Infrena)
 	}
-	if !m.AllowsInfrata("9.9.9") {
-		t.Error("an unconstrained manifest must allow any infrata")
+	if !m.AllowsInfrena("9.9.9") {
+		t.Error("an unconstrained manifest must allow any infrena")
 	}
 }
 
@@ -155,7 +158,7 @@ description: No constraint stated.
 // build is not something they can act on. Anything parsing as 0.0.0 counts, because a
 // `go build` in a checkout with a VCS remote reports a pseudo-version that does.
 func TestAStatedConstraintIsEnforcedExceptForADevelopmentBuild(t *testing.T) {
-	m, _ := parse(t, valid) // infrata: ">= 0.2.0"
+	m, _ := parse(t, valid) // infrena: ">= 0.2.0"
 	for _, tc := range []struct {
 		version string
 		want    bool
@@ -167,8 +170,8 @@ func TestAStatedConstraintIsEnforcedExceptForADevelopmentBuild(t *testing.T) {
 		{"0.0.0-20260913163216-b7f0de604428+dirty", true},
 		{"not-a-version", true},
 	} {
-		if got := m.AllowsInfrata(tc.version); got != tc.want {
-			t.Errorf("AllowsInfrata(%q) = %v, want %v", tc.version, got, tc.want)
+		if got := m.AllowsInfrena(tc.version); got != tc.want {
+			t.Errorf("AllowsInfrena(%q) = %v, want %v", tc.version, got, tc.want)
 		}
 	}
 }
@@ -216,4 +219,55 @@ func dropLineStarting(body, prefix string) string {
 		}
 	}
 	return body
+}
+
+// TestTheFloorKeyMustMatchTheFormatVersion.
+//
+// `infrata:` became `infrena:` in the 2026-09-14 rename — a RENAMED key, which is why the
+// format version moved where §14.1's additive changes did not. Each half of the likely
+// mistake is refused BY NAME rather than as a generic unknown key, because an absent floor
+// means "unconstrained" (§31.2): a plugin that meant to require infrena 0.4 and wrote the
+// wrong spelling would otherwise claim, silently, to run against anything.
+func TestTheFloorKeyMustMatchTheFormatVersion(t *testing.T) {
+	const body = "name: fake\nversion: 0.1.0\nprotocol: [2]\n" +
+		"platforms: [linux/amd64]\ndescription: A fake provider.\n"
+
+	// Bumped the format, forgot to rename the key.
+	_, _, err := pluginmanifest.Parse([]byte("manifest: 2\n" + body + "infrata: \">= 0.3.0\"\n"))
+	if err == nil {
+		t.Fatal("`infrata:` in a version 2 manifest must be refused, not silently ignored")
+	}
+	if !strings.Contains(err.Error(), "infrena") {
+		t.Errorf("the error does not say what to write instead: %v", err)
+	}
+
+	// Renamed the key, forgot to bump the format.
+	_, _, err = pluginmanifest.Parse([]byte("manifest: 1\n" + body + "infrena: \">= 0.4.0\"\n"))
+	if err == nil {
+		t.Fatal("`infrena:` in a version 1 manifest must be refused")
+	}
+	if !strings.Contains(err.Error(), "manifest: 2") {
+		t.Errorf("the error does not say which format version the key needs: %v", err)
+	}
+}
+
+// TestAVersionOneManifestStillReadsItsFloor.
+//
+// The reason no deprecation alias is needed: a plugin released before the rename declares
+// `manifest: 1` with `infrata:`, and §31.2 reads a manifest AT THE TAG — so that document
+// keeps meaning exactly what it meant, permanently. If this broke, every pre-rename release
+// would silently lose its floor and claim to run against anything.
+func TestAVersionOneManifestStillReadsItsFloor(t *testing.T) {
+	m, _, err := pluginmanifest.Parse([]byte("manifest: 1\nname: fake\nversion: 0.1.0\n" +
+		"protocol: [1]\nplatforms: [linux/amd64]\ndescription: A fake provider.\n" +
+		"infrata: \">= 0.3.0\"\n"))
+	if err != nil {
+		t.Fatalf("a pre-rename manifest must still parse: %v", err)
+	}
+	if m.Infrena.IsZero() {
+		t.Error("the floor was dropped, so this plugin now claims to run against any infrena")
+	}
+	if m.AllowsInfrena("0.2.0") {
+		t.Error("the floor is not being enforced: 0.2.0 is below `>= 0.3.0`")
+	}
 }

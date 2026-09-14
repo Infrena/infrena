@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/infrata/infrata/internal/registry"
-	"github.com/infrata/infrata/pkg/provider"
-	"github.com/infrata/infrata/pkg/value"
+	"github.com/infrena/infrena/internal/registry"
+	"github.com/infrena/infrena/pkg/provider"
+	"github.com/infrena/infrena/pkg/value"
 )
 
 // Result is one discovered resource, with the name configuration would give it.

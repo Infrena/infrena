@@ -1,6 +1,6 @@
-// Package pluginproto is the contract between infrata and a provider plugin.
+// Package pluginproto is the contract between infrena and a provider plugin.
 //
-// A plugin is a separate binary that infrata launches and talks to over stdio in
+// A plugin is a separate binary that infrena launches and talks to over stdio in
 // newline-delimited JSON (PLAN.md §31.1). This package holds the message types
 // and the protocol version, and NOTHING ELSE: no transport, no host logic, no
 // plugin logic. It is what both sides compile against, so it must stay importable
@@ -17,9 +17,9 @@ import (
 	"fmt"
 	"slices"
 
-	"github.com/infrata/infrata/pkg/resource"
-	"github.com/infrata/infrata/pkg/schema"
-	"github.com/infrata/infrata/pkg/value"
+	"github.com/infrena/infrena/pkg/resource"
+	"github.com/infrena/infrena/pkg/schema"
+	"github.com/infrena/infrena/pkg/value"
 )
 
 // Version is the protocol version this build speaks.
@@ -59,7 +59,7 @@ func IsSupported(v int) bool {
 // A plugin binary run by hand without it prints a line saying what it is and
 // exits non-zero. Without that check it would sit silently waiting for protocol
 // input on a terminal, which looks exactly like a hang.
-const CookieEnv = "INFRATA_PLUGIN_COOKIE"
+const CookieEnv = "INFRENA_PLUGIN_COOKIE"
 
 // Method names. Every request carries one.
 const (
@@ -134,7 +134,7 @@ type ConfigureParams struct {
 // ConfigureResult returns the handle naming this configured instance.
 //
 // One process per plugin, not per instance: two AWS accounts means one
-// infrata-plugin-aws holding two configured clients, told apart by this handle.
+// infrena-plugin-aws holding two configured clients, told apart by this handle.
 type ConfigureResult struct {
 	Handle string `json:"handle"`
 }
@@ -158,7 +158,7 @@ type SchemasResult struct {
 type ResourceParams struct {
 	Handle string `json:"handle"`
 	Type   string `json:"type"`
-	// Address is the name infrata knows this resource by.
+	// Address is the name infrena knows this resource by.
 	//
 	// SENT, unlike the rest of the bookkeeping, because it is an INPUT rather than
 	// something the plugin reports: a provider legitimately needs a name — to tag
@@ -212,7 +212,7 @@ type DiscoverResult struct {
 	Found []Discovered `json:"found"`
 }
 
-// Discovered is one resource that exists, whether or not infrata manages it.
+// Discovered is one resource that exists, whether or not infrena manages it.
 type Discovered struct {
 	Type       string                 `json:"type"`
 	ProviderID string                 `json:"provider_id"`

@@ -7,14 +7,14 @@ import (
 	"sort"
 	"time"
 
-	"github.com/infrata/infrata/internal/diag"
-	"github.com/infrata/infrata/internal/executor"
-	"github.com/infrata/infrata/internal/refresh"
-	"github.com/infrata/infrata/internal/state"
-	"github.com/infrata/infrata/pkg/address"
-	"github.com/infrata/infrata/pkg/report"
-	"github.com/infrata/infrata/pkg/resource"
-	"github.com/infrata/infrata/pkg/value"
+	"github.com/infrena/infrena/internal/diag"
+	"github.com/infrena/infrena/internal/executor"
+	"github.com/infrena/infrena/internal/refresh"
+	"github.com/infrena/infrena/internal/state"
+	"github.com/infrena/infrena/pkg/address"
+	"github.com/infrena/infrena/pkg/report"
+	"github.com/infrena/infrena/pkg/resource"
+	"github.com/infrena/infrena/pkg/value"
 )
 
 // openReport opens --output for a command that streams pkg/report's

@@ -3,7 +3,7 @@ package value
 import (
 	"fmt"
 
-	"github.com/infrata/infrata/pkg/address"
+	"github.com/infrena/infrena/pkg/address"
 )
 
 // The on-disk form of an expression.

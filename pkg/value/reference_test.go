@@ -3,7 +3,7 @@ package value
 import (
 	"testing"
 
-	"github.com/infrata/infrata/pkg/address"
+	"github.com/infrena/infrena/pkg/address"
 )
 
 // TestReferenceStringIncludesTheModulePath pins the whole point of Ruling 1:

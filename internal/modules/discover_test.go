@@ -3,7 +3,7 @@ package modules
 import (
 	"testing"
 
-	"github.com/infrata/infrata/internal/variables"
+	"github.com/infrena/infrena/internal/variables"
 )
 
 func TestADirectoryHoldingAModuleFileIsLoadedWithoutAModulesEntry(t *testing.T) {

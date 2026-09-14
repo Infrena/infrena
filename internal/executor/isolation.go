@@ -5,11 +5,11 @@ import (
 	"sort"
 	"time"
 
-	"github.com/infrata/infrata/internal/diag"
-	"github.com/infrata/infrata/internal/graph"
-	"github.com/infrata/infrata/internal/planner"
-	"github.com/infrata/infrata/internal/state"
-	"github.com/infrata/infrata/pkg/address"
+	"github.com/infrena/infrena/internal/diag"
+	"github.com/infrena/infrena/internal/graph"
+	"github.com/infrena/infrena/internal/planner"
+	"github.com/infrena/infrena/internal/state"
+	"github.com/infrena/infrena/pkg/address"
 )
 
 // trackedApply is one completed (or attempted) operation as tracker

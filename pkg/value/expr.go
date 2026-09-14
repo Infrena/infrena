@@ -4,7 +4,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/infrata/infrata/pkg/address"
+	"github.com/infrena/infrena/pkg/address"
 )
 
 // ExprOp is the kind of an expression node.

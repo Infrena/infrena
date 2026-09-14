@@ -105,7 +105,7 @@ func TestASavedPlanIsRefusedOnceTheStateHasMoved(t *testing.T) {
 			again.combined())
 	}
 	requireContains(t, again.combined(), "the state has changed")
-	requireContains(t, again.combined(), "infrata plan dev")
+	requireContains(t, again.combined(), "infrena plan dev")
 
 	// Nothing was created a second time, which is the actual harm being prevented.
 	st := readState(t, dir, "dev")
@@ -165,7 +165,7 @@ func TestSavedPlanAndVariableFlagsAreRefusedTogether(t *testing.T) {
 	} {
 		got := run(t, dir, args...)
 		if got.ExitCode == 0 {
-			t.Errorf("infrata %v was accepted:\n%s", args, got.combined())
+			t.Errorf("infrena %v was accepted:\n%s", args, got.combined())
 		}
 		requireContains(t, got.combined(), "does not combine with --var")
 	}

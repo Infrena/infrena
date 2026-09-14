@@ -1,6 +1,6 @@
-// Package semver parses the version constraints infrata's configuration language uses:
-// a floor on infrata itself (`infrata: ">= 0.4"`), a range on a provider plugin
-// (`plugins: {aws: ">= 0.3.0, < 0.4.0"}`), and the `infrata:` field of a plugin's own
+// Package semver parses the version constraints infrena's configuration language uses:
+// a floor on infrena itself (`infrena: ">= 0.4"`), a range on a provider plugin
+// (`plugins: {aws: ">= 0.3.0, < 0.4.0"}`), and the `infrena:` field of a plugin's own
 // manifest. PLAN.md §61.2, §31.2.
 //
 // PUBLIC, and in pkg/ rather than internal/ for one reason: a plugin author needs to

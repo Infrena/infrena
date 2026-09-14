@@ -8,10 +8,10 @@ import (
 	"context"
 	"time"
 
-	"github.com/infrata/infrata/internal/planner"
-	"github.com/infrata/infrata/internal/registry"
-	"github.com/infrata/infrata/internal/state"
-	"github.com/infrata/infrata/pkg/address"
+	"github.com/infrena/infrena/internal/planner"
+	"github.com/infrena/infrena/internal/registry"
+	"github.com/infrena/infrena/internal/state"
+	"github.com/infrena/infrena/pkg/address"
 )
 
 // Result is what one Apply run produced.

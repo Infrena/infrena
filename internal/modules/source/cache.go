@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/infrata/infrata/internal/diag"
+	"github.com/infrena/infrena/internal/diag"
 )
 
 const (

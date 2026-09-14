@@ -27,8 +27,8 @@ func binary(t *testing.T) string {
 			buildErr = err
 			return
 		}
-		binPath = filepath.Join(dir, "infrata")
-		cmd := exec.Command("go", "build", "-o", binPath, "github.com/infrata/infrata/cmd/infrata")
+		binPath = filepath.Join(dir, "infrena")
+		cmd := exec.Command("go", "build", "-o", binPath, "github.com/infrena/infrena/cmd/infrena")
 		cmd.Dir = repoRoot(t)
 		out, err := cmd.CombinedOutput()
 		if err != nil {
@@ -159,7 +159,7 @@ func reportedStateVersion(t *testing.T) int {
 // stampedBinary builds the CLI with a version stamped in, the way the release
 // workflow does.
 //
-// A development build is EXEMPT from a project's `infrata:` floor (§61.2), and the
+// A development build is EXEMPT from a project's `infrena:` floor (§61.2), and the
 // binary every other test in this file uses is a development build reporting
 // 0.0.0-dev. So a test about the floor being enforced must stamp one, or it passes
 // against a build that never checks anything — which is the shape of a test that
@@ -172,10 +172,10 @@ func reportedStateVersion(t *testing.T) int {
 func stampedBinary(t *testing.T, version string) string {
 	t.Helper()
 	dir := t.TempDir()
-	bin := filepath.Join(dir, "infrata")
+	bin := filepath.Join(dir, "infrena")
 	cmd := exec.Command("go", "build",
-		"-ldflags", "-X github.com/infrata/infrata/internal/version.version="+version,
-		"-o", bin, "github.com/infrata/infrata/cmd/infrata")
+		"-ldflags", "-X github.com/infrena/infrena/internal/version.version="+version,
+		"-o", bin, "github.com/infrena/infrena/cmd/infrena")
 	cmd.Dir = repoRoot(t)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("building a stamped CLI: %v\n%s", err, out)

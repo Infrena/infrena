@@ -13,7 +13,7 @@ import (
 // replaced, and the plugin's own last words are quoted, because the sentence alone is
 // still useless — a plugin that died of a missing credential already said so on stderr.
 //
-// Written after infrata-provider-fake's review found the doc comment here describing a
+// Written after infrena-provider-fake's review found the doc comment here describing a
 // message this function does not produce. A comment nobody can check is how that
 // happened; this is the check.
 func TestAPluginThatJustExitsGetsASentenceNotAGoSentinel(t *testing.T) {

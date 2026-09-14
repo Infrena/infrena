@@ -6,10 +6,10 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/infrata/infrata/internal/config"
-	"github.com/infrata/infrata/internal/diag"
-	"github.com/infrata/infrata/internal/expressions"
-	"github.com/infrata/infrata/pkg/value"
+	"github.com/infrena/infrena/internal/config"
+	"github.com/infrena/infrena/internal/diag"
+	"github.com/infrena/infrena/internal/expressions"
+	"github.com/infrena/infrena/pkg/value"
 )
 
 // Env is the environment stage 5 is expanding for, and every environment the

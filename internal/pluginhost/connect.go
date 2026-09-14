@@ -10,9 +10,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/infrata/infrata/pkg/pluginproto"
-	"github.com/infrata/infrata/pkg/pluginsdk"
-	"github.com/infrata/infrata/pkg/provider"
+	"github.com/infrena/infrena/pkg/pluginproto"
+	"github.com/infrena/infrena/pkg/pluginsdk"
+	"github.com/infrena/infrena/pkg/provider"
 )
 
 // ONE CODE PATH, TWO WAYS TO CONNECT IT.
@@ -149,9 +149,9 @@ func forwardStderr(r io.Reader, name string, tail *stderrTail, verbose io.Writer
 // BinaryName is the file a plugin is looked up as.
 func BinaryName(plugin string) string {
 	if os.PathSeparator == '\\' {
-		return "infrata-plugin-" + plugin + ".exe"
+		return "infrena-plugin-" + plugin + ".exe"
 	}
-	return "infrata-plugin-" + plugin
+	return "infrena-plugin-" + plugin
 }
 
 // Find locates a plugin binary, first match wins, and reports every place it
@@ -179,14 +179,14 @@ func Find(plugin string, opts SearchOptions) (string, []string, error) {
 
 // SearchOptions is where to look, in order.
 type SearchOptions struct {
-	// Explicit is --plugin-dir, then INFRATA_PLUGIN_PATH. Highest precedence so a
+	// Explicit is --plugin-dir, then INFRENA_PLUGIN_PATH. Highest precedence so a
 	// developer can point at a freshly built binary without installing it.
 	Explicit []string
 	// ProjectDir contributes <project>/.infra/plugins, so a project can pin its
 	// own plugins alongside its state.
 	ProjectDir string
 	// HomeDir contributes the per-user install location, which is where
-	// `infrata plugins install` will write.
+	// `infrena plugins install` will write.
 	HomeDir string
 }
 
@@ -196,7 +196,7 @@ func (o SearchOptions) dirs() []string {
 		out = append(out, filepath.Join(o.ProjectDir, ".infra", "plugins"))
 	}
 	if o.HomeDir != "" {
-		out = append(out, filepath.Join(o.HomeDir, ".local", "share", "infrata", "plugins"))
+		out = append(out, filepath.Join(o.HomeDir, ".local", "share", "infrena", "plugins"))
 	}
 	return out
 }
@@ -210,7 +210,7 @@ type NotFoundError struct {
 func (e *NotFoundError) Error() string {
 	return fmt.Sprintf(
 		"no binary for plugin %q\n"+
-			"  `providers:` names plugin %q, so infrata looked for %s in:\n%s\n"+
+			"  `providers:` names plugin %q, so infrena looked for %s in:\n%s\n"+
 			"Put the binary in one of those directories, or pass --plugin-dir.",
 		e.Plugin, e.Plugin, e.Binary, indent(strings.Join(e.Searched, "\n")))
 }

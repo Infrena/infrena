@@ -8,7 +8,7 @@ import (
 
 // cookie is a fresh random value per launch.
 //
-// Its only job is to tell a plugin it was started by infrata rather than typed at
+// Its only job is to tell a plugin it was started by infrena rather than typed at
 // a shell. It is NOT a security boundary — a plugin holds cloud credentials by
 // design and the user chose to run it — so nothing verifies it beyond presence.
 func cookie() (string, error) {

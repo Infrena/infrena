@@ -7,9 +7,9 @@ import (
 	"context"
 	"errors"
 
-	"github.com/infrata/infrata/pkg/resource"
-	"github.com/infrata/infrata/pkg/schema"
-	"github.com/infrata/infrata/pkg/value"
+	"github.com/infrena/infrena/pkg/resource"
+	"github.com/infrena/infrena/pkg/schema"
+	"github.com/infrena/infrena/pkg/value"
 )
 
 // Config is everything a plugin is told when it configures one instance of itself.
@@ -36,7 +36,7 @@ type Config struct {
 
 	// ProjectDir is the project directory, for resolving a relative path a user
 	// wrote. It is not the plugin's working directory, which is inherited from
-	// infrata and is not where the project is.
+	// infrena and is not where the project is.
 	ProjectDir string
 }
 

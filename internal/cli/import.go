@@ -10,16 +10,16 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/infrata/infrata/internal/config"
-	"github.com/infrata/infrata/internal/discovery"
-	"github.com/infrata/infrata/internal/generator"
-	"github.com/infrata/infrata/internal/providers"
-	"github.com/infrata/infrata/internal/registry"
-	"github.com/infrata/infrata/internal/state"
-	"github.com/infrata/infrata/pkg/address"
+	"github.com/infrena/infrena/internal/config"
+	"github.com/infrena/infrena/internal/discovery"
+	"github.com/infrena/infrena/internal/generator"
+	"github.com/infrena/infrena/internal/providers"
+	"github.com/infrena/infrena/internal/registry"
+	"github.com/infrena/infrena/internal/state"
+	"github.com/infrena/infrena/pkg/address"
 )
 
-// newImportCommand builds `infrata import <environment> [type.id...]` (spec §26).
+// newImportCommand builds `infrena import <environment> [type.id...]` (spec §26).
 //
 // Import adopts existing infrastructure into state. The hazard it exists to
 // avoid is the one invariant 1 creates: a resource in state that no
@@ -122,7 +122,7 @@ func runImport(
 		sort.Strings(already)
 		return fmt.Errorf("already in the state of environment %q: %s\n"+
 			"Importing would overwrite what is recorded there, including the provider IDs. "+
-			"Remove them with `infrata state rm <address>` first, or import the others by name",
+			"Remove them with `infrena state rm <address>` first, or import the others by name",
 			environment, strings.Join(already, ", "))
 	}
 
@@ -132,7 +132,7 @@ func runImport(
 			"Importing it again would leave two addresses managing one resource. The second "+
 			"declares nothing, so the next plan would propose destroying it — and destroying "+
 			"it deletes the resource the first one manages.\n"+
-			"Import something else, or use `infrata state rm <address>` if the existing entry "+
+			"Import something else, or use `infrena state rm <address>` if the existing entry "+
 			"is the one you want to replace",
 			environment, strings.Join(claimed, ", "))
 	}
@@ -318,7 +318,7 @@ func narrowToSelectors(
 	if len(missing) > 0 {
 		sort.Strings(missing)
 		return nil, fmt.Errorf("not found by discovery: %s\n"+
-			"Run `infrata discover` to see what exists. A selector is `<type>.<provider id>`",
+			"Run `infrena discover` to see what exists. A selector is `<type>.<provider id>`",
 			strings.Join(missing, ", "))
 	}
 	return out, nil

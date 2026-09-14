@@ -7,12 +7,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/infrata/infrata/pkg/address"
-	"github.com/infrata/infrata/pkg/pluginproto"
-	"github.com/infrata/infrata/pkg/provider"
-	"github.com/infrata/infrata/pkg/resource"
-	"github.com/infrata/infrata/pkg/schema"
-	"github.com/infrata/infrata/pkg/value"
+	"github.com/infrena/infrena/pkg/address"
+	"github.com/infrena/infrena/pkg/pluginproto"
+	"github.com/infrena/infrena/pkg/provider"
+	"github.com/infrena/infrena/pkg/resource"
+	"github.com/infrena/infrena/pkg/schema"
+	"github.com/infrena/infrena/pkg/value"
 )
 
 // PLAN.md §31.1: what the engine stops trusting a plugin with.
@@ -253,7 +253,7 @@ func TestNilFromCreateBecomesAnError(t *testing.T) {
 	if err == nil {
 		t.Fatal("(nil, nil) from Create must be an error")
 	}
-	// The message has to tell the user what to go and check, because infrata
+	// The message has to tell the user what to go and check, because infrena
 	// cannot find out for them.
 	for _, want := range []string{"exists", "not in state"} {
 		if !strings.Contains(err.Error(), want) {
@@ -367,13 +367,13 @@ func TestAHostSideFailureIsNeverSafeToRetry(t *testing.T) {
 
 // TestAPluginDeclaringAReservedAttributeIsRefusedOnLoad.
 //
-// prevent_destroy and retain belong to infrata's lifecycle handling, and a provider
+// prevent_destroy and retain belong to infrena's lifecycle handling, and a provider
 // instance's `defaults:` accepts them for every resource (§12.1) — so an attribute
 // of either name would make one key mean two things.
 //
 // The registry refuses this too, but the message there names a provider rather than
 // a plugin and arrives later. Refusing at load means a plugin author sees it the
-// first time they run against infrata at all.
+// first time they run against infrena at all.
 func TestAPluginDeclaringAReservedAttributeIsRefusedOnLoad(t *testing.T) {
 	for _, name := range []string{"prevent_destroy", "retain"} {
 		_, err := InProcess(context.Background(), &reservedPlugin{attr: name}, t.TempDir())

@@ -35,7 +35,7 @@ const EnvironmentsDirName = "environments"
 // `outputs`, no `project` — and two names make the shapes distinguishable by
 // construction: neither decoder accepts the other's keys, so four bespoke
 // rejection rules never have to exist. It also stops a module directory looking
-// like a project: under a shared name, `infrata plan dev` run inside
+// like a project: under a shared name, `infrena plan dev` run inside
 // modules/networking/ would find a valid infra.yml and TRY, producing a pile of
 // "variable not set" errors describing a situation that is not a mistake.
 const ModuleFileName = "module.yml"

@@ -4,13 +4,13 @@
 //
 // PUBLIC, for the same reason pkg/semver is: a plugin validates its own manifest in its
 // own tests, and the alternative is a second implementation of this format that drifts
-// from the one `infrata plugins install` checks it with. One parser, two callers.
+// from the one `infrena plugins install` checks it with. One parser, two callers.
 //
 // It is also the only practical way a plugin repository can validate the file at all.
-// Reading YAML needs a YAML parser; infrata already depends on gopkg.in/yaml.v3 and a
+// Reading YAML needs a YAML parser; infrena already depends on gopkg.in/yaml.v3 and a
 // plugin author accepts that transitively by importing this package, where adding their
 // own would be a third-party dependency in a module whose rule is the standard library
-// plus infrata.
+// plus infrena.
 //
 // NOTE ON THE ARCHITECTURE RULE: internal/config is "the only place in the engine
 // permitted to touch yaml.Node", and this package does not touch it — it decodes into
@@ -30,20 +30,30 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/infrata/infrata/pkg/semver"
+	"github.com/infrena/infrena/pkg/semver"
 )
 
-// Version is the manifest format version this build understands.
-const Version = 1
+// Version is the manifest format version this build WRITES. Reading is governed by
+// Supported, which is wider.
+const Version = 2
 
-// Supported lists every manifest format version this build can read.
-var Supported = []int{1}
+// Supported lists every manifest format version this build can read, newest first.
+//
+// 2 SINCE THE INFRENA RENAME (2026-09-14). The floor field is spelled `infrena:` in a
+// version 2 manifest and was spelled `infrata:` in a version 1 one — a RENAMED key, not an
+// added one, which is why the format version moves where §14.1's additive changes did not.
+//
+// 1 stays readable, and that is the whole benefit of having versioned the file: a plugin
+// released before the rename declares `manifest: 1` and keeps being understood exactly as it
+// was, permanently. §31.2 reads a manifest AT THE TAG, so an old release's manifest is never
+// reinterpreted under new rules. No deprecation alias is needed anywhere.
+var Supported = []int{2, 1}
 
 // Manifest is a parsed `plugin.yaml`.
 type Manifest struct {
 	// Format is the `manifest:` key: the version of the FILE FORMAT, not of the plugin.
 	Format int
-	// Name is the plugin's name: its binary is infrata-plugin-<Name>, Plugin.Name()
+	// Name is the plugin's name: its binary is infrena-plugin-<Name>, Plugin.Name()
 	// returns it, and every resource type it serves is prefixed with it.
 	Name string
 	// Version is the plugin's own version, which must equal the tag this manifest was
@@ -55,10 +65,10 @@ type Manifest struct {
 	Platforms []Platform
 	// Description is one line, for a search result.
 	Description string
-	// Infrata is the releases this plugin is known to work with. The ZERO value means
+	// Infrena is the releases this plugin is known to work with. The ZERO value means
 	// unconstrained, which is what an absent key means — see §31.2 on why absence is
 	// preferred to `">= 0.0.0"`.
-	Infrata semver.Constraint
+	Infrena semver.Constraint
 	// Source is where the plugin lives, for a search result to link. Optional.
 	Source string
 }
@@ -103,24 +113,24 @@ func (m *Manifest) SpeaksProtocol(hostSupports []int) bool {
 	return false
 }
 
-// AllowsInfrata reports whether the plugin accepts a running infrata version.
+// AllowsInfrena reports whether the plugin accepts a running infrena version.
 //
 // A development build is EXEMPT, the same exemption §61.2 gives a project's own
-// `infrata:` floor and for the same reason: a complaint about a developer's own build is
+// `infrena:` floor and for the same reason: a complaint about a developer's own build is
 // not something they can act on. Anything parsing as 0.0.0 counts — a `go build` in a
 // checkout with a VCS remote reports a pseudo-version that does.
-func (m *Manifest) AllowsInfrata(infrataVersion string) bool {
-	if m.Infrata.IsZero() {
+func (m *Manifest) AllowsInfrena(infrenaVersion string) bool {
+	if m.Infrena.IsZero() {
 		return true
 	}
-	v, err := semver.Parse(infrataVersion)
+	v, err := semver.Parse(infrenaVersion)
 	if err != nil {
 		return true
 	}
 	if v.Major == 0 && v.Minor == 0 && v.Patch == 0 {
 		return true
 	}
-	return m.Infrata.Allows(v)
+	return m.Infrena.Allows(v)
 }
 
 // manifestFile is the wire form. Written by hand rather than derived, so what is and is
@@ -133,14 +143,37 @@ type manifestFile struct {
 	Protocol    []int    `yaml:"protocol"`
 	Platforms   []string `yaml:"platforms"`
 	Description string   `yaml:"description"`
-	Infrata     string   `yaml:"infrata"`
-	Source      string   `yaml:"source"`
+	Infrena     string   `yaml:"infrena"`
+	// Infrata is the pre-rename spelling of Infrena, carried ONLY so that writing the
+	// wrong one for the declared format version is refused by name. It is never a value
+	// this package hands back: fromFile checks it against Manifest and then discards it.
+	Infrata string `yaml:"infrata"`
+	Source  string `yaml:"source"`
+}
+
+// checkFloorSpelling refuses a manifest whose floor key does not match its format version.
+//
+// TWO MISTAKES, EACH NAMED. Someone bumping `manifest: 2` and forgetting to rename the key,
+// and someone renaming the key without bumping. Both are obvious mistakes and both would
+// otherwise surface as a generic unknown-key error or, worse, as a silently absent floor —
+// an absent `infrena:` means "unconstrained" (§31.2), so a plugin that meant to require
+// infrena 0.4 would quietly claim to run against anything.
+func checkFloorSpelling(format int, f manifestFile) error {
+	switch {
+	case format >= 2 && f.Infrata != "":
+		return fmt.Errorf("plugin.yaml: `infrata:` is the pre-rename spelling and is only valid "+
+			"in `manifest: 1`; this manifest declares version %d, so write `infrena:`", format)
+	case format == 1 && f.Infrena != "":
+		return errors.New("plugin.yaml: `infrena:` needs `manifest: 2`; a version 1 manifest " +
+			"spells the floor `infrata:`")
+	}
+	return nil
 }
 
 // Parse reads a manifest, returning any warnings alongside it.
 //
 // THE FORMAT VERSION IS READ FIRST, on its own, before anything else is decoded. A
-// manifest from the future must report "this needs a newer infrata to describe itself"
+// manifest from the future must report "this needs a newer infrena to describe itself"
 // rather than an error about a key nobody recognises — which is the whole reason §31.2
 // gives the format a version when the configuration language deliberately has none. The
 // reader of a manifest cannot be upgraded in step with its writer.
@@ -158,7 +191,7 @@ func Parse(data []byte) (*Manifest, []string, error) {
 	known := slices.Contains(Supported, format)
 	if !known {
 		warnings = append(warnings, fmt.Sprintf(
-			"this manifest is format version %d; this build of infrata understands %s, so "+
+			"this manifest is format version %d; this build of infrena understands %s, so "+
 				"anything it adds is ignored", format, joinInts(Supported)))
 	}
 
@@ -201,6 +234,17 @@ func parseFormat(data []byte) (int, error) {
 
 // fromFile converts the decoded file into a Manifest, validating as it goes.
 func fromFile(file manifestFile) (*Manifest, error) {
+	if err := checkFloorSpelling(file.Manifest, file); err != nil {
+		return nil, err
+	}
+	// A version 1 manifest spells the floor `infrata:`; from 2 it is `infrena:`. Reading
+	// whichever the declared version calls for is what lets an old release stay correctly
+	// understood without a deprecation alias anywhere.
+	if file.Manifest == 1 {
+		file.Infrena = file.Infrata
+	}
+	file.Infrata = ""
+
 	m := &Manifest{
 		Format:      file.Manifest,
 		Name:        strings.TrimSpace(file.Name),
@@ -216,12 +260,12 @@ func fromFile(file manifestFile) (*Manifest, error) {
 		}
 		m.Version = v
 	}
-	if strings.TrimSpace(file.Infrata) != "" {
-		c, err := semver.ParseConstraint(file.Infrata)
+	if strings.TrimSpace(file.Infrena) != "" {
+		c, err := semver.ParseConstraint(file.Infrena)
 		if err != nil {
-			return nil, fmt.Errorf("`infrata`: %w", err)
+			return nil, fmt.Errorf("`infrena`: %w", err)
 		}
-		m.Infrata = c
+		m.Infrena = c
 	}
 	for _, p := range file.Platforms {
 		parsed, err := ParsePlatform(p)
@@ -246,13 +290,13 @@ func (m *Manifest) Validate() error { return m.validate(true) }
 func (m *Manifest) validate(hadVersion bool) error {
 	if m.Name == "" {
 		return errors.New("`name` is required: it is the plugin's name, so the binary is " +
-			"infrata-plugin-<name> and every resource type is prefixed with it")
+			"infrena-plugin-<name> and every resource type is prefixed with it")
 	}
 	// The name becomes a filename AND a resource-type prefix, so anything that would
 	// break either is refused here rather than at load.
 	if i := strings.IndexAny(m.Name, "./\\ \t:"); i >= 0 {
 		return fmt.Errorf("`name` may not contain %q: it becomes both a filename "+
-			"(infrata-plugin-%s) and a resource type prefix (%s.…)",
+			"(infrena-plugin-%s) and a resource type prefix (%s.…)",
 			string(m.Name[i]), m.Name, m.Name)
 	}
 	if !hadVersion {

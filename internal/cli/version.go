@@ -10,11 +10,11 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/infrata/infrata/internal/planner"
-	"github.com/infrata/infrata/internal/state"
-	"github.com/infrata/infrata/internal/version"
-	"github.com/infrata/infrata/pkg/pluginproto"
-	"github.com/infrata/infrata/pkg/report"
+	"github.com/infrena/infrena/internal/planner"
+	"github.com/infrena/infrena/internal/state"
+	"github.com/infrena/infrena/internal/version"
+	"github.com/infrena/infrena/pkg/pluginproto"
+	"github.com/infrena/infrena/pkg/report"
 )
 
 // newVersionCommand reports what this binary is and which formats it speaks.
@@ -48,7 +48,7 @@ func newVersionCommand(opts *GlobalOptions) *cobra.Command {
 // following.
 //
 // ASSEMBLED HERE because internal/version may not import these: the compiler imports
-// it to check a project's `infrata:` floor, and a Formats() that read
+// it to check a project's `infrena:` floor, and a Formats() that read
 // planner.PlanVersion would close an import cycle.
 func formats() []version.Format {
 	return []version.Format{
@@ -62,7 +62,7 @@ func formats() []version.Format {
 }
 
 func renderVersion(w io.Writer, info version.Info) {
-	fmt.Fprintf(w, "infrata %s (%s)\n", info.Version, strings.Join(nonEmpty(
+	fmt.Fprintf(w, "infrena %s (%s)\n", info.Version, strings.Join(nonEmpty(
 		info.Revision, info.Go, info.Platform), ", "))
 
 	if len(info.Formats) == 0 {

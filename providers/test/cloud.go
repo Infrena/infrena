@@ -12,7 +12,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/infrata/infrata/pkg/provider"
+	"github.com/infrena/infrena/pkg/provider"
 )
 
 // DefaultCloudPath is where the fake cloud lives inside a project.

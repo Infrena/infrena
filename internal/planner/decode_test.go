@@ -6,10 +6,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/infrata/infrata/internal/diag"
-	"github.com/infrata/infrata/pkg/address"
-	"github.com/infrata/infrata/pkg/resource"
-	"github.com/infrata/infrata/pkg/value"
+	"github.com/infrena/infrena/internal/diag"
+	"github.com/infrena/infrena/pkg/address"
+	"github.com/infrena/infrena/pkg/resource"
+	"github.com/infrena/infrena/pkg/value"
 )
 
 // TestASavedPlanSurvivesTheRoundTrip.
@@ -160,7 +160,7 @@ func TestEachStalenessCauseHasItsOwnMessage(t *testing.T) {
 				t.Errorf("the message does not say %q:\n%v", tc.wantSubstring, err)
 			}
 			// §44: every refusal says what to do next.
-			if !strings.Contains(err.Error(), "infrata plan") {
+			if !strings.Contains(err.Error(), "infrena plan") {
 				t.Errorf("the refusal offers no action:\n%v", err)
 			}
 		})

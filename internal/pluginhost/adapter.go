@@ -8,13 +8,13 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/infrata/infrata/internal/registry"
-	"github.com/infrata/infrata/pkg/address"
-	"github.com/infrata/infrata/pkg/pluginproto"
-	"github.com/infrata/infrata/pkg/provider"
-	"github.com/infrata/infrata/pkg/resource"
-	"github.com/infrata/infrata/pkg/schema"
-	"github.com/infrata/infrata/pkg/value"
+	"github.com/infrena/infrena/internal/registry"
+	"github.com/infrena/infrena/pkg/address"
+	"github.com/infrena/infrena/pkg/pluginproto"
+	"github.com/infrena/infrena/pkg/provider"
+	"github.com/infrena/infrena/pkg/resource"
+	"github.com/infrena/infrena/pkg/schema"
+	"github.com/infrena/infrena/pkg/value"
 )
 
 // Plugin adapts a Client to provider.Plugin, so the registry cannot tell a
@@ -84,7 +84,7 @@ func (p *Plugin) loadSchemas(ctx context.Context) error {
 				p.Name(), d.Type, p.Name())
 		}
 		if reserved := reservedAttributeOf(d); reserved != "" {
-			// prevent_destroy and retain belong to infrata's lifecycle handling and
+			// prevent_destroy and retain belong to infrena's lifecycle handling and
 			// are accepted in a provider instance's `defaults:` for every resource
 			// (§12.1), so an attribute of either name would make one key mean two
 			// things. Refused here as well as in the registry, so the message names
@@ -106,7 +106,7 @@ func (p *Plugin) New(cfg provider.Config) (provider.Provider, error) {
 	err := p.client.call(context.Background(), pluginproto.MethodConfigure, pluginproto.ConfigureParams{
 		Instance: cfg.Instance,
 		Config:   cfg.Values,
-		// The host's own, not the caller's. ProjectDir is context infrata supplies,
+		// The host's own, not the caller's. ProjectDir is context infrena supplies,
 		// so a configuration file cannot tell a plugin its project lives elsewhere.
 		Dir: p.dir,
 	}, &result)
@@ -266,7 +266,7 @@ func (r *remoteProvider) params(addr address.Address, resourceType, providerID s
 // destroy. Saying so is the only useful thing left to do.
 func (r *remoteProvider) nothingHappened(method, resourceType string) error {
 	return fmt.Errorf(
-		"%s reported no result from %s of %s, so infrata cannot record what now exists.\n"+
+		"%s reported no result from %s of %s, so infrena cannot record what now exists.\n"+
 			"If the operation did take effect, that resource exists and is not in state: "+
 			"check %s directly before re-running.\n"+
 			"This is a defect in the plugin — a successful %s must report the resource it "+

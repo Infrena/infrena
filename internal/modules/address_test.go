@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/infrata/infrata/internal/variables"
+	"github.com/infrena/infrena/internal/variables"
 )
 
 func addresses(exp *Expansion) []string {

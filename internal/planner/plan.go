@@ -15,10 +15,10 @@ import (
 	"sort"
 	"time"
 
-	"github.com/infrata/infrata/internal/diag"
-	"github.com/infrata/infrata/pkg/address"
-	"github.com/infrata/infrata/pkg/resource"
-	"github.com/infrata/infrata/pkg/value"
+	"github.com/infrena/infrena/internal/diag"
+	"github.com/infrena/infrena/pkg/address"
+	"github.com/infrena/infrena/pkg/resource"
+	"github.com/infrena/infrena/pkg/value"
 )
 
 // PlanVersion is the schema version of the plan artifact this build writes.
@@ -197,7 +197,7 @@ type Plan struct {
 	// against, for the same reason.
 	//
 	// THE FINGERPRINT IS OF STATE AS LOADED, before any in-memory change a command
-	// makes to it. `infrata plan` hashes what came off disk; `apply` stamps the project
+	// makes to it. `infrena plan` hashes what came off disk; `apply` stamps the project
 	// name into state before planning (see cli.computePlan), which changes the bytes.
 	// So a command comparing a saved plan's hash against state must take its own hash
 	// BEFORE mutating anything, or it compares two different states and reports a
@@ -270,7 +270,7 @@ type planWire struct {
 
 // EVERY resource appears here, `OpNoop` included: the artifact describes the whole
 // plan, not only what changes. A consumer counting `operations` is not counting
-// changes — Plan.HasChanges() is. Noted after infrata-provider-fake's e2e suite read
+// changes — Plan.HasChanges() is. Noted after infrena-provider-fake's e2e suite read
 // it the other way.
 type operationWire struct {
 	Address string `json:"address"`
@@ -440,8 +440,8 @@ func DecodePlan(data []byte) (*Plan, error) {
 		return nil, fmt.Errorf("this is not a plan artifact: %w", err)
 	}
 	if w.Version != PlanVersion {
-		return nil, fmt.Errorf("this plan is version %d and this infrata writes version %d\n"+
-			"A plan artifact is not portable across format versions. Re-run `infrata plan` to "+
+		return nil, fmt.Errorf("this plan is version %d and this infrena writes version %d\n"+
+			"A plan artifact is not portable across format versions. Re-run `infrena plan` to "+
 			"produce one this build can apply", w.Version, PlanVersion)
 	}
 
@@ -525,14 +525,14 @@ func (p *Plan) CheckApplicable(project, environment, configHash string, st stale
 		return &StaleError{
 			Reason: "the configuration has changed since this plan was made, so the plan no " +
 				"longer describes what the project asks for",
-			Action: "Re-run `infrata plan " + environment + "` and review the new plan.",
+			Action: "Re-run `infrena plan " + environment + "` and review the new plan.",
 		}
 	case p.StateSerial != st.Serial || (p.StateHash != "" && st.Hash != "" && p.StateHash != st.Hash):
 		return &StaleError{
 			Reason: fmt.Sprintf("the state has changed since this plan was made (serial %d, now %d) "+
 				"— something else has applied in the meantime, so this plan's before-values are "+
 				"no longer what is out there", p.StateSerial, st.Serial),
-			Action: "Re-run `infrata plan " + environment + "` and review the new plan.",
+			Action: "Re-run `infrena plan " + environment + "` and review the new plan.",
 		}
 	}
 	return nil
@@ -565,13 +565,13 @@ func (p *Plan) CheckIdentity(project, environment string) error {
 	case p.Project != project:
 		return &StaleError{
 			Reason: fmt.Sprintf("this plan was made for project %q and this is %q", p.Project, project),
-			Action: "Apply it where it was made, or re-run `infrata plan` here.",
+			Action: "Apply it where it was made, or re-run `infrena plan` here.",
 		}
 	case p.Environment != environment:
 		return &StaleError{
 			Reason: fmt.Sprintf("this plan was made for environment %q, not %q",
 				p.Environment, environment),
-			Action: "Apply it to " + p.Environment + ", or re-run `infrata plan " + environment + "`.",
+			Action: "Apply it to " + p.Environment + ", or re-run `infrena plan " + environment + "`.",
 		}
 	}
 	return nil

@@ -1,8 +1,8 @@
 package test
 
 import (
-	"github.com/infrata/infrata/pkg/schema"
-	"github.com/infrata/infrata/pkg/value"
+	"github.com/infrena/infrena/pkg/schema"
+	"github.com/infrena/infrena/pkg/value"
 )
 
 // definitions returns the resource definitions the fake provider supports.

@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/infrata/infrata/internal/variables"
-	"github.com/infrata/infrata/pkg/value"
+	"github.com/infrena/infrena/internal/variables"
+	"github.com/infrena/infrena/pkg/value"
 )
 
 // PLAN.md §12.1's `defaults:` block, and the rule that governs it: FAIL CLOSED.

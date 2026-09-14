@@ -354,14 +354,14 @@ resources:
 	}
 }
 
-// TestTheInfrataFloorIsDecodedAsAConstraint — PLAN.md §61.2's optional floor.
-func TestTheInfrataFloorIsDecodedAsAConstraint(t *testing.T) {
-	decl, out := providersIn(t, "project: p\ninfrata: \">= 0.4, < 1.0\"\n")
+// TestTheInfrenaFloorIsDecodedAsAConstraint — PLAN.md §61.2's optional floor.
+func TestTheInfrenaFloorIsDecodedAsAConstraint(t *testing.T) {
+	decl, out := providersIn(t, "project: p\ninfrena: \">= 0.4, < 1.0\"\n")
 	if out != "" {
 		t.Fatalf("unexpected diagnostics:\n%s", out)
 	}
 	if decl.RequiredVersion.IsZero() {
-		t.Fatal("`infrata:` was not decoded")
+		t.Fatal("`infrena:` was not decoded")
 	}
 	if got := decl.RequiredVersion.String(); got != ">= 0.4, < 1.0" {
 		t.Errorf("constraint = %q, want the text as written for a diagnostic to quote", got)
@@ -371,28 +371,28 @@ func TestTheInfrataFloorIsDecodedAsAConstraint(t *testing.T) {
 	}
 }
 
-// TestAProjectWithNoInfrataKeyIsUnconstrained — every project written before the key
+// TestAProjectWithNoInfrenaKeyIsUnconstrained — every project written before the key
 // existed, which is all of them.
-func TestAProjectWithNoInfrataKeyIsUnconstrained(t *testing.T) {
+func TestAProjectWithNoInfrenaKeyIsUnconstrained(t *testing.T) {
 	decl, _ := providersIn(t, "project: p\n")
 	if !decl.RequiredVersion.IsZero() {
 		t.Error("a project stating no floor must decode as unconstrained")
 	}
 }
 
-// TestAMalformedInfrataFloorIsRefused, rather than silently ignored — a floor nobody
+// TestAMalformedInfrenaFloorIsRefused, rather than silently ignored — a floor nobody
 // checks is worse than no floor, because the file claims a guarantee it has not got.
-func TestAMalformedInfrataFloorIsRefused(t *testing.T) {
-	_, out := providersIn(t, "project: p\ninfrata: \"at least 4\"\n")
+func TestAMalformedInfrenaFloorIsRefused(t *testing.T) {
+	_, out := providersIn(t, "project: p\ninfrena: \"at least 4\"\n")
 	if out == "" {
-		t.Fatal("`infrata: \"at least 4\"` must be refused")
+		t.Fatal("`infrena: \"at least 4\"` must be refused")
 	}
 	if !strings.Contains(out, "MAJOR.MINOR.PATCH") {
 		t.Errorf("the diagnostic does not say what a constraint looks like:\n%s", out)
 	}
 }
 
-// TestTheInfrataFloorDeclaredTwiceIsAnErrorNamingBothLines.
+// TestTheInfrenaFloorDeclaredTwiceIsAnErrorNamingBothLines.
 //
 // Two floors can contradict each other — `>= 0.4` and `< 0.4` — and YAML is perfectly
 // happy with the repeated key, taking the last silently. Which floor won would then
@@ -401,10 +401,10 @@ func TestAMalformedInfrataFloorIsRefused(t *testing.T) {
 // A resources file already refuses foreign keys, so the reachable case is twice in the
 // project file. Checked before writing the guard, because a guard for an unreachable
 // case is code nothing can exercise.
-func TestTheInfrataFloorDeclaredTwiceIsAnErrorNamingBothLines(t *testing.T) {
-	_, out := providersIn(t, "project: p\ninfrata: \">= 0.4\"\ninfrata: \"< 0.4\"\n")
+func TestTheInfrenaFloorDeclaredTwiceIsAnErrorNamingBothLines(t *testing.T) {
+	_, out := providersIn(t, "project: p\ninfrena: \">= 0.4\"\ninfrena: \"< 0.4\"\n")
 	if out == "" {
-		t.Fatal("`infrata` declared twice must be an error")
+		t.Fatal("`infrena` declared twice must be an error")
 	}
 	if !strings.Contains(out, "declared twice") {
 		t.Errorf("the diagnostic does not say it is a duplicate:\n%s", out)

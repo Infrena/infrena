@@ -6,14 +6,14 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/infrata/infrata/internal/config"
-	"github.com/infrata/infrata/internal/diag"
-	"github.com/infrata/infrata/internal/environments"
-	"github.com/infrata/infrata/internal/modules"
-	"github.com/infrata/infrata/internal/modules/source"
-	"github.com/infrata/infrata/internal/variables"
-	"github.com/infrata/infrata/pkg/address"
-	"github.com/infrata/infrata/pkg/value"
+	"github.com/infrena/infrena/internal/config"
+	"github.com/infrena/infrena/internal/diag"
+	"github.com/infrena/infrena/internal/environments"
+	"github.com/infrena/infrena/internal/modules"
+	"github.com/infrena/infrena/internal/modules/source"
+	"github.com/infrena/infrena/internal/variables"
+	"github.com/infrena/infrena/pkg/address"
+	"github.com/infrena/infrena/pkg/value"
 )
 
 // scopeFor builds the variable scope bindReferences now requires, through the

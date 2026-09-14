@@ -11,16 +11,16 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/infrata/infrata/internal/compiler"
-	"github.com/infrata/infrata/internal/config"
-	"github.com/infrata/infrata/internal/diag"
-	"github.com/infrata/infrata/internal/executor"
-	"github.com/infrata/infrata/internal/planner"
-	"github.com/infrata/infrata/internal/refresh"
-	"github.com/infrata/infrata/internal/registry"
-	"github.com/infrata/infrata/internal/state"
-	"github.com/infrata/infrata/pkg/address"
-	"github.com/infrata/infrata/pkg/report"
+	"github.com/infrena/infrena/internal/compiler"
+	"github.com/infrena/infrena/internal/config"
+	"github.com/infrena/infrena/internal/diag"
+	"github.com/infrena/infrena/internal/executor"
+	"github.com/infrena/infrena/internal/planner"
+	"github.com/infrena/infrena/internal/refresh"
+	"github.com/infrena/infrena/internal/registry"
+	"github.com/infrena/infrena/internal/state"
+	"github.com/infrena/infrena/pkg/address"
+	"github.com/infrena/infrena/pkg/report"
 )
 
 // applyPrompt is what a human sees before infra mutates anything. "yes",
@@ -239,7 +239,7 @@ func newApplyCommand(opts *GlobalOptions) *cobra.Command {
 	// The backticked word is cobra's argument placeholder, so there is exactly one of
 	// them and it is the one a user types. A second pair would print literal backticks.
 	cmd.Flags().StringVar(&planPath, "plan", "",
-		"apply the plan artifact in `file`, written earlier by infrata plan --output, "+
+		"apply the plan artifact in `file`, written earlier by infrena plan --output, "+
 			"instead of compiling configuration")
 	return cmd
 }

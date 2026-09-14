@@ -4,10 +4,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/infrata/infrata/pkg/address"
-	"github.com/infrata/infrata/pkg/resource"
-	"github.com/infrata/infrata/pkg/schema"
-	"github.com/infrata/infrata/pkg/value"
+	"github.com/infrena/infrena/pkg/address"
+	"github.com/infrena/infrena/pkg/resource"
+	"github.com/infrena/infrena/pkg/schema"
+	"github.com/infrena/infrena/pkg/value"
 )
 
 func taskDef() *schema.ResourceDefinition {
@@ -23,7 +23,7 @@ func taskDef() *schema.ResourceDefinition {
 
 // TestAnIgnoredAttributeProducesNoChange.
 //
-// The case `ignore_changes` exists for: something outside infrata owns one attribute. A CI
+// The case `ignore_changes` exists for: something outside infrena owns one attribute. A CI
 // pipeline sets an ECS service's task revision on every deploy, so a plan computed from
 // configuration would revert it on the next apply and undo the deployment. The user says
 // "that one is not mine" and the planner stops arguing about it.

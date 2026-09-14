@@ -4,9 +4,9 @@ import (
 	"errors"
 	"io"
 
-	"github.com/infrata/infrata/pkg/pluginproto"
-	"github.com/infrata/infrata/pkg/pluginsdk"
-	"github.com/infrata/infrata/pkg/provider"
+	"github.com/infrena/infrena/pkg/pluginproto"
+	"github.com/infrena/infrena/pkg/pluginsdk"
+	"github.com/infrena/infrena/pkg/provider"
 )
 
 // Test-only seams, so trust_test.go can build a half-connected client for the

@@ -5,13 +5,13 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/infrata/infrata/internal/diag"
-	"github.com/infrata/infrata/internal/registry"
-	"github.com/infrata/infrata/pkg/address"
-	"github.com/infrata/infrata/pkg/provider"
-	"github.com/infrata/infrata/pkg/resource"
-	"github.com/infrata/infrata/pkg/schema"
-	"github.com/infrata/infrata/pkg/value"
+	"github.com/infrena/infrena/internal/diag"
+	"github.com/infrena/infrena/internal/registry"
+	"github.com/infrena/infrena/pkg/address"
+	"github.com/infrena/infrena/pkg/provider"
+	"github.com/infrena/infrena/pkg/resource"
+	"github.com/infrena/infrena/pkg/schema"
+	"github.com/infrena/infrena/pkg/value"
 )
 
 // aliasedDef is an attribute with several accepted spellings, the shape an AWS plugin

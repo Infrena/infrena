@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/infrata/infrata/pkg/provider"
+	"github.com/infrena/infrena/pkg/provider"
 )
 
 // Verb identifies which provider call a retry attempt is making. Retry

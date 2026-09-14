@@ -6,10 +6,10 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/infrata/infrata/internal/generator"
+	"github.com/infrena/infrena/internal/generator"
 )
 
-// newExportCommand builds `infrata export <environment>` (spec §28).
+// newExportCommand builds `infrena export <environment>` (spec §28).
 //
 // The opposite of generation: every configurable attribute of everything in
 // state, for auditing and migration. `import --generate` writes what you must
@@ -70,7 +70,7 @@ func newExportCommand(opts *GlobalOptions) *cobra.Command {
 
 			files, err := generator.Generate(resources, reg, generator.Options{
 				Minimal: false,
-				Header: "infrata export of environment " + environment + "\n" +
+				Header: "infrena export of environment " + environment + "\n" +
 					"Every configurable attribute, including ones equal to a provider default.\n" +
 					"Sensitive attributes are omitted; see the notes beside each resource.",
 			})

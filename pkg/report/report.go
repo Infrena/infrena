@@ -20,7 +20,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/infrata/infrata/pkg/value"
+	"github.com/infrena/infrena/pkg/value"
 )
 
 // Version is the wire format's schema version, written on every meta line.

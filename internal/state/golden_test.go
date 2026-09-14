@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/infrata/infrata/pkg/address"
-	"github.com/infrata/infrata/pkg/resource"
-	"github.com/infrata/infrata/pkg/value"
+	"github.com/infrena/infrena/pkg/address"
+	"github.com/infrena/infrena/pkg/resource"
+	"github.com/infrena/infrena/pkg/value"
 )
 
 // updateGolden regenerates the current golden. Run with
@@ -19,7 +19,7 @@ import (
 // deliberate, version-bumped format change — never to make a red test go green.
 //
 // EVERY OLD GOLDEN IS KEPT, not regenerated: testdata/state-v1.json is the real bytes a
-// version-1 infrata wrote, and it is what internal/state/migrate_fake_test.go migrates.
+// version-1 infrena wrote, and it is what internal/state/migrate_fake_test.go migrates.
 // A hand-written approximation of an old format is worth much less than the format
 // itself, and there is exactly one chance to keep the real thing.
 var updateGolden = flag.Bool("update", false, "rewrite the golden state file from the current encoder")

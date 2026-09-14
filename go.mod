@@ -1,4 +1,4 @@
-module github.com/infrata/infrata
+module github.com/infrena/infrena
 
 // The minimum Go a consumer needs. Raised to 1.27 on 2026-09-13, deliberately and at
 // the owner's direction.
