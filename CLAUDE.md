@@ -398,6 +398,17 @@ any outside module cannot. That was measured, not assumed. So the rule is that *
 module path must never be under `github.com/infrata/infrata/`**, which is what keeps an official
 plugin on exactly the footing a third-party plugin has.
 
+**Then §31.3 — finding and installing plugins — before Phase 4 or 5.** `infrata plugins
+install`, a committed `plugins.lock` with per-platform checksums, sources a user trusts, and
+the offer to install a plugin a project names and the machine lacks. It used to be filed
+under Phase 5, which was right while the fake provider was the only plugin; a released AWS
+provider with no install path means every user hand-places the binary that touches their
+production account. Two rules in that design are easy to violate and worth knowing before
+touching it: **a project may NAME a plugin source but only a user may TRUST one** (project
+configuration travels with a `git clone`, so it must not be able to grant a download
+source), and **no command on the hot path may touch the network** — searching happens in
+`infrata plugins ...` and in one interactive prompt, never in `plan` or `apply`.
+
 After that, Phase 4 remote state (§52) and Phase 5 production features (§53).
 
 §54 lists what **not** to build yet: the full AWS surface, a general-purpose language,

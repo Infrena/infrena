@@ -2301,12 +2301,20 @@ instead of `0.0.0-dev` (§61.1).
 **Revisit when:** the product is feature complete. That is the stated gate, and going
 public is the only thing that makes an outside plugin author possible.
 
-**Phase B (later, §53).**
+**Phase B — now designed in full in §31.3, which supersedes these four bullets and moves
+them out of §53.** In outline:
 
 - `infrata plugins install` fetches release binaries.
-- A committed `plugins.lock` records the resolved version and a SHA-256 per platform.
+- A committed `plugins.lock` records the resolved version, the source, and a SHA-256 per
+  platform.
 - The host verifies the checksum on every launch once a lock file exists.
 - Phase A's search path is where install writes, so nothing moves.
+
+§31.3 adds what this omitted: where infrata LOOKS (the `infrata-provider-*` naming
+convention, plus sources a user trusts), the rule that a project may NAME a source but only
+a user may TRUST one, and the offer to install a plugin a project references and the machine
+does not have. It ships behind Phase 3 rather than in Phase 5, because AWS is the point at
+which hand-placing a binary stops being a reasonable ask.
 
 ## 31.2 The plugin manifest: `plugin.yaml`
 
@@ -2590,6 +2598,248 @@ Tests this section requires, each with a sabotage proving it can fail:
    because the plugin repository is private.
 6. Documentation: `explain` and `validate` errors for a missing or incompatible plugin, and
    an authoring guide for the SDK.
+
+---
+
+## 31.3 Finding and installing plugins
+
+**Designed 2026-09-13**, from the owner's requirements. This SUPERSEDES §31.1's four-bullet
+"Phase B", and it moves: Phase B was filed under §53 (Phase 5), which was right while the
+only plugin was the fake one and hand-placing a binary was a reasonable ask. **AWS makes it
+wrong.** The moment a real provider exists, every user hand-places a binary, and the first
+thing they hand-place is the thing that touches their production account. This ships behind
+Phase 3, not two phases later.
+
+The goal in one sentence: **a project says which plugins it uses, and infrata can find,
+check, and install them without the user hunting for a URL.**
+
+### What the manifest already bought
+
+§31.2 designed `plugin.yaml` for exactly this and the reasoning holds, so it is not
+re-argued here — only the consequence. The manifest is fetched over HTTP at the git **tag**,
+before any binary is downloaded, and it carries `name`, `version`, `protocol`, `platforms`,
+`description` and an optional `infrata` constraint. So **"is this plugin compatible with
+what I am running, and is there a build for my machine" is answerable from one small text
+file**, which is what makes search possible without a registry, a server or an index.
+
+Everything below is plumbing around that one fact.
+
+### Sources: what infrata will look at
+
+```yaml
+# ~/.config/infrata/plugins.yml — the user's own, global
+sources:
+  - github.com/mycorp                       # an owner: search it
+  - github.com/someone/infrata-provider-hetzner   # one exact repository
+```
+
+Two forms, and the distinction is whether a repository is named:
+
+- **An owner** (`github.com/<owner>`, user or organisation) means *search this owner for
+  repositories named `infrata-provider-*`*.
+- **A repository** (`github.com/<owner>/infrata-provider-<name>`) means *this one, exactly*.
+
+**`github.com/infrata` is always searched and cannot be removed.** It is where the official
+plugins live, and a user who wants to avoid it can simply not name a plugin that lives
+there. It is not a configurable default because a configurable default is a thing that gets
+misconfigured into an empty list, after which `plugin: aws` reports that nothing matches —
+a failure whose cause is invisible.
+
+**THE NAMING CONVENTION IS LOAD-BEARING.** An owner search works by repository name, so a
+plugin must live in a repository called `infrata-provider-<name>`, and `<name>` must equal
+the manifest's `name` and the binary's `infrata-plugin-<name>`. This is the whole of the
+"registry": no index, no server, no publishing step, no account. The cost is that a plugin
+in a differently-named repository is only findable by naming the repository exactly, which
+is the second form above and is why that form exists.
+
+### A project may NAME a source; only the user may TRUST one
+
+This is the security decision, and it is the one place the design refuses the obvious
+thing.
+
+A project's configuration is checked into git and travels to whoever clones it. If project
+configuration could grant a download source, then `git clone && infrata plan` would be
+enough for a repository to introduce a place infrata fetches executables from. The prompt
+would show the URL — and a prompt that appears routinely is a prompt people stop reading.
+
+So:
+
+```yaml
+# infra.yml — a project may say where its plugin comes from
+plugins:
+  aws: ">= 0.3.0, < 0.4.0"              # today's form, unchanged
+  hetzner:                               # the new mapping form
+    version: ">= 1.2"
+    source: github.com/someone/infrata-provider-hetzner
+```
+
+- **`plugins:` keeps accepting a bare constraint string.** The mapping form is additive and
+  a project using the scalar form behaves exactly as it does today (§58). Considered and
+  rejected: a separate top-level `plugin_sources:` key, which would split one plugin's
+  facts across two places for no gain.
+- **A source named by a project is a CANDIDATE, not a permission.** Installing from an owner
+  the user has not already trusted requires an explicit confirmation that names the owner,
+  and confirming records that owner in the user's own config. One mechanism — "approve an
+  owner once" — rather than a per-install prompt nobody reads.
+- **Non-interactive never approves.** With no TTY, an unapproved owner is an error telling
+  the user which owner to approve and how. CI must be explicit; a pipeline that silently
+  starts trusting a new binary publisher is the failure this whole subsection exists to
+  prevent.
+
+`github.com/infrata` is trusted from the start, because the binary making the decision came
+from there. That is not a claim that we are trustworthy; it is the observation that a user
+who does not trust us has already lost by running `infrata`.
+
+### Detecting what is missing, and offering it
+
+Today a missing plugin is a §44 error (`pluginhost.NotFoundError`) naming the `plugin:`
+entry, every directory searched, and where to put the binary. That error is the hook.
+
+When a plugin is missing **and** stdin is a terminal **and** searching is not disabled:
+
+1. Search every trusted and project-named source for a plugin whose manifest `name`
+   matches.
+2. Filter to what can actually run here: `manifest` format supported, `protocol`
+   intersecting `pluginproto.Supported`, `platforms` containing this `GOOS/GOARCH`,
+   `infrata` allowing this build, and any `plugins:` version constraint satisfied.
+3. Print every survivor — owner, version, description — and ask.
+4. On confirmation, install, then **stop and say so**.
+
+**Step 4 does not continue the command**, and that is deliberate. Installing a plugin
+mid-`plan` means the first half of the run happened under different conditions from the
+second, and the registry is already built by then. "Installed `infrata-plugin-aws` 0.4.1;
+re-run your command" is one extra keystroke and leaves nothing to reason about.
+
+**Every filtered-out candidate is still worth mentioning, with the reason.** A user whose
+plugin exists but has no `darwin/arm64` build must be told that, not told nothing was found.
+"No plugin named `hetzner` was found" and "hetzner 2.0.0 exists but publishes no build for
+darwin/arm64" send a reader to completely different places.
+
+**With no TTY, nothing changes**: the existing error is printed, plus the one-line
+`infrata plugins install` command that would fix it. Never block on input that cannot come.
+
+### The network is never on the hot path
+
+`validate`, `plan`, `apply`, `destroy`, `refresh`, `discover`, `import`, `graph`, `explain`
+and `state` **must not make a network request**, ever, for plugin discovery. Searching
+happens in `infrata plugins search` / `install`, and in the interactive prompt above, which
+is a user answering a question rather than a command reaching out on its own.
+
+This is a hard rule and not a performance preference. A `plan` that consults the network is
+a `plan` that behaves differently on a train, in a locked-down CI runner, and during a
+GitHub outage — and invariant 6 says the same inputs produce the same plan.
+
+### `plugins.lock`
+
+Committed, one per project, and the thing that makes a downloaded binary trustworthy after
+the fact:
+
+```yaml
+version: 1
+plugins:
+  aws:
+    version: 0.4.1
+    source: github.com/infrata/infrata-provider-aws
+    checksums:
+      linux/amd64: sha256:...
+      darwin/arm64: sha256:...
+```
+
+- It records the **resolved** version, the source it came from, and a SHA-256 per platform.
+  The source is recorded because "which owner did this come from" is the question a reviewer
+  needs answered, and a name alone cannot answer it.
+- **Checksums come from the release's `SHA256SUMS`, not from the manifest.** §31.2 recorded
+  why the manifest has none: they postdate the build. Install fetches `SHA256SUMS` beside
+  the archive, verifies the archive, and records the hash here.
+- **The host verifies on every launch once a lock exists.** A binary replaced on disk after
+  install is caught at the next command rather than never.
+- `version:` is its own format version, per §61's rule that each boundary carries one.
+  It joins that section's table.
+
+**What this does and does not protect against, stated plainly.** `SHA256SUMS` is published
+by the same party as the binary, so verifying against it catches corruption in transit and
+tampering afterwards — not a malicious publisher, who would simply publish matching
+checksums. What guards against that is the trust decision above (the user approved that
+owner) and the lock file being reviewable in a diff. Signing is out of scope and recorded
+below rather than implied.
+
+### Two owners publishing the same plugin name
+
+`plugin: hetzner` in configuration is a NAME, not a source, so two owners can both answer
+it. Present every match and **never auto-pick** — not the first alphabetically, not the
+higher version, not the official one. The choice is recorded in `plugins.lock`, so it is
+asked once and then visible in review.
+
+The same rule as the ambiguous import selector (`internal/cli/import.go`), and for the same
+reason: when two candidates both answer what the user asked, choosing one silently gives
+them a thing they did not name.
+
+### Rate limits, caching, and the error that must not be confused
+
+Unauthenticated GitHub allows 60 requests an hour. An owner search costs one request to list
+repositories, plus one per candidate for its latest release, plus one per manifest. Two
+owners with several repositories each can exhaust that in a single invocation.
+
+- **Search results are cached on disk** under `~/.cache/infrata/plugins/` with a TTL, so a
+  repeated search is free. `--refresh` bypasses it.
+- **A token is accepted**, from `INFRATA_GITHUB_TOKEN` or `GITHUB_TOKEN`, and raises the
+  limit. It is optional and only read for search.
+- **A rate limit must never be reported as "not found".** This is the specific mistake to
+  avoid: both come back from the same API call, and conflating them tells a user their
+  plugin does not exist when what actually happened is that they searched four times in an
+  hour. The message says the limit was reached, when it resets, and that a token raises it.
+
+### The commands
+
+Deliberately four:
+
+- `infrata plugins list` — what is installed, its version, and where it was loaded from.
+  Answers "what am I actually running" with no network.
+- `infrata plugins search <name>` — every match across every source, with why any was
+  rejected.
+- `infrata plugins install <name>[@version]` — resolve, check, download, verify, write the
+  lock. Writes to `<project>/.infra/plugins/`, or `~/.local/share/infrata/plugins/` with
+  `--global`.
+- `infrata plugins verify` — re-check installed binaries against `plugins.lock`. What CI
+  runs.
+
+**Phase A's search path is where install writes, so nothing moves** (§31.1). Install is a
+way to populate the directories that already exist, not a second mechanism beside them —
+which is also why a hand-placed binary keeps working and keeps winning when `--plugin-dir`
+names it.
+
+### Deliberately NOT in this design
+
+Recorded so that each is a decision rather than an oversight:
+
+- **A central registry or index.** The naming convention plus one file per repository is
+  enough, and a registry is a service to run, secure and keep available.
+- **Publishing.** A plugin author tags a release and pushes archives with `SHA256SUMS`,
+  which is what the existing release workflows already do. There is nothing to publish
+  *to*.
+- **Signing.** `SHA256SUMS` is not a signature and this section says so rather than implying
+  otherwise. Sigstore or minisign would be an addition, and a real one, but it needs a key
+  story before it needs code.
+- **Forges other than GitHub.** The source syntax is host-prefixed (`github.com/...`)
+  precisely so another host can be added without changing the shape of what a user wrote.
+  Not built until someone wants it.
+- **Auto-update.** A plugin version changing without a user asking is a plan changing
+  without a user asking.
+- **Install scripts.** A plugin is one static binary. Nothing in an archive is ever
+  executed except the binary the manifest names, and only when a command needs it.
+
+### Build order within this section
+
+1. `plugins.lock` and `infrata plugins verify` — the parts with no network at all.
+2. `infrata plugins list` — no network, immediate value, exercises the loader's reporting.
+3. Manifest fetch plus `infrata plugins search` — the first network code, read-only, and
+   the place where compatibility filtering and its messages get written.
+4. `infrata plugins install`, download and checksum verification.
+5. The interactive offer on a missing plugin, which is everything above plus a prompt.
+
+The order is not arbitrary: each step is useful alone, the network arrives after the file
+formats are settled, and the prompt — the only part that can surprise a user — is last,
+built on machinery already exercised by explicit commands.
 
 ---
 
@@ -3238,6 +3488,13 @@ Phase 3 then starts with AWS as a plugin from its first commit, in its OWN REPOS
 `infrata-provider-aws`, building `infrata-plugin-aws`. See §31.1's amendment of
 2026-09-13 for why it is not `providers/aws/` inside this repository.
 
+**Then §31.3, finding and installing plugins, before anything in Phase 4 or 5.** The
+ordering is AWS first and install second rather than the other way round, because AWS is
+what makes install necessary and is also what says whether the design is right: until a
+plugin exists that someone outside this project wants, every requirement for installing one
+is a guess. It must not wait longer than that, though — a released AWS provider with no
+install path means every user hand-places the binary that touches their production account.
+
 ---
 
 # 51. Phase 3 — AWS
@@ -3277,6 +3534,10 @@ Implement:
 ---
 
 # 53. Phase 5 — Production Features
+
+**`infrata plugins install` has MOVED OUT of this phase** — it is designed in §31.3 and
+ships behind Phase 3. It was filed here while the fake provider was the only plugin, when
+hand-placing a binary was a reasonable ask; AWS is the point at which it stops being one.
 
 Implement:
 
@@ -3545,6 +3806,7 @@ The most important engineering goal is to make the **core reconciliation engine 
 | `planner.PlanVersion` | `internal/planner` | the plan artifact | additive, with a frozen-keys test |
 | `report.Version` | `pkg/report` | `--output` reports | additive |
 | lockfile `Version` | `internal/modules/source` | `modules.lock` | internal |
+| `plugins.lock` `version` | Phase B (§31.3) | the resolved plugins and their checksums | internal |
 | cache `Version` | `internal/modules/source` | module cache metadata | internal |
 
 **They stay independent, and that is the decision.** Each guards a different boundary
