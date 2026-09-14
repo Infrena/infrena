@@ -441,6 +441,7 @@ func TestTheArtifactsKeysAreFrozen(t *testing.T) {
 		p.Operations[i].Provider = "main"
 		p.Operations[i].Lifecycle = resource.Lifecycle{PreventDestroy: true}
 		p.Operations[i].Dependents = []address.Address{{Name: "dependent"}}
+		p.Operations[i].DependsOn = []address.Address{{Name: "prerequisite"}}
 	}
 
 	out, err := json.Marshal(p)
@@ -472,7 +473,7 @@ func TestTheArtifactsKeysAreFrozen(t *testing.T) {
 	}
 	assertKeys(t, "an operation", union, []string{
 		"address", "type", "provider", "kind", "before", "after",
-		"reasons", "dependents", "lifecycle",
+		"reasons", "dependents", "depends_on", "lifecycle",
 	})
 }
 

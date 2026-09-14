@@ -8,8 +8,10 @@
 package planner
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sort"
 	"time"
 
@@ -85,6 +87,24 @@ func (k OpKind) Symbol() string {
 // versioned contract, and a numeric kind would change meaning the moment
 // someone reordered the constants.
 func (k OpKind) MarshalText() ([]byte, error) { return []byte(k.String()), nil }
+
+// UnmarshalText reads a kind back by NAME, the pair MarshalText needs to make the
+// artifact readable rather than merely writable — without it the format was
+// write-only, which is what reading a saved plan back discovered.
+//
+// A name it does not know is an ERROR rather than OpNoOp. A kind that fell back to
+// "no operation" would turn a create from a newer build into a silent skip: the
+// apply would report success and do nothing, which is the worst available outcome
+// and the reason this is not a lenient decode.
+func (k *OpKind) UnmarshalText(text []byte) error {
+	for _, candidate := range []OpKind{OpNoOp, OpCreate, OpUpdate, OpReplace, OpDestroy, OpForget} {
+		if candidate.String() == string(text) {
+			*k = candidate
+			return nil
+		}
+	}
+	return fmt.Errorf("unknown operation kind %q", text)
+}
 
 // ChangeReason explains one attribute's contribution to an operation.
 //
@@ -270,6 +290,24 @@ type operationWire struct {
 	After      map[string]value.Value `json:"after,omitempty"`
 	Reasons    []ChangeReason         `json:"reasons,omitempty"`
 	Dependents []string               `json:"dependents,omitempty"`
+	// DependsOn is what the configuration says this resource depends on.
+	//
+	// Here for the same reason as Provider above, and it is the field whose absence
+	// would have made reading a plan back QUIETLY WRONG rather than merely
+	// incomplete. The executor copies Operation.DependsOn onto the state it records,
+	// and state's Dependencies is the only surviving record of what a resource
+	// depended on once it leaves configuration — which is what orders a later
+	// destroy (spec §14, and see Operation.DependsOn). An operation decoded without
+	// it records no dependencies, so a plan saved and applied would satisfy
+	// invariant 4 for itself and silently break it for the NEXT plan's destroys.
+	// That is the exact bug Operation.DependsOn's comment describes as fixed, and it
+	// would have come back through this door alone.
+	//
+	// Distinct from Dependents, which is the other direction and is data for the
+	// renderer: Dependents says who would break if this went away, DependsOn says
+	// what this needs. Both are carried because neither is derivable from the other
+	// once the plan has left the process that made it.
+	DependsOn []string `json:"depends_on,omitempty"`
 	// omitzero, not omitempty: encoding/json cannot omit a zero struct any
 	// other way, and a plan for a configuration that sets no lifecycle at all
 	// must encode byte-for-byte as it did before this field existed
@@ -335,6 +373,15 @@ func (p *Plan) encode(withTimestamp bool) ([]byte, error) {
 		for _, dependent := range dependents {
 			entry.Dependents = append(entry.Dependents, dependent.String())
 		}
+
+		// Sorted from a copy, like Dependents, so the canonical form is canonical
+		// however the plan was assembled.
+		dependsOn := make([]address.Address, len(op.DependsOn))
+		copy(dependsOn, op.DependsOn)
+		address.Sort(dependsOn)
+		for _, d := range dependsOn {
+			entry.DependsOn = append(entry.DependsOn, d.String())
+		}
 		w.Operations = append(w.Operations, entry)
 	}
 
@@ -361,4 +408,145 @@ func (p *Plan) encode(withTimestamp bool) ([]byte, error) {
 	}
 
 	return json.Marshal(w)
+}
+
+// DecodePlan reads a plan artifact back.
+//
+// It is deliberately NOT the inverse of encode: it recovers exactly what the executor
+// needs to carry out the plan, and nothing that is only there for a human reader.
+// Diagnostics are dropped, because a saved plan's warnings were addressed to whoever
+// reviewed it, and re-printing them at apply time would present a decision already made
+// as one still open.
+//
+// The version is checked before anything else, the same probe-then-decode shape
+// state.Decode and pluginmanifest.Parse use: a plan from a future build carries
+// operations this one may not understand, and refusing by version gives a message that
+// names the problem instead of one about an unknown field.
+func DecodePlan(data []byte) (*Plan, error) {
+	var w planWire
+	dec := json.NewDecoder(bytes.NewReader(data))
+	// Numbers keep their exact text on the way through, so a large integer attribute
+	// survives a save-and-apply round trip rather than becoming a float64. The same
+	// hazard internal/state hit, and the same fix.
+	dec.UseNumber()
+	if err := dec.Decode(&w); err != nil {
+		return nil, fmt.Errorf("this is not a plan artifact: %w", err)
+	}
+	if w.Version != PlanVersion {
+		return nil, fmt.Errorf("this plan is version %d and this infrata writes version %d\n"+
+			"A plan artifact is not portable across format versions. Re-run `infrata plan` to "+
+			"produce one this build can apply", w.Version, PlanVersion)
+	}
+
+	p := &Plan{
+		Version:     w.Version,
+		Project:     w.Project,
+		Environment: w.Environment,
+		ConfigHash:  w.ConfigHash,
+		StateSerial: w.StateSerial,
+		StateHash:   w.StateHash,
+	}
+	if w.CreatedAt != nil {
+		p.CreatedAt = *w.CreatedAt
+	}
+
+	for _, entry := range w.Operations {
+		addr, err := address.Parse(entry.Address)
+		if err != nil {
+			return nil, fmt.Errorf("plan operation has an unreadable address %q: %w", entry.Address, err)
+		}
+		op := Operation{
+			Address:   addr,
+			Type:      entry.Type,
+			Kind:      entry.Kind,
+			Provider:  entry.Provider,
+			Before:    entry.Before,
+			After:     entry.After,
+			Reasons:   entry.Reasons,
+			Lifecycle: entry.Lifecycle,
+		}
+		for _, field := range []struct {
+			raw  []string
+			into *[]address.Address
+		}{
+			{entry.Dependents, &op.Dependents},
+			{entry.DependsOn, &op.DependsOn},
+		} {
+			for _, s := range field.raw {
+				parsed, err := address.Parse(s)
+				if err != nil {
+					return nil, fmt.Errorf("plan operation %q names an unreadable address %q: %w",
+						entry.Address, s, err)
+				}
+				*field.into = append(*field.into, parsed)
+			}
+		}
+		p.Operations = append(p.Operations, op)
+	}
+	return p, nil
+}
+
+// StaleError says a saved plan cannot be applied because what it was made from has
+// moved. Its four causes are separate because they are four different things for a
+// user to do about it.
+type StaleError struct {
+	// Reason is the human sentence, already complete.
+	Reason string
+	// Action is what to do, per §44.
+	Action string
+}
+
+func (e *StaleError) Error() string { return e.Reason + "\n" + e.Action }
+
+// CheckApplicable refuses a saved plan that does not belong to what is in front of it.
+//
+// REFUSED OUTRIGHT, with no override flag. Decided 2026-09-13: an escape hatch on "the
+// state moved under you" is an escape hatch on the single guarantee a saved plan exists
+// to provide. A user who wants to apply against moved state wants a NEW plan, and
+// saying so is both shorter and true.
+//
+// Four checks because they are four different mistakes. Collapsing them into "this plan
+// is stale" would be accurate and useless: applying dev's plan to production, applying a
+// plan after editing configuration, and applying one after a colleague applied theirs
+// need completely different sentences.
+func (p *Plan) CheckApplicable(project, environment, configHash string, st staleState) error {
+	switch {
+	case p.Project != project:
+		return &StaleError{
+			Reason: fmt.Sprintf("this plan was made for project %q and this is %q", p.Project, project),
+			Action: "Apply it where it was made, or re-run `infrata plan` here.",
+		}
+	case p.Environment != environment:
+		return &StaleError{
+			Reason: fmt.Sprintf("this plan was made for environment %q, not %q",
+				p.Environment, environment),
+			Action: "Apply it to " + p.Environment + ", or re-run `infrata plan " + environment + "`.",
+		}
+	case configHash != "" && p.ConfigHash != "" && p.ConfigHash != configHash:
+		return &StaleError{
+			Reason: "the configuration has changed since this plan was made, so the plan no " +
+				"longer describes what the project asks for",
+			Action: "Re-run `infrata plan " + environment + "` and review the new plan.",
+		}
+	case p.StateSerial != st.Serial || (p.StateHash != "" && st.Hash != "" && p.StateHash != st.Hash):
+		return &StaleError{
+			Reason: fmt.Sprintf("the state has changed since this plan was made (serial %d, now %d) "+
+				"— something else has applied in the meantime, so this plan's before-values are "+
+				"no longer what is out there", p.StateSerial, st.Serial),
+			Action: "Re-run `infrata plan " + environment + "` and review the new plan.",
+		}
+	}
+	return nil
+}
+
+// staleState is the fingerprint of the state a plan is about to be applied against,
+// taken as a parameter so that this package keeps touching no filesystem.
+type staleState struct {
+	Serial uint64
+	Hash   string
+}
+
+// StateFingerprint pairs a state serial with its hash, for CheckApplicable.
+func StateFingerprint(serial uint64, hash string) staleState {
+	return staleState{Serial: serial, Hash: hash}
 }
