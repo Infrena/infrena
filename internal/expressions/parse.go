@@ -471,6 +471,28 @@ func parseReference(src string, origin value.Origin, ds *diag.Diagnostics) *valu
 		return nil
 	}
 
+	// `var` is the variable namespace. Stripping it HERE means nothing below
+	// the parser learns the prefix exists: variables.Scope is still keyed on
+	// the bare name, and the process variables seeded by
+	// compiler.seedProcessVariables need no change at all.
+	if segments[0] == "var" {
+		if len(segments) == 1 {
+			ds.Add(diag.Diagnostic{
+				Severity: diag.SeverityError,
+				Summary:  "${var} names no variable",
+				Detail:   "`var` is the namespace variables live in, not a variable itself.",
+				Action:   "Name one, as ${var.region}.",
+				Origin:   origin,
+			})
+			return nil
+		}
+		return &value.Expr{
+			Op:     value.OpVarRef,
+			Ref:    value.VarRef(segments[1]),
+			Origin: origin,
+		}
+	}
+
 	// One segment is a variable; two or more is a resource attribute. The
 	// compiler resolves each against a different scope.
 	//

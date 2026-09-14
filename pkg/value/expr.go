@@ -238,7 +238,9 @@ func (e *Expr) inner() string {
 			return strconv.Quote(s)
 		}
 		return "<literal>"
-	case OpVarRef, OpResourceRef:
+	case OpVarRef:
+		return "var." + e.Ref.String()
+	case OpResourceRef:
 		return e.Ref.String()
 	case OpCall:
 		parts := make([]string, 0, len(e.Args))

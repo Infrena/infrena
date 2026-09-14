@@ -288,3 +288,35 @@ func TestQualifiedReferencesDoNotRouteThroughTheParser(t *testing.T) {
 		t.Error("the guard does not refuse a rendered qualified address; it must, or a user can type one")
 	}
 }
+
+func TestVarPrefixParsesAsAVariable(t *testing.T) {
+	e, ds := Parse("${var.region}", value.Origin{})
+	if ds.HasErrors() {
+		t.Fatalf("unexpected errors: %v", ds)
+	}
+	if e.Op != value.OpVarRef {
+		t.Fatalf("Op = %v, want OpVarRef", e.Op)
+	}
+	if got := e.Ref.VarName(); got != "region" {
+		t.Errorf("VarName() = %q, want %q — the prefix is stripped at parse time", got, "region")
+	}
+}
+
+func TestABareNameStillParsesAsAVariableDuringExpand(t *testing.T) {
+	// Removed in the contract task. Here it pins that the expand step is
+	// additive: nothing that worked stops working.
+	e, ds := Parse("${region}", value.Origin{})
+	if ds.HasErrors() {
+		t.Fatalf("unexpected errors: %v", ds)
+	}
+	if e.Op != value.OpVarRef || e.Ref.VarName() != "region" {
+		t.Errorf("got %v/%q, want OpVarRef/region", e.Op, e.Ref.VarName())
+	}
+}
+
+func TestAVariableReferenceRendersItsPrefix(t *testing.T) {
+	e, _ := Parse("${var.region}", value.Origin{})
+	if got := e.String(); got != "${var.region}" {
+		t.Errorf("String() = %q, want %q — a diagnostic must echo what the user wrote", got, "${var.region}")
+	}
+}
