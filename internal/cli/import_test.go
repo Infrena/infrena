@@ -229,3 +229,84 @@ func TestAnEntryWithNoProviderIDClaimsNothing(t *testing.T) {
 		t.Errorf("an entry with no provider ID was treated as managing something: %v", got)
 	}
 }
+
+// TestAnAmbiguousSelectorIsRefusedRatherThanResolvedArbitrarily.
+//
+// A selector is `<type>.<provider id>`, which names no instance — and a provider ID is
+// unique within an ACCOUNT, not across them (§12.1), so two instances of one plugin can
+// each hold `net-1`. `byID` was a plain map keyed by type and ID, so the second
+// candidate overwrote the first and one account won by map-insertion order. The loser
+// was not reported: the user asked to adopt a resource, got a different one, and
+// nothing in the output said so.
+//
+// Refusing is the only correct answer with this syntax, and the refusal has to name
+// both candidates and their instances, or the user cannot tell which is which — the
+// action is --provider.
+func TestAnAmbiguousSelectorIsRefusedRatherThanResolvedArbitrarily(t *testing.T) {
+	found := []discovery.Result{
+		{Name: "net", Type: "fake.network", Provider: "main", ProviderID: "net-1"},
+		{Name: "net", Type: "fake.network", Provider: "acct2", ProviderID: "net-1"},
+	}
+
+	_, err := narrowToSelectors(found, []string{"fake.network.net-1"}, "")
+	if err == nil {
+		t.Fatal("two accounts hold net-1; picking one silently adopts a resource the user did not name")
+	}
+	for _, want := range []string{"fake.network.net-1", "main", "acct2", "--provider"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal omits %q, so the user cannot act on it:\n%v", want, err)
+		}
+	}
+}
+
+// TestProviderNarrowsAnOtherwiseAmbiguousSelector is the way out the message names.
+// Without this the refusal above would be a dead end, which §44 forbids: a suggested
+// action has to be one the reader can take.
+func TestProviderNarrowsAnOtherwiseAmbiguousSelector(t *testing.T) {
+	found := []discovery.Result{
+		{Name: "net", Type: "fake.network", Provider: "main", ProviderID: "net-1"},
+		{Name: "net", Type: "fake.network", Provider: "acct2", ProviderID: "net-1"},
+	}
+
+	got, err := narrowToSelectors(found, []string{"fake.network.net-1"}, "acct2")
+	if err != nil {
+		t.Fatalf("--provider acct2 must resolve the ambiguity: %v", err)
+	}
+	if len(got) != 1 || got[0].Provider != "acct2" {
+		t.Fatalf("selected %+v, want the acct2 candidate alone", got)
+	}
+}
+
+// TestAnUnambiguousSelectorStillWorksWithoutProvider.
+//
+// The control. A check that refused whenever two results shared a type would pass the
+// two tests above and break every ordinary import, and one instance is the common case.
+func TestAnUnambiguousSelectorStillWorksWithoutProvider(t *testing.T) {
+	found := []discovery.Result{
+		{Name: "net", Type: "fake.network", Provider: "main", ProviderID: "net-1"},
+		{Name: "other", Type: "fake.network", Provider: "main", ProviderID: "net-2"},
+	}
+
+	got, err := narrowToSelectors(found, []string{"fake.network.net-2"}, "")
+	if err != nil {
+		t.Fatalf("net-2 is held by exactly one instance: %v", err)
+	}
+	if len(got) != 1 || got[0].ProviderID != "net-2" {
+		t.Fatalf("selected %+v, want net-2 alone", got)
+	}
+}
+
+// TestProviderNamingNoInstanceIsRefused.
+//
+// A typo in --provider must not silently import nothing: with no selectors, import
+// adopts everything discovery found, so an unmatched instance name would quietly become
+// "import nothing" and report success.
+func TestProviderNamingNoInstanceIsRefused(t *testing.T) {
+	found := []discovery.Result{
+		{Name: "net", Type: "fake.network", Provider: "main", ProviderID: "net-1"},
+	}
+
+	if _, err := narrowToSelectors(found, nil, "acct3"); err == nil {
+		t.Error("--provider naming an instance that holds nothing must be refused, not treated as an empty import")
+	}
+}

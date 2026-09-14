@@ -75,3 +75,58 @@ resources:
 		t.Errorf("the real resource is gone from the cloud:\n%s", cloud)
 	}
 }
+
+// TestImportRefusesAnIDTwoAccountsBothHold.
+//
+// The unit tests in internal/cli cover the choosing; this is the shape a user is in
+// when they meet it, and the only place the two halves are proved together: discovery
+// really does return one ID twice when two instances hold it, and import really does
+// refuse rather than pick.
+//
+// The fixture writes both cloud files by hand, because two accounts holding the same
+// provider ID is exactly what infrata cannot produce itself — it allocates IDs per
+// cloud file, so this is pre-existing infrastructure, which is the only way the
+// situation arises and precisely the situation `import` is for.
+func TestImportRefusesAnIDTwoAccountsBothHold(t *testing.T) {
+	dir := project(t, `
+project: amb
+environments:
+  dev: {}
+providers:
+  - plugin: fake
+    name: main
+  - plugin: fake
+    name: acct2
+resources: {}
+`)
+	if err := os.MkdirAll(filepath.Join(dir, ".infra"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	const oneNetwork = `{"resources":{"net-1":{"type":"fake.network",` +
+		`"attributes":{"cidr":"10.0.0.0/16","id":"net-1"}}}}`
+	for _, instance := range []string{"main", "acct2"} {
+		writeFile(t, filepath.Join(dir, ".infra", "fake-cloud-"+instance+".json"), oneNetwork)
+	}
+
+	ambiguous := run(t, dir, "import", "dev", "fake.network.net-1")
+	if ambiguous.ExitCode == 0 {
+		t.Errorf("import adopted one of two candidates silently:\n%s", ambiguous.combined())
+	}
+	for _, want := range []string{"more than one provider instance", "main", "acct2", "--provider"} {
+		requireContains(t, ambiguous.combined(), want)
+	}
+
+	// Nothing was written: the refusal must come before state is touched, or the
+	// message is advice about damage already done.
+	if list := run(t, dir, "state", "list", "dev"); strings.Contains(list.Stdout, "net-1") {
+		t.Errorf("a refused import still wrote state:\n%s", list.Stdout)
+	}
+
+	// The way out works, and adopts from the account named rather than the other one.
+	narrowed := run(t, dir, "import", "dev", "fake.network.net-1", "--provider", "acct2")
+	if narrowed.ExitCode != 0 {
+		t.Fatalf("--provider did not resolve the ambiguity:\n%s", narrowed.combined())
+	}
+	show := run(t, dir, "state", "show", "dev", "net-1")
+	requireContains(t, show.combined(), "acct2")
+}

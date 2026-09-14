@@ -31,6 +31,7 @@ import (
 // then state. Both or neither.
 func newImportCommand(opts *GlobalOptions) *cobra.Command {
 	var generate bool
+	var instance string
 
 	cmd := &cobra.Command{
 		Use:           "import <environment> [type.id...]",
@@ -39,7 +40,8 @@ func newImportCommand(opts *GlobalOptions) *cobra.Command {
 		Short:         "Adopt existing infrastructure into state",
 		Long: "Adopt resources that already exist, so this tool manages them without recreating " +
 			"them.\n\nWith no type.id arguments, everything discovery finds is imported. Pass " +
-			"`fake.database.db-9` to import one.\n\n--generate additionally writes the " +
+			"`fake.database.db-9` to import one. With two provider instances holding the same " +
+			"provider ID, narrow the command with --provider <instance>.\n\n--generate additionally writes the " +
 			"configuration that declares what was imported, under " + config.DiscoveredDirName +
 			"/. Without it you must write that configuration yourself before the next apply: a " +
 			"resource in state that no configuration declares is scheduled for destruction.",
@@ -61,21 +63,28 @@ func newImportCommand(opts *GlobalOptions) *cobra.Command {
 
 			return withLockedEnvironment(environment, "import", backend, cmd.ErrOrStderr(),
 				func(ctx context.Context) error {
-					return runImport(ctx, cmd, opts, reg, tbl, backend, environment, args[1:], generate)
+					return runImport(ctx, cmd, opts, reg, tbl, backend, environment, args[1:],
+						generate, instance)
 				})
 		},
 	}
 	cmd.Flags().BoolVar(&generate, "generate", false,
 		"also write the configuration declaring what was imported, under "+config.DiscoveredDirName+"/")
+	// Needed because a selector is `<type>.<provider id>` and names no instance, while
+	// a provider ID is unique within an account rather than across them. It also
+	// answers "adopt everything in this one account", which the no-selector form
+	// could not say at all.
+	cmd.Flags().StringVar(&instance, "provider", "",
+		"only adopt resources belonging to this provider instance")
 	return cmd
 }
 
 func runImport(
 	ctx context.Context, cmd *cobra.Command, opts *GlobalOptions,
 	reg *registry.Registry, table providers.Table, backend *state.Local,
-	environment string, selectors []string, generate bool,
+	environment string, selectors []string, generate bool, instance string,
 ) error {
-	selected, problems, err := selectForImport(ctx, reg, selectors)
+	selected, problems, err := selectForImport(ctx, reg, selectors, instance)
 	for _, p := range problems {
 		fmt.Fprintf(cmd.ErrOrStderr(), "Warning: %v\n", p)
 	}
@@ -220,34 +229,110 @@ func alreadyManaged(st *state.State, selected []discovery.Result) []string {
 // types in every provider, and because the type is what the provider needs to
 // read the resource. `fake.database.db-9` splits at the LAST dot: a type
 // already contains one.
-func selectForImport(ctx context.Context, reg *registry.Registry, selectors []string) ([]discovery.Result, []error, error) {
+func selectForImport(
+	ctx context.Context, reg *registry.Registry, selectors []string, instance string,
+) ([]discovery.Result, []error, error) {
 	found, problems := discovery.Walk(ctx, reg, nil)
-	if len(selectors) == 0 {
-		return found, problems, nil
+	out, err := narrowToSelectors(found, selectors, instance)
+	return out, problems, err
+}
+
+// narrowToSelectors picks the discovered resources to import, optionally restricted to
+// one provider instance.
+//
+// A SELECTOR NAMES NO INSTANCE, and that is the problem this function exists to handle
+// honestly. `<type>.<provider id>` is the syntax, and a provider ID is unique within an
+// ACCOUNT rather than across them (§12.1) — two instances of one plugin can each hold
+// `net-1`, and on AWS two accounts can hold resources with identical IDs. This used to
+// be a map keyed by type and ID, so the second candidate overwrote the first and one
+// account won by insertion order, silently: the user asked to adopt one resource, got
+// another, and nothing in the output said so.
+//
+// Refusing is the only correct answer, since there is no way to say which one is meant
+// in the selector itself. `--provider` is the way out rather than new selector syntax:
+// it narrows the whole command, so it also answers "adopt everything in this one
+// account", which is the shape a two-account AWS project actually wants. Extending the
+// selector would put the instance in one place and leave the no-selector form with no
+// way to say it.
+//
+// Split out from selectForImport so it is testable without a registry or a plugin: what
+// is worth testing here is the choosing, not the discovering.
+func narrowToSelectors(
+	found []discovery.Result, selectors []string, instance string,
+) ([]discovery.Result, error) {
+	if instance != "" {
+		var held []discovery.Result
+		for _, r := range found {
+			if r.Provider == instance {
+				held = append(held, r)
+			}
+		}
+		if len(held) == 0 {
+			// NOT an empty import. With no selectors this would otherwise adopt
+			// nothing and report success, so a typo in --provider would read as
+			// "there was nothing to import".
+			names := map[string]bool{}
+			for _, r := range found {
+				names[r.Provider] = true
+			}
+			return nil, fmt.Errorf("no discovered resource belongs to provider instance %q\n"+
+				"Instances holding something: %s",
+				instance, strings.Join(sortedKeys(names), ", "))
+		}
+		found = held
 	}
 
-	byID := map[string]discovery.Result{}
+	if len(selectors) == 0 {
+		return found, nil
+	}
+
+	byID := map[string][]discovery.Result{}
 	for _, r := range found {
-		byID[r.Type+"."+r.ProviderID] = r
+		key := r.Type + "." + r.ProviderID
+		byID[key] = append(byID[key], r)
 	}
 
 	var out []discovery.Result
 	var missing []string
 	for _, sel := range selectors {
-		r, ok := byID[sel]
-		if !ok {
+		candidates := byID[sel]
+		switch {
+		case len(candidates) == 0:
 			missing = append(missing, sel)
-			continue
+		case len(candidates) == 1:
+			out = append(out, candidates[0])
+		default:
+			// Both instances named: without them the reader cannot tell which
+			// candidate is which, and the suggested action cannot be carried out.
+			held := map[string]bool{}
+			for _, c := range candidates {
+				held[c.Provider] = true
+			}
+			return nil, fmt.Errorf("%s exists in more than one provider instance: %s\n"+
+				"A selector names no instance, and a provider ID is unique within an account "+
+				"rather than across them, so this would adopt one of them arbitrarily.\n"+
+				"Narrow it with --provider <instance>",
+				sel, strings.Join(sortedKeys(held), ", "))
 		}
-		out = append(out, r)
 	}
 	if len(missing) > 0 {
 		sort.Strings(missing)
-		return nil, problems, fmt.Errorf("not found by discovery: %s\n"+
+		return nil, fmt.Errorf("not found by discovery: %s\n"+
 			"Run `infrata discover` to see what exists. A selector is `<type>.<provider id>`",
 			strings.Join(missing, ", "))
 	}
-	return out, problems, nil
+	return out, nil
+}
+
+// sortedKeys lists a set's members in a stable order, so a diagnostic naming several
+// instances reads the same way on every run (invariant 6's spirit, applied to output).
+func sortedKeys(set map[string]bool) []string {
+	out := make([]string, 0, len(set))
+	for k := range set {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // writeGenerated renders configuration for what is being imported and merges it
