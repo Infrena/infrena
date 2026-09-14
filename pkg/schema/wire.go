@@ -32,6 +32,8 @@ type attributeWire struct {
 	Computed    bool         `json:"computed,omitempty"`
 	Sensitive   bool         `json:"sensitive,omitempty"`
 	ForceNew    bool         `json:"force_new,omitempty"`
+	Optional    bool         `json:"optional,omitempty"`
+	Aliases     []string     `json:"aliases,omitempty"`
 	Default     *value.Value `json:"default,omitempty"`
 	Description string       `json:"description,omitempty"`
 }
@@ -56,6 +58,8 @@ func (a Attribute) MarshalJSON() ([]byte, error) {
 		Computed:    a.Computed,
 		Sensitive:   a.Sensitive,
 		ForceNew:    a.ForceNew,
+		Optional:    a.Optional,
+		Aliases:     a.Aliases,
 		Description: a.Description,
 	}
 	if a.Default != nil {
@@ -90,6 +94,8 @@ func (a *Attribute) UnmarshalJSON(b []byte) error {
 		Computed:    w.Computed,
 		Sensitive:   w.Sensitive,
 		ForceNew:    w.ForceNew,
+		Optional:    w.Optional,
+		Aliases:     w.Aliases,
 		Description: w.Description,
 	}
 	if w.Default != nil {

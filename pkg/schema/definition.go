@@ -93,11 +93,19 @@ func (d *ResourceDefinition) Validate() error {
 			return fmt.Errorf("%s: attribute %q has no Kind", d.Type, name)
 		case attr.Required && attr.Computed:
 			return fmt.Errorf("%s: attribute %q is both Required and Computed; configuration may not set a computed attribute", d.Type, name)
+		case attr.Optional && !attr.Computed:
+			// Every non-required attribute is already optional, so Optional alone
+			// says nothing — and an author setting it expects it to mean something.
+			return fmt.Errorf("%s: attribute %q is Optional without Computed, which says nothing: every attribute that is not Required is already optional. Optional exists to pair with Computed (PLAN.md §14.1)", d.Type, name)
 		case attr.Computed && attr.Default != nil:
 			return fmt.Errorf("%s: attribute %q is Computed and also has a Default; the provider supplies computed values", d.Type, name)
 		case attr.Required && attr.Default != nil:
 			return fmt.Errorf("%s: attribute %q is Required and also has a Default; a default makes it optional", d.Type, name)
 		}
+	}
+
+	if err := d.checkSpellings(); err != nil {
+		return err
 	}
 
 	for _, req := range d.Requirements {

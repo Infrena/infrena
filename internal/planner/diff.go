@@ -37,6 +37,13 @@ func diffAttributes(addr address.Address, def *schema.ResourceDefinition, desire
 			// The provider reports it but configuration does not set it. A
 			// computed attribute is an output; an attribute the schema does
 			// not define at all is the provider's own business.
+			//
+			// Computed covers the optional+computed case too, and that is the whole
+			// point of it (PLAN.md §14.1): when configuration does not set such an
+			// attribute the provider's choice is authoritative, so there is nothing
+			// to diff. Without this the next line proposes "removed from
+			// configuration" and the plan asks to unset what the cloud just chose —
+			// which the cloud then chooses again, forever.
 			if !defined || attr.Computed {
 				continue
 			}

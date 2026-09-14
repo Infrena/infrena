@@ -15,9 +15,46 @@ import "github.com/infrata/infrata/pkg/value"
 type Attribute struct {
 	Kind      value.Kind
 	Required  bool
-	Computed  bool // the provider sets it; configuration may not
+	Computed  bool // the provider sets it; configuration may not, unless Optional
 	Sensitive bool
 	ForceNew  bool // a change replaces the resource rather than updating it
+
+	// Optional, WITH Computed, is the third state a real cloud needs (PLAN.md §14.1):
+	// configuration MAY set this attribute, and the provider picks a value when
+	// configuration does not.
+	//
+	// Without it the model is binary — configuration's or the provider's — and an
+	// attribute the cloud fills in does not fail cleanly, it fails to CONVERGE: the
+	// planner reads a returned value that configuration does not set as "removed from
+	// configuration" and proposes to unset it, so the cloud chooses again on the next
+	// apply, forever.
+	//
+	// Set: an ordinary attribute, diffed normally, ForceNew applying normally.
+	// Unset: the provider's value is recorded and never diffed. ForceNew therefore
+	// needs no special case — an unset optional+computed attribute produces no diff at
+	// all, so it can never produce a replacement however the provider's value moves.
+	//
+	// Meaningless without Computed, since every non-required attribute is already
+	// optional, and Validate refuses it there so the field cannot be set in the belief
+	// that it does something.
+	Optional bool
+
+	// Aliases are alternative spellings configuration may use for this attribute.
+	//
+	// Matching is CASE-INSENSITIVE across the canonical name and every alias, so a
+	// plugin declaring `CidrBlock` with aliases `cidr` and `cidr_block` accepts all of
+	// `CidrBlock`, `cidrblock`, `cidr_block` and `cidr`.
+	//
+	// THE CANONICAL NAME IS THE IDENTITY. Aliases are input and display only, and that
+	// needs no enforcement: the compiler canonicalises at its own boundary, and state,
+	// the plan artifact and the plugin wire are all written downstream of it, so none
+	// of them can carry an alias. Adding an alias in a later plugin release therefore
+	// changes only what a user may type and what a plan renders — never a stored key.
+	//
+	// Validate refuses a definition whose names fold together, so a collision is a
+	// plugin that will not load rather than a silent runtime surprise about which
+	// spelling won.
+	Aliases []string
 
 	// Default is the value this attribute takes when configuration supplies
 	// none: a plain Go datum of the attribute's declared Kind — int64(10),

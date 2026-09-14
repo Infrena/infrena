@@ -14,6 +14,7 @@ import (
 	"github.com/infrata/infrata/internal/registry"
 	"github.com/infrata/infrata/pkg/address"
 	"github.com/infrata/infrata/pkg/resource"
+	"github.com/infrata/infrata/pkg/schema"
 	"github.com/infrata/infrata/pkg/value"
 )
 
@@ -181,10 +182,25 @@ type refTarget struct {
 	// so an unknown resource type produces stage 7's single "unknown resource
 	// type" diagnostic rather than one "no such attribute" per reference to it.
 	names []string
+	// def is carried so a reference can be CANONICALISED, not merely checked:
+	// `${vpc.cidr}` must become `${vpc.CidrBlock}` here, because the evaluator
+	// resolves against a plain map of attribute values with no schema in reach
+	// (expressions.ResourceScope). Stage 6 is the last place that knows both.
+	def *schema.ResourceDefinition
 }
 
 func (t refTarget) has(name string) bool {
 	return slices.Contains(t.names, name)
+}
+
+// canonical resolves a reference's attribute spelling to the plugin's own name.
+// Unknown types carry no definition, so they resolve to nothing and the caller's
+// existing "skip the attribute axis" behaviour is unchanged.
+func (t refTarget) canonical(name string) (string, bool) {
+	if t.def == nil {
+		return "", false
+	}
+	return t.def.Canonical(name)
 }
 
 func targetFor(inst modules.Instance, reg *registry.Registry) refTarget {
@@ -192,7 +208,32 @@ func targetFor(inst modules.Instance, reg *registry.Registry) refTarget {
 	if !ok {
 		return refTarget{typeName: inst.Decl.Type}
 	}
-	return refTarget{typeName: def.Type, names: attributeNames(def)}
+	return refTarget{typeName: def.Type, names: attributeNames(def), def: def}
+}
+
+// canonicaliseRefs rewrites every resource reference in an expression to the attribute
+// name its target's plugin declared (PLAN.md §14.1).
+//
+// IN PLACE, on the AST, because Expr.References() returns a collected copy and mutating
+// that changes nothing. It runs before the attribute-axis check below, so a reference
+// written as an alias is rewritten and then found rather than reported as a typo.
+//
+// A reference whose target or attribute resolves to nothing is left exactly as written,
+// so the existing diagnostics report the name the user actually typed.
+func canonicaliseRefs(e *value.Expr, declared map[string]refTarget) {
+	if e == nil {
+		return
+	}
+	if e.Op == value.OpResourceRef {
+		if t, known := declared[e.Ref.Target.String()]; known {
+			if canonical, ok := t.canonical(e.Ref.Attribute); ok {
+				e.Ref.Attribute = canonical
+			}
+		}
+	}
+	for _, arg := range e.Args {
+		canonicaliseRefs(arg, declared)
+	}
 }
 
 // sortedTargets lists the declared addresses for a diagnostic, sorted.
@@ -299,6 +340,10 @@ func bindOneExpression(
 	}
 
 	e = inst.Scope.Qualify(e)
+
+	// BEFORE the attribute axis is checked below, so an alias is rewritten and then
+	// found rather than reported as a typo naming an attribute that does exist.
+	canonicaliseRefs(e, declared)
 
 	self := inst.Address.String()
 	for _, ref := range e.References() {

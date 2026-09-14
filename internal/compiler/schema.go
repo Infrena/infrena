@@ -35,6 +35,11 @@ func bindSchemas(
 			continue
 		}
 
+		// BEFORE everything else that touches these keys. Canonicalisation is the one
+		// place aliases are resolved (PLAN.md §14.1), so checkConfiguredAttributes,
+		// the defaults, checkRequired and markSensitive all see the plugin's own names
+		// — and so does every stage downstream of the compiler.
+		canonicaliseAttributes(r.Attrs, def, &ds)
 		checkConfiguredAttributes(r.Attrs, def, r.Origin, &ds)
 		// BEFORE the plugin's own defaults, because §12.1's ladder has the
 		// instance's `defaults:` beating them: whichever runs first wins, since
@@ -46,6 +51,58 @@ func bindSchemas(
 	}
 
 	return ds
+}
+
+// canonicaliseAttributes rewrites configuration's attribute keys to the names the plugin
+// declared, resolving aliases and case (PLAN.md §14.1).
+//
+// THE ONE PLACE THIS HAPPENS for resource attributes. Everything downstream — the
+// defaults, checkRequired, markSensitive, the planner's diff, the host's
+// undeclared-attribute refusal, the generator, state, the plan artifact and the plugin
+// wire — keeps looking attributes up by exact name, because after this they ARE exact.
+// Two of those would be actively unsafe otherwise: markSensitive applies sensitivity by
+// exact name, so an unresolved alias would leave a secret unmarked and print it in clear,
+// and the planner would see one attribute under two spellings and propose a change
+// forever.
+//
+// A name that resolves to nothing is LEFT ALONE rather than reported here, so that
+// checkConfiguredAttributes reports it once with the list of attributes the type has.
+func canonicaliseAttributes(
+	attrs map[string]value.Value, def *schema.ResourceDefinition, ds *diag.Diagnostics,
+) {
+	written := make([]string, 0, len(attrs))
+	for name := range attrs {
+		written = append(written, name)
+	}
+	// Sorted so that two spellings of one attribute are reported against the same pair
+	// on every run, and so the surviving key is the same one every time.
+	sort.Strings(written)
+
+	claimed := map[string]string{} // canonical -> the spelling that claimed it
+	for _, name := range written {
+		canonical, ok := def.Canonical(name)
+		if !ok || canonical == name {
+			if ok {
+				claimed[canonical] = name
+			}
+			continue
+		}
+		if first, taken := claimed[canonical]; taken {
+			ds.Add(diag.Diagnostic{
+				Severity: diag.SeverityError,
+				Summary: strconv.Quote(first) + " and " + strconv.Quote(name) +
+					" are the same attribute",
+				Detail: "Both name " + strconv.Quote(canonical) + " on " + def.Type +
+					". Setting one attribute twice leaves it ambiguous which value applies.",
+				Action: "Remove one of them.",
+				Origin: attrs[name].Origin,
+			})
+			continue
+		}
+		claimed[canonical] = name
+		attrs[canonical] = attrs[name]
+		delete(attrs, name)
+	}
 }
 
 // checkConfiguredAttributes rejects what configuration must not set.
@@ -76,7 +133,10 @@ func checkConfiguredAttributes(attrs map[string]value.Value, def *schema.Resourc
 			continue
 		}
 
-		if attr.Computed {
+		// Computed AND Optional is the third state §14.1 adds: configuration may set
+		// it, and the provider picks when configuration does not. Only a computed
+		// attribute that is NOT optional is refused.
+		if attr.Computed && !attr.Optional {
 			ds.Add(diag.Diagnostic{
 				Severity: diag.SeverityError,
 				Summary:  strconv.Quote(name) + " is computed and cannot be set",
@@ -201,7 +261,7 @@ func applyInstanceDefaults(
 ) {
 	for _, name := range sortedDefaultKeys(inst.Defaults) {
 		attr, declared := def.Attribute(name)
-		if !declared || attr.Computed {
+		if !declared || (attr.Computed && !attr.Optional) {
 			continue
 		}
 		if _, present := attrs[name]; present {
