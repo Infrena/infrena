@@ -162,11 +162,11 @@ Two rules the design leaves behind, and both still bind:
 segments** (2026-09-14, `PLAN.md` §10.5). Six forms, each with exactly one meaning:
 `${var.region}` (a variable), `${var.tags.team}` (a path into a map variable),
 `${var.azs[0]}` (a list entry), `${vpc.id}` (a resource attribute), `${vpc.tags.Name}`
-(a path into one), and `${var.vpc}` reserved for a later change that projects a
-resource itself. `var` is reserved as a resource name, checked at the declaration; a bare
-single segment (`${vpc}`) is now a parse error naming its own fix rather than a variable
-reference, and the process variables `${var.environment}`/`${var.project}` take the
-prefix like any other.
+(a path into one), and `${vpc}` reserved for a later change that projects a
+resource itself. `var` is reserved as a resource name, checked at the declaration; today
+that bare single segment (`${vpc}`) is a parse error naming its own fix rather than a
+variable reference, and the process variables `${var.environment}`/`${var.project}` take
+the prefix like any other.
 
 - A path indexes a map with dotted keys or a list with `[n]` — an integer literal only, no
   arithmetic, no negative indices — and the two compose in either order. A missing key or
