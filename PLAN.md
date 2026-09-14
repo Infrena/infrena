@@ -834,7 +834,7 @@ ${var.tags.team}       a path into a map variable
 ${var.azs[0]}          an entry of a list variable
 ${vpc.id}              an attribute of resource `vpc`
 ${vpc.tags.Name}       a path into a resource attribute
-${vpc}                the resource `vpc` itself   (reserved here; a later change)
+${vpc}                 the resource `vpc` itself   (reserved here; a later change)
 ```
 
 Before this, a variable and a resource attribute were told apart by COUNTING
