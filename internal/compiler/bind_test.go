@@ -427,6 +427,84 @@ resources:
 	}
 }
 
+func TestAWholeResourceReferenceIsProjectedToTheDeclaredAttribute(t *testing.T) {
+	// fake.subnet's vpc_id declares References{fake.vpc, "id"}, so ${net}
+	// must become ${net.id} before anything downstream sees it.
+	p := decl(t, `
+project: myapp
+resources:
+  net:
+    type: fake.vpc
+  sub:
+    type: fake.subnet
+    vpc_id: ${net}
+`)
+	cfg, ds := bindReferences(rootOnly(t, p, Options{Environment: "dev"}), Options{Environment: "dev"}, testRegistry(t), testTable())
+	if ds.HasErrors() {
+		t.Fatalf("unexpected diagnostics: %+v", ds)
+	}
+	refs := cfg.Resources["sub"].Attrs["vpc_id"].Expr.References()
+	if len(refs) != 1 {
+		t.Fatalf("References() = %v, want exactly one", refs)
+	}
+	got := refs[0]
+	if got.Attribute != "id" {
+		t.Errorf("Attribute = %q, want %q — the projection reads the consuming attribute's declaration", got.Attribute, "id")
+	}
+	if got.Target.Name != "net" {
+		t.Errorf("Target.Name = %q, want %q", got.Target.Name, "net")
+	}
+}
+
+func TestAWholeResourceReferenceWithNoDeclarationIsAnError(t *testing.T) {
+	// fake.subnet's `cidr` declares no References, so ${net} there cannot be
+	// projected. The engine must NOT guess.
+	p := decl(t, `
+project: myapp
+resources:
+  net:
+    type: fake.vpc
+  sub:
+    type: fake.subnet
+    cidr: ${net}
+`)
+	_, ds := bindReferences(rootOnly(t, p, Options{Environment: "dev"}), Options{Environment: "dev"}, testRegistry(t), testTable())
+	if !ds.HasErrors() {
+		t.Fatal("passing a resource to an attribute that declares no reference must be an error, never a guess")
+	}
+	if !strings.Contains(ds[0].Detail, "${net.") {
+		t.Errorf("Detail = %q, want it to show naming an attribute explicitly as the fix", ds[0].Detail)
+	}
+}
+
+func TestNoEmptyAttributeReferenceEscapesStageSix(t *testing.T) {
+	// The invariant Task 3's parser comment relies on. An empty attribute
+	// downstream means ResourceScope misses, the value stays deferred forever,
+	// and the resource is created with the attribute silently unset.
+	p := decl(t, `
+project: myapp
+resources:
+  net:
+    type: fake.vpc
+  sub:
+    type: fake.subnet
+    vpc_id: ${net}
+`)
+	cfg, ds := bindReferences(rootOnly(t, p, Options{Environment: "dev"}), Options{Environment: "dev"}, testRegistry(t), testTable())
+	if ds.HasErrors() {
+		t.Fatalf("unexpected diagnostics: %+v", ds)
+	}
+	for _, rc := range cfg.Resources {
+		for name, v := range rc.Attrs {
+			for _, ref := range v.Expr.References() {
+				if ref.Attribute == "" {
+					t.Errorf("%s.%s kept an empty-attribute reference past stage 6", rc.Address, name)
+				}
+			}
+		}
+	}
+}
+
 // rootOnly wraps a project as stage 5 would when it contains no modules: every
 // resource an instance at the root, each sharing the root scope.
 //

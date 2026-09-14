@@ -49,6 +49,26 @@ func definitions() []*schema.ResourceDefinition {
 			ImportID:     schema.ImportSpec{Description: "the database identifier, e.g. db-1"},
 		},
 		{
+			Type:        "fake.vpc",
+			Description: "A fake VPC. Has no dependencies.",
+			Attributes: map[string]schema.Attribute{
+				"id": {Kind: value.KindString, Computed: true, Description: "Assigned VPC identifier"},
+			},
+			Capabilities: schema.Capabilities{Create: true, Read: true, Update: true, Delete: true, Import: true},
+			ImportID:     schema.ImportSpec{Description: "the VPC identifier, e.g. vpc-1"},
+		},
+		{
+			Type:        "fake.subnet",
+			Description: "A fake subnet. vpc_id refers to a fake.vpc; cidr declares no reference.",
+			Attributes: map[string]schema.Attribute{
+				"vpc_id": {Kind: value.KindString, Description: "VPC this subnet sits in",
+					References: &schema.Reference{Type: "fake.vpc", Attribute: "id"}},
+				"cidr": {Kind: value.KindString, Description: "Address range"},
+			},
+			Capabilities: schema.Capabilities{Create: true, Read: true, Update: true, Delete: true, Import: true},
+			ImportID:     schema.ImportSpec{Description: "the subnet identifier, e.g. subnet-1"},
+		},
+		{
 			Type:        "fake.application",
 			Description: "A fake application. Requires a database.",
 			Attributes: map[string]schema.Attribute{

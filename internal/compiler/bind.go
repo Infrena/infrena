@@ -236,6 +236,55 @@ func canonicaliseRefs(e *value.Expr, declared map[string]refTarget) {
 	}
 }
 
+// projectRefs fills in the attribute of every WHOLE-RESOURCE reference, from
+// the declaration on the attribute that consumes it (PLAN.md §14.3).
+//
+// `vpc_id: ${vpc}` becomes `${vpc.id}` here and nowhere else, which is what lets
+// the planner, the executor, the plan artifact and the wire format stay exactly
+// as they are: downstream sees an ordinary two-part reference and cannot tell
+// the difference.
+//
+// IN PLACE on the AST, and BEFORE canonicaliseRefs, for the same reason that one
+// runs before the attribute-axis check: a projected name must then be
+// canonicalised like any other, in case a plugin declares its reference against
+// an attribute spelling that is itself an alias of another.
+//
+// THE ENGINE NEVER GUESSES. An attribute with no declaration is an error naming
+// the fix, not a fallback to "probably the id" — a wrong value shipped silently
+// is the failure this whole feature exists to prevent.
+func projectRefs(
+	e *value.Expr,
+	consuming *schema.Attribute,
+	consumingName string,
+	declared map[string]refTarget,
+	origin value.Origin,
+	ds *diag.Diagnostics,
+) {
+	if e == nil {
+		return
+	}
+	if e.Op == value.OpResourceRef && e.Ref.Attribute == "" {
+		switch {
+		case consuming == nil || consuming.References == nil:
+			ds.Add(diag.Diagnostic{
+				Severity: diag.SeverityError,
+				Summary:  "${" + e.Ref.Target.String() + "} passes a resource to an attribute that declares no reference",
+				Detail: "`" + consumingName + "` does not say which of " +
+					strconv.Quote(e.Ref.Target.String()) + "'s attributes it holds, so there is " +
+					"nothing to pick — write ${" + e.Ref.Target.String() + ".<attribute>} instead. " +
+					"The provider declares that, not infrena.",
+				Action: "Name the attribute you mean, as ${" + e.Ref.Target.String() + ".<attribute>}.",
+				Origin: origin,
+			})
+		default:
+			e.Ref.Attribute = consuming.References.Attribute
+		}
+	}
+	for _, arg := range e.Args {
+		projectRefs(arg, consuming, consumingName, declared, origin, ds)
+	}
+}
+
 // sortedTargets lists the declared addresses for a diagnostic, sorted.
 func sortedTargets(set map[string]refTarget) []string {
 	out := make([]string, 0, len(set))
@@ -260,6 +309,18 @@ func bindAttribute(
 		return attr.Value
 	}
 
+	// The consuming attribute's own declaration, looked up ONCE for every leaf
+	// this attribute has: it is what projectRefs checks a whole-resource
+	// reference against. A nil def means an unregistered type, which already
+	// skips the attribute axis elsewhere and must skip this too rather than
+	// reporting a second diagnostic about the same unknown type.
+	var consuming *schema.Attribute
+	if def := declared[inst.Address.String()].def; def != nil {
+		if a, ok := def.Attribute(attr.Name); ok {
+			consuming = &a
+		}
+	}
+
 	// A COMPOSITE carrying interpolations is walked leaf by leaf (PLAN.md
 	// §10.1). Until M10 this was refused, and the refusal was right for the code
 	// that existed: HasExpressions is set whenever any leaf holds "${" while the
@@ -273,7 +334,7 @@ func bindAttribute(
 	src, ok := attr.Value.AsString()
 	if !ok {
 		walked := expressions.WalkLeaves(attr.Value, func(leafSrc string, leafOrigin value.Origin) value.Value {
-			return bindOneExpression(inst, leafSrc, leafOrigin, environment, declared, edges, ds)
+			return bindOneExpression(inst, leafSrc, leafOrigin, environment, declared, edges, consuming, attr.Name, ds)
 		})
 		// A composite one of whose leaves did not resolve is itself UNKNOWN
 		// (PLAN.md §10.1). Left Known, the planner would diff a placeholder leaf
@@ -287,7 +348,7 @@ func bindAttribute(
 		return walked
 	}
 
-	return bindOneExpression(inst, src, attr.Origin, environment, declared, edges, ds)
+	return bindOneExpression(inst, src, attr.Origin, environment, declared, edges, consuming, attr.Name, ds)
 }
 
 // bindOneExpression is everything that happens to ONE interpolated string: parse,
@@ -303,6 +364,8 @@ func bindOneExpression(
 	environment string,
 	declared map[string]refTarget,
 	edges map[string]value.Origin,
+	consuming *schema.Attribute,
+	consumingName string,
 	ds *diag.Diagnostics,
 ) value.Value {
 	e, parseDiags := expressions.Parse(src, origin)
@@ -340,6 +403,11 @@ func bindOneExpression(
 	}
 
 	e = inst.Scope.Qualify(e)
+
+	// BEFORE canonicaliseRefs: a projected name must then be canonicalised like
+	// any other, in case a plugin declares its reference against an attribute
+	// spelling that is itself an alias of another.
+	projectRefs(e, consuming, consumingName, declared, origin, ds)
 
 	// BEFORE the attribute axis is checked below, so an alias is rewritten and then
 	// found rather than reported as a typo naming an attribute that does exist.
