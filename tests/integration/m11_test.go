@@ -165,6 +165,13 @@ resources:
 // twoAccounts is two instances of one plugin with resources split between them, and
 // DIFFERENT counts in each: a bug that split them evenly could otherwise satisfy a
 // per-cloud assertion by accident.
+//
+// EACH ACCOUNT HOLDS ITS OWN NETWORK, which is not decoration. `fake.database`
+// declares a requirement for a `fake.network`, and satisfaction is per instance
+// (internal/compiler.checkRequirements) because another instance is another account.
+// This fixture used to give acct2 a database and no network, with a literal CIDR
+// standing in for one — which validated only because the check counted types across
+// the whole project and let main's network satisfy acct2's database.
 const twoAccounts = `
 project: MainApp
 environments:
@@ -182,10 +189,18 @@ resources:
     type: fake.database
     engine: postgres
     network: ${net.id}
+  also:
+    type: fake.database
+    engine: mysql
+    network: ${net.id}
+  othernet:
+    type: fake.network
+    cidr: 10.1.0.0/16
+    provider: acct2
   there:
     type: fake.database
     engine: postgres
-    network: 10.0.0.0/16
+    network: ${othernet.id}
     provider: acct2
 `
 
@@ -209,12 +224,13 @@ func TestTwoInstancesThatConfigureNothingAreStillTwoAccounts(t *testing.T) {
 	base := filepath.Join(dir, ".infra")
 	main := cloudNames(t, filepath.Join(base, "fake-cloud-main.json"))
 	acct2 := cloudNames(t, filepath.Join(base, "fake-cloud-acct2.json"))
-	if strings.Join(main, ",") != "here,net" {
-		t.Errorf("main holds %v, want net and here", main)
+	if strings.Join(main, ",") != "also,here,net" {
+		t.Errorf("main holds %v, want net, here and also", main)
 	}
-	// The half a shared file would fail: `there` must be in acct2 and NOWHERE else.
-	if strings.Join(acct2, ",") != "there" {
-		t.Errorf("acct2 holds %v, want just `there`", acct2)
+	// The half a shared file would fail: acct2's two resources must be there and
+	// NOWHERE else.
+	if strings.Join(acct2, ",") != "othernet,there" {
+		t.Errorf("acct2 holds %v, want othernet and there", acct2)
 	}
 	// The counts DIFFER, so a symmetric bug that split resources evenly between two
 	// files cannot satisfy both assertions above by accident.
@@ -260,6 +276,14 @@ resources:
     type: fake.database
     engine: postgres
     network: ${net.id}
+  also:
+    type: fake.database
+    engine: mysql
+    network: ${net.id}
+  othernet:
+    type: fake.network
+    cidr: 10.1.0.0/16
+    provider: acct2
 `)
 	p := run(t, dir, "plan", "dev")
 	if p.ExitCode != 2 {
@@ -274,12 +298,14 @@ resources:
 	}
 
 	base := filepath.Join(dir, ".infra")
-	if got := cloudNames(t, filepath.Join(base, "fake-cloud-acct2.json")); len(got) != 0 {
-		t.Errorf("acct2 still holds %v", got)
+	// acct2 keeps its own network — only the database was removed — so this asserts
+	// the destroy was precise rather than that the account was emptied.
+	if got := cloudNames(t, filepath.Join(base, "fake-cloud-acct2.json")); strings.Join(got, ",") != "othernet" {
+		t.Errorf("acct2 holds %v, want just othernet", got)
 	}
 	// The other account UNTOUCHED, which is the half that fails if the destroy went to
 	// whichever instance a type lookup happened to return.
-	if got := cloudNames(t, filepath.Join(base, "fake-cloud-main.json")); strings.Join(got, ",") != "here,net" {
+	if got := cloudNames(t, filepath.Join(base, "fake-cloud-main.json")); strings.Join(got, ",") != "also,here,net" {
 		t.Errorf("main holds %v — removing acct2's resource disturbed the other account", got)
 	}
 }
@@ -455,10 +481,14 @@ resources:
     type: fake.database
     engine: postgres
     network: ${net.id}
+  othernet:
+    type: fake.network
+    cidr: 10.1.0.0/16
+    provider: acct2
   there:
     type: fake.database
     engine: postgres
-    network: ${net.id}
+    network: ${othernet.id}
     provider: acct2
   own:
     type: fake.database

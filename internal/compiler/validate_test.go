@@ -81,6 +81,56 @@ func TestValidateGraphAcceptsSatisfiedRequirement(t *testing.T) {
 	}
 }
 
+// TestARequirementIsNotSatisfiedFromAnotherAccount.
+//
+// Requirements were keyed by resource TYPE across the whole configuration, so a
+// database in one provider instance was satisfied by a network in another. Two
+// instances are two accounts (§12.1) — resources in one cannot reach the other, which
+// is the entire reason instances exist — so that satisfied nothing.
+//
+// It was an inconsistency rather than a deliberate allowance, which is what settles
+// it: the SAME logical situation reported an error whenever only one instance was
+// declared (TestValidateGraphReportsMissingRequiredInfrastructure is that case). One
+// project got two different answers to "this database has no network in its account",
+// decided by whether some unrelated account happened to have one.
+func TestARequirementIsNotSatisfiedFromAnotherAccount(t *testing.T) {
+	network := res("network", "fake.network", map[string]value.Value{"cidr": value.String("10.0.0.0/16", value.SourceExplicit)})
+	network.Provider = "main"
+	database := res("database", "fake.database", map[string]value.Value{"engine": value.String("postgres", value.SourceExplicit)})
+	database.Provider = "acct2"
+
+	graph := cfg(network, database)
+	ds := validateGraph(&graph, testRegistry(t))
+	if !ds.HasErrors() {
+		t.Fatal("a network in a different account does not satisfy a database's requirement")
+	}
+
+	var out strings.Builder
+	ds.Render(&out)
+	// The instance has to be named, or the message describes a configuration the
+	// user can see contains a fake.network and reads as a bug in the tool.
+	if !strings.Contains(out.String(), "acct2") {
+		t.Errorf("the diagnostic does not name the instance whose account is short:\n%s", out.String())
+	}
+}
+
+// TestARequirementIsSatisfiedWithinTheSameAccount is the control.
+//
+// Without it, keying on the instance could be satisfied by a check that always fails,
+// and nothing here would notice: the test above would pass against code that refused
+// every requirement.
+func TestARequirementIsSatisfiedWithinTheSameAccount(t *testing.T) {
+	network := res("network", "fake.network", map[string]value.Value{"cidr": value.String("10.0.0.0/16", value.SourceExplicit)})
+	network.Provider = "acct2"
+	database := res("database", "fake.database", map[string]value.Value{"engine": value.String("postgres", value.SourceExplicit)})
+	database.Provider = "acct2"
+
+	graph := cfg(network, database)
+	if ds := validateGraph(&graph, testRegistry(t)); ds.HasErrors() {
+		t.Errorf("both resources are in acct2, so the requirement is satisfied: %+v", ds)
+	}
+}
+
 // stubProvider satisfies provider.Provider with exactly what this file needs:
 // one resource type whose requirement is Optional, to prove stage 8 only
 // errors on requirements that are not.

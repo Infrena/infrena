@@ -116,17 +116,46 @@ func cycleDiagnostic(cfg *ResolvedConfig, cycle []address.Address) diag.Diagnost
 // needs a database," not an opaque failure once a provider API is finally
 // asked to create it (PLAN.md §17).
 //
-// Satisfaction here is existence across the whole resolved configuration, not
-// a traced reference from the specific resource that declares the
-// requirement: Requirement carries no attribute name to trace against, so
-// there is no principled way to demand a specific edge. The spec also allows
-// a requirement to be satisfied by an existing resource already in state, but
-// validateGraph has no state to consult — that half of satisfaction belongs
-// to whichever stage has state, not to compilation.
+// Satisfaction here is existence WITHIN THE SAME PROVIDER INSTANCE, not a traced
+// reference from the specific resource that declares the requirement: Requirement
+// carries no attribute name to trace against, so there is no principled way to demand
+// a specific edge.
+//
+// PER INSTANCE, corrected 2026-09-13. This counted types across the whole
+// configuration, so a database in one account was satisfied by a network in another —
+// and two instances are two accounts (§12.1), which is the entire reason instances
+// exist. What settles it as a defect rather than deliberate looseness is that the same
+// situation already errored whenever only one instance was declared: one project got
+// two different answers to "this database has no network in its account", decided by
+// whether some unrelated account happened to have one.
+//
+// TWO LIMITS REMAIN, recorded rather than hidden because AWS meets both:
+//
+//  1. **State is not consulted.** §8.1 allows a requirement to be satisfied by a
+//     resource that already exists, and `validate` has no state — by design, since it
+//     is the command that contacts nothing. So a project whose VPC is adopted rather
+//     than declared reports a requirement it does in fact meet. Moving the check to a
+//     stage that has state would make `validate` either weaker or state-dependent; the
+//     honest fix is for a requirement to be satisfiable by a REFERENCE, which needs
+//     vocabulary Requirement does not have.
+//  2. **An attribute like `region` is not compared.** A requirement names TYPES, so a
+//     subnet requiring a VPC is satisfied by a VPC in any region of the same account.
+//     Comparing regions means matching an arbitrary attribute, which the mechanism has
+//     no vocabulary for either — and the real guarantee there is the REFERENCE:
+//     `${vpc.id}` is validated by stages 6 and 7 and is what actually ties a subnet to
+//     one VPC. This check is a pre-flight hint ("an application needs a database"), not
+//     the correctness mechanism, and must not be mistaken for one.
+//
+// Both would be answered by the same change — letting a Requirement name the attribute
+// that satisfies it — and neither should be guessed at before AWS says what it needs.
 func checkRequirements(cfg *ResolvedConfig, reg *registry.Registry, ds *diag.Diagnostics) {
-	present := map[string]bool{}
+	// Keyed by instance AND type. Every resource carries an instance name by the time
+	// this runs — a project declaring no `providers:` block gets one implicit instance
+	// and every resource in it names that — so single-instance projects behave exactly
+	// as they did.
+	present := map[held]bool{}
 	for _, r := range cfg.Resources {
-		present[r.Type] = true
+		present[held{r.Provider, r.Type}] = true
 	}
 
 	for _, addr := range cfg.Addresses() {
@@ -141,24 +170,41 @@ func checkRequirements(cfg *ResolvedConfig, reg *registry.Registry, ds *diag.Dia
 		}
 
 		for _, req := range def.Requirements {
-			if req.Optional || satisfiesAny(present, req.Types) {
+			if req.Optional || satisfiesAny(present, r.Provider, req.Types) {
 				continue
+			}
+			// The instance is NAMED whenever there is one to name. Without it the
+			// message describes a configuration the reader can see does contain a
+			// fake.network, and reads as a bug in the tool rather than a gap in
+			// their project.
+			where := " to this configuration."
+			detail := req.Description + "\nSatisfied by a resource of type: " + strings.Join(req.Types, ", ")
+			if r.Provider != "" {
+				where = " to provider instance " + strconv.Quote(r.Provider) + "."
+				detail += "\nIt must belong to the same provider instance, " +
+					strconv.Quote(r.Provider) + ": another instance is another account, " +
+					"and resources in one cannot reach the other."
 			}
 			ds.Add(diag.Diagnostic{
 				Severity: diag.SeverityError,
 				Summary:  strconv.Quote(addr.String()) + " is missing required " + req.Name,
-				Detail:   req.Description + "\nSatisfied by a resource of type: " + strings.Join(req.Types, ", "),
-				Action:   "Add a resource of type " + strings.Join(req.Types, " or ") + " to this configuration.",
+				Detail:   detail,
+				Action:   "Add a resource of type " + strings.Join(req.Types, " or ") + where,
 				Origin:   r.Origin,
 			})
 		}
 	}
 }
 
-// satisfiesAny reports whether any of types is present in the configuration.
-func satisfiesAny(present map[string]bool, types []string) bool {
+// held is one resource type present in one provider instance's account. The PAIR is
+// the unit of satisfaction: a type alone says nothing about whether the resource
+// declaring the requirement can reach it.
+type held struct{ instance, typ string }
+
+// satisfiesAny reports whether any of types is present in instance's account.
+func satisfiesAny(present map[held]bool, instance string, types []string) bool {
 	for _, t := range types {
-		if present[t] {
+		if present[held{instance, t}] {
 			return true
 		}
 	}
