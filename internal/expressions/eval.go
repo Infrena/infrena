@@ -51,7 +51,18 @@ func evaluate(e *value.Expr, scope Scope, ds *diag.Diagnostics) value.Value {
 			})
 			return unknownFrom(e, value.KindString, false)
 		}
-		return v.WithOrigin(e.Origin)
+		v = v.WithOrigin(e.Origin)
+		if len(e.Ref.Path) == 0 {
+			return v
+		}
+		// The ref rendered WITHOUT the path, so a diagnostic names the thing
+		// being stepped into rather than echoing the whole failing expression.
+		base := "var." + e.Ref.VarName()
+		out, ok := applyPath(v, e.Ref.Path, base, e.Origin, ds)
+		if !ok {
+			return unknownFrom(e, value.KindString, false)
+		}
+		return out
 
 	case value.OpResourceRef:
 		v, ok := scope.Attribute(e.Ref)
