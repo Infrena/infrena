@@ -590,7 +590,7 @@ func TestEmptyDeclarationSaysTheRootCauseOnce(t *testing.T) {
 		// `type` present but unusable.
 		"variables:\n  v:\n    type: widget\n": {"widget"},
 		// `default` present but unusable.
-		"variables:\n  v:\n    default: ${other}\n": {"interpolation"},
+		"variables:\n  v:\n    default: ${var.other}\n": {"interpolation"},
 		// A bound with no type: decodeBound already says to add one.
 		"variables:\n  v:\n    min: 1\n": {"min", "type"},
 	}

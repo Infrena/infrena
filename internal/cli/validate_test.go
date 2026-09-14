@@ -327,7 +327,7 @@ project: myapp
 resources:
   network:
     type: fake.network
-    cidr: ${cidr}
+    cidr: ${var.cidr}
 `)
 
 	// Without the variable, the reference is genuinely undefined.

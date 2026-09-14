@@ -6,6 +6,7 @@ package expressions
 
 import (
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -234,7 +235,7 @@ func parseExpr(src string, origin value.Origin, ds *diag.Diagnostics) *value.Exp
 				"function call is expected. YAML already expresses maps and lists, so the " +
 				"language does not.",
 			Action: "Write the value as YAML, or pass it to a function: " +
-				"`${merge(tags, " + src + ")}`.",
+				"`${merge(var.tags, " + src + ")}`.",
 			Origin: origin,
 		})
 		return nil
@@ -268,7 +269,7 @@ func parseArgument(src string, origin value.Origin, ds *diag.Diagnostics) *value
 // means the string "payments", which is what the YAML around it would mean and
 // what anyone writing it expects. Treating it as a reference would make the
 // obvious spelling silently resolve to something else — and there is no need
-// for it, because a variable belongs in another argument: `merge(tags, {...})`.
+// for it, because a variable belongs in another argument: `merge(var.tags, {...})`.
 //
 // Keys are text, unquoted and uninterpolated, for the reason §10.1 gives: a
 // configuration's shape must not depend on a value.
@@ -406,6 +407,80 @@ func parseCall(src string, open int, origin value.Origin, ds *diag.Diagnostics) 
 	return &value.Expr{Op: value.OpCall, Function: name, Args: args, Origin: origin}
 }
 
+// indexSuffix matches a trailing [N] on one segment.
+var indexSuffix = regexp.MustCompile(`^(.*?)\[([^\]]*)\]$`)
+
+// parseSteps turns the segments after a name into path steps.
+//
+// A segment is a map key, optionally carrying ONE trailing [N] that indexes
+// the value that key names. Brackets are scanned here rather than by the
+// expression scanner because they never nest inside a reference: the index is
+// a literal integer, so there is nothing to nest.
+func parseSteps(segments []string, ref string, origin value.Origin, ds *diag.Diagnostics) ([]value.Step, bool) {
+	var out []value.Step
+	for _, seg := range segments {
+		key := seg
+		var indices []string
+		for {
+			m := indexSuffix.FindStringSubmatch(key)
+			if m == nil {
+				break
+			}
+			key = m[1]
+			indices = append([]string{m[2]}, indices...)
+		}
+		if key == "" {
+			// Every segment reaching parseSteps came from the top-level dot
+			// split, which already refuses a segment that is empty outright
+			// (`${var.a..b}`). A segment can still be entirely brackets
+			// (`[0]`) after stripping them here — that is a key-less index,
+			// not a key: there is nothing for [0] to index into.
+			ds.Add(diag.Diagnostic{
+				Severity: diag.SeverityError,
+				Summary:  "malformed reference " + strconv.Quote(ref),
+				Detail: strconv.Quote(seg) + " in ${" + ref + "} has no key before its bracket, so " +
+					"the index has nothing to index.",
+				Action: "Write the key the index applies to before the bracket, as ${var.name[0]}.",
+				Origin: origin,
+			})
+			return nil, false
+		}
+		out = append(out, value.Step{Kind: value.StepKey, Key: key})
+		for _, raw := range indices {
+			n, err := strconv.Atoi(raw)
+			if err != nil {
+				bracket := strings.Index(ref, "[")
+				refPrefix := ref
+				if bracket >= 0 {
+					refPrefix = ref[:bracket]
+				}
+				ds.Add(diag.Diagnostic{
+					Severity: diag.SeverityError,
+					Summary:  "index " + strconv.Quote(raw) + " in ${" + ref + "} is not a literal integer",
+					Detail: "An index is a literal integer. A varying index is only useful if something " +
+						"varies it, which is iteration, and this language has none.",
+					Action: "Write a literal, as ${" + refPrefix + "[0]}.",
+					Origin: origin,
+				})
+				return nil, false
+			}
+			if n < 0 {
+				ds.Add(diag.Diagnostic{
+					Severity: diag.SeverityError,
+					Summary:  "index " + raw + " in ${" + ref + "} is negative",
+					Detail: "A negative index would make the reference's meaning depend on a length " +
+						"the reader cannot see.",
+					Action: "Count from the start, as [0].",
+					Origin: origin,
+				})
+				return nil, false
+			}
+			out = append(out, value.Step{Kind: value.StepIndex, Index: n})
+		}
+	}
+	return out, true
+}
+
 func parseReference(src string, origin value.Origin, ds *diag.Diagnostics) *value.Expr {
 	segments := strings.Split(src, ".")
 	for _, s := range segments {
@@ -414,7 +489,7 @@ func parseReference(src string, origin value.Origin, ds *diag.Diagnostics) *valu
 				Severity: diag.SeverityError,
 				Summary:  "malformed reference " + strconv.Quote(src),
 				Detail:   fmt.Sprintf("%q has an empty name segment.", src),
-				Action:   "Write ${name} for a variable, or ${resource.attribute} for a resource attribute.",
+				Action:   "Write ${var.name} for a variable, or ${resource.attribute} for a resource attribute.",
 				Origin:   origin,
 			})
 			return nil
@@ -439,14 +514,16 @@ func parseReference(src string, origin value.Origin, ds *diag.Diagnostics) *valu
 	// on an already-parsed expression. A guard at the lookup instead would have
 	// to tell "qualified by Qualify" from "typed by the user" when both are the
 	// same bytes, which is not a check that can be made right.
-	for i, s := range segments {
-		if s != "module" {
-			continue
-		}
+	//
+	// Only segments[0] can be a module qualifier — under this grammar the
+	// target is always exactly one segment, so `module` is legitimate spelled
+	// anywhere else: a map key (${var.tags.module}) or a path step
+	// (${vpc.module}) names something the user wrote, not an address.
+	if segments[0] == "module" {
 		// Two different mistakes wear the same segment, and telling a user to
 		// reference an output would be nonsense for the second.
-		if i+2 <= len(segments)-1 {
-			instance := segments[i+1]
+		if len(segments) >= 3 {
+			instance := segments[1]
 			ds.Add(diag.Diagnostic{
 				Severity: diag.SeverityError,
 				Summary:  "reference ${" + src + "} names a module's internals",
@@ -471,22 +548,101 @@ func parseReference(src string, origin value.Origin, ds *diag.Diagnostics) *valu
 		return nil
 	}
 
-	// One segment is a variable; two or more is a resource attribute. The
-	// compiler resolves each against a different scope.
-	//
-	// Both are SCOPE-RELATIVE: the parser has no scope, so it cannot know
-	// whether it is reading a module file or infra.yml, and a reference
-	// written inside a module is re-rooted by stage 5 rather than here.
-	if len(segments) == 1 {
-		return &value.Expr{
-			Op:     value.OpVarRef,
-			Ref:    value.VarRef(segments[0]),
-			Origin: origin,
+	// `var` is the variable namespace. Stripping it HERE means nothing below
+	// the parser learns the prefix exists: variables.Scope is still keyed on
+	// the bare name, and the process variables seeded by
+	// compiler.seedProcessVariables need no change at all.
+	if segments[0] == "var" {
+		if len(segments) == 1 {
+			ds.Add(diag.Diagnostic{
+				Severity: diag.SeverityError,
+				Summary:  "${var} names no variable",
+				Detail:   "`var` is the namespace variables live in, not a variable itself.",
+				Action:   "Name one, as ${var.region}.",
+				Origin:   origin,
+			})
+			return nil
 		}
+		// The variable's own name may carry an index: ${var.azs[0]}.
+		nameSteps, ok := parseSteps(segments[1:2], src, origin, ds)
+		if !ok {
+			return nil
+		}
+		if len(nameSteps) == 0 || nameSteps[0].Kind != value.StepKey {
+			ds.Add(diag.Diagnostic{
+				Severity: diag.SeverityError,
+				Summary:  "malformed reference " + strconv.Quote(src),
+				Detail:   "`var.` must be followed by a variable name.",
+				Action:   "Name one, as ${var.region}.",
+				Origin:   origin,
+			})
+			return nil
+		}
+		rest, ok := parseSteps(segments[2:], src, origin, ds)
+		if !ok {
+			return nil
+		}
+		ref := value.VarRef(nameSteps[0].Key)
+		ref.Path = append(nameSteps[1:], rest...)
+		return &value.Expr{Op: value.OpVarRef, Ref: ref, Origin: origin}
 	}
-	return &value.Expr{
-		Op:     value.OpResourceRef,
-		Ref:    value.LocalRef(strings.Join(segments[:len(segments)-1], "."), segments[len(segments)-1]),
-		Origin: origin,
+
+	if len(segments) == 1 {
+		ds.Add(diag.Diagnostic{
+			Severity: diag.SeverityError,
+			Summary:  "${" + src + "} is not a reference",
+			Detail: "Variables are written ${var." + src + "}. A resource reference needs an " +
+				"attribute, as ${" + src + ".id}.",
+			Action: "Add the `var.` prefix, or name an attribute.",
+			Origin: origin,
+		})
+		return nil
 	}
+
+	// FIRST segment is the resource, SECOND is the attribute, the rest is a
+	// path. A resource's name cannot contain a dot — config.checkResourceName
+	// refuses one, because a name IS an address and a dot separates module
+	// levels — so a user-written target is always exactly one segment. The old
+	// rule, target-is-everything-but-the-last, could only ever construct a
+	// target nothing is permitted to declare, which is why ${vpc.tags.Name}
+	// reported an undeclared resource "vpc.tags".
+	//
+	// The target is used as-is below, not run through parseSteps — a resource
+	// name is never indexed, only its attributes are. A bracket here
+	// (${vpc[0].id}) would otherwise construct a resource literally named
+	// "vpc[0]", reported much later as an undeclared resource instead of as
+	// malformed at the point of the mistake.
+	if strings.ContainsAny(segments[0], "[]") {
+		ds.Add(diag.Diagnostic{
+			Severity: diag.SeverityError,
+			Summary:  "malformed reference " + strconv.Quote(src),
+			Detail: strconv.Quote(segments[0]) + " is not a valid resource name — a resource is " +
+				"never indexed, only an attribute or a path step is.",
+			Action: "Remove the bracket from the resource name, and index an attribute instead, " +
+				"as ${vpc.id[0]}.",
+			Origin: origin,
+		})
+		return nil
+	}
+	attrSteps, ok := parseSteps(segments[1:2], src, origin, ds)
+	if !ok {
+		return nil
+	}
+	if len(attrSteps) == 0 || attrSteps[0].Kind != value.StepKey {
+		ds.Add(diag.Diagnostic{
+			Severity: diag.SeverityError,
+			Summary:  "malformed reference " + strconv.Quote(src),
+			Detail:   "A resource reference names an attribute after the resource.",
+			Action:   "Write ${" + segments[0] + ".<attribute>}.",
+			Origin:   origin,
+		})
+		return nil
+	}
+	rest, ok := parseSteps(segments[2:], src, origin, ds)
+	if !ok {
+		return nil
+	}
+	ref := value.LocalRef(segments[0], attrSteps[0].Key)
+	ref.Path = append(attrSteps[1:], rest...)
+	return &value.Expr{Op: value.OpResourceRef, Ref: ref, Origin: origin}
 }

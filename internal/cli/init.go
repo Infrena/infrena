@@ -46,6 +46,11 @@ func scaffoldFiles() map[string]string {
 	return map[string]string{
 		config.ProjectFileName: `project: my-project
 
+# The oldest infrena that understands this project. Optional, and worth
+# keeping: without it, an older binary reports unknown keys one at a time
+# instead of saying it is too old.
+infrena: ">= 0.5"
+
 # Environments are first-class: each has its own state and its own lock. Add as
 # many as you like — they hold the same infrastructure and differ only in what
 # their variables say. Removing one from this file proposes tearing it down --

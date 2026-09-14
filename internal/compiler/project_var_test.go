@@ -23,7 +23,7 @@ environments:
 resources:
   network:
     type: fake.network
-    cidr: ${project}-${environment}
+    cidr: ${var.project}-${var.environment}
 `)
 	cfg, ds := Compile(files, testRegistry(t), Options{Environment: "dev"})
 	if ds.HasErrors() {
@@ -36,7 +36,7 @@ resources:
 	}
 	// No scope assertion here, deliberately. A CONCATENATION carries neither
 	// operand's scope — it resolves to SourceComputed at ScopeUnset, and that is
-	// pre-existing and true of `${environment}-x` just the same. The renderer
+	// pre-existing and true of `${var.environment}-x` just the same. The renderer
 	// omits the annotation entirely rather than printing "from unset", so
 	// nothing wrong reaches a user; it just means provenance cannot be asserted
 	// through a concatenated value. TestProjectIsAuthoritative below asserts it
@@ -58,7 +58,7 @@ environments:
 resources:
   network:
     type: fake.network
-    cidr: ${project}
+    cidr: ${var.project}
 `)
 	cfg, ds := Compile(files, testRegistry(t), Options{Environment: "dev"})
 	if ds.HasErrors() {
@@ -69,7 +69,7 @@ resources:
 		t.Errorf("cidr = %v; an environment override beat the project name", got)
 	}
 	if got.Scope != value.ScopeCLIOverride {
-		t.Errorf("${project} resolved at scope %v, want the invocation rung", got.Scope)
+		t.Errorf("${var.project} resolved at scope %v, want the invocation rung", got.Scope)
 	}
 }
 
@@ -85,7 +85,7 @@ environments:
 resources:
   network:
     type: fake.network
-    cidr: ${project}
+    cidr: ${var.project}
 `)
 	cfg, ds := Compile(files, testRegistry(t), Options{Environment: "dev"})
 	if ds.HasErrors() {
@@ -93,11 +93,11 @@ resources:
 	}
 	label := value.ScopeLabel(cfg.Resources["network"].Attrs["cidr"])
 	if label == "--var" || label == "" {
-		t.Errorf("${project} renders as %q — it did not come from the command line and the plan "+
+		t.Errorf("${var.project} renders as %q — it did not come from the command line and the plan "+
 			"must not say it did", label)
 	}
 	if !strings.Contains(label, "project") {
-		t.Errorf("${project} renders as %q, which does not say where the value came from", label)
+		t.Errorf("${var.project} renders as %q, which does not say where the value came from", label)
 	}
 }
 
@@ -114,7 +114,7 @@ func TestProjectCrossesAModuleBoundary(t *testing.T) {
 resources:
   net:
     type: fake.network
-    cidr: ${project}-inner
+    cidr: ${var.project}-inner
 `,
 		"infra.yml": `
 project: MainApp
@@ -130,7 +130,7 @@ resources:
 
 	cfg, ds := Compile(files, testRegistry(t), Options{Environment: "dev", Dir: dir})
 	if ds.HasErrors() {
-		t.Fatalf("${project} is not visible inside a module:\n%s", rendered(ds))
+		t.Fatalf("${var.project} is not visible inside a module:\n%s", rendered(ds))
 	}
 	inner, ok := cfg.Resources["module.stack.net"]
 	if !ok {
@@ -157,7 +157,7 @@ environments:
 resources:
   network:
     type: fake.network
-    cidr: ${project}
+    cidr: ${var.project}
 `)
 	cfg, ds := Compile(files, testRegistry(t), Options{
 		Environment: "dev",

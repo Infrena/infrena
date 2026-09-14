@@ -93,7 +93,7 @@ func Compile(files []config.File, reg *registry.Registry, opts Options) (Resolve
 	fileValues, varDiags := stage.FileValues, stage.VarDiags
 
 	// Stage 4.5: the provider instances. AFTER variables, because an instance's
-	// configuration interpolates them — `cloud: ${path}`, `iam-role: ${role}` —
+	// configuration interpolates them — `cloud: ${var.path}`, `iam-role: ${var.role}` —
 	// and BEFORE stage 5, because expansion needs to know which instance a
 	// resource belongs to in order to inherit it down a module call.
 	//
@@ -205,9 +205,25 @@ func Compile(files []config.File, reg *registry.Registry, opts Options) (Resolve
 // states one — including this repository's own fixtures. The constraint exists to stop
 // a RELEASED binary quietly misreading a project written for a later one; a developer
 // running their own build has not made that mistake.
-// isZero reports a version of 0.0.0, which nobody releases.
-func isZero(v semver.Version) bool {
-	return v.Major == 0 && v.Minor == 0 && v.Patch == 0
+//
+// notARelease reports whether v cannot be a version anyone shipped: 0.0.0, or a
+// version carrying a pre-release/build suffix.
+//
+// The zero check alone USED TO BE ENOUGH: before this repository had any release tag,
+// `go build` in a checkout with a VCS remote reported a pseudo-version that parsed as
+// 0.0.0, so checking for zero caught every development build. It stopped being enough
+// the moment the first tag (v0.1.0) was pushed — a pseudo-version bases itself on the
+// nearest reachable tag plus one patch, so the same untagged checkout now reports
+// something like `0.4.1-0.20260914210715-b41497c99237+dirty`, which is not zero and
+// so slipped past this check entirely, letting a project's floor refuse a developer's
+// own build (found via `infrena: ">= 0.5"` in a freshly scaffolded project, 2026-09-14).
+// A suffix is what still marks it: the release workflow stamps a bare MAJOR.MINOR.PATCH
+// with `-ldflags -X`, so anything carrying a `-` (semver.Parse only keeps a suffix as
+// `Pre` when a `-` precedes it; a bare `+meta` with none, as in `0.5.0+dirty`, is
+// dropped and leaves `Pre` empty — that version IS floor-checked) is, whatever numbers
+// it landed on, not that.
+func notARelease(v semver.Version) bool {
+	return (v.Major == 0 && v.Minor == 0 && v.Patch == 0) || v.Pre != ""
 }
 
 // developmentVersion is what a build with no version information calls itself. Stated
@@ -229,12 +245,10 @@ func checkRequiredVersion(project *config.ProjectDecl, current string) diag.Diag
 	}
 
 	running, err := semver.Parse(current)
-	if err != nil || isZero(running) {
-		// Neither an unparseable version nor 0.0.0 is a release, and a complaint about
-		// the binary's own version string is not something a user can act on. 0.0.0
-		// specifically is what a pseudo-version parses to — `go build` in a checkout
-		// with a remote produces one — so without this a developer's own build would
-		// be refused by every project stating a floor.
+	if err != nil || notARelease(running) {
+		// Neither an unparseable version nor a non-release one is something a user can
+		// act on a complaint about — see notARelease for why zero alone is not enough
+		// to catch it.
 		return ds
 	}
 	if project.RequiredVersion.Allows(running) {
@@ -402,7 +416,7 @@ func directoryScopes(
 			}
 		}
 		// The three process variables are authoritative in every scope, not
-		// just the project-wide one — a ${environment} that resolved inside
+		// just the project-wide one — a ${var.environment} that resolved inside
 		// resources/db/ and nowhere else would be worse than one that resolved
 		// nowhere. See seedProcessVariables.
 		seedProcessVariables(&scope, project.Project, opts)
@@ -443,7 +457,7 @@ func sortedDirs(m map[string]map[string]value.Value) []string {
 // invocation rather than from any file.
 //
 // `environment` is unconditional and authoritative: configuration names its
-// own environment (PLAN.md §10's example is `name: ${project_name}-${environment}`),
+// own environment (PLAN.md §10's example is `name: ${var.project_name}-${var.environment}`),
 // and a --var that could change it would produce resource names claiming one
 // environment while the plan changed another.
 //
@@ -475,7 +489,7 @@ func sortedDirs(m map[string]map[string]value.Value) []string {
 // itself, not a flag.
 //
 // TWO variables, not four. "region" and "account" were seeded here from Options fields
-// that nothing ever assigned, so they were never in scope and `${region}` was an
+// that nothing ever assigned, so they were never in scope and `${var.region}` was an
 // undefined variable in every project that ever ran. Removed 2026-09-13; see
 // variables.processReservedNames for what that cost while it stood.
 func seedProcessVariables(scope *variables.Scope, project string, opts Options) {

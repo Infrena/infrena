@@ -53,7 +53,7 @@ func scopeWith(pairs map[string]string) variables.Scope {
 // TestAnInstancesConfigInterpolates — the point of the whole rule. BOTH scopes,
 // because one cannot tell "resolved" from "resolved correctly".
 func TestAnInstancesConfigInterpolates(t *testing.T) {
-	d := decls(t, "project: p\nproviders:\n  - plugin: fake\n    iam-role: ${aws_role}\n")
+	d := decls(t, "project: p\nproviders:\n  - plugin: fake\n    iam-role: ${var.aws_role}\n")
 
 	for _, tc := range []struct{ role string }{{"arn:prod"}, {"arn:dev"}} {
 		table, ds := Resolve(d, scopeWith(map[string]string{"aws_role": tc.role}))
@@ -76,7 +76,7 @@ providers:
   - plugin: fake
     defaults:
       tags:
-        environment: ${environment}
+        environment: ${var.environment}
         team: payments
 `)
 	table, ds := Resolve(d, scopeWith(map[string]string{"environment": "production"}))
@@ -166,7 +166,7 @@ func TestAnInstanceWithNoInterpolationIsUnchanged(t *testing.T) {
 // TestAnUndefinedVariableInProviderConfigIsReported. Not an unknown that surfaces
 // as a credential failure at apply, which is where it would otherwise land.
 func TestAnUndefinedVariableInProviderConfigIsReported(t *testing.T) {
-	d := decls(t, "project: p\nproviders:\n  - plugin: fake\n    iam-role: ${nosuch}\n")
+	d := decls(t, "project: p\nproviders:\n  - plugin: fake\n    iam-role: ${var.nosuch}\n")
 	if _, ds := Resolve(d, variables.Scope{}); !ds.HasErrors() {
 		t.Fatal("an undefined variable must be reported here, not left to fail at apply")
 	}

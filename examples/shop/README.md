@@ -71,10 +71,10 @@ production still gets everything else from `default.yml`.
   look in `resources/app/vars/` rather than `vars/`.
 - `size: 50` is `resources/app/vars/sizes.yml` overriding the module's own `default: 10`.
 - `tags:` is a map whose values interpolate, crossing the module boundary as one input.
-  `${environment}` and `${project}` come from the invocation, so `plan production` shows
+  `${var.environment}` and `${var.project}` come from the invocation, so `plan production` shows
   different values with no second copy of the map anywhere. It cannot live in a variables file:
   a variable is resolved before any expression scope exists, so `${...}` there has nothing to
-  refer to. To combine it with another map, `${merge(a, {team: storefront})}` — quoted, because
+  refer to. To combine it with another map, `${merge(var.a, {team: storefront})}` — quoted, because
   YAML ends a plain scalar at `: `.
 
 Precedence runs: provider default → `vars/**` and `variables.yml` → `resources/<dir>/vars/**` →
@@ -115,7 +115,7 @@ there is no second, hidden mechanism that changes behaviour because an environme
 `modules/app-stack/module.yml` declares `password` as an input, and `resources/app/app.yml`
 passes it. That is not ceremony: a module cannot see a project variable, or a directory's
 variables either. Try routing around the input — delete the `password:` declaration from the
-module, delete the `password:` line from the call, and reference `${db_password}` directly
+module, delete the `password:` line from the call, and reference `${var.db_password}` directly
 inside the module:
 
 ```

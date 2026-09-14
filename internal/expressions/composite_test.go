@@ -22,7 +22,7 @@ func marker(src string, _ value.Origin) value.Value {
 
 func TestALeafInsideAMapIsReached(t *testing.T) {
 	in := value.Map(map[string]value.Value{
-		"environment": leafStr("${environment}"),
+		"environment": leafStr("${var.environment}"),
 		"team":        leafStr("payments"),
 	}, value.SourceExplicit)
 
@@ -31,7 +31,7 @@ func TestALeafInsideAMapIsReached(t *testing.T) {
 	if !ok {
 		t.Fatalf("the walk changed the shape: %#v", out.Raw)
 	}
-	if got, _ := m["environment"].AsString(); got != "<${environment}>" {
+	if got, _ := m["environment"].AsString(); got != "<${var.environment}>" {
 		t.Errorf("the interpolated leaf was not reached: %q", got)
 	}
 	// A leaf with no interpolation is UNTOUCHED, not reparsed. Parsing a literal
@@ -45,14 +45,14 @@ func TestNestingWorksToAnyDepth(t *testing.T) {
 	in := value.Map(map[string]value.Value{
 		"outer": value.List([]value.Value{
 			leafStr("plain"),
-			value.Map(map[string]value.Value{"deep": leafStr("${x}")}, value.SourceExplicit),
+			value.Map(map[string]value.Value{"deep": leafStr("${var.x}")}, value.SourceExplicit),
 		}, value.SourceExplicit),
 	}, value.SourceExplicit)
 
 	out := WalkLeaves(in, marker)
 	outer := out.Raw.(map[string]value.Value)["outer"].Raw.([]value.Value)
 	inner := outer[1].Raw.(map[string]value.Value)
-	if got, _ := inner["deep"].AsString(); got != "<${x}>" {
+	if got, _ := inner["deep"].AsString(); got != "<${var.x}>" {
 		t.Errorf("a leaf three levels down was not reached: %q", got)
 	}
 	// Refusing depth two while allowing depth one would be a rule nobody could
@@ -66,12 +66,12 @@ func TestNestingWorksToAnyDepth(t *testing.T) {
 // read without resolving anything.
 func TestAKeyIsNeverInterpolated(t *testing.T) {
 	in := value.Map(map[string]value.Value{
-		"${notakey}": leafStr("value"),
+		"${var.notakey}": leafStr("value"),
 	}, value.SourceExplicit)
 
 	out := WalkLeaves(in, marker)
 	m := out.Raw.(map[string]value.Value)
-	if _, ok := m["${notakey}"]; !ok {
+	if _, ok := m["${var.notakey}"]; !ok {
 		t.Errorf("the key was rewritten; a configuration's shape must not depend on a value: %#v", m)
 	}
 }
@@ -80,12 +80,12 @@ func TestAKeyIsNeverInterpolated(t *testing.T) {
 // the scope: mutating it would make a second reference to that variable see the
 // resolved result, which would depend on evaluation order.
 func TestTheWalkDoesNotMutateItsInput(t *testing.T) {
-	inner := map[string]value.Value{"a": leafStr("${x}")}
+	inner := map[string]value.Value{"a": leafStr("${var.x}")}
 	in := value.Map(inner, value.SourceExplicit)
 
 	_ = WalkLeaves(in, marker)
 
-	if got, _ := inner["a"].AsString(); got != "${x}" {
+	if got, _ := inner["a"].AsString(); got != "${var.x}" {
 		t.Errorf("the input map was mutated: %q", got)
 	}
 }
@@ -104,7 +104,7 @@ func TestANonCompositeIsReturnedAsIs(t *testing.T) {
 func TestTheLeafGetsItsOwnOrigin(t *testing.T) {
 	leafOrigin := value.Origin{File: "f.yml", Line: 42, Column: 7}
 	in := value.Map(map[string]value.Value{
-		"a": leafStr("${x}").WithOrigin(leafOrigin),
+		"a": leafStr("${var.x}").WithOrigin(leafOrigin),
 	}, value.SourceExplicit).WithOrigin(value.Origin{File: "f.yml", Line: 1, Column: 1})
 
 	var seen value.Origin
@@ -131,7 +131,7 @@ func TestTheWalkPreservesLeafSensitivity(t *testing.T) {
 	in := value.Map(map[string]value.Value{
 		"team":     leafStr("payments"),
 		"password": leafStr("hunter2").WithSensitive(true),
-		"resolved": leafStr("${x}"),
+		"resolved": leafStr("${var.x}"),
 	}, value.SourceExplicit)
 
 	out := WalkLeaves(in, func(string, value.Origin) value.Value {

@@ -349,7 +349,7 @@ func (w *walker) expand(lv level, scope *Scope, dir string, module []string, inh
 		// dependency of everything the call expanded into, and NOTHING ELSE
 		// records it. The call is expanded away, so stage 6 never sees its
 		// attributes; inside the module that value arrives as an INPUT, which is
-		// a bare `${network}` with no dot, and stage 6 walks only resource
+		// a bare `${var.network}` with no dot, and stage 6 walks only resource
 		// references for edges. Without this the plan looks clean and the apply
 		// fails with "network is still unknown after its dependencies were
 		// applied", after the outer resource has already been created.

@@ -55,6 +55,41 @@ resources:
 	}
 }
 
+// TestQualifyPreservesAPathIntoAResourceAttribute guards the BindsResource
+// branch, which used to rebuild Ref from Target and Attribute alone — dropping
+// Path. ${server.tags.owner} inside a module would qualify the target
+// correctly and then silently return the whole `tags` map instead of stepping
+// into it.
+func TestQualifyPreservesAPathIntoAResourceAttribute(t *testing.T) {
+	decl, dir := fixture(t, map[string]string{
+		"infra.yml": "project: demo\nmodules:\n  - ./net\nresources:\n  netA:\n    type: module.net\n",
+		"net/module.yml": `
+resources:
+  server:
+    type: test.thing
+  web:
+    type: test.thing
+`,
+	})
+
+	exp, ds := Expand(decl, variables.Scope{}, nil, Env{Name: "dev"}, dir, paths{})
+	if ds.HasErrors() {
+		t.Fatalf("unexpected diagnostics: %+v", ds)
+	}
+
+	v, ds := evalAt(t, exp, "web", "${server.tags.owner}")
+	if ds.HasErrors() {
+		t.Fatalf("unexpected diagnostics: %+v", ds)
+	}
+	if got := v.Expr.Ref.Target.String(); got != "module.netA.server" {
+		t.Fatalf("reference target = %q, want %q", got, "module.netA.server")
+	}
+	if len(v.Expr.Ref.Path) != 1 || v.Expr.Ref.Path[0].Kind != value.StepKey || v.Expr.Ref.Path[0].Key != "owner" {
+		t.Errorf("Qualify lost the path: Ref.Path = %#v, want a single key step \"owner\" — "+
+			"${server.tags.owner} would silently resolve to the whole tags map", v.Expr.Ref.Path)
+	}
+}
+
 func TestBareNameResolvesToAModuleCallsOutput(t *testing.T) {
 	decl, dir := fixture(t, map[string]string{
 		"infra.yml": `
@@ -156,7 +191,7 @@ resources:
     type: test.thing
 outputs:
   home:
-    value: ${region}
+    value: ${var.region}
 `,
 	})
 
@@ -332,7 +367,7 @@ resources:
     type: test.thing
 outputs:
   out:
-    value: ${text}
+    value: ${var.text}
 `,
 	})
 
@@ -371,7 +406,7 @@ modules:
 resources:
   ca:
     type: module.a
-    count: ${scale}
+    count: ${var.scale}
   cb:
     type: module.b
     ratio: ${ca.n}
@@ -385,7 +420,7 @@ resources:
     type: test.thing
 outputs:
   n:
-    value: ${count}
+    value: ${var.count}
 `,
 		"b/module.yml": `
 inputs:
@@ -442,7 +477,7 @@ resources:
     type: test.thing
   ca:
     type: module.a
-    count: ${scale}
+    count: ${var.scale}
 `,
 		"a/module.yml": `
 inputs:
@@ -453,7 +488,7 @@ resources:
     type: test.thing
 outputs:
   n:
-    value: ${count}
+    value: ${var.count}
 `,
 	})
 

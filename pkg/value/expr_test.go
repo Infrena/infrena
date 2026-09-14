@@ -4,7 +4,71 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/infrena/infrena/pkg/address"
 )
+
+func TestAStepRendersAsItWasWritten(t *testing.T) {
+	if got := (Step{Kind: StepKey, Key: "team"}).String(); got != ".team" {
+		t.Errorf("Step.String() = %q, want %q", got, ".team")
+	}
+	if got := (Step{Kind: StepIndex, Index: 0}).String(); got != "[0]" {
+		t.Errorf("Step.String() = %q, want %q", got, "[0]")
+	}
+}
+
+func TestAReferenceRendersItsPath(t *testing.T) {
+	// A resource attribute with a path: the form ${vpc.tags.Name}.
+	r := Reference{
+		Target:    address.Address{Name: "vpc"},
+		Attribute: "tags",
+		Path:      []Step{{Kind: StepKey, Key: "Name"}},
+	}
+	if got := r.String(); got != "vpc.tags.Name" {
+		t.Errorf("String() = %q, want %q", got, "vpc.tags.Name")
+	}
+
+	// A variable with a mixed path: the form ${var.subnets[0].cidr}. Under
+	// OpVarRef the Attribute is empty and the path carries everything.
+	v := Reference{
+		Target: address.Address{Name: "subnets"},
+		Path:   []Step{{Kind: StepIndex, Index: 0}, {Kind: StepKey, Key: "cidr"}},
+	}
+	if got := v.String(); got != "subnets[0].cidr" {
+		t.Errorf("String() = %q, want %q", got, "subnets[0].cidr")
+	}
+}
+
+func TestTwoPathsIntoOneAttributeAreTwoReferences(t *testing.T) {
+	// References() dedups on String(), so a path must be part of the key or
+	// ${vpc.tags.Name} and ${vpc.tags.Env} collapse into one and the second
+	// silently resolves to the first.
+	e := &Expr{Op: OpConcat, Args: []*Expr{
+		{Op: OpResourceRef, Ref: Reference{Target: address.Address{Name: "vpc"}, Attribute: "tags",
+			Path: []Step{{Kind: StepKey, Key: "Name"}}}},
+		{Op: OpResourceRef, Ref: Reference{Target: address.Address{Name: "vpc"}, Attribute: "tags",
+			Path: []Step{{Kind: StepKey, Key: "Env"}}}},
+	}}
+	if got := len(e.References()); got != 2 {
+		t.Errorf("References() returned %d, want 2 — a path must be part of the dedup key", got)
+	}
+}
+
+func TestInModuleCarriesThePath(t *testing.T) {
+	// InModule re-roots a reference written inside a module. If it dropped
+	// Path, a module containing ${vpc.tags.Name} would silently resolve to
+	// the whole tags map instead of the "Name" key — a silently wrong plan,
+	// not an error.
+	r := Reference{
+		Target:    address.Address{Name: "vpc"},
+		Attribute: "tags",
+		Path:      []Step{{Kind: StepKey, Key: "Name"}},
+	}
+	got := r.InModule("net")
+	if len(got.Path) != 1 || got.Path[0].Key != "Name" {
+		t.Errorf("InModule dropped the path: Path = %+v, want one key step Name", got.Path)
+	}
+}
 
 func TestReferenceString(t *testing.T) {
 	r := LocalRef("database", "endpoint")
@@ -204,6 +268,55 @@ func TestAnExpressionSurvivesTheWire(t *testing.T) {
 	}
 	if got := back.Expr.Ref.Attribute; got != "endpoint" {
 		t.Errorf("reference attribute = %q, want endpoint", got)
+	}
+}
+
+// TestAPathIntoAResourceAttributeSurvivesTheWire guards exprwire.go's
+// wireReference specifically for Path, which — until this test — it dropped
+// silently in both directions. A saved plan containing ${vpc.tags.Name} would
+// round-trip to ${vpc.tags}: apply would then resolve the WHOLE tags map
+// instead of the Name key, with no error, which is PLAN.md §37's exact
+// "carries the expression that reproduces it" guarantee broken silently.
+//
+// A MIXED path (a key then an index), because a fixture with only one kind of
+// step could pass against a wire step that hard-codes StepKey and ignores
+// Index — or the reverse.
+func TestAPathIntoAResourceAttributeSurvivesTheWire(t *testing.T) {
+	original := &Expr{
+		Op: OpResourceRef,
+		Ref: Reference{
+			Target:    address.Address{Name: "vpc"},
+			Attribute: "subnets",
+			Path:      []Step{{Kind: StepIndex, Index: 0}, {Kind: StepKey, Key: "cidr"}},
+		},
+	}
+
+	v := Unknown(KindString, SourceComputed)
+	v.Expr = original
+
+	data, err := v.MarshalJSON()
+	if err != nil {
+		t.Fatalf("MarshalJSON: %v", err)
+	}
+
+	var back Value
+	if err := back.UnmarshalJSON(data); err != nil {
+		t.Fatalf("UnmarshalJSON: %v", err)
+	}
+	if back.Expr == nil {
+		t.Fatalf("the expression did not survive: %s", data)
+	}
+	if got, want := back.Expr.String(), original.String(); got != want {
+		t.Errorf("String() = %q after the wire, want %q — the path did not round-trip", got, want)
+	}
+	if len(back.Expr.Ref.Path) != 2 {
+		t.Fatalf("Path = %+v, want 2 steps", back.Expr.Ref.Path)
+	}
+	if back.Expr.Ref.Path[0].Kind != StepIndex || back.Expr.Ref.Path[0].Index != 0 {
+		t.Errorf("Path[0] = %+v, want the index step", back.Expr.Ref.Path[0])
+	}
+	if back.Expr.Ref.Path[1].Kind != StepKey || back.Expr.Ref.Path[1].Key != "cidr" {
+		t.Errorf("Path[1] = %+v, want the key step \"cidr\"", back.Expr.Ref.Path[1])
 	}
 }
 

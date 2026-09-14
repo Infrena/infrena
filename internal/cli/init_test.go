@@ -79,6 +79,24 @@ func TestInitRefusesWhenAnyScaffoldFileExists(t *testing.T) {
 	}
 }
 
+// TestInitScaffoldsAVersionFloor. PLAN.md §61.2: the key turns "unknown key"
+// into "this project needs infrena >= X; this is Y" for the NEXT break, which
+// is the one nobody will remember to prepare for.
+func TestInitScaffoldsAVersionFloor(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := scaffold(dir); err != nil {
+		t.Fatalf("scaffold: %v", err)
+	}
+
+	b, err := os.ReadFile(filepath.Join(dir, "infra.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), "infrena:") {
+		t.Error("infra.yml must declare a version floor")
+	}
+}
+
 // TestInitIsDeterministic. The file list is reported to the user and the order
 // must not come from Go's map iteration.
 func TestInitIsDeterministic(t *testing.T) {

@@ -779,7 +779,7 @@ func TestTheUnsetMessageNamesTheDirectoryLayoutToo(t *testing.T) {
 // argument and the project name — and a --var changing either would make a resource
 // claim one thing while its state recorded another. Region and account were supplied by
 // NOTHING: `compiler.Options.Region` and `.Account` were declared and read and never
-// assigned, so `${region}` was an undefined variable in every project that ever ran.
+// assigned, so `${var.region}` was an undefined variable in every project that ever ran.
 //
 // Being reserved on top of that was actively harmful, in two ways this test pins:
 // a declared `region` was skipped by the reserved-name branch, so a project that forgot

@@ -544,7 +544,7 @@ resources: {}
 // interpolate into. It does read `providers:` though, and an instance's configuration
 // interpolates variables — refresh has to construct that instance to call
 // Provider.Read against the right account. Refusing the flag left an instance
-// configured `cloud: ${cloud_file}` refreshable by nothing.
+// configured `cloud: ${var.cloud_file}` refreshable by nothing.
 func TestRefreshTakesVarForAProviderInstance(t *testing.T) {
 	dir := projectDir(t, `
 project: myapp

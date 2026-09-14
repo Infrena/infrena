@@ -1,6 +1,7 @@
 package expressions
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 
@@ -39,7 +40,7 @@ func TestParseLoneInterpolationIsNotWrapped(t *testing.T) {
 }
 
 func TestParseMixedTextIsAConcat(t *testing.T) {
-	e := mustParse(t, "${project}-db")
+	e := mustParse(t, "${var.project}-db")
 	if e.Op != value.OpConcat {
 		t.Fatalf("Op = %v, want OpConcat", e.Op)
 	}
@@ -57,7 +58,7 @@ func TestParseMixedTextIsAConcat(t *testing.T) {
 func TestParseBareNameIsAVarRefNotAResourceRef(t *testing.T) {
 	// One segment is a variable; two or more is a resource attribute. The
 	// compiler needs the distinction to know which scope to resolve against.
-	e := mustParse(t, "${region}")
+	e := mustParse(t, "${var.region}")
 	if e.Op != value.OpVarRef {
 		t.Errorf("Op = %v, want OpVarRef for a single-segment name", e.Op)
 	}
@@ -149,13 +150,13 @@ func TestParseDiagnosticsNameTheOffendingSource(t *testing.T) {
 }
 
 func TestParseEscapedDollarIsLiteral(t *testing.T) {
-	// $${not_an_expression} is how a user writes a literal dollar-brace.
-	e := mustParse(t, "$${literal}")
+	// $${var.not_an_expression} is how a user writes a literal dollar-brace.
+	e := mustParse(t, "$${var.literal}")
 	if e.Op != value.OpLiteral {
 		t.Fatalf("Op = %v, want OpLiteral", e.Op)
 	}
-	if s, _ := e.Literal.AsString(); s != "${literal}" {
-		t.Errorf("Literal = %q, want \"${literal}\"", s)
+	if s, _ := e.Literal.AsString(); s != "${var.literal}" {
+		t.Errorf("Literal = %q, want \"${var.literal}\"", s)
 	}
 }
 
@@ -196,14 +197,15 @@ func TestParseEscapedQuoteInLiteral(t *testing.T) {
 // map by canonical address, so without this guard the two collide and a user
 // can reach inside a module. A module exposes outputs, not resources.
 //
-// The nested case is here because a two-level address has `module` at position
-// 0 AND 2, so a guard that checked only the first segment would pass the first
-// case and leak the second.
+// The nested case (`module` at 0, and again at 2 for the module it contains)
+// pins that the guard still fires when the outer target itself is a module
+// qualifier — under this grammar the target is always segments[0], so `module`
+// is only ever a qualifier there; elsewhere it is an ordinary path step (see
+// TestModuleIsOrdinaryOutsideTheTargetSegment).
 func TestReferenceIntoAModuleIsRefused(t *testing.T) {
 	for _, src := range []string{
 		"${module.prod.database.id}",
 		"${module.prod.module.net.vpc.id}",
-		"${prod.module.net.vpc.id}",
 	} {
 		t.Run(src, func(t *testing.T) {
 			e, ds := Parse(src, value.Origin{File: "infra.yml", Line: 3})
@@ -249,6 +251,28 @@ func TestReferenceNamingTheInstanceIsAccepted(t *testing.T) {
 	}
 }
 
+// TestModuleIsOrdinaryOutsideTheTargetSegment pins the fix for the guard
+// scanning every segment instead of just segments[0]: `${prod.module.net.vpc.id}`
+// used to be refused as reaching into a module, even though "module" there is
+// only ATTRIBUTE and PATH text — a map key or a path step the user wrote, never
+// an address qualifier. Under this grammar the target is always exactly one
+// segment, so `module` can only legitimately qualify a reference at position 0.
+func TestModuleIsOrdinaryOutsideTheTargetSegment(t *testing.T) {
+	for _, src := range []string{
+		"${var.tags.module}",
+		"${vpc.module}",
+		"${var.a.module.b}",
+		"${prod.module.net.vpc.id}",
+	} {
+		t.Run(src, func(t *testing.T) {
+			_, ds := Parse(src, value.Origin{File: "infra.yml", Line: 3})
+			if ds.HasErrors() {
+				t.Fatalf("Parse(%q) errored: %v", src, ds)
+			}
+		})
+	}
+}
+
 // TestResourceNamedModuleIsRefusedWithItsOwnReason.
 //
 // ${module.id} is not someone reaching into a module — it is a resource
@@ -286,5 +310,157 @@ func TestQualifiedReferencesDoNotRouteThroughTheParser(t *testing.T) {
 	// point: it is produced, never typed.
 	if _, ds := Parse("${"+qualified.String()+"}", value.Origin{File: "infra.yml", Line: 1}); !ds.HasErrors() {
 		t.Error("the guard does not refuse a rendered qualified address; it must, or a user can type one")
+	}
+}
+
+// TestEmptyKeyBeforeABracketIsMalformed pins that ${var.a.[0]} is refused
+// rather than silently accepted as identical to ${var.a[0]}. The extra dot
+// before the bracket leaves a segment that is nothing but "[0]" — a key-less
+// index, reported as malformed at the point of the mistake rather than quietly
+// parsed as if the dot were never there.
+func TestEmptyKeyBeforeABracketIsMalformed(t *testing.T) {
+	_, ds := Parse("${var.a.[0]}", value.Origin{File: "infra.yml", Line: 3})
+	if !ds.HasErrors() {
+		t.Fatal("${var.a.[0]} parsed cleanly; an empty key before a bracket must be malformed")
+	}
+	if !strings.Contains(ds[0].Summary, "malformed reference") {
+		t.Errorf("wrong diagnostic: %s", ds[0].Summary)
+	}
+}
+
+// TestBracketOnTheTargetIsMalformed pins that ${vpc[0].id} is refused as
+// malformed at parse time, instead of constructing a resource literally named
+// "vpc[0]" that is only reported as undeclared much later.
+func TestBracketOnTheTargetIsMalformed(t *testing.T) {
+	_, ds := Parse("${vpc[0].id}", value.Origin{File: "infra.yml", Line: 3})
+	if !ds.HasErrors() {
+		t.Fatal("${vpc[0].id} parsed cleanly; a resource name must never carry an index")
+	}
+	if !strings.Contains(ds[0].Summary, "malformed reference") {
+		t.Errorf("wrong diagnostic: %s", ds[0].Summary)
+	}
+}
+
+func TestVarPrefixParsesAsAVariable(t *testing.T) {
+	e, ds := Parse("${var.region}", value.Origin{})
+	if ds.HasErrors() {
+		t.Fatalf("unexpected errors: %v", ds)
+	}
+	if e.Op != value.OpVarRef {
+		t.Fatalf("Op = %v, want OpVarRef", e.Op)
+	}
+	if got := e.Ref.VarName(); got != "region" {
+		t.Errorf("VarName() = %q, want %q — the prefix is stripped at parse time", got, "region")
+	}
+}
+
+func TestABareSingleSegmentIsNotAReference(t *testing.T) {
+	_, ds := Parse("${region}", value.Origin{})
+	if !ds.HasErrors() {
+		t.Fatal("a bare single segment must be an error: variables are var.-prefixed and a resource reference needs an attribute")
+	}
+	d := ds[0]
+	if !strings.Contains(d.Detail, "${var.region}") {
+		t.Errorf("Detail = %q, want it to name the fix", d.Detail)
+	}
+	if !strings.Contains(d.Detail, "attribute") {
+		t.Errorf("Detail = %q, want it to mention the resource-reference form too", d.Detail)
+	}
+}
+
+func TestAVariableReferenceRendersItsPrefix(t *testing.T) {
+	e, _ := Parse("${var.region}", value.Origin{})
+	if got := e.String(); got != "${var.region}" {
+		t.Errorf("String() = %q, want %q — a diagnostic must echo what the user wrote", got, "${var.region}")
+	}
+}
+
+func TestAVariablePathParsesToSteps(t *testing.T) {
+	for _, tc := range []struct {
+		src  string
+		name string
+		want []value.Step
+	}{
+		{"${var.tags.team}", "tags", []value.Step{{Kind: value.StepKey, Key: "team"}}},
+		{"${var.azs[0]}", "azs", []value.Step{{Kind: value.StepIndex, Index: 0}}},
+		{"${var.subnets[1].cidr}", "subnets", []value.Step{
+			{Kind: value.StepIndex, Index: 1}, {Kind: value.StepKey, Key: "cidr"}}},
+		{"${var.regions.us_east.azs[2]}", "regions", []value.Step{
+			{Kind: value.StepKey, Key: "us_east"}, {Kind: value.StepKey, Key: "azs"},
+			{Kind: value.StepIndex, Index: 2}}},
+	} {
+		e, ds := Parse(tc.src, value.Origin{})
+		if ds.HasErrors() {
+			t.Errorf("%s: unexpected errors: %v", tc.src, ds)
+			continue
+		}
+		if e.Ref.VarName() != tc.name {
+			t.Errorf("%s: VarName() = %q, want %q", tc.src, e.Ref.VarName(), tc.name)
+		}
+		if !reflect.DeepEqual(e.Ref.Path, tc.want) {
+			t.Errorf("%s: Path = %+v, want %+v", tc.src, e.Ref.Path, tc.want)
+		}
+	}
+}
+
+func TestAnIndexMustBeALiteralInteger(t *testing.T) {
+	_, ds := Parse("${var.azs[i]}", value.Origin{})
+	if !ds.HasErrors() {
+		t.Fatal("${var.azs[i]} must be refused: a varying index needs iteration, which this language does not have")
+	}
+	if got := ds[0].Summary; !strings.Contains(got, "literal") {
+		t.Errorf("Summary = %q, want it to say the index must be a literal", got)
+	}
+}
+
+func TestANegativeIndexIsRefused(t *testing.T) {
+	_, ds := Parse("${var.azs[-1]}", value.Origin{})
+	if !ds.HasErrors() {
+		t.Fatal("${var.azs[-1]} must be refused: meaning would depend on a length the reader cannot see")
+	}
+}
+
+func TestAPathRoundTripsThroughString(t *testing.T) {
+	for _, src := range []string{"${var.tags.team}", "${var.azs[0]}", "${var.subnets[1].cidr}"} {
+		e, ds := Parse(src, value.Origin{})
+		if ds.HasErrors() {
+			t.Fatalf("%s: %v", src, ds)
+		}
+		if got := e.String(); got != src {
+			t.Errorf("String() = %q, want %q", got, src)
+		}
+	}
+}
+
+func TestAResourceReferenceTakesTheFirstSegmentAsItsTarget(t *testing.T) {
+	// A resource name cannot contain a dot (config.checkResourceName), so the
+	// target is always exactly one segment. The old rule took every segment
+	// but the last, which could only ever build a target nothing is allowed
+	// to declare.
+	e, ds := Parse("${vpc.tags.Name}", value.Origin{})
+	if ds.HasErrors() {
+		t.Fatalf("unexpected errors: %v", ds)
+	}
+	if e.Op != value.OpResourceRef {
+		t.Fatalf("Op = %v, want OpResourceRef", e.Op)
+	}
+	if e.Ref.Target.Name != "vpc" {
+		t.Errorf("Target.Name = %q, want %q", e.Ref.Target.Name, "vpc")
+	}
+	if e.Ref.Attribute != "tags" {
+		t.Errorf("Attribute = %q, want %q", e.Ref.Attribute, "tags")
+	}
+	if len(e.Ref.Path) != 1 || e.Ref.Path[0].Key != "Name" {
+		t.Errorf("Path = %+v, want one key step Name", e.Ref.Path)
+	}
+}
+
+func TestATwoSegmentResourceReferenceIsUnchanged(t *testing.T) {
+	e, ds := Parse("${vpc.id}", value.Origin{})
+	if ds.HasErrors() {
+		t.Fatalf("unexpected errors: %v", ds)
+	}
+	if e.Ref.Target.Name != "vpc" || e.Ref.Attribute != "id" || len(e.Ref.Path) != 0 {
+		t.Errorf("got %q/%q/%+v, want vpc/id/no path", e.Ref.Target.Name, e.Ref.Attribute, e.Ref.Path)
 	}
 }

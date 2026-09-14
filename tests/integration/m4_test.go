@@ -6,7 +6,7 @@ import (
 )
 
 // TestValidatePlanAndApplyResolveTheSameVariableLayers is Task 11's core
-// property: validate, plan and apply must resolve ${cidr} to the same value.
+// property: validate, plan and apply must resolve ${var.cidr} to the same value.
 // It asserts behaviour, not structure, because "they share a helper" is not
 // the property; "they resolve the same value" is — a test asserting all
 // three call compilerOptions would pass even if compilerOptions itself were
@@ -18,13 +18,13 @@ project: myapp
 resources:
   net:
     type: fake.network
-    cidr: ${cidr}
+    cidr: ${var.cidr}
 `)
 		writeIn(t, dir, "overrides.yml", "cidr: 10.7.0.0/16\n")
 		return dir
 	}
 
-	// With the file, every command resolves ${cidr}.
+	// With the file, every command resolves ${var.cidr}.
 	for _, cmd := range [][]string{
 		{"validate"},
 		{"plan", "dev"},
@@ -51,7 +51,7 @@ resources:
 		dir := newDir(t)
 		r := run(t, dir, cmd...)
 		if r.ExitCode != 1 {
-			t.Errorf("infra %v with no value for ${cidr}: exit = %d, want 1\n%s", cmd, r.ExitCode, r.combined())
+			t.Errorf("infra %v with no value for ${var.cidr}: exit = %d, want 1\n%s", cmd, r.ExitCode, r.combined())
 		}
 		requireContains(t, r.combined(), "undefined variable")
 	}
@@ -69,7 +69,7 @@ project: myapp
 resources:
   net:
     type: fake.network
-    cidr: ${cidr}
+    cidr: ${var.cidr}
 `)
 	// Five environments set cidr; the sixth does not, so validate must fail
 	// and must name the one that is broken.
@@ -80,7 +80,7 @@ resources:
 
 	r := run(t, dir, "validate")
 	if r.ExitCode != 1 {
-		t.Fatalf("validate exit = %d, want 1 — an environment with no value for ${cidr} is invalid\n%s",
+		t.Fatalf("validate exit = %d, want 1 — an environment with no value for ${var.cidr} is invalid\n%s",
 			r.ExitCode, r.combined())
 	}
 	requireContains(t, r.combined(), "foxtrot")
@@ -132,7 +132,7 @@ resources:
 // These two used to REFUSE --var and --var-file, and this test asserted the refusal.
 // The refusal's premise — "a variable has nothing to interpolate into" — was true of
 // resources and false of `providers:`, so it is gone (see §12.1, amended); an instance
-// configured `cloud: ${cloud_file}` was otherwise refreshable and destroyable by
+// configured `cloud: ${var.cloud_file}` was otherwise refreshable and destroyable by
 // nothing. tests/integration/provider_variables_test.go covers what the flags now
 // reach.
 //
@@ -222,19 +222,19 @@ project: myapp
 resources:
   a:
     type: fake.network
-    cidr: ${a}
+    cidr: ${var.a}
   b:
     type: fake.network
-    cidr: ${b}
+    cidr: ${var.b}
   c:
     type: fake.network
-    cidr: ${c}
+    cidr: ${var.c}
   d:
     type: fake.network
-    cidr: ${d}
+    cidr: ${var.d}
   e:
     type: fake.network
-    cidr: ${e}
+    cidr: ${var.e}
 `)
 	// rung 2: base configuration
 	writeIn(t, dir, "variables.yml", "a: base\nb: base\nc: base\nd: base\ne: base\n")
@@ -303,13 +303,13 @@ project: myapp
 resources:
   a:
     type: fake.network
-    cidr: ${a}
+    cidr: ${var.a}
   b:
     type: fake.network
-    cidr: ${b}
+    cidr: ${var.b}
   c:
     type: fake.network
-    cidr: ${c}
+    cidr: ${var.c}
 `)
 	writeIn(t, dir, "one.yml", "a: one\nb: one\nc: one\n")
 	writeIn(t, dir, "two.yml", "b: two\nc: two\n")
@@ -364,7 +364,7 @@ resources:
     type: fake.database
     engine: postgres
     network: ${net.id}
-    size: ${size}
+    size: ${var.size}
 `)
 }
 
@@ -394,7 +394,7 @@ func TestTypedVariablesAreValidatedDuringValidate(t *testing.T) {
 }
 
 // TestATypedVariableKeepsItsTypeThroughTheChain: --var carries strings, so
-// without the declared type `size: ${size}` would reach an integer attribute
+// without the declared type `size: ${var.size}` would reach an integer attribute
 // as a string and fail schema binding with a kind mismatch the user cannot fix
 // from YAML.
 func TestATypedVariableKeepsItsTypeThroughTheChain(t *testing.T) {
@@ -434,7 +434,7 @@ resources:
     type: fake.database
     engine: postgres
     network: ${net.id}
-    password: ${dbpass}
+    password: ${var.dbpass}
 `
 	for _, tc := range []struct {
 		name  string
@@ -501,7 +501,7 @@ project: myapp
 resources:
   net:
     type: fake.network
-    cidr: ${cidr}
+    cidr: ${var.cidr}
 `)
 	// "resources" here names a VARIABLE inside the flat var-file mapping, not
 	// a configuration block — it triggers the warning precisely because a

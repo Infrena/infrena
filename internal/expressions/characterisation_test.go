@@ -22,8 +22,8 @@ func TestParseShapesAreUnchangedByTheScannerRewrite(t *testing.T) {
 		src   string
 		// want is the first diagnostic summary, or "" for no diagnostics.
 		want string
-		// refs is the RESOURCE reference targets parsed, joined by ",". A bare
-		// name with no dot is a VARIABLE and does not appear here — which is
+		// refs is the RESOURCE reference targets parsed, joined by ",". A
+		// var.-prefixed name is a VARIABLE and does not appear here — which is
 		// itself behaviour worth recording, and it is why the fixtures below use
 		// dotted targets wherever the extraction is the thing being pinned.
 		refs string
@@ -35,7 +35,7 @@ func TestParseShapesAreUnchangedByTheScannerRewrite(t *testing.T) {
 		// arity is not checked until evaluation. A sabotage proved exactly that.
 		args int
 	}{
-		{shape: "a bare variable is not a resource reference", src: "${a}", refs: ""},
+		{shape: "a bare variable is not a resource reference", src: "${var.a}", refs: ""},
 		{shape: "a resource reference", src: "${db.id}", refs: "db.id"},
 		{shape: "two references and literal text", src: "${db.id}-${net.id}", refs: "db.id,net.id"},
 		{shape: "a call with three arguments", src: "${replace(db.id, \"x\", \"y\")}", refs: "db.id", args: 3},

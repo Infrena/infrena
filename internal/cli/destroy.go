@@ -31,7 +31,7 @@ import (
 // which was true of resources and never true of `providers:`: an instance's
 // own configuration interpolates variables, and destroy has to construct that
 // instance to dispatch a delete to the right account. So the flag did affect
-// the outcome, and refusing it left `defaults: {region: ${aws_region}}`
+// the outcome, and refusing it left `defaults: {region: ${var.aws_region}}`
 // destroyable by nothing. Reversed 2026-09-13 with §12.1.
 //
 // The older reasoning it replaced is still right about its own case and worth

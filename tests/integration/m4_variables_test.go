@@ -46,7 +46,7 @@ resources:
     type: fake.database
     engine: postgres
     network: ${network.id}
-    size: ${replicas}
+    size: ${var.replicas}
 `, map[string]string{
 		"variables.yml": "replicas: 40\n",
 	})
@@ -81,7 +81,7 @@ resources:
 
 func TestPlanNamesTheEnvironmentItIsPlanning(t *testing.T) {
 	// fake.network has no `name` attribute (providers/test/definitions.go), so
-	// the synthetic ${environment} is exercised through `cidr` instead — the
+	// the synthetic ${var.environment} is exercised through `cidr` instead — the
 	// point under test is that the variable resolves, not which attribute
 	// carries it.
 	dir := project(t, `
@@ -89,7 +89,7 @@ project: myapp
 resources:
   network:
     type: fake.network
-    cidr: net-${environment}
+    cidr: net-${var.environment}
 `)
 	res := run(t, dir, "plan", "production")
 	if res.ExitCode != 2 {

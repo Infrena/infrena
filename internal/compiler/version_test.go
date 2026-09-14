@@ -167,3 +167,37 @@ func TestAZeroVersionSatisfiesEveryFloor(t *testing.T) {
 		}
 	}
 }
+
+// TestAPseudoVersionAheadOfARealTagStillSatisfiesEveryFloor.
+//
+// TestAZeroVersionSatisfiesEveryFloor above pinned the case a pseudo-version parses to
+// 0.0.0 — true only before this repository had a release tag. Once v0.1.0 (and later
+// v0.4.0) were pushed, the SAME `go build` in the SAME kind of checkout instead reports
+// something like `0.4.1-0.20260914210715-b41497c99237+dirty` — not zero, because a
+// pseudo-version bases itself on the nearest reachable tag plus one patch. That slipped
+// straight past isZero and, with `infrena: ">= 0.5"` newly in the scaffold (§61.2),
+// refused a developer's own build the moment it was tried. Found this way, 2026-09-14.
+func TestAPseudoVersionAheadOfARealTagStillSatisfiesEveryFloor(t *testing.T) {
+	current := "0.4.1-0.20260914210715-b41497c99237+dirty"
+	if ds := checkRequiredVersion(projectWithFloor(t, ">= 0.5"), current); ds.HasErrors() {
+		t.Errorf("%q is a pseudo-version, not a release, and must not be refused by a floor:\n%s",
+			current, rendered(ds))
+	}
+}
+
+// TestARealReleaseBelowTheFloorIsStillRefused is the other direction, and the one that
+// stops the pseudo-version fix above from over-exempting: a build that genuinely IS a
+// tagged release, with no pre-release or build suffix at all, must still be checked
+// against the floor like the mechanism has always intended.
+func TestARealReleaseBelowTheFloorIsStillRefused(t *testing.T) {
+	ds := checkRequiredVersion(projectWithFloor(t, ">= 0.5"), "0.4.1")
+	if !ds.HasErrors() {
+		t.Fatal("a real 0.4.1 release must be refused by a >= 0.5 floor")
+	}
+	out := rendered(ds)
+	for _, want := range []string{">= 0.5", "0.4.1"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the diagnostic does not mention %q:\n%s", want, out)
+		}
+	}
+}

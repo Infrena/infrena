@@ -85,11 +85,11 @@ func TestMergingNeverOverwritesAUserEditedBlock(t *testing.T) {
   orders:
     type: fake.database
     engine: postgres
-    password: ${db_password}
+    password: ${var.db_password}
 `
 	merged, changed := mergeGenerated([]byte(edited), []byte(genDatabases))
 	got := string(merged)
-	if !strings.Contains(got, "password: ${db_password}") {
+	if !strings.Contains(got, "password: ${var.db_password}") {
 		t.Fatalf("a user's edit was lost:\n%s", got)
 	}
 	if n := strings.Count(got, "  orders:"); n != 1 {

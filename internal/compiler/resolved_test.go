@@ -179,7 +179,7 @@ resources:
   database:
     type: fake.database
     engine: postgres
-    network: ${prefix}-${network.id}
+    network: ${var.prefix}-${network.id}
 `
 	hashWith := func(prefix string) string {
 		t.Helper()
@@ -218,7 +218,7 @@ resources:
   database:
     type: fake.database
     engine: postgres
-    network: ${replace(network.id, "old", prefix)}
+    network: ${replace(network.id, "old", var.prefix)}
 `
 	hashWith := func(prefix string) string {
 		t.Helper()
@@ -258,7 +258,7 @@ resources:
   database:
     type: fake.database
     engine: postgres
-    network: ${replace(network.id, "old", prefix)}-tail
+    network: ${replace(network.id, "old", var.prefix)}-tail
 `
 	hashWith := func(prefix string) string {
 		t.Helper()
@@ -296,7 +296,7 @@ resources:
   database:
     type: fake.database
     engine: postgres
-    network: ${upper(replace(network.id, "old", prefix))}
+    network: ${upper(replace(network.id, "old", var.prefix))}
 `
 	hashWith := func(prefix string) string {
 		t.Helper()

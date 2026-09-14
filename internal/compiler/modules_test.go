@@ -48,7 +48,7 @@ resources:
   db:
     type: fake.database
     engine: postgres
-    size: ${size}
+    size: ${var.size}
     network: ${net.id}
 outputs:
   endpoint:

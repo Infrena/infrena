@@ -162,7 +162,7 @@ resources:
 // TWO process variables, not four. This test used to assert four, and it passed by
 // setting Options.Region and Options.Account directly — which no production code path
 // ever did. That is a test that could not fail in the other direction: it proved the
-// mechanism worked when driven, while nothing drove it, so `${region}` was an undefined
+// mechanism worked when driven, while nothing drove it, so `${var.region}` was an undefined
 // variable in every real project and the suite was green about it for months. The fields
 // are gone; region and account are ordinary variable names now.
 func TestCompileAlwaysDefinesEnvironmentAndProject(t *testing.T) {
@@ -171,7 +171,7 @@ project: myapp
 resources:
   network:
     type: fake.network
-    cidr: ${environment}/${project}
+    cidr: ${var.environment}/${var.project}
 `)
 	cfg, ds := Compile(files, testRegistry(t), Options{Environment: "production"})
 	if ds.HasErrors() {
@@ -219,7 +219,7 @@ project: myapp
 resources:
   network:
     type: fake.network
-    cidr: ${environment}
+    cidr: ${var.environment}
 `)
 	_, ds := Compile(files, testRegistry(t), Options{
 		Environment: "production",
@@ -254,7 +254,7 @@ variables:
 resources:
   network:
     type: fake.network
-    cidr: ${environment}
+    cidr: ${var.environment}
 `)
 	cfg, ds := Compile(files, testRegistry(t), Options{Environment: "production"})
 	if ds.HasErrors() {
@@ -280,7 +280,7 @@ project: myapp
 resources:
   network:
     type: fake.network
-    cidr: ${environment}
+    cidr: ${var.environment}
 `)
 	cfg, ds := Compile(files, testRegistry(t), Options{Environment: "dev"})
 	if ds.HasErrors() {
@@ -318,7 +318,7 @@ resources:
     type: fake.database
     engine: postgres
     network: ${network.id}
-    size: ${replicas}
+    size: ${var.replicas}
 `)
 	cfg, ds := Compile(files, testRegistry(t), Options{Environment: "production"})
 	if ds.HasErrors() {
@@ -371,7 +371,7 @@ environments:
 resources:
   network:
     type: fake.network
-    cidr: ${domain}
+    cidr: ${var.domain}
 `)
 	_, ds := Compile(files, testRegistry(t), Options{Environment: "a"})
 	if len(ds) != 1 {
@@ -422,7 +422,7 @@ resources:
 // after stage 4 does anything. This fixture resolves its environment
 // chain cleanly and fails only because a declared variable has no default
 // and nothing sets it: without the halt, stage 6 additionally reports
-// `undefined variable "domain"` at ${domain}'s use site — the same
+// `undefined variable "domain"` at ${var.domain}'s use site — the same
 // problem told twice, exactly what the halt exists to prevent.
 func TestCompileStopsAfterVariableErrors(t *testing.T) {
 	files := loadFiles(t, `
@@ -433,7 +433,7 @@ variables:
 resources:
   network:
     type: fake.network
-    cidr: ${domain}
+    cidr: ${var.domain}
 `)
 	_, ds := Compile(files, testRegistry(t), Options{Environment: "dev"})
 	if len(ds) != 1 {
@@ -458,7 +458,7 @@ variables:
 resources:
   network:
     type: fake.network
-    cidr: ${name}
+    cidr: ${var.name}
 `, "name: from-variables-yml\n")
 
 	cfg, ds := Compile(files, testRegistry(t), Options{
@@ -485,7 +485,7 @@ variables:
 resources:
   network:
     type: fake.network
-    cidr: ${name}
+    cidr: ${var.name}
 `, "name: from-variables-yml\n")
 
 	cfg, ds := Compile(files, testRegistry(t), Options{Environment: "dev"})

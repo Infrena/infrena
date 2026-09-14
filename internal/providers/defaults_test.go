@@ -152,7 +152,7 @@ providers:
   - plugin: fake
     defaults:
       tags:
-        environment: ${environment}
+        environment: ${var.environment}
 `, reg, scopeWith(map[string]string{"environment": "production"}))
 	if out != "" {
 		t.Fatalf("unexpected diagnostics:\n%s", out)

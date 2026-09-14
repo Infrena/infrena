@@ -15,7 +15,7 @@ import (
 // Plugin is the fake provider as a PLUGIN: its schemas, which need no
 // configuration, and a constructor for one configured instance of it.
 //
-// The split is what lets `cloud: ${path}` work at all. A provider object needs its
+// The split is what lets `cloud: ${var.path}` work at all. A provider object needs its
 // cloud file; the path may interpolate a variable; resolving that variable needs a
 // compile; and a compile needs the schemas. Handing the schemas over separately
 // breaks the cycle — see provider.Plugin.

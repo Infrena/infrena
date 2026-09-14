@@ -86,7 +86,7 @@ also plan clean.
 environments it belongs to, as a scalar, a list, or an expression — which is what lets a module
 be written with parts a caller switches off. An environment is reachable if it is DECLARED or it
 HAS STATE, so removing one from configuration proposes tearing it down and lets you see the
-teardown first. `${project}` is a fourth process variable.
+teardown first. `${var.project}` is a fourth process variable.
 
 Three rules to know before touching any of it:
 
@@ -157,6 +157,28 @@ Two rules the design leaves behind, and both still bind:
   non-nil-on-success and the sensitivity flags are enforced in the host adapter, because a
   third-party binary cannot be held to a doc comment. A plugin that re-implements them is a
   plugin whose tests pass when the host is broken.
+
+**The reference grammar no longer tells a variable from a resource attribute by counting
+segments** (2026-09-14, `PLAN.md` §10.5). Six forms, each with exactly one meaning:
+`${var.region}` (a variable), `${var.tags.team}` (a path into a map variable),
+`${var.azs[0]}` (a list entry), `${vpc.id}` (a resource attribute), `${vpc.tags.Name}`
+(a path into one), and `${vpc}` reserved for a later change that projects a
+resource itself. `var` is reserved as a resource name, checked at the declaration; today
+that bare single segment (`${vpc}`) is a parse error naming its own fix rather than a
+variable reference, and the process variables `${var.environment}`/`${var.project}` take
+the prefix like any other.
+
+- A path indexes a map with dotted keys or a list with `[n]` — an integer literal only, no
+  arithmetic, no negative indices — and the two compose in either order. A missing key or
+  an out-of-range index is a compile-time error naming what is actually there, never an
+  unknown deferred to apply.
+- Extraction unions sensitivity across every container on the path, key or index alike, so
+  a leaf pulled out of a sensitive map or list is never returned declassified (§10.5,
+  §36).
+- A path into a resource attribute resolves exactly like the whole attribute — deferred
+  until apply — with one known gap: only the outer attribute name is schema-checked at
+  compile time; a key past it fails before dispatch instead, closed properly by a later
+  change to the plugin wire.
 
 ## Name
 
@@ -365,7 +387,7 @@ Key architectural rules, in rough order of how easy they are to violate:
   provider defaults → base config → module defaults → environment inheritance →
   environment variables → CLI overrides (§7). Explicit config always wins over an
   implicit default.
-- **Expressions stay constrained.** `${var}` interpolation and `${resource.attr}`
+- **Expressions stay constrained.** `${var.name}` interpolation and `${resource.attr}`
   references, with a small set of pure functions eventually. This is deliberately not
   a programming language (§10).
 - **The configuration language is a product API.** Even pre-1.0, weigh backwards

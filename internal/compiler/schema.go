@@ -295,7 +295,7 @@ func applyDefaults(attrs map[string]value.Value, def *schema.ResourceDefinition,
 // WHOLE, not merged: a resource writing `tags: {team: payments}` replaces the
 // instance's map rather than adding to it. That is the documented rule and the reason
 // §10.2 has `merge()` — a user who wants both writes
-// `${merge(tags, {team: payments})}` and can see, in the file, which keys they get.
+// `${merge(var.tags, {team: payments})}` and can see, in the file, which keys they get.
 // Merging silently would mean no way to REMOVE an inherited key.
 //
 // Marked SourceDefault so a plan prints [default] and generation omits it, and

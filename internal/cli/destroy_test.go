@@ -807,7 +807,7 @@ resources:
 // interpolate into. That was true of resources and false of `providers:` — an
 // instance's own configuration interpolates variables, and destroy must construct
 // that instance to send a delete to the right account. So the flag did affect the
-// outcome, and refusing it made `region: ${aws_region}` destroyable by nothing.
+// outcome, and refusing it made `region: ${var.aws_region}` destroyable by nothing.
 //
 // Asserting the absence of the old error rather than a successful destroy: this is a
 // command-level test, and what was wrong was the refusal happening before anything

@@ -25,8 +25,8 @@ resources:
     engine: postgres
     network: ${net.id}
     tags:
-      environment: ${environment}
-      project: ${project}
+      environment: ${var.environment}
+      project: ${var.project}
       team: payments
 `
 
@@ -52,7 +52,7 @@ func TestAMapWhoseValuesInterpolateDiffersPerEnvironment(t *testing.T) {
 			t.Errorf("%s: tags line does not carry its own environment: %s", env, line)
 		}
 		if !strings.Contains(line, `project: "MainApp"`) {
-			t.Errorf("%s: ${project} did not resolve: %s", env, line)
+			t.Errorf("%s: ${var.project} did not resolve: %s", env, line)
 		}
 		// A leaf with no interpolation survives untouched, alongside ones that
 		// resolved.
@@ -86,7 +86,7 @@ resources:
     type: fake.database
     engine: postgres
     network: ${net.id}
-    tags: "${merge(base_tags, {team: payments, project: billing})}"
+    tags: "${merge(var.base_tags, {team: payments, project: billing})}"
 `, map[string]string{
 		"variables.yml": "base_tags:\n  owner: platform\n  team: unassigned\n",
 	})

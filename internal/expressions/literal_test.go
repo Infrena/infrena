@@ -21,7 +21,7 @@ func parseArgs(t *testing.T, src string) (*value.Expr, string) {
 // TestAMapLiteralIsOneArgument. The comma INSIDE the braces is the whole point:
 // before the scanners were unified this split into three arguments.
 func TestAMapLiteralIsOneArgument(t *testing.T) {
-	e, out := parseArgs(t, `${merge(tags, {team: payments, project: billing})}`)
+	e, out := parseArgs(t, `${merge(var.tags, {team: payments, project: billing})}`)
 	if out != "" {
 		t.Fatalf("unexpected diagnostics:\n%s", out)
 	}
@@ -64,7 +64,7 @@ func TestAListLiteralIsOneArgument(t *testing.T) {
 	}
 
 	// Nested: a map inside a call inside a call, with commas at two depths.
-	e, out = parseArgs(t, `${merge(default(tags, {a: 1, b: 2}), {c: 3})}`)
+	e, out = parseArgs(t, `${merge(default(var.tags, {a: 1, b: 2}), {c: 3})}`)
 	if out != "" {
 		t.Fatalf("nested literals: %s", out)
 	}
@@ -78,7 +78,7 @@ func TestAListLiteralIsOneArgument(t *testing.T) {
 // reads. Anything unreadable stays text, which is the answer that cannot
 // silently change a value's meaning.
 func TestLiteralScalarsTakeTheShapeYamlWouldGiveThem(t *testing.T) {
-	e, out := parseArgs(t, `${merge(tags, {n: 3, f: 1.5, yes: true, no: false, s: plain, q: "quoted"})}`)
+	e, out := parseArgs(t, `${merge(var.tags, {n: 3, f: 1.5, yes: true, no: false, s: plain, q: "quoted"})}`)
 	if out != "" {
 		t.Fatalf("unexpected diagnostics:\n%s", out)
 	}

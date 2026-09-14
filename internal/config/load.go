@@ -540,5 +540,5 @@ func quotingHint(err error, data []byte) string {
 	}
 	return "\n\nThis usually means an interpolation containing `: ` was left unquoted. " +
 		"YAML ends a plain scalar at `: `, so wrap the whole value in quotes:\n" +
-		"    tags: \"${merge(tags, {team: payments})}\""
+		"    tags: \"${merge(var.tags, {team: payments})}\""
 }

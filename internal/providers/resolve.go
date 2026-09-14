@@ -58,7 +58,7 @@ func (t Table) Names() []string {
 // Resolve turns declarations into the instance table, evaluating every
 // interpolation in each instance's configuration.
 //
-// AFTER VARIABLES, which is the whole point: `iam-role: ${aws_role}` with the
+// AFTER VARIABLES, which is the whole point: `iam-role: ${var.aws_role}` with the
 // variable set per environment is how one project reaches a different account in
 // production than in dev.
 func Resolve(decls []config.ProviderDecl, scope variables.Scope) (Table, diag.Diagnostics) {

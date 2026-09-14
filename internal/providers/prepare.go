@@ -23,7 +23,7 @@ import (
 // This is the seam the factory split exists for. reg arrives holding SCHEMAS ONLY
 // — enough for the compiler to have resolved the variables in scope — and leaves
 // holding provider objects built from those resolved values. Which is what makes
-// `cloud: ${path}` choose the file a provider opens, rather than merely resolving
+// `cloud: ${var.path}` choose the file a provider opens, rather than merely resolving
 // to a string nothing reads.
 func Prepare(
 	ctx context.Context, project *config.ProjectDecl,

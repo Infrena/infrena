@@ -58,7 +58,7 @@ resources:
   db:
     type: fake.database
     engine: postgres
-    size: ${size}
+    size: ${var.size}
     network: ${net.id}
 `,
 		"resources/app/app.yml": `
@@ -66,7 +66,7 @@ resources:
   app:
     type: fake.database
     engine: postgres
-    size: ${size}
+    size: ${var.size}
     network: ${net.id}
 `,
 	}
@@ -117,7 +117,7 @@ resources:
   app:
     type: fake.database
     engine: postgres
-    size: ${db_only}
+    size: ${var.db_only}
     network: ${net.id}
 `,
 	})
@@ -241,13 +241,13 @@ resources:
   inner:
     type: fake.database
     engine: postgres
-    size: ${size}
-    network: ${network}
+    size: ${var.size}
+    network: ${var.network}
 outputs:
   endpoint:
     value: ${inner.endpoint}
   label:
-    value: label-${size}
+    value: label-${var.size}
 `,
 		"modules/sink/module.yml": `
 inputs:
@@ -256,13 +256,13 @@ inputs:
 resources:
   probe:
     type: fake.network
-    cidr: ${upstream}
+    cidr: ${var.upstream}
 `,
 		"resources/db/call.yml": `
 resources:
   stack:
     type: module.sized
-    size: ${size}
+    size: ${var.size}
     network: ${net.id}
   sink:
     type: module.sink

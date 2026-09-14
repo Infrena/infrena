@@ -178,7 +178,7 @@ func TestResolveAfterMixesVariableAndResourceReference(t *testing.T) {
 		Provider: "test",
 		Address:  address.Address{Name: "app"},
 		After: map[string]value.Value{
-			"name": deferredValue(t, "${environment}-${net.id}"),
+			"name": deferredValue(t, "${var.environment}-${net.id}"),
 		},
 	}
 	snapshot := map[string]*resource.ResourceState{

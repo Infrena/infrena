@@ -475,7 +475,7 @@ Rules:
   real: skipping a resource forces you to skip what depends on it. Silently
   dropping the edge is the alternative, and it produces a plan that applies and
   then fails partway.
-- **The value may be an expression.** `only: ${replica_environments}` resolving
+- **The value may be an expression.** `only: ${var.replica_environments}` resolving
   to a string or a list. This is what lets a MODULE be written with parts that
   the caller can switch off:
 
@@ -488,7 +488,7 @@ Rules:
   resources:
     replica:
       type: test.database
-      only: ${replica_in}
+      only: ${var.replica_in}
   ```
   ```yaml
   # the caller
@@ -522,7 +522,7 @@ available in every scope including inside modules:
 **`region` and `account` were in this table and are REMOVED (2026-09-13).** They were
 listed as coming from `--region` and `--account` "when supplied" — flags that were never
 built. `compiler.Options` carried both fields, `seedProcessVariables` read both, and
-nothing ever assigned either, so `${region}` reported `undefined variable "region"` in
+nothing ever assigned either, so `${var.region}` reported `undefined variable "region"` in
 every project that ever ran. Being reserved on top of that was worse than inert: a
 project declaring its own `region` variable got "undefined variable" at the use site
 instead of "variable is not set" at the declaration, and `--var region=...` was refused
@@ -537,6 +537,12 @@ attached, not as a table entry promising one.
 `project` is here because a resource name or a tag almost always wants it, and
 threading it through as an ordinary variable makes every project declare the
 same line.
+
+**Both are read as `${var.environment}` and `${var.project}`, the same as any
+other variable** (§10.5). There is no separate spelling for a process
+variable; the prefix applies to every variable without exception, because a
+prefix that applies to most of them is the kind of exception nobody
+remembers to check for.
 
 ---
 
@@ -629,8 +635,8 @@ resources:
 
   application:
     type: aws.ecs.service
-    name: ${project_name}
-    replicas: ${replicas}
+    name: ${var.project_name}
+    replicas: ${var.replicas}
 ```
 
 Commands:
@@ -684,10 +690,13 @@ Do not build a general-purpose programming language into variable expressions.
 
 # 10. Expressions
 
-Support simple interpolation:
+Interpolation names exactly one of two things, and which is which is never
+counted from the number of segments (§10.5): a declared variable, always
+written `${var.x}`, or an attribute a provider assigns, written
+`${resource.attribute}`.
 
 ```yaml
-name: ${project_name}-${environment}
+name: ${var.project_name}-${var.environment}
 ```
 
 Resource references:
@@ -699,7 +708,7 @@ database_url: ${database.connection_string}
 A small set of pure helper functions may eventually be supported:
 
 ```yaml
-name: ${lower(project_name)}-${environment}
+name: ${lower(var.project_name)}-${var.environment}
 ```
 
 Do not initially build a Terraform/HCL-like programming language.
@@ -713,8 +722,8 @@ bare string:
 
 ```yaml
 tags:
-  environment: ${environment}
-  project: ${project}
+  environment: ${var.environment}
+  project: ${var.project}
   team: payments
 ```
 
@@ -729,7 +738,7 @@ Rules:
 
 - Each STRING leaf is parsed and evaluated independently. A leaf with no `${` is
   untouched.
-- A key is never interpolated. `${x}: y` is not a thing; keys are literal, so a
+- A key is never interpolated. `${var.x}: y` is not a thing; keys are literal, so a
   configuration's shape never depends on a value.
 - Sensitivity and provenance are per leaf, as everywhere else (§43). A map one
   leaf of which resolves to a secret is a map with one sensitive leaf, not a
@@ -781,7 +790,7 @@ written into a tag.
 A map or list literal may appear as a function ARGUMENT, and nowhere else:
 
 ```yaml
-tags: "${merge(tags, {team: payments, project: billing})}"
+tags: "${merge(var.tags, {team: payments, project: billing})}"
 ```
 
 Not as a value on its own, because YAML already does that job. Bounding it to
@@ -789,7 +798,7 @@ argument position is what keeps this from being the first step toward a
 programming language.
 
 **The quotes are required, and not by us.** YAML itself rejects the unquoted
-form: a plain scalar may not contain `: `, so `tags: ${merge(a, {b: c})}` fails
+form: a plain scalar may not contain `: `, so `tags: ${merge(var.a, {b: c})}` fails
 with "mapping values are not allowed in this context" before any of this code
 sees it. That message says nothing about quoting, so the loader detects this
 shape and says what to do.
@@ -808,6 +817,174 @@ a comma inside a map literal is not an argument separator. **The two must become
 one walk before literals are added**, not after, because the alternative is
 editing both in lockstep — which is exactly what that comment predicts will go
 wrong.
+
+**§10.5's `[index]` introduces no new token.** `splitArgs` already nests
+brackets (`open: "({["`, `close: ")}]"`) for §10.3's list literals, so a `[` in
+a reference path is a shape `matchBrace`/`splitArgs` already track. Reading a
+path is a change to `parseReference`, not to the scanner.
+
+## 10.5 The var namespace, paths and indices
+
+Six forms, each with exactly one meaning, and no rule that depends on counting
+segments:
+
+```yaml
+${var.region}          a variable
+${var.tags.team}       a path into a map variable
+${var.azs[0]}          an entry of a list variable
+${vpc.id}              an attribute of resource `vpc`
+${vpc.tags.Name}       a path into a resource attribute
+${vpc}                 the resource `vpc` itself   (reserved here; a later change)
+```
+
+Before this, a variable and a resource attribute were told apart by COUNTING
+SEGMENTS — one is a variable, two or more is a resource attribute
+(`internal/expressions/parse.go`). That single rule meant a map variable could
+never be indexed (`${tags.team}` was already spoken for as a resource
+reference), meant the error for a variable shadowed by a same-named resource
+lied about which one existed, and meant `${vpc.tags.Name}` constructed a
+target — a resource named `vpc.tags` — that `checkResourceName` forbids anyone
+from ever declaring. Counting segments could not be patched into correctness;
+it had to be replaced.
+
+**`var` is reserved as a resource name.** A resource so named would make
+`${var.x}` mean two things, and the error is reported at the DECLARATION, not
+at the reference, because that is where the fix is. A VARIABLE named `var`
+stays legal — `${var.var}` is unambiguous, and reserving it would be a rule
+with no cause.
+
+**Process variables carry the prefix too:** `${var.environment}`,
+`${var.project}` (§6.3). This is what makes the rule total — no bare name
+anywhere resolves to a variable — and a prefix applied to some variables and
+not others is the kind of exception nobody remembers to check for.
+
+**A bare single segment is an ERROR**, not a resource reference:
+
+```
+${vpc} is not a reference.
+
+Variables are written ${var.vpc}. A resource reference needs an attribute,
+as ${vpc.id}.
+```
+
+The message names the fix rather than the mistake, which matters most during
+migration: every un-prefixed variable a rewrite missed announces its own
+repair instead of resolving to something silently wrong.
+
+**How a reference divides.** The first segment is the resource, the second is
+the attribute, and everything after that is a path — `${vpc.tags.Name}` is
+resource `vpc`, attribute `tags`, path `Name`. This works because a resource's
+name can never contain a dot (`checkResourceName` refuses one: a resource's
+name is its address, and a dot is how an address separates module levels), so
+a user-written target is always exactly one segment; module paths are added
+STRUCTURALLY at stage 6, not through this parser. `module` stays reserved
+exactly as it was.
+
+### Path semantics
+
+**A path indexes a map, and only a map**, to whatever depth YAML produced —
+refusing depth two while allowing depth one would be a rule nobody could
+predict (§10.1 settled the same argument for composite interpolation).
+
+**Lists are indexed with brackets, maps with dotted keys, and the two compose
+in either order:**
+
+```yaml
+${var.azs[0]}                 an entry of a list
+${var.subnets[0].cidr}        index, then key
+${var.regions.us_east.azs[0]} key, then index
+```
+
+Brackets rather than a dotted `${var.azs.0}` is not cosmetic: a map may have a
+numeric-looking key, so `${var.ports.0}` is genuinely ambiguous between key
+`"0"` and index `0`. Resolving it by the value's runtime kind would make a
+reference's meaning depend on the type of the thing it names, which is the
+class of implicit rule this language avoids everywhere else. With brackets,
+`[0]` is always an index and `.0` is always a key, decided at parse time with
+no value in hand.
+
+**An index is an integer literal, and nothing else.** No `${var.azs[i]}`, no
+`${var.azs[var.i]}`, no arithmetic. Reading a known list at a fixed position
+generates nothing; an index that can VARY is only useful if something varies
+it, and that is the iteration §54 refuses. The restriction is the whole guard
+against that, so it is stated as a rule rather than left as an accident of
+what the grammar happens to allow.
+
+No negative indices. `[-1]` for "last" makes a reference's meaning depend on a
+length the reader cannot see, and is additive later if it earns its place.
+
+**An out-of-range index is a compile-time error**, on the same reasoning as a
+missing key below — the list is fully resolved by stage 4, so out of range
+then is out of range forever:
+
+```
+var.azs has 3 entries; there is no index 5
+```
+
+**Indexing a map, or keying a list, names the mistake both ways.**
+`${var.tags[0]}` says "`var.tags` is a map; index it by key, as
+`${var.tags.team}`", and `${var.azs.first}` says the converse — each points at
+the other form rather than reporting a missing member.
+
+**A missing key is a compile-time error, never an unknown.** Unknown means
+"does not exist yet" — a resource the executor will create, whose value
+arrives later. A variable's map is fully resolved by stage 4, so a key absent
+then is absent forever, and treating it as unknown would defer a certain
+failure to apply time, where §20's safety story is weakest. The diagnostic
+lists the keys that do exist, the same shape resource-name errors already use:
+
+```
+variable "tags" has no key "tema"
+
+Known keys:
+  team
+  project
+```
+
+**A step into a scalar names the kind:** "`var.region` is a string; it has no
+members" — not "no such key", which would send a reader hunting for a typo in
+a name spelled correctly. A step into the wrong kind of CONTAINER is the case
+above, and points at the other form instead.
+
+**Extraction must not launder a secret.** `pkg/value` lets a container be
+`Sensitive` itself, separately from its leaves, and a variable declared
+`sensitive: true` holding a map or list carries the flag on the container —
+its leaves may carry nothing. Walking `Raw` and returning the leaf `Value`
+would therefore silently DECLASSIFY every secret inside a sensitive map or
+list: `${var.creds.password}` would return unflagged, reach `Format`, and
+print in clear in a plan, which is §36's exact failure. **The rule: extraction
+unions the sensitivity of every container along the path onto the result —
+keys and indices alike.** This is the same rule §10.2 states for functions —
+sensitivity unions across all arguments, and `join()`/`replace()` each shipped
+that rule wrong once — in a new position, and it needs its own test rather
+than assuming existing coverage extends to it. Provenance (§43) takes the
+container's source; the leaf has no independent origin.
+
+**The path lives inside the variable reference**, not as a general operator:
+`value.VarRef` carries a path — a slice of steps, each a key or an index — and
+there is no `OpIndex`. A general index operator would make `${lower(x).y}` and
+`${merge(a,b).k}` grammatical, which is the first step toward the expression
+language this section exists to refuse; bounding the path to one syntactic
+position is the same move §10.3 makes for map literals, legal as an argument
+and nowhere else.
+
+**Resource attributes take the same paths.** `${vpc.tags.Name}` resolves with
+the same steps, the same deferral and the same resolution as `${vpc.id}`:
+`ResourceScope.Attribute` returns the map once it is known, the steps apply to
+it, and `ResolveDeferred` finishes the job at apply against what the resource
+actually turned out to be — deferred exactly as a whole attribute is, for the
+same reason: the value does not exist yet.
+
+One check is weaker here, and only one: the attribute NAME (`tags`) is
+validated against the schema at compile time, but a step past it (`Name`) is
+not, because `pkg/schema` models `tags` as `Kind: KindMap` and nothing deeper.
+Two things keep that acceptable rather than a hole — it fails before dispatch,
+not during create, since `resolveAfter` runs in `execute` ahead of the
+provider call; and the apply-time diagnostic carries what a compile-time one
+would have said, the keys that do exist, in this section's shape. Closing the
+gap — a compile-time check on a nested resource attribute key — needs nested
+shape in `pkg/schema`, which crosses the plugin wire, and is deliberately left
+for later rather than made to wait on a wire-format change.
 
 ---
 
@@ -946,9 +1123,9 @@ resources:
 
   service:
     type: fake_service
-    name: ${application_name}
-    image: ${image}
-    count: ${replicas}
+    name: ${var.application_name}
+    image: ${var.image}
+    count: ${var.replicas}
 
 outputs:
 
@@ -1100,8 +1277,8 @@ different account per environment:
 ```yaml
 providers:
   - plugin: aws
-    iam-role: ${aws_role}
-    region: ${aws_region}
+    iam-role: ${var.aws_role}
+    region: ${var.aws_region}
 ```
 
 ```yaml
@@ -1116,11 +1293,11 @@ aws_role: arn:aws:iam::222222222222:role/deploy
 aws_region: us-west-2
 ```
 
-**`${aws_region}` is an ORDINARY DECLARED VARIABLE, and these examples used to write
-`${region}` as though it were supplied by the process.** It is not. `region` and
+**`${var.aws_region}` is an ORDINARY DECLARED VARIABLE, and these examples used to write
+`${var.region}` as though it were supplied by the process.** It is not. `region` and
 `account` are named as process variables in §12/§43 alongside `environment` and
 `project`, and `compiler.Options.Region` exists and is read — but nothing anywhere
-assigns it, so `${region}` reports `undefined variable "region"` today (checked against
+assigns it, so `${var.region}` reports `undefined variable "region"` today (checked against
 the built binary, 2026-09-13). `provider.DiscoverRequest.Region` is inert in the same
 way: `internal/discovery/walk.go` builds the request without it and no flag sets it, so
 a plugin author implementing against `DiscoverParams.Region` reads `""` forever.
@@ -1130,7 +1307,7 @@ needs none of them — every regional type declares `region` as Required and For
 instance supplies it through `defaults:`, and `discover` takes its scan list from the
 instance's own `config:`. So `compiler.Options.Region`/`.Account`,
 `provider.DiscoverRequest.Region` and `pluginproto.DiscoverParams.Region` are all
-removed, and `region` is an ordinary variable name. No example here may use `${region}`
+removed, and `region` is an ordinary variable name. No example here may use `${var.region}`
 as a process variable, because there is no longer any such thing.
 
 **Variables only — never a resource reference.** A provider's configuration is
@@ -1149,7 +1326,7 @@ The per-leaf walk from §10.1 applies, so a nested value interpolates too:
 providers:
   - plugin: aws
     tags:
-      environment: ${environment}
+      environment: ${var.environment}
 ```
 
 ### Internal shape
@@ -1187,7 +1364,7 @@ now discharged, the migration included — see §21.1):
 ### A plugin is not a provider: the factory split
 
 An instance's configuration may interpolate a variable — that is the whole point of
-`region: ${aws_region}` — and that creates a cycle. Constructing a provider needs its
+`region: ${var.aws_region}` — and that creates a cycle. Constructing a provider needs its
 configuration; resolving the configuration needs variables; resolving variables needs
 a compile; and a compile needs the provider's SCHEMAS. Something has to come first.
 
@@ -1228,7 +1405,7 @@ the four commands are handed an environment on the command line, so their scope 
 same one `plan` would build.
 
 What the old rule actually cost was not elegance. An AWS instance supplying its region
-through `defaults: {region: ${aws_region}}` — the agreed model — could be planned and
+through `defaults: {region: ${var.aws_region}}` — the agreed model — could be planned and
 applied and then never refreshed or destroyed. **A project the tool cannot tear down is
 worse than one it cannot build**, and it would have shipped that way.
 
@@ -1273,13 +1450,13 @@ An instance may also default attributes on every resource that uses it:
 providers:
   - plugin: aws
     iam-role: some-role
-    region: ${aws_region}
+    region: ${var.aws_region}
     defaults:
-      tags: ${tags}
-      prevent_destroy: ${protect}
+      tags: ${var.tags}
+      prevent_destroy: ${var.protect}
 ```
 
-Nested rather than mixed in, because at the top level `tags: ${tags}` and
+Nested rather than mixed in, because at the top level `tags: ${var.tags}` and
 `iam-role: x` are indistinguishable while meaning entirely different things — one
 defaults a RESOURCE, the other configures the PROVIDER. The alternative
 considered was letting the plugin declare its own config keys and treating
@@ -1293,7 +1470,7 @@ plugin's schema says:
 ```
 explicit on the resource        tags: {team: payments}
         ↓
-the instance's `defaults:`      defaults: {tags: ${tags}}
+the instance's `defaults:`      defaults: {tags: ${var.tags}}
         ↓
 the plugin's schema default     whatever the plugin ships
 ```
@@ -1382,7 +1559,7 @@ It is withdrawn for three reasons, in increasing order of weight.
 **It never worked as documented.** `type:` was never a reserved key. The
 environment decoder handles `extends` and `variables`; everything else becomes
 a variable override — so `type: production` silently declared a VARIABLE named
-`type`, reachable as `${type}`, and classified nothing. Classification was done
+`type`, reachable as `${var.type}`, and classified nothing. Classification was done
 by matching the environment's NAME against `"production"` and `"prod"`.
 
 **Name-matching is wrong exactly where it matters.** §6 says environments are
@@ -3998,8 +4175,8 @@ resources:
 
   application:
     type: aws.ecs.service
-    image: ${application_image}
-    replicas: ${replicas}
+    image: ${var.application_image}
+    replicas: ${var.replicas}
     database_url: ${database.connection_string}
 ```
 
