@@ -365,7 +365,7 @@ Key architectural rules, in rough order of how easy they are to violate:
   provider defaults → base config → module defaults → environment inheritance →
   environment variables → CLI overrides (§7). Explicit config always wins over an
   implicit default.
-- **Expressions stay constrained.** `${var.var}` interpolation and `${resource.attr}`
+- **Expressions stay constrained.** `${var.name}` interpolation and `${resource.attr}`
   references, with a small set of pure functions eventually. This is deliberately not
   a programming language (§10).
 - **The configuration language is a product API.** Even pre-1.0, weigh backwards
