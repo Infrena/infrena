@@ -4,7 +4,55 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/infrena/infrena/pkg/address"
 )
+
+func TestAStepRendersAsItWasWritten(t *testing.T) {
+	if got := (Step{Kind: StepKey, Key: "team"}).String(); got != ".team" {
+		t.Errorf("Step.String() = %q, want %q", got, ".team")
+	}
+	if got := (Step{Kind: StepIndex, Index: 0}).String(); got != "[0]" {
+		t.Errorf("Step.String() = %q, want %q", got, "[0]")
+	}
+}
+
+func TestAReferenceRendersItsPath(t *testing.T) {
+	// A resource attribute with a path: the form ${vpc.tags.Name}.
+	r := Reference{
+		Target:    address.Address{Name: "vpc"},
+		Attribute: "tags",
+		Path:      []Step{{Kind: StepKey, Key: "Name"}},
+	}
+	if got := r.String(); got != "vpc.tags.Name" {
+		t.Errorf("String() = %q, want %q", got, "vpc.tags.Name")
+	}
+
+	// A variable with a mixed path: the form ${var.subnets[0].cidr}. Under
+	// OpVarRef the Attribute is empty and the path carries everything.
+	v := Reference{
+		Target: address.Address{Name: "subnets"},
+		Path:   []Step{{Kind: StepIndex, Index: 0}, {Kind: StepKey, Key: "cidr"}},
+	}
+	if got := v.String(); got != "subnets[0].cidr" {
+		t.Errorf("String() = %q, want %q", got, "subnets[0].cidr")
+	}
+}
+
+func TestTwoPathsIntoOneAttributeAreTwoReferences(t *testing.T) {
+	// References() dedups on String(), so a path must be part of the key or
+	// ${vpc.tags.Name} and ${vpc.tags.Env} collapse into one and the second
+	// silently resolves to the first.
+	e := &Expr{Op: OpConcat, Args: []*Expr{
+		{Op: OpResourceRef, Ref: Reference{Target: address.Address{Name: "vpc"}, Attribute: "tags",
+			Path: []Step{{Kind: StepKey, Key: "Name"}}}},
+		{Op: OpResourceRef, Ref: Reference{Target: address.Address{Name: "vpc"}, Attribute: "tags",
+			Path: []Step{{Kind: StepKey, Key: "Env"}}}},
+	}}
+	if got := len(e.References()); got != 2 {
+		t.Errorf("References() returned %d, want 2 — a path must be part of the dedup key", got)
+	}
+}
 
 func TestReferenceString(t *testing.T) {
 	r := LocalRef("database", "endpoint")

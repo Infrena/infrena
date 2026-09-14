@@ -24,6 +24,39 @@ const (
 	OpCall
 )
 
+// StepKind distinguishes the two ways a path moves into a composite.
+type StepKind uint8
+
+const (
+	// StepKey reads a key from a map.
+	StepKey StepKind = iota
+	// StepIndex reads an entry from a list.
+	StepIndex
+)
+
+// Step is one move along a path into a composite value.
+//
+// The two kinds are kept apart at PARSE time rather than resolved against the
+// value's kind at evaluation time, because a map may have a numeric-looking
+// key: `${var.ports.0}` would otherwise mean key "0" or index 0 depending on
+// what `ports` turned out to be, which makes a reference's meaning depend on
+// the type of the thing it names. `.0` is always a key and `[0]` is always an
+// index, decided with no value in hand.
+type Step struct {
+	Kind  StepKind
+	Key   string // StepKey only
+	Index int    // StepIndex only
+}
+
+// String renders a step as it was written, including its leading delimiter, so
+// that joining a path's steps reproduces the source.
+func (s Step) String() string {
+	if s.Kind == StepIndex {
+		return "[" + strconv.Itoa(s.Index) + "]"
+	}
+	return "." + s.Key
+}
+
 // Reference names another resource's attribute — or, under OpVarRef, a
 // variable by name.
 //
@@ -51,6 +84,14 @@ const (
 type Reference struct {
 	Target    address.Address
 	Attribute string
+	// Path is the steps taken into Attribute's value — or, under OpVarRef,
+	// into the variable's own value, where Attribute is empty.
+	//
+	// It is part of String(), and therefore part of References()' dedup key.
+	// Without that, ${vpc.tags.Name} and ${vpc.tags.Env} render identically,
+	// the second is dropped as a duplicate, and its expression resolves to the
+	// first one's value.
+	Path []Step
 }
 
 // LocalRef builds a reference as written, with no module path — which is what
@@ -85,10 +126,16 @@ func (r Reference) InModule(module string) Reference {
 
 // String renders a reference in the form used in configuration.
 func (r Reference) String() string {
-	if r.Attribute == "" {
-		return r.Target.String()
+	var b strings.Builder
+	b.WriteString(r.Target.String())
+	if r.Attribute != "" {
+		b.WriteString(".")
+		b.WriteString(r.Attribute)
 	}
-	return r.Target.String() + "." + r.Attribute
+	for _, s := range r.Path {
+		b.WriteString(s.String())
+	}
+	return b.String()
 }
 
 // Expr is a parsed expression.
