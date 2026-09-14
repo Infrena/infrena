@@ -49,7 +49,7 @@ func scaffoldFiles() map[string]string {
 # The oldest infrena that understands this project. Optional, and worth
 # keeping: without it, an older binary reports unknown keys one at a time
 # instead of saying it is too old.
-infrena: ">= 0.4"
+infrena: ">= 0.5"
 
 # Environments are first-class: each has its own state and its own lock. Add as
 # many as you like — they hold the same infrastructure and differ only in what
