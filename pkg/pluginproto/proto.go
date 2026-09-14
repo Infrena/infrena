@@ -39,7 +39,16 @@ import (
 // names the plugin. A plugin that does NOT use either field keeps announcing 1 by being
 // built with an older SDK, and this build still talks to it — which is the whole point
 // of Supported being a set rather than a number.
-const Version = 2
+//
+// RAISED TO 3 on 2026-09-14, for `References` on an attribute (PLAN.md §14.3). The
+// messages did not change shape; the SCHEMA PAYLOAD gained one key, and the reason is
+// exactly the reason 2 was raised: Attribute.UnmarshalJSON decodes leniently, so a
+// plugin built with this SDK talking to an OLDER host would have References silently
+// DROPPED. `${vpc}` would then report "declares no reference" about an attribute whose
+// plugin plainly declares one, with nothing anywhere explaining why it was not heard.
+//
+// Announcing 3 makes that a refusal that names the plugin and the versions instead.
+const Version = 3
 
 // Supported lists every protocol version this build can talk to, newest first.
 //
@@ -47,7 +56,7 @@ const Version = 2
 // means exactly what it meant then — not optional, no aliases. Nothing about an older
 // plugin becomes wrong, so nothing about it should stop working. §61.1 calls this a
 // MINOR: a version added while the previous one keeps working.
-var Supported = []int{2, 1}
+var Supported = []int{3, 2, 1}
 
 // IsSupported reports whether a plugin's protocol version can be spoken here.
 func IsSupported(v int) bool {

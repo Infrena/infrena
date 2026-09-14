@@ -15,8 +15,8 @@ import (
 // The literal is duplicated on purpose. Reading it from the constant would assert that
 // the constant equals itself.
 func TestTheProtocolVersionIsDeliberate(t *testing.T) {
-	if Version != 2 {
-		t.Errorf("Version = %d, want 2. Changing it is a deliberate act: raise this literal "+
+	if Version != 3 {
+		t.Errorf("Version = %d, want 3. Changing it is a deliberate act: raise this literal "+
 			"together with the constant, and say in PLAN.md §61 what moved and why", Version)
 	}
 }
@@ -56,5 +56,19 @@ func TestThisBuildCanTalkToItself(t *testing.T) {
 func TestSupportedIsNewestFirst(t *testing.T) {
 	if !slices.IsSortedFunc(Supported, func(a, b int) int { return b - a }) {
 		t.Errorf("Supported = %v, want newest first as its doc comment states", Supported)
+	}
+}
+
+func TestProtocolIsThreeAndStillSpeaksTwoAndOne(t *testing.T) {
+	if Version != 3 {
+		t.Errorf("Version = %d, want 3 — References is a schema-payload addition, same as optional/aliases were for 2", Version)
+	}
+	for _, v := range []int{3, 2, 1} {
+		if !IsSupported(v) {
+			t.Errorf("protocol %d must still be supported — Supported is a set so raising the version does not orphan every plugin", v)
+		}
+	}
+	if IsSupported(4) {
+		t.Error("an unreleased protocol must not be accepted")
 	}
 }
