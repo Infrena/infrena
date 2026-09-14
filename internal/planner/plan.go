@@ -538,52 +538,19 @@ func (p *Plan) CheckApplicable(project, environment, configHash string, st stale
 	return nil
 }
 
-// UnappliableFromFile reports the operations that cannot be applied from a saved plan,
-// each with the operation it depends on that makes it so.
+// A saved plan CAN now carry an expression, and that is what lifted the restriction this
+// file used to hold. An UnappliableFromFile method here refused any plan whose operations
+// referred to one another, because `value.Value.Expr` was not serialised: such a plan
+// decoded to unknowns with no expressions, which are indistinguishable from computed
+// attributes, so the executor dropped them and the apply reported success having left
+// them unset. pkg/value now serialises the expression (see pkg/value/exprwire.go), the
+// executor resolves it exactly as it does on the normal path, and the refusal is gone
+// rather than merely relaxed.
 //
-// THE CASE THIS CATCHES WOULD OTHERWISE BE SILENT, which is the only reason it exists.
-// When a resource references another resource created in the same plan — `network:
-// ${net.id}` — the referencing attribute is UNKNOWN at plan time and carries the
-// expression that will produce it. The executor evaluates that expression during the
-// apply, once the dependency exists (internal/executor.resolveAfter).
-//
-// `value.Value.Expr` is not serialized, so the expression does not survive the artifact.
-// A decoded value is then an unknown with no expression, which resolveAfter deliberately
-// DROPS — correctly, because that is also exactly what a computed attribute looks like.
-// The two cases are indistinguishable after decoding, so the apply would succeed, report
-// success, and leave the attribute absent. Measured: `db.network` came back `(absent)`
-// and the next plan proposed an update, breaking invariant 2.
-//
-// So it is detected from structure instead: an operation that depends on another
-// operation IN THIS PLAN which creates the thing it depends on. That is conservative — an
-// explicit `depends_on` with no reference is refused too — and conservative is the right
-// direction, because the alternative is applying a plan that quietly does less than it
-// says.
-//
-// The fix that removes this restriction is to serialize the expression, which is a change
-// to pkg/value's wire format (shared with state and reports) and is deliberately not made
-// here.
-func (p *Plan) UnappliableFromFile() []string {
-	creates := map[string]bool{}
-	for _, op := range p.Operations {
-		switch op.Kind {
-		case OpCreate, OpReplace:
-			creates[op.Address.String()] = true
-		}
-	}
-
-	var out []string
-	for _, op := range p.Operations {
-		for _, dep := range op.DependsOn {
-			if creates[dep.String()] {
-				out = append(out, op.Address.String()+" depends on "+dep.String())
-				break
-			}
-		}
-	}
-	sort.Strings(out)
-	return out
-}
+// The invariant that refusal protected did not disappear with it: state must never
+// persist a pending expression, and internal/state.Encode now refuses one outright —
+// where the rule is about state, rather than in Value, where it constrained every
+// consumer including plans.
 
 // CheckIdentity refuses a plan that belongs to a different project or environment.
 //

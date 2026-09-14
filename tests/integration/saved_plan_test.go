@@ -213,43 +213,44 @@ func readState(t *testing.T, dir, environment string) stateFile {
 	return st
 }
 
-// TestAPlanWhoseResourcesReferToEachOtherIsRefusedRatherThanSilentlyIncomplete.
+// TestASavedPlanResolvesAReferenceToAResourceItAlsoCreates.
 //
-// The limitation that had to be made LOUD. An attribute referring to a resource created
-// in the same plan is unknown at plan time and carries the expression the executor
-// evaluates once the dependency exists. `value.Value.Expr` is not serialized, so after a
-// round trip the value is an unknown with no expression — which is indistinguishable from
-// a computed attribute, and internal/executor.resolveAfter drops exactly that.
+// The case that was SILENTLY WRONG, and the reason pkg/value now serialises expressions.
+// `network: ${net.id}` is unknown at plan time and carries the expression the executor
+// evaluates once net exists. While `value.Value.Expr` was not serialised, the artifact
+// carried the unknown and lost the expression — which is indistinguishable from a
+// computed attribute, so the executor dropped it. Measured then: both resources created,
+// success reported, `db.network` left ABSENT, and the next plan proposing an update.
+// Invariant 2 broken by a command that said it had succeeded.
 //
-// Measured before this refusal existed: applying such a plan created both resources,
-// reported success, and left `db.network` ABSENT, so the next plan proposed an update.
-// Invariant 2 broken by a command that said it had succeeded. Refusing is worse for the
-// feature and better for the user.
-func TestAPlanWhoseResourcesReferToEachOtherIsRefusedRatherThanSilentlyIncomplete(t *testing.T) {
+// This test is the whole feature in one run, so it asserts the outcome rather than the
+// mechanism: the referencing attribute holds the created resource's real ID, state records
+// the dependency edge, and a re-plan is clean.
+func TestASavedPlanResolvesAReferenceToAResourceItAlsoCreates(t *testing.T) {
 	dir := project(t, savedPlanProject) // db: network: ${net.id}
 	artifact := filepath.Join(dir, "p.json")
+
 	if r := run(t, dir, "plan", "dev", "--output", artifact); r.ExitCode != 2 {
 		t.Fatalf("plan exit = %d:\n%s", r.ExitCode, r.combined())
 	}
-
-	got := run(t, dir, "apply", "dev", "--plan", artifact, "--auto-approve")
-	if got.ExitCode == 0 {
-		t.Fatalf("a plan with an intra-plan reference must be refused, not applied incompletely:\n%s",
-			got.combined())
+	// The expression must be IN the file, or what follows proves nothing about the
+	// artifact — it would only prove the executor works, which was never in doubt.
+	saved, err := os.ReadFile(artifact)
+	if err != nil {
+		t.Fatal(err)
 	}
-	// The message names WHICH operations, and what to do instead.
-	requireContains(t, got.combined(), "db depends on net")
-	requireContains(t, got.combined(), "without --plan")
-
-	// Nothing was created: the refusal is before the lock, so there is no state at all.
-	if _, err := os.Stat(filepath.Join(dir, ".infra", "state", "dev.json")); err == nil {
-		t.Error("a refused apply created state")
+	if !strings.Contains(string(saved), `"op": "resource_ref"`) {
+		t.Fatalf("the artifact carries no expression, so the apply below cannot be resolving one:\n%s", saved)
 	}
 
-	// And the normal path still handles it, which is what the message tells the user.
-	if r := run(t, dir, "apply", "dev", "--auto-approve"); r.ExitCode != 2 {
-		t.Fatalf("apply without --plan exit = %d:\n%s", r.ExitCode, r.combined())
+	applied := run(t, dir, "apply", "dev", "--plan", artifact, "--auto-approve")
+	if applied.ExitCode != 2 {
+		t.Fatalf("applying it exit = %d:\n%s", applied.ExitCode, applied.combined())
 	}
+	// Resolved to the real ID, not left unset: this is the exact line that used to be
+	// missing.
+	requireContains(t, applied.Stdout, `network: "net-1"`)
+
 	st := readState(t, dir, "dev")
 	db, ok := st.Resources["db"]
 	if !ok {
@@ -257,5 +258,11 @@ func TestAPlanWhoseResourcesReferToEachOtherIsRefusedRatherThanSilentlyIncomplet
 	}
 	if len(db.Dependencies) != 1 || db.Dependencies[0].Name != "net" {
 		t.Errorf("db records dependencies %v, want [net]", db.Dependencies)
+	}
+
+	// Invariant 2, which is what the silent failure broke.
+	if again := run(t, dir, "plan", "dev"); again.ExitCode != 0 {
+		t.Errorf("does not converge after applying a saved plan; re-plan exit = %d:\n%s",
+			again.ExitCode, again.combined())
 	}
 }

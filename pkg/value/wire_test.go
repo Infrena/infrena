@@ -73,3 +73,58 @@ func TestValueWireShapeIsFrozen(t *testing.T) {
 		t.Errorf("value wire shape changed.\n got %s\nwant %s", data, want)
 	}
 }
+
+// TestExprOpWireNamesAreFrozen pins the on-disk spelling of every expression operation.
+//
+// Established by sabotage: renaming one spelling in exprOpWireNames broke NOTHING,
+// because the round-trip test marshals and unmarshals through the same table — a renamed
+// spelling is symmetric and therefore invisible to it. What it would break is every plan
+// artifact already written, which a newer build would then decode as a different
+// operation or refuse outright.
+//
+// The literals are duplicated on purpose. Deriving them from the map asserts nothing.
+func TestExprOpWireNamesAreFrozen(t *testing.T) {
+	want := map[ExprOp]string{
+		OpLiteral:     "literal",
+		OpVarRef:      "var_ref",
+		OpResourceRef: "resource_ref",
+		OpConcat:      "concat",
+		OpCall:        "call",
+	}
+	if len(exprOpWireNames) != len(want) {
+		t.Fatalf("exprOpWireNames has %d entries, want %d — a new operation needs a frozen "+
+			"spelling here and a format version decision", len(exprOpWireNames), len(want))
+	}
+	for op, spelling := range want {
+		got, err := exprOpToWireName(op)
+		if err != nil {
+			t.Errorf("%v has no on-disk spelling: %v", op, err)
+			continue
+		}
+		if got != spelling {
+			t.Errorf("%v is written as %q, want %q — every artifact already on disk uses the latter",
+				op, got, spelling)
+		}
+		back, err := exprOpFromWireName(spelling)
+		if err != nil || back != op {
+			t.Errorf("%q decodes to %v (err %v), want %v", spelling, back, err, op)
+		}
+	}
+}
+
+// TestAnExpressionWireShapeIsFrozen pins the JSON an expression serialises to, the
+// counterpart to TestValueWireShapeIsFrozen for the field it gained.
+func TestAnExpressionWireShapeIsFrozen(t *testing.T) {
+	v := Unknown(KindString, SourceComputed)
+	v.Expr = &Expr{Op: OpResourceRef, Ref: LocalRef("net", "id")}
+
+	data, err := json.Marshal(v)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	want := `{"kind":"string","known":false,"source":"computed",` +
+		`"expr":{"op":"resource_ref","ref":{"name":"net","attribute":"id"}}}`
+	if strings.TrimSpace(string(data)) != want {
+		t.Errorf("expression wire shape changed.\n got %s\nwant %s", data, want)
+	}
+}

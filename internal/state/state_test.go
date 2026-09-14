@@ -2,6 +2,7 @@ package state
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/infrata/infrata/pkg/address"
@@ -187,5 +188,62 @@ func TestDecodePreservesLargeIntegers(t *testing.T) {
 	}
 	if back != large+1 {
 		t.Errorf("Decode returned %d, want %d", back, large+1)
+	}
+}
+
+// TestStateRefusesToWriteAPendingExpression.
+//
+// pkg/value used to refuse to serialise an expression at all, which made this impossible
+// by construction — and also made it impossible for a PLAN ARTIFACT to carry one, which
+// silently broke applying a saved plan. The expression now travels, so the rule that
+// matters to STATE is enforced here instead, and this is the only thing asserting it:
+// established by sabotage, which found that disabling the check broke nothing.
+//
+// The rule is narrow on purpose. An UNKNOWN value is fine in state — a computed attribute
+// a provider has not reported is legitimately unknown, which the golden fixture pins. An
+// unknown carrying an EXPRESSION is a promise to evaluate something later that nothing
+// downstream ever will, and on the next load it is a dangling reference naming a resource
+// that may be gone.
+func TestStateRefusesToWriteAPendingExpression(t *testing.T) {
+	st := New("myapp", "dev")
+	pending := value.Unknown(value.KindString, value.SourceComputed)
+	pending.Expr = &value.Expr{Op: value.OpResourceRef, Ref: value.LocalRef("net", "id")}
+	st.Set(&resource.ResourceState{
+		Address:    address.Address{Name: "db"},
+		Type:       "fake.database",
+		Provider:   "fake",
+		ProviderID: "db-1",
+		Attributes: map[string]value.Value{"network": pending},
+	})
+
+	_, err := st.Encode()
+	if err == nil {
+		t.Fatal("state carrying an unresolved expression must not be written: the next load " +
+			"would resurrect a reference to a resource that may no longer exist")
+	}
+	for _, want := range []string{"db", "network", "net.id"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal does not name %q, so it cannot be diagnosed: %v", want, err)
+		}
+	}
+}
+
+// TestStateStillWritesAPlainUnknown is the control, and it is the half that matters most:
+// the check above must not have made every computed attribute unwritable. Without this,
+// a guard that refused all unknowns would pass the test above and break every apply.
+func TestStateStillWritesAPlainUnknown(t *testing.T) {
+	st := New("myapp", "dev")
+	st.Set(&resource.ResourceState{
+		Address:    address.Address{Name: "db"},
+		Type:       "fake.database",
+		Provider:   "fake",
+		ProviderID: "db-1",
+		Attributes: map[string]value.Value{
+			"endpoint": value.Unknown(value.KindString, value.SourceComputed),
+		},
+	})
+
+	if _, err := st.Encode(); err != nil {
+		t.Errorf("an unknown computed attribute is legitimate state and must still be written: %v", err)
 	}
 }

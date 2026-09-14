@@ -10,6 +10,7 @@ import (
 
 	"github.com/infrata/infrata/pkg/address"
 	"github.com/infrata/infrata/pkg/resource"
+	"github.com/infrata/infrata/pkg/value"
 )
 
 // CurrentVersion is the state schema version this build writes.
@@ -77,11 +78,66 @@ func (s *State) Addresses() []address.Address {
 // sorted by encoding/json for maps, and indentation is fixed, so a state file
 // only changes when the state actually changed.
 func (s *State) Encode() ([]byte, error) {
+	if err := s.checkNothingPending(); err != nil {
+		return nil, err
+	}
 	data, err := json.MarshalIndent(s, "", "  ")
 	if err != nil {
 		return nil, err
 	}
 	return append(data, '\n'), nil
+}
+
+// checkNothingPending refuses to write a state file carrying a pending expression.
+//
+// AN UNKNOWN VALUE IS FINE and deliberately not refused: a computed attribute a provider
+// has not reported is legitimately unknown in state, which the golden fixture pins. An
+// unknown carrying an EXPRESSION is different — that is a promise to evaluate something
+// later, and nothing downstream ever will. Written into state it becomes a dangling
+// reference the next load resurrects, naming a resource that may be gone by then.
+//
+// The first version of this check refused every unknown and the golden test caught it
+// immediately, which is the distinction worth recording: state stores values it does not
+// know, and never instructions for finding them out.
+//
+// This used to be guaranteed by pkg/value refusing to serialise an expression at all.
+// That made it impossible for a PLAN ARTIFACT to carry one either, and a plan's whole
+// job is to record work not yet done — so the expression now travels and the rule lives
+// here, where it is about state rather than about every consumer of a Value.
+//
+// An engine defect rather than a user error, and worded as one: nothing a user writes
+// can reach this, because the executor resolves every deferred value before recording it
+// (internal/executor.resolveAfter). Failing the WRITE is the point — a corrupt state file
+// is far more expensive than a failed apply, and the alternative is discovering it on the
+// next load, when the run that produced it is over.
+func (s *State) checkNothingPending() error {
+	for _, addr := range s.Addresses() {
+		r, ok := s.Get(addr)
+		if !ok {
+			continue
+		}
+		for _, name := range sortedNames(r.Attributes) {
+			v := r.Attributes[name]
+			if v.Expr != nil {
+				return fmt.Errorf("refusing to write state: %s attribute %q still carries the "+
+					"expression %s, which means it was recorded before it was resolved. "+
+					"This is an engine defect; please report it",
+					addr, name, v.Expr.String())
+			}
+		}
+	}
+	return nil
+}
+
+// sortedNames lists a map's keys in order, so a refusal names the same attribute on
+// every run of the same failure.
+func sortedNames(m map[string]value.Value) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // Migration transforms a decoded state document from one version to the next.

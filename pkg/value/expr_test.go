@@ -1,6 +1,7 @@
 package value
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -158,9 +159,25 @@ func TestValueCarriesExpr(t *testing.T) {
 	}
 }
 
-func TestExprIsNotSerialised(t *testing.T) {
-	// State on disk records what a provider reported, never a pending
-	// expression. Persisting one would resurrect a dangling reference on load.
+// TestAnExpressionSurvivesTheWire.
+//
+// This test used to assert the OPPOSITE — that Expr is never serialised — on the
+// grounds that "state on disk records what a provider reported, never a pending
+// expression; persisting one would resurrect a dangling reference on load". The concern
+// is real and has NOT been dropped; it has moved to where it belongs. Refusing to encode
+// an expression anywhere made it impossible for state to hold one, and also impossible
+// for a PLAN ARTIFACT to hold one — and a plan's whole job is to record work not yet
+// done, including the values that will only be known once part of it has run.
+//
+// The cost of the old rule was silent: a saved plan containing `network: ${net.id}`
+// decoded to an unknown with no expression, which is indistinguishable from a computed
+// attribute, so the executor dropped it. The apply reported success and left the
+// attribute unset.
+//
+// The state invariant is now enforced by internal/state, which refuses to encode a
+// resource attribute that is unknown or carries an expression — a checked rule rather
+// than an emergent property of what Value declines to write.
+func TestAnExpressionSurvivesTheWire(t *testing.T) {
 	v := Unknown(KindString, SourceComputed)
 	v.Expr = &Expr{Op: OpResourceRef, Ref: LocalRef("db", "endpoint")}
 
@@ -168,9 +185,39 @@ func TestExprIsNotSerialised(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MarshalJSON: %v", err)
 	}
-	for _, leak := range []string{"expr", "Expr", "db.endpoint"} {
-		if strings.Contains(string(data), leak) {
-			t.Errorf("serialised form leaks %q: %s", leak, data)
-		}
+
+	var back Value
+	if err := back.UnmarshalJSON(data); err != nil {
+		t.Fatalf("UnmarshalJSON: %v", err)
+	}
+	if back.Known {
+		t.Error("a value awaiting an expression must not come back Known")
+	}
+	if back.Expr == nil {
+		t.Fatalf("the expression did not survive: %s", data)
+	}
+	if back.Expr.Op != OpResourceRef {
+		t.Errorf("Op = %v, want OpResourceRef — an operation read back wrongly changes what the expression means", back.Expr.Op)
+	}
+	if got := back.Expr.Ref.Target.Name; got != "db" {
+		t.Errorf("reference target = %q, want db", got)
+	}
+	if got := back.Expr.Ref.Attribute; got != "endpoint" {
+		t.Errorf("reference attribute = %q, want endpoint", got)
+	}
+}
+
+// TestAKnownValueWritesNoExpressionKey.
+//
+// The additivity claim, asserted rather than assumed. Every value in a state file and
+// every value a provider plugin is sent or returns is KNOWN, so if a known value's bytes
+// are unchanged, none of those formats changed at all.
+func TestAKnownValueWritesNoExpressionKey(t *testing.T) {
+	data, err := json.Marshal(String("10.0.0.0/16", SourceExplicit))
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if strings.Contains(string(data), "expr") {
+		t.Errorf("a known value gained an expr key: %s", data)
 	}
 }

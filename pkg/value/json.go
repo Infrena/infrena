@@ -16,6 +16,11 @@ type wireValue struct {
 	Sensitive  bool            `json:"sensitive,omitempty"`
 	Origin     *Origin         `json:"origin,omitempty"`
 	SuppliedBy string          `json:"supplied_by,omitempty"`
+	// Expr is the expression that will produce an unknown value. omitempty, so a
+	// KNOWN value — which is every value in a state file and every value a provider
+	// plugin is ever sent or returns — serialises byte-for-byte as it did before this
+	// field existed. See exprwire.go for why it had to start travelling.
+	Expr *wireExpr `json:"expr,omitempty"`
 }
 
 // kindWireNames is the frozen on-disk spelling of every Kind.
@@ -87,6 +92,13 @@ func (v Value) MarshalJSON() ([]byte, error) {
 		}
 		w.Raw = raw
 	}
+	if v.Expr != nil {
+		expr, err := toWireExpr(v.Expr)
+		if err != nil {
+			return nil, err
+		}
+		w.Expr = expr
+	}
 	return json.Marshal(w)
 }
 
@@ -151,6 +163,14 @@ func (v *Value) UnmarshalJSON(data []byte) error {
 		default:
 			return fmt.Errorf("cannot decode value of kind %s", kind)
 		}
+	}
+
+	if w.Expr != nil {
+		expr, err := fromWireExpr(w.Expr)
+		if err != nil {
+			return err
+		}
+		out.Expr = expr
 	}
 
 	*v = out

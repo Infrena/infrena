@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -79,19 +78,6 @@ func applySavedPlan(
 	project := projectNameFor(opts.Dir)
 	if project == "" {
 		project = p.Project
-	}
-
-	// Refused before rendering, like the identity check, and for a stronger reason: this
-	// one is a limitation of the format rather than a mistake by the user, so the message
-	// has to explain rather than accuse. See planner.UnappliableFromFile.
-	if blocked := p.UnappliableFromFile(); len(blocked) > 0 {
-		return finishApply(cmd.ErrOrStderr(), rw, report.ApplyResult{}, fmt.Errorf(
-			"this plan cannot be applied from a file: it creates resources that other "+
-				"resources in it refer to, and a saved plan cannot carry the expressions that "+
-				"get resolved while applying.\n  %s\n"+
-				"Run `infrata apply %s` without --plan, which resolves them as it goes. Applying "+
-				"this file would leave those attributes unset and report success",
-			strings.Join(blocked, "\n  "), environment))
 	}
 
 	// REFUSED BEFORE THE PLAN IS RENDERED. Identity cannot change under us, so there is
