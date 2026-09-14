@@ -37,7 +37,7 @@ type AttributeDecl struct {
 // Plugin is the implementation; Name is what resources refer to, defaulting to
 // the plugin name. Config is handed to the plugin; Defaults are attribute
 // defaults for every resource that uses this instance. They are separate maps
-// because at the top level of the block `iam-role: x` and `tags: ${tags}` are
+// because at the top level of the block `iam-role: x` and `tags: ${var.tags}` are
 // indistinguishable while meaning entirely different things — one configures the
 // PROVIDER, the other defaults a RESOURCE.
 type ProviderDecl struct {
@@ -106,7 +106,7 @@ type ResourceDecl struct {
 	// interchangeable. The Origin travels with the value, so stage 5 reports an
 	// unknown environment name against the line that wrote it rather than
 	// against the resource. And HasExpressions survives, which is what makes
-	// `only: ${replica_in}` work — a module written with parts its caller can
+	// `only: ${var.replica_in}` work — a module written with parts its caller can
 	// switch off. A bare slice loses both and cannot hold an expression at all.
 	Skip AttributeDecl
 	Only AttributeDecl

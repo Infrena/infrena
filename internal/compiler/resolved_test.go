@@ -179,7 +179,7 @@ resources:
   database:
     type: fake.database
     engine: postgres
-    network: ${prefix}-${network.id}
+    network: ${var.prefix}-${network.id}
 `
 	hashWith := func(prefix string) string {
 		t.Helper()

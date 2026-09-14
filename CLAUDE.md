@@ -86,7 +86,7 @@ also plan clean.
 environments it belongs to, as a scalar, a list, or an expression — which is what lets a module
 be written with parts a caller switches off. An environment is reachable if it is DECLARED or it
 HAS STATE, so removing one from configuration proposes tearing it down and lets you see the
-teardown first. `${project}` is a fourth process variable.
+teardown first. `${var.project}` is a fourth process variable.
 
 Three rules to know before touching any of it:
 
@@ -365,7 +365,7 @@ Key architectural rules, in rough order of how easy they are to violate:
   provider defaults → base config → module defaults → environment inheritance →
   environment variables → CLI overrides (§7). Explicit config always wins over an
   implicit default.
-- **Expressions stay constrained.** `${var}` interpolation and `${resource.attr}`
+- **Expressions stay constrained.** `${var.var}` interpolation and `${resource.attr}`
   references, with a small set of pure functions eventually. This is deliberately not
   a programming language (§10).
 - **The configuration language is a product API.** Even pre-1.0, weigh backwards

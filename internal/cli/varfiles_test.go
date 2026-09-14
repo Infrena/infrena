@@ -96,7 +96,7 @@ func TestLoadVarFilesReportsAYAMLSyntaxError(t *testing.T) {
 // --var-file with a shape error look identical to a clean one.
 func TestLoadVarFilesPropagatesDecodeVariableFileDiagnostics(t *testing.T) {
 	dir := t.TempDir()
-	writeFile(t, dir, "vars.yml", "name: ${project_name}-web\n")
+	writeFile(t, dir, "vars.yml", "name: ${var.project_name}-web\n")
 	_, ds := loadVarFiles(dir, []string{"vars.yml"})
 	if !ds.HasErrors() {
 		t.Fatal("an interpolation inside a --var-file must surface as a diagnostic from loadVarFiles, not be swallowed")
@@ -113,7 +113,7 @@ func TestLoadVarFilesPropagatesDecodeVariableFileDiagnostics(t *testing.T) {
 // a message meant to show the user what they wrote.
 func TestLoadVarFilesDecodeDiagnosticsNameThePathAsTyped(t *testing.T) {
 	dir := t.TempDir()
-	writeFile(t, dir, "vars.yml", "name: ${project_name}-web\n")
+	writeFile(t, dir, "vars.yml", "name: ${var.project_name}-web\n")
 	_, ds := loadVarFiles(dir, []string{"vars.yml"})
 	text := renderToString(ds)
 	if !strings.Contains(text, "vars.yml") {
@@ -140,7 +140,7 @@ variables:
 resources:
   network:
     type: fake.network
-    cidr: ${cidr}
+    cidr: ${var.cidr}
 `)
 	writeFile(t, dir, "vars.yml", "cidr: 10.77.0.0/16\n")
 
@@ -178,7 +178,7 @@ environments:
 resources:
   network:
     type: fake.network
-    cidr: ${cidr}
+    cidr: ${var.cidr}
 `)
 	writeFile(t, dir, "vars.yml", "cidr: 10.77.0.0/16\n")
 
@@ -208,14 +208,14 @@ resources:
 // Amendment 5 tried to make a CLI-override annotation name its own source by
 // reusing Value.Origin, and every test written for it — constructing a
 // Value directly and rendering it — passed. The binary still regressed: a
-// real plan reaches its resource attributes through "${cidr}" interpolation,
+// real plan reaches its resource attributes through "${var.cidr}" interpolation,
 // and internal/expressions/eval.go's OpVarRef case re-origins every such
 // reference to the referencing expression's site BEFORE the value reaches
 // the renderer, which a test that never evaluates an expression cannot see.
 // Amendment 6 replaced Origin with the dedicated Value.SuppliedBy field
 // specifically because WithOrigin's overwrite cannot touch it — but that
 // claim is only worth as much as a test that actually exercises the real
-// path: compiled configuration with "${cidr}" in it, through
+// path: compiled configuration with "${var.cidr}" in it, through
 // variables.Resolve, through expressions.Evaluate, into a rendered plan.
 func TestPlanAnnotatesVarFileAndVarWithTheirOwnSource(t *testing.T) {
 	const body = `
@@ -226,7 +226,7 @@ variables:
 resources:
   network:
     type: fake.network
-    cidr: ${cidr}
+    cidr: ${var.cidr}
 `
 	run := func(t *testing.T, opts *GlobalOptions) string {
 		t.Helper()

@@ -26,7 +26,7 @@ type Scope struct {
 	// Module is the instantiation path to this level, outermost first, empty
 	// at the root.
 	Module []string
-	// Vars is what ${name} resolves to here: the module's own inputs plus the
+	// Vars is what ${var.name} resolves to here: the module's own inputs plus the
 	// three process variables, or the project's whole variable scope at the
 	// root.
 	Vars variables.Scope
@@ -138,7 +138,7 @@ func (w *walker) moduleScope(
 
 	// The three facts about the invocation cross every module boundary, each
 	// copied as-is, keeping the provenance the compiler stamped. A module that
-	// rendered ${environment} as having come from its own inputs would claim an
+	// rendered ${var.environment} as having come from its own inputs would claim an
 	// origin that does not exist.
 	for _, name := range variables.ProcessVariables {
 		if v, ok := caller.Variable(name); ok {
@@ -216,7 +216,7 @@ func (w *walker) moduleScope(
 		w.ds.Extend(s.Validate(coerced))
 		// Stored exactly as evaluation produced it. Amendment 8b: stage 5 does
 		// not re-stamp Scope. A literal arrives as stage 2 left it and a
-		// ${count} from --var keeps ScopeCLIOverride, because Evaluate returns
+		// ${var.count} from --var keeps ScopeCLIOverride, because Evaluate returns
 		// the variable's own Value — a module boundary is a point where it is
 		// tempting to re-derive provenance, and the rule is that provenance is
 		// recorded where a value ENTERS, not where it is passed along.

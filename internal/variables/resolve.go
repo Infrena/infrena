@@ -62,7 +62,7 @@ var ProcessVariables = []string{"environment", "project"}
 //
 // This is NOT a second precedence ladder. It exists for exactly three fixed
 // names — `environment`, `region`, `account` — whose values are not written in
-// any file and which must be authoritative: a ${environment} that disagreed
+// any file and which must be authoritative: a ${var.environment} that disagreed
 // with the environment being planned would make every diagnostic and every
 // resource name that interpolates it lie about which environment it belongs
 // to. See task 7, which is the only caller.
@@ -430,7 +430,7 @@ func checkAgainstSchemas(schemas map[string]Schema, out *Scope, chain environmen
 // value, and a flag that cannot change the outcome must be refused rather than ignored.
 //
 // TWO, not four. "region" and "account" were here until 2026-09-13, on the strength of
-// compiler.Options fields that nothing ever assigned — so `${region}` was an undefined
+// compiler.Options fields that nothing ever assigned — so `${var.region}` was an undefined
 // variable in every project that ever ran, a DECLARED `region` was skipped by the branch
 // below and reported only as "undefined variable" at its use site, and `--var region=...`
 // was refused with a message about discarding it "in favour of the engine's own value"

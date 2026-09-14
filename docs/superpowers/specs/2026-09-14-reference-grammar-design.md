@@ -4,7 +4,7 @@
 **Status:** approved, not implemented
 **Amends:** `PLAN.md` §9, §10, §10.4, §12.1, §57
 **Sequence:** this is spec ONE of two. Spec two (provider-declared resource
-references and the `${vpc}` projection) depends on it and is written separately.
+references and the `${var.vpc}` projection) depends on it and is written separately.
 
 ---
 
@@ -32,7 +32,7 @@ a resource named `vpc.tags` — which `checkResourceName` forbids anyone from
 declaring. The reference is unsatisfiable by construction, and the error names
 the wrong thing.
 
-**The two forms are indistinguishable by eye.** `${vpc}` and `${vpc.arn}` mean
+**The two forms are indistinguishable by eye.** `${var.vpc}` and `${vpc.arn}` mean
 entirely unrelated things — one a value from `vars/`, the other an attribute a
 provider assigns during apply — and nothing marks which is which.
 
@@ -40,12 +40,12 @@ Confirmed empirically before designing (throwaway test against the real parser
 and evaluator, scope holding both a variable `vpc` and a resource `vpc.arn`):
 
 ```
-${vpc}        op=VarRef:vpc           known=true  raw=VARIABLE-VALUE
+${var.vpc}        op=VarRef:vpc           known=true  raw=VARIABLE-VALUE
 ${vpc.arn}    op=ResourceRef:vpc.arn  known=true  raw=RESOURCE-ARN
 ${vpc.cidr}   op=ResourceRef:vpc.cidr known=false (deferred)
 ```
 
-A fourth reason is forward-looking. Spec two wants `${vpc}` to mean "the
+A fourth reason is forward-looking. Spec two wants `${var.vpc}` to mean "the
 resource `vpc`, projected to whichever attribute the target expects" — the fix
 for wiring an id where an arn was wanted. That slot is occupied by variables
 today, and this change is what frees it.
@@ -63,7 +63,7 @@ ${var.tags.team}       a path into a map variable                     (new)
 ${var.azs[0]}          an entry of a list variable                    (new)
 ${vpc.id}              an attribute of resource `vpc`
 ${vpc.tags.Name}       a path into a resource attribute              (new)
-${vpc}                 the resource `vpc` itself   (reserved here; spec two)
+${var.vpc}                 the resource `vpc` itself   (reserved here; spec two)
 ```
 
 **`var` is reserved as a resource name.** A resource so named makes `${var.x}`
@@ -81,7 +81,7 @@ is amended accordingly.
 reference:
 
 ```
-${vpc} is not a reference.
+${var.vpc} is not a reference.
 
 Variables are written ${var.vpc}. A resource reference needs an attribute,
 as ${vpc.id}.
@@ -298,7 +298,7 @@ field ban.
 
 **The rewrite needs no judgment.** Under the old grammar a bare single segment
 could ONLY be a variable — that was the whole of `parse.go:478`. Every bare
-`${x}` in infrena configuration becomes `${var.x}`, mechanically. There is no
+`${var.x}` in infrena configuration becomes `${var.x}`, mechanically. There is no
 file where the author might have meant a resource, because the grammar gave
 them no way to.
 
@@ -340,7 +340,7 @@ Landing the parser change and ~200 fixture edits as one commit gives one
 unreviewable diff; landing them separately gives a red build in between. Three
 commits, each green:
 
-1. **Expand** — accept `${var.x}` alongside bare `${x}`. Additive; every
+1. **Expand** — accept `${var.x}` alongside bare `${var.x}`. Additive; every
    existing test passes untouched.
 2. **Migrate** — rewrite the 243, by file allowlist. `go test ./...` is the
    verification: a fixture rewritten wrongly fails a test, so the commit checks
@@ -349,7 +349,7 @@ commits, each green:
    reserved as a resource name. The new grammar's tests land here.
 
 **The dual-acceptance window exists only inside the branch, never in a
-release.** While both forms work, `${vpc}` is ambiguous again — precisely the
+release.** While both forms work, `${var.vpc}` is ambiguous again — precisely the
 property being removed. Commits 2 and 3 are not separately releasable, and the
 expand step is NOT a compatibility promise.
 
@@ -385,9 +385,9 @@ rather than the symptom:
 
 | Trigger | Says |
 |---|---|
-| `${vpc}` | not a reference; variables are `${var.vpc}`, a resource reference needs an attribute |
+| `${var.vpc}` | not a reference; variables are `${var.vpc}`, a resource reference needs an attribute |
 | a resource named `var` | reserved; reported at the DECLARATION |
-| `${var}` | `var` is a namespace, not a variable |
+| `${var.var}` | `var` is a namespace, not a variable |
 | `${var.tags.tema}` | no key `tema`; lists the keys that exist |
 | `${var.region.x}` | `region` is a string; it has no members |
 | `${var.azs[5]}` | `var.azs` has 3 entries; there is no index 5 |

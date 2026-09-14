@@ -156,7 +156,7 @@ resources:
     type: test.thing
 outputs:
   home:
-    value: ${region}
+    value: ${var.region}
 `,
 	})
 
@@ -332,7 +332,7 @@ resources:
     type: test.thing
 outputs:
   out:
-    value: ${text}
+    value: ${var.text}
 `,
 	})
 
@@ -371,7 +371,7 @@ modules:
 resources:
   ca:
     type: module.a
-    count: ${scale}
+    count: ${var.scale}
   cb:
     type: module.b
     ratio: ${ca.n}
@@ -385,7 +385,7 @@ resources:
     type: test.thing
 outputs:
   n:
-    value: ${count}
+    value: ${var.count}
 `,
 		"b/module.yml": `
 inputs:
@@ -442,7 +442,7 @@ resources:
     type: test.thing
   ca:
     type: module.a
-    count: ${scale}
+    count: ${var.scale}
 `,
 		"a/module.yml": `
 inputs:
@@ -453,7 +453,7 @@ resources:
     type: test.thing
 outputs:
   n:
-    value: ${count}
+    value: ${var.count}
 `,
 	})
 

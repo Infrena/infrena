@@ -447,7 +447,7 @@ func TestRenderAnnotatesEveryScope(t *testing.T) {
 //
 // This replaced Amendment 5, which tried the same idea by reusing Origin and
 // was reverted: internal/expressions/eval.go's OpVarRef case re-origins
-// every "${var}" reference to the referencing expression's site, so Origin
+// every "${var.var}" reference to the referencing expression's site, so Origin
 // does not survive to the renderer for any value that reaches a resource
 // attribute the normal way. SuppliedBy is a dedicated field that
 // WithOrigin's overwrite cannot touch, which is what makes this fix

@@ -24,7 +24,7 @@ func Decode(files []File) (*ProjectDecl, diag.Diagnostics) {
 	// files to the same root module.
 	//
 	// Variables, environments and resources get SEPARATE sets. They are
-	// separate namespaces: `${db}` is a variable reference and `${db.host}` a
+	// separate namespaces: `${var.db}` is a variable reference and `${db.host}` a
 	// resource reference, and stage 6 already tells them apart.
 	seenResources := map[string]value.Origin{}
 	seenVariables := map[string]value.Origin{}

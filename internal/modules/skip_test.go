@@ -190,7 +190,7 @@ func TestSkipMayBeAnExpression(t *testing.T) {
 	scope.Override("targets", listOf("production"))
 	scope.Override("one", stringVal("production"))
 
-	for _, attr := range []string{"only: ${targets}", "only: ${one}"} {
+	for _, attr := range []string{"only: ${var.targets}", "only: ${var.one}"} {
 		decl, dir := declIn(t, twoEnvs+`
 resources:
   a:
@@ -212,7 +212,7 @@ resources:
 // TestAFilterThatDependsOnAResourceIsAnError.
 //
 // The input matters, and the first version of this test used
-// `only: ${nosuchvariable}` — which errors during EVALUATION, from the
+// `only: ${var.nosuchvariable}` — which errors during EVALUATION, from the
 // expression package, so the unknown-value guard it meant to exercise never ran
 // and deleting that guard changed nothing.
 //
@@ -250,7 +250,7 @@ resources:
   a:
     type: fake.network
     cidr: 10.0.0.0/16
-    only: ${nosuchvariable}
+    only: ${var.nosuchvariable}
 `, nil)
 	if out == "" {
 		t.Fatal("an `only` naming an undefined variable must be reported")
@@ -275,7 +275,7 @@ resources:
   stack:
     type: module.tagged
     tags:
-      owner: ${who}
+      owner: ${var.who}
       team: storefront
 `, map[string]string{
 		"modules/tagged/module.yml": `
@@ -287,7 +287,7 @@ resources:
   db:
     type: fake.database
     engine: postgres
-    tags: ${tags}
+    tags: ${var.tags}
 `,
 	})
 

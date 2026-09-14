@@ -112,7 +112,7 @@ modules:
 resources:
   app:
     type: module.m
-    replicas: ${count}
+    replicas: ${var.count}
 `,
 		"m/module.yml": moduleWithReplicas,
 	})
@@ -152,7 +152,7 @@ modules:
 resources:
   app:
     type: module.m
-    chosen: ${size}
+    chosen: ${var.size}
 `,
 		"m/module.yml": `
 inputs:

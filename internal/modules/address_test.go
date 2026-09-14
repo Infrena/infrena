@@ -279,7 +279,7 @@ resources:
 // nowhere else.
 //
 // The call is expanded away, so stage 6 never sees its attributes. Inside the
-// module the value arrives as an INPUT, which is a bare `${network}` with no
+// module the value arrives as an INPUT, which is a bare `${var.network}` with no
 // dot, and stage 6 walks only resource references for edges. Before this edge
 // was recorded the plan was CLEAN and the apply failed after the outer resource
 // had already been created:
@@ -303,7 +303,7 @@ resources:
     type: module.db
     network: ${net.id}
 `,
-		"db/module.yml": "inputs:\n  network:\n    type: string\nresources:\n  store:\n    type: fake.database\n    engine: postgres\n    network: ${network}\n",
+		"db/module.yml": "inputs:\n  network:\n    type: string\nresources:\n  store:\n    type: fake.database\n    engine: postgres\n    network: ${var.network}\n",
 	})
 
 	exp, ds := Expand(decl, variables.Scope{}, nil, Env{Name: "dev"}, dir, paths{})

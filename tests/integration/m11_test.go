@@ -44,7 +44,7 @@ func cloudNames(t *testing.T, path string) []string {
 // The cycle it breaks: constructing a provider needs its configuration; this
 // configuration interpolates a variable; resolving that variable needs a compile;
 // and a compile needs the provider's schemas. Before the split the registry was
-// built from raw declarations, so `cloud: ${account_file}` resolved to a string
+// built from raw declarations, so `cloud: ${var.account_file}` resolved to a string
 // nothing read — the provider opened a file named after the expression, or the
 // default, depending on the day.
 //
@@ -64,7 +64,7 @@ environments:
     account_file: prod-cloud.json
 providers:
   - plugin: fake
-    cloud: "${account_file}"
+    cloud: "${var.account_file}"
 resources:
   net:
     type: fake.network
@@ -470,7 +470,7 @@ providers:
     defaults:
       size: 200
       tags:
-        tier: ${tier}
+        tier: ${var.tier}
   - plugin: fake
     name: acct2
 resources:

@@ -93,7 +93,7 @@ func Compile(files []config.File, reg *registry.Registry, opts Options) (Resolve
 	fileValues, varDiags := stage.FileValues, stage.VarDiags
 
 	// Stage 4.5: the provider instances. AFTER variables, because an instance's
-	// configuration interpolates them — `cloud: ${path}`, `iam-role: ${role}` —
+	// configuration interpolates them — `cloud: ${var.path}`, `iam-role: ${var.role}` —
 	// and BEFORE stage 5, because expansion needs to know which instance a
 	// resource belongs to in order to inherit it down a module call.
 	//
@@ -402,7 +402,7 @@ func directoryScopes(
 			}
 		}
 		// The three process variables are authoritative in every scope, not
-		// just the project-wide one — a ${environment} that resolved inside
+		// just the project-wide one — a ${var.environment} that resolved inside
 		// resources/db/ and nowhere else would be worse than one that resolved
 		// nowhere. See seedProcessVariables.
 		seedProcessVariables(&scope, project.Project, opts)
@@ -443,7 +443,7 @@ func sortedDirs(m map[string]map[string]value.Value) []string {
 // invocation rather than from any file.
 //
 // `environment` is unconditional and authoritative: configuration names its
-// own environment (PLAN.md §10's example is `name: ${project_name}-${environment}`),
+// own environment (PLAN.md §10's example is `name: ${var.project_name}-${var.environment}`),
 // and a --var that could change it would produce resource names claiming one
 // environment while the plan changed another.
 //
@@ -475,7 +475,7 @@ func sortedDirs(m map[string]map[string]value.Value) []string {
 // itself, not a flag.
 //
 // TWO variables, not four. "region" and "account" were seeded here from Options fields
-// that nothing ever assigned, so they were never in scope and `${region}` was an
+// that nothing ever assigned, so they were never in scope and `${var.region}` was an
 // undefined variable in every project that ever ran. Removed 2026-09-13; see
 // variables.processReservedNames for what that cost while it stood.
 func seedProcessVariables(scope *variables.Scope, project string, opts Options) {

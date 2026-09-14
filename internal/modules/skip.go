@@ -71,7 +71,7 @@ func (w *walker) environmentNames(decl config.AttributeDecl, scope *Scope, r *co
 				Severity: diag.SeverityError,
 				Summary:  "`" + decl.Name + "` on resource " + strconv.Quote(r.Name) + " is not resolvable",
 				Detail:   "An expression here must appear on its own, as the whole value.",
-				Action:   "Write `" + decl.Name + ": ${names}` or a literal list of environment names.",
+				Action:   "Write `" + decl.Name + ": ${var.names}` or a literal list of environment names.",
 				Origin:   decl.Origin,
 			})
 			return nil, false

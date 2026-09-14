@@ -212,7 +212,7 @@ project: myapp
 resources:
   network:
     type: fake.network
-    cidr: ${cidr_block}
+    cidr: ${var.cidr_block}
 `)
 	opts := Options{Environment: "dev", Vars: map[string]string{"cidr_block": "10.9.0.0/16"}}
 	cfg, ds := bindReferences(rootOnly(t, p, opts), opts, testRegistry(t), testTable())
@@ -251,7 +251,7 @@ resources:
   database:
     type: fake.database
     engine: postgres
-    password: ${secret_value}-${network.id}
+    password: ${var.secret_value}-${network.id}
 `)
 	opts := Options{
 		Environment: "dev",

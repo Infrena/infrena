@@ -475,7 +475,7 @@ Rules:
   real: skipping a resource forces you to skip what depends on it. Silently
   dropping the edge is the alternative, and it produces a plan that applies and
   then fails partway.
-- **The value may be an expression.** `only: ${replica_environments}` resolving
+- **The value may be an expression.** `only: ${var.replica_environments}` resolving
   to a string or a list. This is what lets a MODULE be written with parts that
   the caller can switch off:
 
@@ -488,7 +488,7 @@ Rules:
   resources:
     replica:
       type: test.database
-      only: ${replica_in}
+      only: ${var.replica_in}
   ```
   ```yaml
   # the caller
@@ -522,7 +522,7 @@ available in every scope including inside modules:
 **`region` and `account` were in this table and are REMOVED (2026-09-13).** They were
 listed as coming from `--region` and `--account` "when supplied" — flags that were never
 built. `compiler.Options` carried both fields, `seedProcessVariables` read both, and
-nothing ever assigned either, so `${region}` reported `undefined variable "region"` in
+nothing ever assigned either, so `${var.region}` reported `undefined variable "region"` in
 every project that ever ran. Being reserved on top of that was worse than inert: a
 project declaring its own `region` variable got "undefined variable" at the use site
 instead of "variable is not set" at the declaration, and `--var region=...` was refused
@@ -629,8 +629,8 @@ resources:
 
   application:
     type: aws.ecs.service
-    name: ${project_name}
-    replicas: ${replicas}
+    name: ${var.project_name}
+    replicas: ${var.replicas}
 ```
 
 Commands:
@@ -687,7 +687,7 @@ Do not build a general-purpose programming language into variable expressions.
 Support simple interpolation:
 
 ```yaml
-name: ${project_name}-${environment}
+name: ${var.project_name}-${var.environment}
 ```
 
 Resource references:
@@ -699,7 +699,7 @@ database_url: ${database.connection_string}
 A small set of pure helper functions may eventually be supported:
 
 ```yaml
-name: ${lower(project_name)}-${environment}
+name: ${lower(project_name)}-${var.environment}
 ```
 
 Do not initially build a Terraform/HCL-like programming language.
@@ -713,8 +713,8 @@ bare string:
 
 ```yaml
 tags:
-  environment: ${environment}
-  project: ${project}
+  environment: ${var.environment}
+  project: ${var.project}
   team: payments
 ```
 
@@ -729,7 +729,7 @@ Rules:
 
 - Each STRING leaf is parsed and evaluated independently. A leaf with no `${` is
   untouched.
-- A key is never interpolated. `${x}: y` is not a thing; keys are literal, so a
+- A key is never interpolated. `${var.x}: y` is not a thing; keys are literal, so a
   configuration's shape never depends on a value.
 - Sensitivity and provenance are per leaf, as everywhere else (§43). A map one
   leaf of which resolves to a secret is a map with one sensitive leaf, not a
@@ -946,9 +946,9 @@ resources:
 
   service:
     type: fake_service
-    name: ${application_name}
-    image: ${image}
-    count: ${replicas}
+    name: ${var.application_name}
+    image: ${var.image}
+    count: ${var.replicas}
 
 outputs:
 
@@ -1100,8 +1100,8 @@ different account per environment:
 ```yaml
 providers:
   - plugin: aws
-    iam-role: ${aws_role}
-    region: ${aws_region}
+    iam-role: ${var.aws_role}
+    region: ${var.aws_region}
 ```
 
 ```yaml
@@ -1116,11 +1116,11 @@ aws_role: arn:aws:iam::222222222222:role/deploy
 aws_region: us-west-2
 ```
 
-**`${aws_region}` is an ORDINARY DECLARED VARIABLE, and these examples used to write
-`${region}` as though it were supplied by the process.** It is not. `region` and
+**`${var.aws_region}` is an ORDINARY DECLARED VARIABLE, and these examples used to write
+`${var.region}` as though it were supplied by the process.** It is not. `region` and
 `account` are named as process variables in §12/§43 alongside `environment` and
 `project`, and `compiler.Options.Region` exists and is read — but nothing anywhere
-assigns it, so `${region}` reports `undefined variable "region"` today (checked against
+assigns it, so `${var.region}` reports `undefined variable "region"` today (checked against
 the built binary, 2026-09-13). `provider.DiscoverRequest.Region` is inert in the same
 way: `internal/discovery/walk.go` builds the request without it and no flag sets it, so
 a plugin author implementing against `DiscoverParams.Region` reads `""` forever.
@@ -1130,7 +1130,7 @@ needs none of them — every regional type declares `region` as Required and For
 instance supplies it through `defaults:`, and `discover` takes its scan list from the
 instance's own `config:`. So `compiler.Options.Region`/`.Account`,
 `provider.DiscoverRequest.Region` and `pluginproto.DiscoverParams.Region` are all
-removed, and `region` is an ordinary variable name. No example here may use `${region}`
+removed, and `region` is an ordinary variable name. No example here may use `${var.region}`
 as a process variable, because there is no longer any such thing.
 
 **Variables only — never a resource reference.** A provider's configuration is
@@ -1149,7 +1149,7 @@ The per-leaf walk from §10.1 applies, so a nested value interpolates too:
 providers:
   - plugin: aws
     tags:
-      environment: ${environment}
+      environment: ${var.environment}
 ```
 
 ### Internal shape
@@ -1187,7 +1187,7 @@ now discharged, the migration included — see §21.1):
 ### A plugin is not a provider: the factory split
 
 An instance's configuration may interpolate a variable — that is the whole point of
-`region: ${aws_region}` — and that creates a cycle. Constructing a provider needs its
+`region: ${var.aws_region}` — and that creates a cycle. Constructing a provider needs its
 configuration; resolving the configuration needs variables; resolving variables needs
 a compile; and a compile needs the provider's SCHEMAS. Something has to come first.
 
@@ -1228,7 +1228,7 @@ the four commands are handed an environment on the command line, so their scope 
 same one `plan` would build.
 
 What the old rule actually cost was not elegance. An AWS instance supplying its region
-through `defaults: {region: ${aws_region}}` — the agreed model — could be planned and
+through `defaults: {region: ${var.aws_region}}` — the agreed model — could be planned and
 applied and then never refreshed or destroyed. **A project the tool cannot tear down is
 worse than one it cannot build**, and it would have shipped that way.
 
@@ -1273,13 +1273,13 @@ An instance may also default attributes on every resource that uses it:
 providers:
   - plugin: aws
     iam-role: some-role
-    region: ${aws_region}
+    region: ${var.aws_region}
     defaults:
-      tags: ${tags}
-      prevent_destroy: ${protect}
+      tags: ${var.tags}
+      prevent_destroy: ${var.protect}
 ```
 
-Nested rather than mixed in, because at the top level `tags: ${tags}` and
+Nested rather than mixed in, because at the top level `tags: ${var.tags}` and
 `iam-role: x` are indistinguishable while meaning entirely different things — one
 defaults a RESOURCE, the other configures the PROVIDER. The alternative
 considered was letting the plugin declare its own config keys and treating
@@ -1293,7 +1293,7 @@ plugin's schema says:
 ```
 explicit on the resource        tags: {team: payments}
         ↓
-the instance's `defaults:`      defaults: {tags: ${tags}}
+the instance's `defaults:`      defaults: {tags: ${var.tags}}
         ↓
 the plugin's schema default     whatever the plugin ships
 ```
@@ -1382,7 +1382,7 @@ It is withdrawn for three reasons, in increasing order of weight.
 **It never worked as documented.** `type:` was never a reserved key. The
 environment decoder handles `extends` and `variables`; everything else becomes
 a variable override — so `type: production` silently declared a VARIABLE named
-`type`, reachable as `${type}`, and classified nothing. Classification was done
+`type`, reachable as `${var.type}`, and classified nothing. Classification was done
 by matching the environment's NAME against `"production"` and `"prod"`.
 
 **Name-matching is wrong exactly where it matters.** §6 says environments are
@@ -3998,8 +3998,8 @@ resources:
 
   application:
     type: aws.ecs.service
-    image: ${application_image}
-    replicas: ${replicas}
+    image: ${var.application_image}
+    replicas: ${var.replicas}
     database_url: ${database.connection_string}
 ```
 

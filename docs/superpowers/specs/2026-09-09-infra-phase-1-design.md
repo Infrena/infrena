@@ -223,7 +223,7 @@ planner, executor) consumes it and knows nothing about how it was produced.
 ## 6. Expressions and unknown values
 
 The expression language is deliberately minimal, per `PLAN.md` §10: interpolation of
-variables (`${project_name}`), references to resource attributes
+variables (`${var.project_name}`), references to resource attributes
 (`${database.connection_string}`), and a small set of pure functions. It is not a
 programming language and must not grow into one.
 
@@ -253,14 +253,14 @@ Unknownness is contagious: any function or concatenation with an unknown argumen
 unknown result, carrying the union of its arguments' sensitivity.
 
 **Interpolation applies to string values only.** An expression inside a list element or a
-map value — `tags: ["${environment}"]` — is rejected with a diagnostic rather than
+map value — `tags: ["${var.environment}"]` — is rejected with a diagnostic rather than
 silently left unevaluated. Every example in `PLAN.md` §10 interpolates a scalar, and this
 states the rule those examples imply rather than adding one.
 
 The restriction is a Phase 1 simplification, not a language decision. Evaluating
 composites per leaf is a natural extension and becomes worth doing in M4, when variables
 make `tags` and similar collections a common place to want interpolation. Until then a
-loud refusal is the honest behaviour: silently emitting the literal text `${environment}`
+loud refusal is the honest behaviour: silently emitting the literal text `${var.environment}`
 into a tag would be far worse than an error, and it is the shape of failure this project
 has repeatedly had to fix elsewhere.
 

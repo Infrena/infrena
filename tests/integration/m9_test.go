@@ -193,12 +193,12 @@ resources:
   primary:
     type: fake.database
     engine: postgres
-    network: ${network}
+    network: ${var.network}
   replica:
     type: fake.database
     engine: postgres
-    network: ${network}
-    only: ${replica_in}
+    network: ${var.network}
+    only: ${var.replica_in}
 `
 
 const fourEnvProject = `

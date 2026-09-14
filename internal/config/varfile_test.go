@@ -215,9 +215,9 @@ func TestDecodeVariableFileRejectsANonMappingTopLevel(t *testing.T) {
 }
 
 func TestDecodeVariableFileRejectsInterpolation(t *testing.T) {
-	// Accepting it would put the literal text ${project_name} into a resource
+	// Accepting it would put the literal text ${var.project_name} into a resource
 	// attribute: a silent wrong answer, which is worse than a refusal.
-	_, ds := DecodeVariableFile(fileFrom(t, "vars.yml", "name: ${project_name}-web\n"), value.ScopeBaseConfig)
+	_, ds := DecodeVariableFile(fileFrom(t, "vars.yml", "name: ${var.project_name}-web\n"), value.ScopeBaseConfig)
 	if !ds.HasErrors() {
 		t.Fatal("an interpolation inside a variable file must be an error while expressions in variable files are unsupported")
 	}

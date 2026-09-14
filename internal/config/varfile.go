@@ -73,7 +73,7 @@ func ParseVariableFile(path string, data []byte) (File, error) {
 // containing `${` is an error: an expression inside a variable file would
 // need its own evaluation order (a variable referring to a variable), which
 // PLAN.md §10 explicitly does not want, and accepting one verbatim would put
-// the literal text `${foo}` into a resource attribute — a silent wrong
+// the literal text `${var.foo}` into a resource attribute — a silent wrong
 // answer.
 func DecodeVariableFile(f File, scope value.Scope) (map[string]value.Value, diag.Diagnostics) {
 	var ds diag.Diagnostics

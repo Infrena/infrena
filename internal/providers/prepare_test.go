@@ -35,7 +35,7 @@ func rendered(t *testing.T, body string, reg *registry.Registry, scope variables
 }
 
 // TestPrepareGivesThePluginTheRESOLVEDConfiguration is the factory split's payoff in
-// one assertion: `cloud: ${account_file}` chooses the file the provider opens.
+// one assertion: `cloud: ${var.account_file}` chooses the file the provider opens.
 //
 // Asserted by reading the constructed provider's path, because that is the only thing
 // that distinguishes "resolved" from "resolved and then ignored" — which is exactly
@@ -47,7 +47,7 @@ func TestPrepareGivesThePluginTheRESOLVEDConfiguration(t *testing.T) {
 project: p
 providers:
   - plugin: fake
-    cloud: "${account_file}"
+    cloud: "${var.account_file}"
 `, reg, scopeWith(map[string]string{"account_file": "prod-cloud.json"}))
 	if out != "" {
 		t.Fatalf("unexpected diagnostics:\n%s", out)
@@ -185,7 +185,7 @@ func TestAnUnresolvableInstanceConfigurationConstructsNothing(t *testing.T) {
 project: p
 providers:
   - plugin: fake
-    cloud: "${nosuchvariable}"
+    cloud: "${var.nosuchvariable}"
 `, reg, variables.Scope{})
 	if out == "" {
 		t.Fatal("an unresolvable instance configuration must be reported")

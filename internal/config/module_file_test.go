@@ -44,7 +44,7 @@ resources:
   service:
     type: fake.database
     engine: postgres
-    count: ${replicas}
+    count: ${var.replicas}
   cache:
     type: fake.network
     cidr: 10.0.0.0/16
@@ -89,7 +89,7 @@ outputs:
 		t.Errorf("service type = %q", got.Resources[1].Type)
 	}
 	if !got.Resources[1].Attributes["count"].HasExpressions {
-		t.Error("${replicas} inside a module resource was not flagged as an expression")
+		t.Error("${var.replicas} inside a module resource was not flagged as an expression")
 	}
 
 	if len(got.Outputs) != 2 {

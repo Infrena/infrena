@@ -475,7 +475,7 @@ func parseReference(src string, origin value.Origin, ds *diag.Diagnostics) *valu
 				Severity: diag.SeverityError,
 				Summary:  "malformed reference " + strconv.Quote(src),
 				Detail:   fmt.Sprintf("%q has an empty name segment.", src),
-				Action:   "Write ${name} for a variable, or ${resource.attribute} for a resource attribute.",
+				Action:   "Write ${var.name} for a variable, or ${resource.attribute} for a resource attribute.",
 				Origin:   origin,
 			})
 			return nil

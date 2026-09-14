@@ -40,7 +40,7 @@ func TestParseLoneInterpolationIsNotWrapped(t *testing.T) {
 }
 
 func TestParseMixedTextIsAConcat(t *testing.T) {
-	e := mustParse(t, "${project}-db")
+	e := mustParse(t, "${var.project}-db")
 	if e.Op != value.OpConcat {
 		t.Fatalf("Op = %v, want OpConcat", e.Op)
 	}
@@ -58,7 +58,7 @@ func TestParseMixedTextIsAConcat(t *testing.T) {
 func TestParseBareNameIsAVarRefNotAResourceRef(t *testing.T) {
 	// One segment is a variable; two or more is a resource attribute. The
 	// compiler needs the distinction to know which scope to resolve against.
-	e := mustParse(t, "${region}")
+	e := mustParse(t, "${var.region}")
 	if e.Op != value.OpVarRef {
 		t.Errorf("Op = %v, want OpVarRef for a single-segment name", e.Op)
 	}
@@ -150,13 +150,13 @@ func TestParseDiagnosticsNameTheOffendingSource(t *testing.T) {
 }
 
 func TestParseEscapedDollarIsLiteral(t *testing.T) {
-	// $${not_an_expression} is how a user writes a literal dollar-brace.
-	e := mustParse(t, "$${literal}")
+	// $${var.not_an_expression} is how a user writes a literal dollar-brace.
+	e := mustParse(t, "$${var.literal}")
 	if e.Op != value.OpLiteral {
 		t.Fatalf("Op = %v, want OpLiteral", e.Op)
 	}
-	if s, _ := e.Literal.AsString(); s != "${literal}" {
-		t.Errorf("Literal = %q, want \"${literal}\"", s)
+	if s, _ := e.Literal.AsString(); s != "${var.literal}" {
+		t.Errorf("Literal = %q, want \"${var.literal}\"", s)
 	}
 }
 
@@ -306,7 +306,7 @@ func TestVarPrefixParsesAsAVariable(t *testing.T) {
 func TestABareNameStillParsesAsAVariableDuringExpand(t *testing.T) {
 	// Removed in the contract task. Here it pins that the expand step is
 	// additive: nothing that worked stops working.
-	e, ds := Parse("${region}", value.Origin{})
+	e, ds := Parse("${var.region}", value.Origin{})
 	if ds.HasErrors() {
 		t.Fatalf("unexpected errors: %v", ds)
 	}

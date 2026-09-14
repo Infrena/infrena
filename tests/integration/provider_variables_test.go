@@ -19,7 +19,7 @@ variables:
     type: string
 providers:
   - plugin: fake
-    cloud: ${cloud_file}
+    cloud: ${var.cloud_file}
 resources:
   net:
     type: fake.network
@@ -45,7 +45,7 @@ const varOnlyInTheEnvironment = "variables:\n  cloud_file: .infra/dev-account.js
 // commands are given an environment on the command line.
 //
 // What made it matter rather than merely inelegant: an AWS instance supplying
-// `region` through `defaults: {region: ${aws_region}}` could be planned and applied
+// `region` through `defaults: {region: ${var.aws_region}}` could be planned and applied
 // and then never refreshed or destroyed. A project that cannot be torn down by the
 // tool that built it is worse than one that cannot be built.
 //
@@ -119,7 +119,7 @@ variables:
     type: string
 providers:
   - plugin: fake
-    cloud: ${cloud_file}
+    cloud: ${var.cloud_file}
 resources:
   net:
     type: fake.network

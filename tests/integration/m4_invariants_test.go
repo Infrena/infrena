@@ -74,7 +74,7 @@ project: myapp
 resources:
   net:
     type: fake.network
-    cidr: ${cidr}
+    cidr: ${var.cidr}
 `)
 	writeIn(t, dir, "variables.yml", variablesYML)
 	return dir

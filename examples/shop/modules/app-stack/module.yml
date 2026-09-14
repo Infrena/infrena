@@ -13,10 +13,10 @@ resources:
   db:
     type: fake.database
     engine: postgres
-    network: ${network}
-    size: ${size}
-    password: ${password}
-    tags: ${tags}
+    network: ${var.network}
+    size: ${var.size}
+    password: ${var.password}
+    tags: ${var.tags}
 outputs:
   endpoint:
     value: ${db.endpoint}

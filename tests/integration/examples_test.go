@@ -125,9 +125,9 @@ func TestTheShopExampleTeachesTheLayout(t *testing.T) {
 	// declares, which is what makes the same module reusable elsewhere.
 	writeFile(t, modPath, strings.Replace(
 		strings.Replace(mod, inputDecl, "", 1),
-		"password: ${password}", "password: ${db_password}", 1))
+		"password: ${var.password}", "password: ${var.db_password}", 1))
 	call := readFile(t, callPath)
-	writeFile(t, callPath, strings.Replace(call, "    password: ${db_password}\n", "", 1))
+	writeFile(t, callPath, strings.Replace(call, "    password: ${var.db_password}\n", "", 1))
 
 	routed := run(t, both, "plan", "dev")
 	requireContains(t, routed.combined(), `undefined variable "db_password"`)

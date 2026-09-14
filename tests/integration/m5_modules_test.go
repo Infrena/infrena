@@ -116,8 +116,8 @@ resources:
   store:
     type: fake.database
     engine: postgres
-    network: ${network}
-    size: ${size}
+    network: ${var.network}
+    size: ${var.size}
 outputs:
   endpoint:
     value: ${store.endpoint}
@@ -237,7 +237,7 @@ modules:
 resources:
   storage:
     type: module.db
-    network: ${network}
+    network: ${var.network}
     size: 30
 outputs:
   dsn:
@@ -314,8 +314,8 @@ inputs:
 resources:
   db:
     type: fake.database
-    engine: ${engine}
-    network: ${network}
+    engine: ${var.engine}
+    network: ${var.network}
 `})
 
 	r := run(t, dir, "plan", "dev")
@@ -539,8 +539,8 @@ resources:
   store:
     type: fake.database
     engine: postgres
-    network: ${network}
-    size: ${size}
+    network: ${var.network}
+    size: ${var.size}
 outputs:
   endpoint:
     value: store.endpoint
@@ -789,8 +789,8 @@ resources:
   store:
     type: fake.database
     engine: postgres
-    network: ${network}
-    password: ${secret}
+    network: ${var.network}
+    password: ${var.secret}
 `})
 
 	r := run(t, dir, "plan", "dev")

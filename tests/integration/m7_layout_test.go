@@ -27,9 +27,9 @@ resources:
   db:
     type: fake.database
     engine: postgres
-    network: ${network}
-    size: ${size}
-    password: ${password}
+    network: ${var.network}
+    size: ${var.size}
+    password: ${var.password}
 outputs:
   endpoint:
     value: ${db.endpoint}
@@ -73,8 +73,8 @@ resources:
   stack:
     type: module.app_stack
     network: ${network.id}
-    size: ${size}
-    password: ${db_password}
+    size: ${var.size}
+    password: ${var.db_password}
   web:
     type: fake.application
     image: nginx:1.27
@@ -164,7 +164,7 @@ resources:
     type: module.app_stack
     network: ${network.id}
     size: 50
-    password: ${db_password}
+    password: ${var.db_password}
 `
 	split := projectWithFiles(t, header, map[string]string{
 		"modules/app-stack/module.yml": layoutModule,
@@ -181,7 +181,7 @@ resources:
     type: module.app_stack
     network: ${network.id}
     size: 50
-    password: ${db_password}
+    password: ${var.db_password}
 `,
 	})
 	single := projectWithFiles(t, header+resources, map[string]string{
@@ -254,7 +254,7 @@ project: shop
 environments:
   dev: {}
 `, map[string]string{
-		"templates/policy.yml": "role_name: ${project}-policy\n",
+		"templates/policy.yml": "role_name: ${var.project}-policy\n",
 		"resources/net/net.yml": `
 resources:
   net:
@@ -268,7 +268,7 @@ resources:
     engine: postgres
     network: ${net.id}
 `,
-		"resources/db/templates/role.yml": "role_name: ${project}-db\n",
+		"resources/db/templates/role.yml": "role_name: ${var.project}-db\n",
 	})
 
 	if r := run(t, dir, "validate"); r.ExitCode != 0 {

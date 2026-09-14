@@ -77,7 +77,7 @@ type Value struct {
 	// typed. It exists because Origin does not survive to the renderer:
 	// internal/expressions/eval.go's OpVarRef case re-origins every
 	// variable reference to the referencing expression's site (the line in
-	// infra.yml where ${var} is written), which is correct for diagnostics
+	// infra.yml where ${var.var} is written), which is correct for diagnostics
 	// but means Origin means "where this was referenced" by the time a
 	// value reaches a plan, not "where it came from". SuppliedBy is a
 	// separate field precisely so that overwrite cannot erase it — see

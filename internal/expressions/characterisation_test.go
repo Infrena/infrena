@@ -35,7 +35,7 @@ func TestParseShapesAreUnchangedByTheScannerRewrite(t *testing.T) {
 		// arity is not checked until evaluation. A sabotage proved exactly that.
 		args int
 	}{
-		{shape: "a bare variable is not a resource reference", src: "${a}", refs: ""},
+		{shape: "a bare variable is not a resource reference", src: "${var.a}", refs: ""},
 		{shape: "a resource reference", src: "${db.id}", refs: "db.id"},
 		{shape: "two references and literal text", src: "${db.id}-${net.id}", refs: "db.id,net.id"},
 		{shape: "a call with three arguments", src: "${replace(db.id, \"x\", \"y\")}", refs: "db.id", args: 3},

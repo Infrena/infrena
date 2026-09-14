@@ -52,7 +52,7 @@ func TestEvaluateLiteral(t *testing.T) {
 }
 
 func TestEvaluateVariable(t *testing.T) {
-	got, _ := evalSrc(t, "${project}", compileScope())
+	got, _ := evalSrc(t, "${var.project}", compileScope())
 	if s, _ := got.AsString(); s != "myapp" {
 		t.Errorf("= %q, want \"myapp\"", s)
 	}
@@ -62,7 +62,7 @@ func TestEvaluateVariable(t *testing.T) {
 }
 
 func TestEvaluateConcat(t *testing.T) {
-	got, _ := evalSrc(t, "${project}-${region}", compileScope())
+	got, _ := evalSrc(t, "${var.project}-${var.region}", compileScope())
 	if s, _ := got.AsString(); s != "myapp-us-east-1" {
 		t.Errorf("= %q", s)
 	}
@@ -92,7 +92,7 @@ func TestUnresolvableAttributeBecomesUnknown(t *testing.T) {
 }
 
 func TestUnknownIsContagiousThroughConcat(t *testing.T) {
-	got, _ := evalSrc(t, "${project}-${database.endpoint}", compileScope())
+	got, _ := evalSrc(t, "${var.project}-${database.endpoint}", compileScope())
 	if got.Known {
 		t.Error("a concat with an unknown argument must be unknown")
 	}
@@ -118,7 +118,7 @@ func TestSensitivityUnionsThroughConcat(t *testing.T) {
 	scope := compileScope()
 	scope.vars["secret"] = value.String("hunter2", value.SourceVariable).WithSensitive(true)
 
-	got, _ := evalSrc(t, "prefix-${secret}", scope)
+	got, _ := evalSrc(t, "prefix-${var.secret}", scope)
 	if !got.Sensitive {
 		t.Error("a concat containing a secret must be sensitive")
 	}
@@ -131,7 +131,7 @@ func TestSensitivitySurvivesIntoAnUnknown(t *testing.T) {
 	scope := compileScope()
 	scope.vars["secret"] = value.String("hunter2", value.SourceVariable).WithSensitive(true)
 
-	got, _ := evalSrc(t, "${secret}-${database.endpoint}", scope)
+	got, _ := evalSrc(t, "${var.secret}-${database.endpoint}", scope)
 	if got.Known {
 		t.Fatal("should be unknown")
 	}
@@ -157,7 +157,7 @@ func TestResolvableAttributeEvaluates(t *testing.T) {
 
 func TestUnknownVariableIsAnError(t *testing.T) {
 	// A variable, unlike a resource attribute, cannot become known later.
-	_, d := evalSrc(t, "${nonexistent}", compileScope())
+	_, d := evalSrc(t, "${var.nonexistent}", compileScope())
 	if !d.HasErrors() {
 		t.Error("an undefined variable must be an error, not an unknown")
 	}
@@ -208,7 +208,7 @@ func TestConcatOfAListIsAnErrorNotAnEmptyString(t *testing.T) {
 		value.String("b", value.SourceVariable),
 	}, value.SourceVariable)
 
-	got, d := evalSrc(t, "prefix-${tags}", scope)
+	got, d := evalSrc(t, "prefix-${var.tags}", scope)
 	if !d.HasErrors() {
 		t.Fatal("interpolating a list must be a diagnostic error, not a silent empty string")
 	}
@@ -257,7 +257,7 @@ func foldScope() testScope {
 // deferred, so a variable resolved at compile time was left to be resolved
 // again by whoever evaluated it later — and ConfigHash could not see its value.
 func TestDeferredConcatFoldsResolvedParts(t *testing.T) {
-	got, ds := evalSrc(t, "${prefix}-${network.id}", foldScope())
+	got, ds := evalSrc(t, "${var.prefix}-${network.id}", foldScope())
 	if ds.HasErrors() {
 		t.Fatalf("unexpected diagnostics: %+v", ds)
 	}
@@ -293,7 +293,7 @@ func TestDeferredConcatFoldsResolvedParts(t *testing.T) {
 // the vacuous-assertion shape this project has shipped eight times; do not
 // reintroduce it by making either line conditional.
 func TestDeferredSensitivitySurvivesFolding(t *testing.T) {
-	got, _ := evalSrc(t, "${secret}-${network.id}", foldScope())
+	got, _ := evalSrc(t, "${var.secret}-${network.id}", foldScope())
 	if !got.Sensitive {
 		t.Error("a deferred value built from a sensitive part must itself be sensitive")
 	}
@@ -331,7 +331,7 @@ func TestFullyUnresolvedConcatKeepsItsShape(t *testing.T) {
 //
 // Measured before this fix: got.Expr.String() == "hunter2-${network.id}".
 func TestFoldedSensitiveLiteralRedactsInStringRendering(t *testing.T) {
-	got, _ := evalSrc(t, "${secret}-${network.id}", foldScope())
+	got, _ := evalSrc(t, "${var.secret}-${network.id}", foldScope())
 	if got.Expr == nil {
 		t.Fatal("expected a deferred expression")
 	}
