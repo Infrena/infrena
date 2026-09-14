@@ -31,6 +31,15 @@ var exprOpWireNames = map[ExprOp]string{
 	OpCall:        "call",
 }
 
+// stepKindWireNames is the frozen on-disk spelling of every StepKind, for the
+// same reason exprOpWireNames exists: StepKind is an iota, and a bare number
+// on disk would silently reinterpret every path ever written the moment a
+// third kind were inserted above it.
+var stepKindWireNames = map[StepKind]string{
+	StepKey:   "key",
+	StepIndex: "index",
+}
+
 type wireExpr struct {
 	Op       string         `json:"op"`
 	Literal  *Value         `json:"literal,omitempty"`
@@ -41,9 +50,19 @@ type wireExpr struct {
 }
 
 type wireReference struct {
-	Module    []string `json:"module,omitempty"`
-	Name      string   `json:"name"`
-	Attribute string   `json:"attribute,omitempty"`
+	Module    []string   `json:"module,omitempty"`
+	Name      string     `json:"name"`
+	Attribute string     `json:"attribute,omitempty"`
+	Path      []wireStep `json:"path,omitempty"`
+}
+
+// wireStep is the on-disk form of a Step. Kind is spelled out ("key"/"index")
+// rather than carrying StepKind's numeric value, matching how wireExpr spells
+// out Op — see exprOpWireNames and stepKindWireNames.
+type wireStep struct {
+	Kind  string `json:"kind"`
+	Key   string `json:"key,omitempty"`
+	Index int    `json:"index,omitempty"`
 }
 
 func exprOpToWireName(op ExprOp) (string, error) {
@@ -61,6 +80,55 @@ func exprOpFromWireName(s string) (ExprOp, error) {
 		}
 	}
 	return 0, fmt.Errorf("unknown expression operation %q", s)
+}
+
+func stepKindToWireName(k StepKind) (string, error) {
+	name, ok := stepKindWireNames[k]
+	if !ok {
+		return "", fmt.Errorf("cannot encode step kind %d", k)
+	}
+	return name, nil
+}
+
+func stepKindFromWireName(s string) (StepKind, error) {
+	for k, name := range stepKindWireNames {
+		if name == s {
+			return k, nil
+		}
+	}
+	return 0, fmt.Errorf("unknown step kind %q", s)
+}
+
+// toWireSteps converts a path to its on-disk form.
+func toWireSteps(path []Step) ([]wireStep, error) {
+	if path == nil {
+		return nil, nil
+	}
+	out := make([]wireStep, len(path))
+	for i, s := range path {
+		kind, err := stepKindToWireName(s.Kind)
+		if err != nil {
+			return nil, err
+		}
+		out[i] = wireStep{Kind: kind, Key: s.Key, Index: s.Index}
+	}
+	return out, nil
+}
+
+// fromWireSteps converts a path back from its on-disk form.
+func fromWireSteps(path []wireStep) ([]Step, error) {
+	if path == nil {
+		return nil, nil
+	}
+	out := make([]Step, len(path))
+	for i, w := range path {
+		kind, err := stepKindFromWireName(w.Kind)
+		if err != nil {
+			return nil, err
+		}
+		out[i] = Step{Kind: kind, Key: w.Key, Index: w.Index}
+	}
+	return out, nil
 }
 
 // toWireExpr converts an expression to its on-disk form.
@@ -82,10 +150,15 @@ func toWireExpr(e *Expr) (*wireExpr, error) {
 		lit := e.Literal
 		w.Literal = &lit
 	case OpVarRef, OpResourceRef:
+		path, err := toWireSteps(e.Ref.Path)
+		if err != nil {
+			return nil, err
+		}
 		w.Ref = &wireReference{
 			Module:    e.Ref.Target.Module,
 			Name:      e.Ref.Target.Name,
 			Attribute: e.Ref.Attribute,
+			Path:      path,
 		}
 	}
 
@@ -118,9 +191,14 @@ func fromWireExpr(w *wireExpr) (*Expr, error) {
 		e.Literal = *w.Literal
 	}
 	if w.Ref != nil {
+		path, err := fromWireSteps(w.Ref.Path)
+		if err != nil {
+			return nil, err
+		}
 		e.Ref = Reference{
 			Target:    address.Address{Module: w.Ref.Module, Name: w.Ref.Name},
 			Attribute: w.Ref.Attribute,
+			Path:      path,
 		}
 	}
 	for _, arg := range w.Args {

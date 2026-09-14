@@ -271,6 +271,55 @@ func TestAnExpressionSurvivesTheWire(t *testing.T) {
 	}
 }
 
+// TestAPathIntoAResourceAttributeSurvivesTheWire guards exprwire.go's
+// wireReference specifically for Path, which — until this test — it dropped
+// silently in both directions. A saved plan containing ${vpc.tags.Name} would
+// round-trip to ${vpc.tags}: apply would then resolve the WHOLE tags map
+// instead of the Name key, with no error, which is PLAN.md §37's exact
+// "carries the expression that reproduces it" guarantee broken silently.
+//
+// A MIXED path (a key then an index), because a fixture with only one kind of
+// step could pass against a wire step that hard-codes StepKey and ignores
+// Index — or the reverse.
+func TestAPathIntoAResourceAttributeSurvivesTheWire(t *testing.T) {
+	original := &Expr{
+		Op: OpResourceRef,
+		Ref: Reference{
+			Target:    address.Address{Name: "vpc"},
+			Attribute: "subnets",
+			Path:      []Step{{Kind: StepIndex, Index: 0}, {Kind: StepKey, Key: "cidr"}},
+		},
+	}
+
+	v := Unknown(KindString, SourceComputed)
+	v.Expr = original
+
+	data, err := v.MarshalJSON()
+	if err != nil {
+		t.Fatalf("MarshalJSON: %v", err)
+	}
+
+	var back Value
+	if err := back.UnmarshalJSON(data); err != nil {
+		t.Fatalf("UnmarshalJSON: %v", err)
+	}
+	if back.Expr == nil {
+		t.Fatalf("the expression did not survive: %s", data)
+	}
+	if got, want := back.Expr.String(), original.String(); got != want {
+		t.Errorf("String() = %q after the wire, want %q — the path did not round-trip", got, want)
+	}
+	if len(back.Expr.Ref.Path) != 2 {
+		t.Fatalf("Path = %+v, want 2 steps", back.Expr.Ref.Path)
+	}
+	if back.Expr.Ref.Path[0].Kind != StepIndex || back.Expr.Ref.Path[0].Index != 0 {
+		t.Errorf("Path[0] = %+v, want the index step", back.Expr.Ref.Path[0])
+	}
+	if back.Expr.Ref.Path[1].Kind != StepKey || back.Expr.Ref.Path[1].Key != "cidr" {
+		t.Errorf("Path[1] = %+v, want the key step \"cidr\"", back.Expr.Ref.Path[1])
+	}
+}
+
 // TestAKnownValueWritesNoExpressionKey.
 //
 // The additivity claim, asserted rather than assumed. Every value in a state file and
