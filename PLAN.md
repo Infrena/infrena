@@ -4014,7 +4014,7 @@ The most important engineering goal is to make the **core reconciliation engine 
 | Version | Package | Guards | How it moves |
 | --- | --- | --- | --- |
 | `state.CurrentVersion` | `internal/state` | the state file | a migration chain, one step per version |
-| `pluginproto.Version`, `Supported` | `pkg/pluginproto` | the plugin wire | negotiated per plugin; `Supported` is a SET |
+| `pluginproto.Version`, `Supported` | `pkg/pluginproto` | the plugin wire | negotiated per plugin; `Supported` is a SET. **At 2 since 2026-09-14** (§14.1's `optional` and `aliases`), with 1 still supported |
 | `planner.PlanVersion` | `internal/planner` | the plan artifact | additive, with a frozen-keys test |
 | `report.Version` | `pkg/report` | `--output` reports | additive |
 | lockfile `Version` | `internal/modules/source` | `modules.lock` | internal |

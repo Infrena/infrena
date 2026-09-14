@@ -26,10 +26,28 @@ import (
 //
 // The host accepts a SET of versions (see Supported), so raising this does not
 // immediately orphan every plugin in the world.
-const Version = 1
+//
+// RAISED TO 2 on 2026-09-14, for `optional` and `aliases` on an attribute (PLAN.md
+// §14.1). The messages did not change shape; the SCHEMA PAYLOAD gained two keys, and
+// that is enough to need a version for one reason: Attribute.UnmarshalJSON decodes
+// leniently, so a plugin built with this SDK talking to an OLDER host would have both
+// keys silently DROPPED. Its aliases would simply not work, and the user would meet
+// "aws.ec2.vpc has no attribute cidr" with nothing anywhere explaining why, or would
+// have configuration refused for setting an attribute the plugin marked settable.
+//
+// Announcing 2 makes that a refusal instead: an older host lists what it supports and
+// names the plugin. A plugin that does NOT use either field keeps announcing 1 by being
+// built with an older SDK, and this build still talks to it — which is the whole point
+// of Supported being a set rather than a number.
+const Version = 2
 
 // Supported lists every protocol version this build can talk to, newest first.
-var Supported = []int{1}
+//
+// 1 stays: a plugin built before §14.1 sends no `optional` and no `aliases`, and absent
+// means exactly what it meant then — not optional, no aliases. Nothing about an older
+// plugin becomes wrong, so nothing about it should stop working. §61.1 calls this a
+// MINOR: a version added while the previous one keeps working.
+var Supported = []int{2, 1}
 
 // IsSupported reports whether a plugin's protocol version can be spoken here.
 func IsSupported(v int) bool {
