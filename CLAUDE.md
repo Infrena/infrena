@@ -158,6 +158,28 @@ Two rules the design leaves behind, and both still bind:
   third-party binary cannot be held to a doc comment. A plugin that re-implements them is a
   plugin whose tests pass when the host is broken.
 
+**The reference grammar no longer tells a variable from a resource attribute by counting
+segments** (2026-09-14, `PLAN.md` §10.5). Six forms, each with exactly one meaning:
+`${var.region}` (a variable), `${var.tags.team}` (a path into a map variable),
+`${var.azs[0]}` (a list entry), `${vpc.id}` (a resource attribute), `${vpc.tags.Name}`
+(a path into one), and `${var.vpc}` reserved for a later change that projects a
+resource itself. `var` is reserved as a resource name, checked at the declaration; a bare
+single segment (`${vpc}`) is now a parse error naming its own fix rather than a variable
+reference, and the process variables `${var.environment}`/`${var.project}` take the
+prefix like any other.
+
+- A path indexes a map with dotted keys or a list with `[n]` — an integer literal only, no
+  arithmetic, no negative indices — and the two compose in either order. A missing key or
+  an out-of-range index is a compile-time error naming what is actually there, never an
+  unknown deferred to apply.
+- Extraction unions sensitivity across every container on the path, key or index alike, so
+  a leaf pulled out of a sensitive map or list is never returned declassified (§10.5,
+  §36).
+- A path into a resource attribute resolves exactly like the whole attribute — deferred
+  until apply — with one known gap: only the outer attribute name is schema-checked at
+  compile time; a key past it fails before dispatch instead, closed properly by a later
+  change to the plugin wire.
+
 ## Name
 
 The product is **Infrena** (GitHub org `infrena`, command `infrena`), **renamed from Infrata
