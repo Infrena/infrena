@@ -2,6 +2,7 @@ package planner
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
@@ -110,6 +111,26 @@ func renderOperationLines(op Operation, moveCandidates []string, opts RenderOpti
 
 	def := opts.definitionFor(op.Type)
 
+	// An ignored attribute produces no change, so it appears in no operation line. It is
+	// listed once, under the resource, because "why is this not in the plan?" is the
+	// question `ignore_changes` otherwise creates — silence is what the user asked for
+	// about the VALUE, not about the rule (PLAN.md §14.2).
+	//
+	// NOT ON A CREATE OR REPLACE, where it would be a lie. Both build the resource afresh
+	// from configuration, so an ignored attribute is RESET by them — nothing is being
+	// ignored, and the ordinary attribute line below shows the value changing. Saying
+	// "[change ignored]" beside "size: 500 -> 10" was the first thing this printed, and
+	// it is exactly the contradiction a reader cannot resolve.
+	if op.Kind != OpCreate && op.Kind != OpReplace {
+		for _, name := range op.Lifecycle.IgnoreChanges {
+			shown := name
+			if def != nil {
+				shown = def.Display(name)
+			}
+			lines = append(lines, "      "+shown+": [change ignored]")
+		}
+	}
+
 	switch op.Kind {
 	case OpCreate:
 		for _, k := range unionKeys(op.After) {
@@ -132,8 +153,17 @@ func renderOperationLines(op Operation, moveCandidates []string, opts RenderOpti
 			if !hasAfter {
 				shown = before
 			}
-			lines = append(lines, "      "+renderAttributeName(def, k, shown, opts)+": "+
-				renderSide(before, hadBefore)+" -> "+renderSide(after, hasAfter))
+			line := "      " + renderAttributeName(def, k, shown, opts) + ": " +
+				renderSide(before, hadBefore) + " -> " + renderSide(after, hasAfter)
+			// The surprise worth naming: a user who wrote `ignore_changes: [size]` to
+			// stop a pipeline's value being reverted needs to know that a REPLACEMENT
+			// resets it anyway, because the new resource is built from configuration.
+			// Silence here is how someone loses a deployed task revision to a change
+			// they made somewhere else entirely.
+			if op.Kind == OpReplace && slices.Contains(op.Lifecycle.IgnoreChanges, k) {
+				line += "   [ignored, but a replacement resets it]"
+			}
+			lines = append(lines, line)
 		}
 		lines = append(lines, renderMetadataLines(op.Reasons)...)
 	}

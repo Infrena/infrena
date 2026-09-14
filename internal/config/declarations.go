@@ -74,6 +74,14 @@ type LifecycleDecl struct {
 	// direction that REFUSES a destroy the user asked for.
 	PreventDestroySet bool
 	RetainSet         bool
+
+	// IgnoreChanges names attributes whose drift this resource does not want reverted,
+	// as WRITTEN — aliases and casing are resolved against the schema later, at the
+	// compiler's one canonicalisation boundary (PLAN.md §14.2).
+	IgnoreChanges []string
+	// IgnoreChangesOrigin locates each entry, so a name that matches no attribute is
+	// reported at the line the user wrote rather than at the resource.
+	IgnoreChangesOrigin map[string]value.Origin
 }
 
 // ResourceDecl is one declared resource, decoded but not yet resolved.

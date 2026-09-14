@@ -442,6 +442,7 @@ func TestTheArtifactsKeysAreFrozen(t *testing.T) {
 		p.Operations[i].Lifecycle = resource.Lifecycle{PreventDestroy: true}
 		p.Operations[i].Dependents = []address.Address{{Name: "dependent"}}
 		p.Operations[i].DependsOn = []address.Address{{Name: "prerequisite"}}
+		p.Operations[i].Lifecycle.IgnoreChanges = []string{"ignored_attribute"}
 	}
 
 	out, err := json.Marshal(p)
@@ -474,6 +475,18 @@ func TestTheArtifactsKeysAreFrozen(t *testing.T) {
 	assertKeys(t, "an operation", union, []string{
 		"address", "type", "provider", "kind", "before", "after",
 		"reasons", "dependents", "depends_on", "lifecycle",
+	})
+
+	// INSIDE `lifecycle` too. This test did not descend into it, so `ignore_changes` was
+	// added to the artifact with nothing noticing — the exact change this test exists to
+	// make deliberate, slipping through because the object was treated as one opaque key.
+	// A nested object in a versioned format is still the format.
+	var lifecycle map[string]json.RawMessage
+	if err := json.Unmarshal(union["lifecycle"], &lifecycle); err != nil {
+		t.Fatalf("lifecycle: %v", err)
+	}
+	assertKeys(t, "an operation's lifecycle", lifecycle, []string{
+		"prevent_destroy", "retain", "ignore_changes",
 	})
 }
 

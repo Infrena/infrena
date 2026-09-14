@@ -52,7 +52,7 @@ func TestAProviderChosenValueIsNotProposedForRemoval(t *testing.T) {
 	desired := map[string]value.Value{"cidr": value.String("10.0.0.0/24", value.SourceExplicit)}
 
 	ops, _ := diffAttributes(address.Address{Name: "net"}, azDefinition(), desired,
-		subnetState("eu-west-1a").Attributes)
+		subnetState("eu-west-1a").Attributes, nil)
 	if len(ops) != 0 {
 		t.Errorf("configuration does not set availability_zone, so the provider's choice is "+
 			"authoritative and there is nothing to change; got %v", ops)
@@ -70,7 +70,7 @@ func TestAProviderChosenValueChangingOutsideInfrataIsNotDrift(t *testing.T) {
 	desired := map[string]value.Value{"cidr": value.String("10.0.0.0/24", value.SourceExplicit)}
 
 	ops, _ := diffAttributes(address.Address{Name: "net"}, azDefinition(), desired,
-		subnetState("eu-west-1c").Attributes)
+		subnetState("eu-west-1c").Attributes, nil)
 	if len(ops) != 0 {
 		t.Errorf("an unset optional+computed attribute is unmanaged, so a change to it is not "+
 			"drift infrata reports; got %v", ops)
@@ -91,7 +91,7 @@ func TestConfigurationSettingItMakesItAnOrdinaryAttribute(t *testing.T) {
 	}
 
 	ops, _ := diffAttributes(address.Address{Name: "net"}, azDefinition(), desired,
-		subnetState("eu-west-1a").Attributes)
+		subnetState("eu-west-1a").Attributes, nil)
 	if len(ops) != 1 {
 		t.Fatalf("configuration names a different zone, so this is a change; got %v", ops)
 	}
@@ -111,7 +111,7 @@ func TestConfigurationSettingItMakesItAnOrdinaryAttribute(t *testing.T) {
 // absent and the NEXT plan sees an attribute that appeared from nowhere.
 func TestAnUnsetProviderChosenValueIsCarriedIntoTheAfterState(t *testing.T) {
 	desired := map[string]value.Value{"cidr": value.String("10.0.0.0/24", value.SourceExplicit)}
-	after := afterAttributes(azDefinition(), desired, subnetState("eu-west-1a").Attributes, OpNoOp)
+	after := afterAttributes(azDefinition(), desired, subnetState("eu-west-1a").Attributes, OpNoOp, nil)
 
 	got, ok := after["availability_zone"]
 	if !ok {

@@ -582,14 +582,54 @@ func decodeLifecycle(path string, node *yaml.Node, r *ResourceDecl, ds *diag.Dia
 				r.Lifecycle.Retain = b
 				r.Lifecycle.RetainSet = true
 			}
+		case "ignore_changes":
+			decodeIgnoreChanges(path, key, val, r, ds)
 		default:
 			ds.Add(diag.Diagnostic{
 				Severity: diag.SeverityError,
 				Summary:  "unknown lifecycle option " + strconv.Quote(key.Value),
-				Detail:   "Supported options are `prevent_destroy` and `retain`.",
+				Detail:   "Supported options are `prevent_destroy`, `retain` and `ignore_changes`.",
 				Origin:   originOf(path, key),
 			})
 		}
+	}
+}
+
+// decodeIgnoreChanges reads `ignore_changes:` — a LIST of attribute names whose drift
+// this resource does not want reverted (PLAN.md §14.2).
+//
+// The names are kept exactly as written. Resolving them against the schema happens in the
+// compiler, at the same boundary that canonicalises everything else a user spells, so
+// `ignore_changes: [taskRevision]` and `[task_revision]` reach the same attribute — and so
+// a name matching nothing is refused there, where the attribute list is known.
+//
+// A list, not a scalar, and not a mapping: every entry is one attribute name, and the
+// shape says so. An empty list is legal and means nothing is ignored, which is what a
+// reader editing the list down to nothing expects.
+func decodeIgnoreChanges(path string, key, node *yaml.Node, r *ResourceDecl, ds *diag.Diagnostics) {
+	if node.Kind != yaml.SequenceNode {
+		ds.Add(diag.Diagnostic{
+			Severity: diag.SeverityError,
+			Summary:  "`ignore_changes` must be a list of attribute names",
+			Detail:   "For example:\n  lifecycle:\n    ignore_changes: [task_revision]",
+			Origin:   originOf(path, key),
+		})
+		return
+	}
+	if r.Lifecycle.IgnoreChangesOrigin == nil {
+		r.Lifecycle.IgnoreChangesOrigin = map[string]value.Origin{}
+	}
+	for _, entry := range node.Content {
+		if entry.Kind != yaml.ScalarNode || entry.Value == "" {
+			ds.Add(diag.Diagnostic{
+				Severity: diag.SeverityError,
+				Summary:  "`ignore_changes` entries must be attribute names",
+				Origin:   originOf(path, entry),
+			})
+			continue
+		}
+		r.Lifecycle.IgnoreChanges = append(r.Lifecycle.IgnoreChanges, entry.Value)
+		r.Lifecycle.IgnoreChangesOrigin[entry.Value] = originOf(path, entry)
 	}
 }
 

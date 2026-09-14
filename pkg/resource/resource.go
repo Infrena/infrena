@@ -24,6 +24,22 @@ import (
 type Lifecycle struct {
 	PreventDestroy bool `json:"prevent_destroy"`
 	Retain         bool `json:"retain"`
+
+	// IgnoreChanges names attributes whose drift the planner does not propose to
+	// revert (PLAN.md §14.2): the real resource keeps whatever it has, and the plan
+	// says so rather than staying silent.
+	//
+	// The case it exists for: something outside infrata owns one attribute. A CI
+	// pipeline sets an ECS service's task revision on every deploy, so a plan computed
+	// from configuration would revert it on the next apply and undo the deployment.
+	//
+	// CANONICAL names by the time it is here — stage 7 resolves whatever spelling the
+	// user wrote, so `ignore_changes: [taskRevision]` and `[task_revision]` both arrive
+	// as the attribute the plugin declared.
+	//
+	// Sorted, so a plan artifact is byte-stable however the list was written
+	// (invariant 6).
+	IgnoreChanges []string `json:"ignore_changes,omitempty"`
 }
 
 // ResolvedResource is a resource after the planner has resolved it.

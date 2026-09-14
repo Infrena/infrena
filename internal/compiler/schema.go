@@ -9,6 +9,7 @@ import (
 	"github.com/infrata/infrata/internal/diag"
 	"github.com/infrata/infrata/internal/providers"
 	"github.com/infrata/infrata/internal/registry"
+	"github.com/infrata/infrata/pkg/resource"
 	"github.com/infrata/infrata/pkg/schema"
 	"github.com/infrata/infrata/pkg/value"
 )
@@ -40,6 +41,7 @@ func bindSchemas(
 		// the defaults, checkRequired and markSensitive all see the plugin's own names
 		// — and so does every stage downstream of the compiler.
 		canonicaliseAttributes(r.Attrs, def, &ds)
+		canonicaliseIgnoreChanges(r, def, &ds)
 		checkConfiguredAttributes(r.Attrs, def, r.Origin, &ds)
 		// BEFORE the plugin's own defaults, because §12.1's ladder has the
 		// instance's `defaults:` beating them: whichever runs first wins, since
@@ -103,6 +105,54 @@ func canonicaliseAttributes(
 		attrs[canonical] = attrs[name]
 		delete(attrs, name)
 	}
+}
+
+// canonicaliseIgnoreChanges resolves `ignore_changes:` entries to the plugin's own
+// attribute names, and refuses one that names nothing (PLAN.md §14.2).
+//
+// THE SAME BOUNDARY as every other spelling a user writes, for the same reason: the
+// planner compares these names against attribute keys that are canonical by then, so an
+// alias left unresolved would silently ignore NOTHING — the user would have written
+// `ignore_changes: [taskRevision]`, seen it accepted, and watched the next apply revert
+// the very attribute they protected. Silence is the failure mode this guards against, so
+// a name matching no attribute is an ERROR rather than a warning.
+//
+// Sorted afterwards so a plan artifact is byte-stable however the list was written
+// (invariant 6).
+func canonicaliseIgnoreChanges(
+	r *resource.ResolvedResource, def *schema.ResourceDefinition, ds *diag.Diagnostics,
+) {
+	if len(r.Lifecycle.IgnoreChanges) == 0 {
+		return
+	}
+	out := make([]string, 0, len(r.Lifecycle.IgnoreChanges))
+	seen := map[string]bool{}
+
+	for _, written := range r.Lifecycle.IgnoreChanges {
+		canonical, ok := def.Canonical(written)
+		if !ok {
+			ds.Add(diag.Diagnostic{
+				Severity: diag.SeverityError,
+				Summary: "`ignore_changes` names " + strconv.Quote(written) +
+					", which " + def.Type + " has no attribute for",
+				Detail: "Ignoring an attribute that does not exist protects nothing, and the next " +
+					"apply would revert whatever was meant to be left alone.\nAttributes of " +
+					def.Type + ":\n  " + strings.Join(attributeNames(def), "\n  "),
+				Action: "Correct the name, or remove it from `ignore_changes`.",
+				Origin: r.Origin,
+			})
+			continue
+		}
+		if seen[canonical] {
+			// Two spellings of one attribute. Harmless — ignoring twice is ignoring —
+			// so it is deduplicated rather than refused.
+			continue
+		}
+		seen[canonical] = true
+		out = append(out, canonical)
+	}
+	sort.Strings(out)
+	r.Lifecycle.IgnoreChanges = out
 }
 
 // checkConfiguredAttributes rejects what configuration must not set.

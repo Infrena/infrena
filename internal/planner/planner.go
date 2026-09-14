@@ -278,14 +278,14 @@ func operationFor(
 			Type:      rc.Type,
 			Provider:  rc.Provider,
 			Kind:      OpCreate,
-			After:     afterAttributes(def, attrs, nil, OpCreate),
+			After:     afterAttributes(def, attrs, nil, OpCreate, rc.Lifecycle.IgnoreChanges),
 			Reasons:   reasons,
 			Lifecycle: rc.Lifecycle,
 			DependsOn: append([]address.Address(nil), rc.DependsOn...),
 		}, ds
 	}
 
-	reasons, diffDS := diffAttributes(addr, def, attrs, actual.Attributes)
+	reasons, diffDS := diffAttributes(addr, def, attrs, actual.Attributes, rc.Lifecycle.IgnoreChanges)
 	ds.Extend(diffDS)
 	if ds.HasErrors() {
 		return nil, ds
@@ -328,7 +328,7 @@ func operationFor(
 		Provider:  rc.Provider,
 		Kind:      kind,
 		Before:    copyAttrs(actual.Attributes),
-		After:     afterAttributes(def, attrs, actual.Attributes, kind),
+		After:     afterAttributes(def, attrs, actual.Attributes, kind, rc.Lifecycle.IgnoreChanges),
 		Reasons:   reasons,
 		Lifecycle: rc.Lifecycle,
 		DependsOn: append([]address.Address(nil), rc.DependsOn...),

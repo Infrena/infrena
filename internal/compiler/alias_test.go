@@ -7,6 +7,7 @@ import (
 
 	"github.com/infrata/infrata/internal/diag"
 	"github.com/infrata/infrata/internal/registry"
+	"github.com/infrata/infrata/pkg/address"
 	"github.com/infrata/infrata/pkg/provider"
 	"github.com/infrata/infrata/pkg/resource"
 	"github.com/infrata/infrata/pkg/schema"
@@ -280,5 +281,115 @@ resources:
 	ds.Render(&out)
 	if !strings.Contains(out.String(), "computed") {
 		t.Errorf("the refusal does not explain that it is computed:\n%s", out.String())
+	}
+}
+
+// TestIgnoreChangesAcceptsAnySpellingAndRefusesANameThatMatchesNothing.
+//
+// `ignore_changes` goes through the SAME canonicalisation boundary as everything else a
+// user spells, and it has to: the planner compares these names against attribute keys
+// that are canonical by then, so an alias left unresolved would ignore NOTHING. The user
+// would write `ignore_changes: [taskRevision]`, see it accepted, and watch the next apply
+// revert the very attribute they protected — silence being the failure mode, which is why
+// a name matching no attribute is an error rather than a warning.
+func TestIgnoreChangesAcceptsAnySpellingAndRefusesANameThatMatchesNothing(t *testing.T) {
+	for _, written := range []string{"CidrBlock", "cidr", "CIDR", "cidr_block"} {
+		r := &resource.ResolvedResource{
+			Address:   address.Address{Name: "vpc"},
+			Type:      "aws.ec2.vpc",
+			Lifecycle: resource.Lifecycle{IgnoreChanges: []string{written}},
+		}
+		var ds diag.Diagnostics
+		canonicaliseIgnoreChanges(r, aliasedDef(), &ds)
+
+		if ds.HasErrors() {
+			t.Errorf("`ignore_changes: [%s]` was refused: %v", written, ds)
+			continue
+		}
+		if len(r.Lifecycle.IgnoreChanges) != 1 || r.Lifecycle.IgnoreChanges[0] != "CidrBlock" {
+			t.Errorf("`ignore_changes: [%s]` resolved to %v, want [CidrBlock] — the planner "+
+				"compares against canonical keys", written, r.Lifecycle.IgnoreChanges)
+		}
+	}
+
+	r := &resource.ResolvedResource{
+		Address:   address.Address{Name: "vpc"},
+		Type:      "aws.ec2.vpc",
+		Lifecycle: resource.Lifecycle{IgnoreChanges: []string{"nosuchthing"}},
+	}
+	var ds diag.Diagnostics
+	canonicaliseIgnoreChanges(r, aliasedDef(), &ds)
+	if !ds.HasErrors() {
+		t.Fatal("ignoring an attribute that does not exist protects nothing and must be refused")
+	}
+	var out strings.Builder
+	ds.Render(&out)
+	if !strings.Contains(out.String(), "nosuchthing") {
+		t.Errorf("the refusal does not name what the user wrote:\n%s", out.String())
+	}
+}
+
+// TestIgnoreChangesIsDeduplicatedAndSorted. Two spellings of one attribute are harmless —
+// ignoring twice is ignoring — so they collapse rather than being refused. Sorted, because
+// the list reaches the plan artifact and invariant 6 wants it byte-stable however it was
+// written.
+func TestIgnoreChangesIsDeduplicatedAndSorted(t *testing.T) {
+	r := &resource.ResolvedResource{
+		Address:   address.Address{Name: "vpc"},
+		Type:      "aws.ec2.vpc",
+		Lifecycle: resource.Lifecycle{IgnoreChanges: []string{"cidr_block", "CidrBlock", "cidr"}},
+	}
+	var ds diag.Diagnostics
+	canonicaliseIgnoreChanges(r, aliasedDef(), &ds)
+	if ds.HasErrors() {
+		t.Fatalf("three spellings of one attribute is not an error: %v", ds)
+	}
+	if len(r.Lifecycle.IgnoreChanges) != 1 {
+		t.Errorf("got %v, want one entry", r.Lifecycle.IgnoreChanges)
+	}
+}
+
+// TestIgnoreChangesIsCanonicalisedThroughTheWholeCompile.
+//
+// THE WIRING, and the second time this exact gap appeared: unwiring
+// canonicaliseIgnoreChanges from the pipeline broke nothing, because the test above calls
+// it directly. The cost of that gap here is silence — a user writes `ignore_changes:
+// [cidr]`, compilation accepts it, and the planner compares "cidr" against a canonical
+// "CidrBlock" key, matches nothing, and reverts the attribute they protected.
+func TestIgnoreChangesIsCanonicalisedThroughTheWholeCompile(t *testing.T) {
+	files := loadFiles(t, `
+project: myapp
+resources:
+  vpc:
+    type: aws.ec2.vpc
+    cidr: 10.0.0.0/16
+    lifecycle:
+      ignore_changes: [cidr_block]
+`)
+	cfg, ds := Compile(files, awsRegistry(t), Options{Environment: "dev"})
+	if ds.HasErrors() {
+		t.Fatalf("unexpected diagnostics: %v", ds)
+	}
+	got := cfg.Resources["vpc"].Lifecycle.IgnoreChanges
+	if len(got) != 1 || got[0] != "CidrBlock" {
+		t.Errorf("ignore_changes = %v, want [CidrBlock]: the planner compares against canonical "+
+			"keys, so an unresolved alias silently ignores nothing", got)
+	}
+}
+
+// TestIgnoreChangesNamingNothingIsRefusedThroughTheWholeCompile is the other half: the
+// error has to reach a user, not just exist in a function nothing calls.
+func TestIgnoreChangesNamingNothingIsRefusedThroughTheWholeCompile(t *testing.T) {
+	files := loadFiles(t, `
+project: myapp
+resources:
+  vpc:
+    type: aws.ec2.vpc
+    cidr: 10.0.0.0/16
+    lifecycle:
+      ignore_changes: [nosuchthing]
+`)
+	if _, ds := Compile(files, awsRegistry(t), Options{Environment: "dev"}); !ds.HasErrors() {
+		t.Fatal("ignoring an attribute that does not exist protects nothing and must be refused")
 	}
 }

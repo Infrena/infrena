@@ -1622,6 +1622,80 @@ function of the schema, with no storage consequence.
 
 ---
 
+## 14.2 `ignore_changes`: attributes something else owns
+
+**Agreed 2026-09-14.** A resource may name attributes whose drift infrata does not propose
+to revert:
+
+```yaml
+resources:
+  app:
+    type: aws.ecs.service
+    image: myapp:latest
+    lifecycle:
+      ignore_changes: [task_revision]
+```
+
+**The case it exists for.** A CI pipeline deploys by setting an ECS service's task
+revision. infrata computes its plan from configuration, so the next `plan` proposes
+reverting the revision to whatever the file says, and the next `apply` undoes the
+deployment. The two systems fight, and the one that ran most recently wins. `ignore_changes`
+is the user saying: that attribute is not mine.
+
+Under `lifecycle:`, beside `prevent_destroy` and `retain`, because it is the same kind of
+statement — a rule about how this resource is managed rather than a value it holds.
+
+### What it does, exactly
+
+- **The planner does not diff it.** No operation is proposed for it, in either direction,
+  whatever the provider reports.
+- **State keeps what is really there.** The operation's `After` carries the OBSERVED value,
+  not configuration's. Without that, the executor would record configuration's value and
+  state would claim a revision the service is not running — the plan saying nothing changed
+  while quietly rewriting the record of what did. Not diffing is only half of ignoring.
+- **A create uses configuration.** There is no existing resource, so configuration's value
+  is the only one there is; ignoring it would build the resource with the attribute unset.
+- **A REPLACEMENT RESETS IT**, and the plan says so. Replacement rebuilds from
+  configuration, so an ignored attribute cannot survive one. The first version of this
+  printed `[change ignored]` beside `size: 500 -> 10` — both half true and impossible for a
+  reader to resolve. An update says `[change ignored]`; a replacement says
+  `[ignored, but a replacement resets it]`, because losing a deployed revision to a change
+  made somewhere else entirely is exactly the surprise worth naming.
+- **It is not settable from an instance's `defaults:`.** Which attributes a resource lets
+  drift is a property of that resource and its pipeline, not of the account it lives in.
+
+### Spellings, and why a wrong name is an ERROR
+
+Entries go through §14.1's canonicalisation boundary like everything else a user writes, so
+`[task_revision]`, `[taskRevision]` and any declared alias all name the same attribute.
+
+**A name matching no attribute is refused.** The failure mode here is silence: the planner
+compares these names against canonical attribute keys, so an unresolved spelling ignores
+NOTHING — the user writes `ignore_changes: [taskRevision]`, sees it accepted, and watches
+the next apply revert the attribute they thought they had protected. A warning would be
+read as "it worked". Two spellings of one attribute are deduplicated rather than refused,
+since ignoring twice is ignoring.
+
+The list is sorted, because it reaches the plan artifact and invariant 6 wants that
+byte-stable however it was written.
+
+### Versions this moved, checked rather than assumed
+
+- **State** gained `ignore_changes` inside `lifecycle`, additively and `omitempty`. **No
+  version bump**: an older infrata ignores the key and has no ignore feature to get wrong,
+  and a newer infrata reading older state finds nothing, which is correct. The planner
+  reads the list from compiled CONFIGURATION, never from state, so state's copy is
+  bookkeeping.
+- **The plan artifact** gained the same key, additively. **No version bump.** The
+  frozen-keys test did not descend into `lifecycle` and so did not notice, which was its
+  own defect: a nested object in a versioned format is still the format. It descends now.
+- **The plugin wire**, the report and the manifest are untouched: `Lifecycle` does not
+  cross to a plugin at all.
+- **The product version** is a MINOR, by §61.1's amended rule: this adds configuration
+  syntax, and a project using it cannot be read by an older build.
+
+---
+
 # 15. Resource Lifecycle
 
 Support:

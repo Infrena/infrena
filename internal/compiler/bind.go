@@ -569,7 +569,15 @@ func providerInstanceFor(inst modules.Instance, table providers.Table, ds *diag.
 // checkDefaults has already refused a non-boolean, so AsBool failing here means the
 // key is absent, and absent is the same as unset.
 func lifecycleFor(decl config.LifecycleDecl, inst providers.Instance) resource.Lifecycle {
-	out := resource.Lifecycle{PreventDestroy: decl.PreventDestroy, Retain: decl.Retain}
+	out := resource.Lifecycle{
+		PreventDestroy: decl.PreventDestroy,
+		Retain:         decl.Retain,
+		// Carried as WRITTEN; stage 7 canonicalises it against the schema, where the
+		// attribute names are known. Deliberately not settable from an instance's
+		// `defaults:`: which attributes a resource lets drift is a property of that
+		// resource and its pipeline, not of the account it lives in.
+		IgnoreChanges: decl.IgnoreChanges,
+	}
 	if !decl.PreventDestroySet {
 		if b, ok := inst.Defaults["prevent_destroy"].AsBool(); ok {
 			out.PreventDestroy = b

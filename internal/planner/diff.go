@@ -24,11 +24,22 @@ import (
 // (spec §11). It also returns diagnostics: an attribute configuration sets
 // that the schema does not define at all is a plan-time error, not a
 // silently mislabelled update — see the comment at that branch.
-func diffAttributes(addr address.Address, def *schema.ResourceDefinition, desired, actual map[string]value.Value) ([]ChangeReason, diag.Diagnostics) {
+func diffAttributes(
+	addr address.Address, def *schema.ResourceDefinition,
+	desired, actual map[string]value.Value, ignored []string,
+) ([]ChangeReason, diag.Diagnostics) {
 	var reasons []ChangeReason
 	var ds diag.Diagnostics
 
 	for _, name := range unionKeys(desired, actual) {
+		// IGNORED BEFORE ANYTHING ELSE, including the undefined-attribute error below.
+		// `ignore_changes` says this attribute is somebody else's — a CI pipeline's, a
+		// console operator's — so the planner has nothing to say about it either way,
+		// and an attribute the schema stopped declaring is not a reason to start
+		// arguing about one the user already told us to leave alone.
+		if slices.Contains(ignored, name) {
+			continue
+		}
 		attr, defined := def.Attribute(name)
 		want, inConfig := desired[name]
 		got, inActual := actual[name]
@@ -310,9 +321,30 @@ func hasUnknown(v value.Value) bool {
 // schema defines. For NoOp and Update those survive in place, so they are
 // carried across from the observed resource; for Create and Replace the object
 // is built afresh, so they are unknown until the provider reports them.
-func afterAttributes(def *schema.ResourceDefinition, desired, actual map[string]value.Value, kind OpKind) map[string]value.Value {
+func afterAttributes(
+	def *schema.ResourceDefinition, desired, actual map[string]value.Value,
+	kind OpKind, ignored []string,
+) map[string]value.Value {
 	out := make(map[string]value.Value, len(desired))
 	maps.Copy(out, desired)
+
+	// AN IGNORED ATTRIBUTE KEEPS WHAT IS REALLY THERE. Without this the operation would
+	// carry configuration's value into After, the executor would record it, and state
+	// would claim a task revision the service is not running — the plan would say
+	// nothing changed while quietly rewriting the record of what did. Ignoring a change
+	// means not touching it, in the plan as well as on the cloud.
+	//
+	// Not on a create: there is no actual resource yet, so configuration's value is the
+	// only one there is and ignoring it would create the resource with nothing.
+	if kind != OpCreate && kind != OpReplace {
+		for _, name := range ignored {
+			if got, ok := actual[name]; ok {
+				out[name] = got
+			} else {
+				delete(out, name)
+			}
+		}
+	}
 	if def == nil {
 		return out
 	}
