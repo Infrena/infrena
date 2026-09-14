@@ -267,8 +267,16 @@ func renderResource(r Resource, reg *registry.Registry, opts Options) (*yaml.Nod
 		if err := scalar.Encode(plain); err != nil {
 			return nil, nil, fmt.Errorf("rendering %s.%s: %w", r.Name, name, err)
 		}
+		// The FRIENDLY name where the plugin declares one (PLAN.md §14.1). A
+		// generated file is configuration a person edits, so it should read the way
+		// they would have written it — `cidr:`, not AWS's `CidrBlock:`. Both load,
+		// because the compiler canonicalises either.
+		shown := name
+		if known {
+			shown = def.Display(name)
+		}
 		node.Content = append(node.Content,
-			&yaml.Node{Kind: yaml.ScalarNode, Value: name}, scalar)
+			&yaml.Node{Kind: yaml.ScalarNode, Value: shown}, scalar)
 	}
 
 	if len(omittedSecrets) > 0 {

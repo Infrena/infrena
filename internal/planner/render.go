@@ -5,15 +5,39 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/infrata/infrata/pkg/schema"
 	"github.com/infrata/infrata/pkg/value"
 )
 
 // RenderOptions controls how a Plan is rendered to text.
 type RenderOptions struct {
-	// Verbose additionally lists resources with no changes.
+	// Verbose additionally lists resources with no changes, and shows the note on an
+	// attribute the provider chose (see renderAttributeName).
 	Verbose bool
 	// Color wraps operation markers in ANSI escape codes.
 	Color bool
+
+	// Definition looks up a resource type's schema, or nil for none.
+	//
+	// A LOOKUP rather than the registry, so this package keeps depending on nothing but
+	// pkg/schema and pkg/value — Render is pure, and a registry parameter would invite a
+	// renderer that consults providers. Callers pass reg.Definition.
+	//
+	// Optional: every caller that has a registry should pass it, and a nil lookup falls
+	// back to canonical names with no notes, which is exactly what the renderer did
+	// before §14.1 gave it anything to say.
+	Definition func(resourceType string) (*schema.ResourceDefinition, bool)
+}
+
+// definitionFor is the nil-safe form of the lookup.
+func (o RenderOptions) definitionFor(resourceType string) *schema.ResourceDefinition {
+	if o.Definition == nil {
+		return nil
+	}
+	if def, ok := o.Definition(resourceType); ok {
+		return def
+	}
+	return nil
 }
 
 const (
@@ -84,14 +108,18 @@ func renderOperationLines(op Operation, moveCandidates []string, opts RenderOpti
 		}
 	}
 
+	def := opts.definitionFor(op.Type)
+
 	switch op.Kind {
 	case OpCreate:
 		for _, k := range unionKeys(op.After) {
-			lines = append(lines, "      "+k+": "+renderAnnotated(op.After[k]))
+			lines = append(lines, "      "+renderAttributeName(def, k, op.After[k], opts)+": "+
+				renderAnnotated(op.After[k]))
 		}
 	case OpDestroy, OpForget:
 		for _, k := range unionKeys(op.Before) {
-			lines = append(lines, "      "+k+": "+renderAnnotated(op.Before[k]))
+			lines = append(lines, "      "+renderAttributeName(def, k, op.Before[k], opts)+": "+
+				renderAnnotated(op.Before[k]))
 		}
 	case OpUpdate, OpReplace:
 		for _, k := range unionKeys(op.Before, op.After) {
@@ -100,11 +128,59 @@ func renderOperationLines(op Operation, moveCandidates []string, opts RenderOpti
 			if hadBefore && hasAfter && before.Equal(after) {
 				continue
 			}
-			lines = append(lines, "      "+k+": "+renderSide(before, hadBefore)+" -> "+renderSide(after, hasAfter))
+			shown := after
+			if !hasAfter {
+				shown = before
+			}
+			lines = append(lines, "      "+renderAttributeName(def, k, shown, opts)+": "+
+				renderSide(before, hadBefore)+" -> "+renderSide(after, hasAfter))
 		}
 		lines = append(lines, renderMetadataLines(op.Reasons)...)
 	}
 	return lines
+}
+
+// renderAttributeName renders an attribute's key: the name a user should see, plus the
+// note that says a value is the provider's rather than theirs.
+//
+// TWO THINGS §14.1 SPECIFIES AND ONE CAUSE. Plans show the FRIENDLY ALIAS where a plugin
+// declares one, because `CidrBlock` is AWS's name for it and `cidr` is what the user
+// wrote; and an attribute the provider chose is marked, because a user who has just
+// deleted that line from their configuration and re-planned would otherwise see nothing
+// happen and conclude the edit failed. Both need the schema, which is why RenderOptions
+// carries a lookup at all.
+//
+// The note is deliberately NOT "no longer set in configuration". infrata cannot know
+// that: every attribute in state records source=provider, including ones configuration
+// set explicitly, because state records what the provider RETURNED. Saying what is true
+// regardless of history still does the job.
+//
+// Shown under --verbose, and ALWAYS when the attribute is ForceNew — that being the case
+// where a later explicit value replaces the resource, so a reader needs to know the
+// current value is the provider's before they type one.
+func renderAttributeName(
+	def *schema.ResourceDefinition, name string, v value.Value, opts RenderOptions,
+) string {
+	if def == nil {
+		return name
+	}
+	shown := def.Display(name)
+
+	attr, known := def.Attribute(name)
+	if !known || !attr.Computed || !attr.Optional {
+		return shown
+	}
+	// Configuration's values reach a plan as explicit or defaulted; a value carried over
+	// from the observed resource keeps the provider's own provenance. That is what
+	// distinguishes "the user set this" from "the provider chose it" HERE, inside one
+	// plan, where state cannot.
+	if v.Source != value.SourceProvider {
+		return shown
+	}
+	if !opts.Verbose && !attr.ForceNew {
+		return shown
+	}
+	return shown + "   [provider-chosen, not in configuration]"
 }
 
 // renderMetadataLines prints the changes an update makes to metadata infra

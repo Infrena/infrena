@@ -92,7 +92,7 @@ func applySavedPlan(
 
 	// Shown before the confirmation, and rendered from the artifact rather than
 	// recomputed: what the user is asked to approve has to be what will run.
-	fmt.Fprint(cmd.OutOrStdout(), planner.Render(p, planner.RenderOptions{Verbose: opts.Verbose}))
+	fmt.Fprint(cmd.OutOrStdout(), planner.Render(p, planner.RenderOptions{Verbose: opts.Verbose, Definition: reg.Definition}))
 
 	if !p.HasChanges() {
 		fmt.Fprintln(cmd.OutOrStdout(), "This plan proposes no changes.")

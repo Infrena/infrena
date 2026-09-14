@@ -145,7 +145,8 @@ func newPlanCommand(opts *GlobalOptions) *cobra.Command {
 			}
 
 			fmt.Fprint(cmd.OutOrStdout(), planner.Render(p, planner.RenderOptions{
-				Verbose: opts.Verbose,
+				Verbose:    opts.Verbose,
+				Definition: reg.Definition,
 			}))
 
 			if opts.Output != "" {

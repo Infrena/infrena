@@ -148,7 +148,7 @@ func newApplyCommand(opts *GlobalOptions) *cobra.Command {
 				return finishApply(cmd.ErrOrStderr(), rw, report.ApplyResult{}, err)
 			}
 
-			fmt.Fprint(cmd.OutOrStdout(), planner.Render(p, planner.RenderOptions{Verbose: opts.Verbose}))
+			fmt.Fprint(cmd.OutOrStdout(), planner.Render(p, planner.RenderOptions{Verbose: opts.Verbose, Definition: reg.Definition}))
 
 			if !p.HasChanges() {
 				return finishApply(cmd.ErrOrStderr(), rw, report.ApplyResult{}, nil)
