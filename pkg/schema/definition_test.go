@@ -2,6 +2,7 @@ package schema
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/infrena/infrena/pkg/value"
@@ -122,5 +123,61 @@ func TestValidateRejectsRequirementWithNoTypes(t *testing.T) {
 	d.Requirements = append(d.Requirements, Requirement{Name: "cluster"})
 	if err := d.Validate(); err == nil {
 		t.Error("a requirement that names no satisfying types can never be satisfied")
+	}
+}
+
+func TestAReferenceToAnUndeclaredAttributeRefusesTheDefinition(t *testing.T) {
+	// A plugin whose relationship names an attribute the target does not have
+	// is a plugin that will not load, on §14.1's precedent that a name
+	// collision should fail at load rather than surprise someone at apply.
+	vpc := &ResourceDefinition{
+		Type: "test.vpc",
+		Attributes: map[string]Attribute{
+			"id": {Kind: value.KindString, Computed: true},
+		},
+	}
+	subnet := &ResourceDefinition{
+		Type: "test.subnet",
+		Attributes: map[string]Attribute{
+			"vpc_id": {Kind: value.KindString, Required: true,
+				References: &Reference{Type: "test.vpc", Attribute: "arn"}},
+		},
+	}
+	err := ValidateAll([]*ResourceDefinition{vpc, subnet})
+	if err == nil {
+		t.Fatal("a reference to an attribute the target does not declare must refuse the definition")
+	}
+	if !strings.Contains(err.Error(), "arn") || !strings.Contains(err.Error(), "test.vpc") {
+		t.Errorf("error = %q, want it to name both the attribute and the target type", err)
+	}
+}
+
+func TestAReferenceToAnUndeclaredTypeRefusesTheDefinition(t *testing.T) {
+	subnet := &ResourceDefinition{
+		Type: "test.subnet",
+		Attributes: map[string]Attribute{
+			"vpc_id": {Kind: value.KindString, Required: true,
+				References: &Reference{Type: "test.nosuch", Attribute: "id"}},
+		},
+	}
+	if err := ValidateAll([]*ResourceDefinition{subnet}); err == nil {
+		t.Fatal("a reference to a type the plugin does not declare must refuse the definition")
+	}
+}
+
+func TestAWellFormedReferenceLoads(t *testing.T) {
+	vpc := &ResourceDefinition{
+		Type: "test.vpc",
+		Attributes: map[string]Attribute{"id": {Kind: value.KindString, Computed: true}},
+	}
+	subnet := &ResourceDefinition{
+		Type: "test.subnet",
+		Attributes: map[string]Attribute{
+			"vpc_id": {Kind: value.KindString, Required: true,
+				References: &Reference{Type: "test.vpc", Attribute: "id"}},
+		},
+	}
+	if err := ValidateAll([]*ResourceDefinition{vpc, subnet}); err != nil {
+		t.Fatalf("a well-formed reference must load: %v", err)
 	}
 }

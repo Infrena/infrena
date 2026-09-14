@@ -11,6 +11,29 @@ package schema
 
 import "github.com/infrena/infrena/pkg/value"
 
+// Reference names what an attribute refers to, when it holds another resource's
+// identifier rather than a value of its own.
+//
+// It is DATA, and that is the whole design. §31.1 forbids a function-typed field
+// in this package because a function cannot cross a pipe, and a plugin that
+// resolved its own references would be a SECOND RESOLVER — free to disagree with
+// the engine's about what a reference means, which is the failure
+// expressions.ResourceScope exists to prevent.
+//
+// THE PLUGIN DECIDES. The engine cannot know that Cloud Control's
+// AWS::EC2::Subnet.VpcId wants a VPC's id rather than its arn; that is knowledge
+// about an API, and it belongs to whoever owns the API. The engine reads this and
+// never infers, defaults, or guesses.
+type Reference struct {
+	// Type is the resource type referred to, in the plugin's own naming —
+	// "aws.ec2.vpc", not "AWS::EC2::VPC".
+	Type string
+	// Attribute is which of that type's attributes this one holds. It is the
+	// CANONICAL name, never an alias: §14.1 makes the canonical name the
+	// identity, and an alias here would have to be folded at every read.
+	Attribute string
+}
+
 // Attribute describes a resource attribute.
 type Attribute struct {
 	Kind      value.Kind
@@ -55,6 +78,15 @@ type Attribute struct {
 	// plugin that will not load rather than a silent runtime surprise about which
 	// spelling won.
 	Aliases []string
+
+	// References declares that this attribute holds another resource's
+	// identifier, which is what lets configuration pass the resource whole —
+	// `vpc_id: ${vpc}` — instead of naming the attribute.
+	//
+	// Nil means "not a reference", and that is the honest default: most
+	// attributes are not references, and an empty Reference{} would be
+	// indistinguishable from an author who meant to fill it in.
+	References *Reference
 
 	// Default is the value this attribute takes when configuration supplies
 	// none: a plain Go datum of the attribute's declared Kind — int64(10),

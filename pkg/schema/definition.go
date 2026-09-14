@@ -118,3 +118,53 @@ func (d *ResourceDefinition) Validate() error {
 	}
 	return nil
 }
+
+// ValidateAll validates each definition on its own and then the relationships
+// BETWEEN them, which no single definition can check: a Reference names another
+// type, and whether that type exists is a fact about the whole set.
+//
+// A plugin with a dangling relationship does not load. §14.1 took the same line
+// for colliding alias spellings, for the same reason — a silent runtime surprise
+// about which relationship won is worse than a plugin that refuses to start.
+func ValidateAll(defs []*ResourceDefinition) error {
+	byType := make(map[string]*ResourceDefinition, len(defs))
+	for _, d := range defs {
+		if err := d.Validate(); err != nil {
+			return err
+		}
+		byType[d.Type] = d
+	}
+
+	// Sorted, so a plugin with two broken relationships reports the same one
+	// first on every run (invariant 6).
+	types := make([]string, 0, len(byType))
+	for t := range byType {
+		types = append(types, t)
+	}
+	sort.Strings(types)
+
+	for _, t := range types {
+		d := byType[t]
+		names := make([]string, 0, len(d.Attributes))
+		for n := range d.Attributes {
+			names = append(names, n)
+		}
+		sort.Strings(names)
+		for _, n := range names {
+			ref := d.Attributes[n].References
+			if ref == nil {
+				continue
+			}
+			target, ok := byType[ref.Type]
+			if !ok {
+				return fmt.Errorf("%s: attribute %q refers to type %q, which this plugin does not declare",
+					d.Type, n, ref.Type)
+			}
+			if _, ok := target.Attributes[ref.Attribute]; !ok {
+				return fmt.Errorf("%s: attribute %q refers to %s.%s, and %s has no attribute %q",
+					d.Type, n, ref.Type, ref.Attribute, ref.Type, ref.Attribute)
+			}
+		}
+	}
+	return nil
+}
