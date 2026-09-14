@@ -354,17 +354,35 @@ func TestVarPrefixParsesAsAVariable(t *testing.T) {
 	}
 }
 
-func TestABareSingleSegmentIsNotAReference(t *testing.T) {
-	_, ds := Parse("${region}", value.Origin{})
+func TestABareSingleSegmentIsAWholeResourceReference(t *testing.T) {
+	e, ds := Parse("${vpc}", value.Origin{})
+	if ds.HasErrors() {
+		t.Fatalf("unexpected errors: %v", ds)
+	}
+	if e.Op != value.OpResourceRef {
+		t.Fatalf("Op = %v, want OpResourceRef", e.Op)
+	}
+	if e.Ref.Target.Name != "vpc" {
+		t.Errorf("Target.Name = %q, want %q", e.Ref.Target.Name, "vpc")
+	}
+	if e.Ref.Attribute != "" {
+		t.Errorf("Attribute = %q, want empty — the attribute is filled in at stage 6 from the consuming attribute's declaration", e.Ref.Attribute)
+	}
+}
+
+func TestAWholeResourceReferenceRendersAsWritten(t *testing.T) {
+	e, _ := Parse("${vpc}", value.Origin{})
+	if got := e.String(); got != "${vpc}" {
+		t.Errorf("String() = %q, want %q — a diagnostic must echo what the user wrote", got, "${vpc}")
+	}
+}
+
+func TestVarIsStillNotAWholeResourceReference(t *testing.T) {
+	// `var` is reserved as a resource name, so ${var} must keep its own
+	// diagnostic rather than becoming a reference to a resource called var.
+	_, ds := Parse("${var}", value.Origin{})
 	if !ds.HasErrors() {
-		t.Fatal("a bare single segment must be an error: variables are var.-prefixed and a resource reference needs an attribute")
-	}
-	d := ds[0]
-	if !strings.Contains(d.Detail, "${var.region}") {
-		t.Errorf("Detail = %q, want it to name the fix", d.Detail)
-	}
-	if !strings.Contains(d.Detail, "attribute") {
-		t.Errorf("Detail = %q, want it to mention the resource-reference form too", d.Detail)
+		t.Fatal("${var} must still be refused: var is the variable namespace, not a resource")
 	}
 }
 
