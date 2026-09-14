@@ -1426,6 +1426,202 @@ Resources must define:
 
 ---
 
+## 14.1 Provider-chosen attributes and attribute aliases
+
+**Agreed 2026-09-14**, from the AWS plugin's requirements (`infrata-provider-aws`,
+`docs/investigations/2026-09-13-generic-aws-provider.md` §5 and §8). Two changes to
+`pkg/schema`, designed and landed TOGETHER so plugin authors meet one contract change
+rather than two.
+
+Both are additive. No existing plugin sets either field, so the fake provider is
+unaffected and `pluginproto.Version` does not move.
+
+### The attribute model was binary, and a real cloud is not
+
+An attribute was either configuration's (`Required`, or optional with a `Default`) or the
+provider's (`Computed`, and `schema.Validate` refuses `Required && Computed`). AWS needs a
+third state that neither expresses: **configuration MAY set it, and the provider picks
+when configuration does not.**
+
+It does not fail cleanly. It fails to converge, which was reproduced against the fake
+provider before any of this was designed:
+
+```
+  ~ fake.database.db
+      tags: {team: "picked-by-the-cloud"} -> (absent)
+```
+
+The planner treats a returned value that configuration does not set as "removed from
+configuration" and proposes to unset it. So: omit `availability_zone`, AWS picks
+`eu-west-1a`, the next plan proposes unsetting it, apply, AWS picks again — forever.
+Invariant 2 broken for a whole class of attributes. Live evidence from the AWS spike: a
+VPC created through Cloud Control with only `CidrBlock` and `Tags` came back from
+`GetResource` with ten properties, including `EnableDnsSupport`, `EnableDnsHostnames` and
+`InstanceTenancy`.
+
+**IT IS NOT A HANDFUL OF CASES, and that constrains the design.** CloudFormation schemas
+mark `required`, `readOnlyProperties` and `createOnlyProperties`. They do not mark "AWS
+picks this if unset", and `default` is almost never populated — of fifteen properties the
+AWS session checked against a real account, only IAM `Role.Path` had one. A generic
+provider therefore cannot tell "AWS chooses this" from "this stays absent", and must set
+the flag on **every non-required, non-read-only property**. So the semantics must be inert
+for an attribute that is simply absent everywhere, and nothing may depend on the flag
+being used sparingly.
+
+### `Optional` beside `Computed`
+
+```go
+type Attribute struct {
+    Required  bool
+    Computed  bool
+    Optional  bool // with Computed: configuration MAY set it; the provider picks if it does not
+    ...
+}
+```
+
+- **Configuration sets it** — an ordinary attribute. Diffed normally, `ForceNew` applies
+  normally.
+- **Configuration does not set it** — the provider's value is recorded and NEVER diffed.
+  No "removed from configuration", no replacement.
+
+`ForceNew` therefore needs no special rule: an unset optional+computed attribute produces
+no diff at all, so it can never produce a replacement, however the provider's value
+changes. Write `us-east-1b` where state holds `us-east-1a` and the plan replaces, which is
+correct; omit it and nothing happens whatever AWS reports.
+
+`schema.Validate` keeps refusing `Required && Computed` and `Computed && Default != nil`.
+`Optional` without `Computed` is meaningless — every non-required attribute is already
+optional — and is refused, so the field cannot be set in the belief it does something.
+
+### What the plan says, and what it deliberately does not
+
+A value the provider chose is shown as
+
+```
+availability_zone: "eu-west-1a"   [provider-chosen, not in configuration]
+```
+
+under `--verbose`, and ALWAYS when the attribute is also `ForceNew` — that being the case
+where a later explicit value replaces the resource, so a reader needs to know the value is
+currently the provider's. If the `--verbose` output proves noisy on a large schema, that
+threshold is the dial to revisit.
+
+**It does not say "no longer set in configuration", and that is a correction to the
+original proposal rather than a wording preference.** infrata cannot know it. Every
+attribute in a state file records `source=provider` — including ones configuration set
+explicitly, because state records what the provider RETURNED. Checked against a real state
+file rather than assumed. Answering "was this ever configured?" would mean recording
+per-attribute "configuration manages this" in state: a format version bump plus a
+migration, bought for an informational line. Refused. The line above is true regardless of
+history and still does the job — a user who has just deleted that line from their file and
+re-planned sees the attribute now reads as provider-chosen, so their edit changed nothing.
+
+**Accepted cost: drift on an unset optional+computed attribute is invisible to `plan`.**
+Someone flips `EnableDnsHostnames` in the console on a VPC that never configured it and no
+plan reports it. That is the right trade — an attribute infrata does not manage is not
+infrata's to report as drift — and it remains visible through `refresh` and `state show`,
+which is where someone investigating a console change looks.
+
+### `import --generate` emits the ForceNew ones and omits the rest
+
+A generated file gets the optional+computed attributes that are also `ForceNew`, and not
+the updatable ones.
+
+The ForceNew ones are the resource's IDENTITY — a bucket name, a role name, a subnet's
+availability zone. Omitting them writes a file that says "AWS, pick a name", which is a
+different request from the one that was just imported, and a later explicit value would
+replace the resource. The updatable ones (`EnableDnsSupport`, `MaxSessionDuration`) are
+settings with cloud defaults, and emitting them pins every AWS default into the file as
+noise — against §27's minimal-generation rule. The rule is mechanical for a plugin, since
+`ForceNew` comes from `createOnlyProperties`.
+
+### Aliases: several spellings, one identity
+
+A plugin may declare alternative spellings for an attribute:
+
+```go
+Attribute{ Kind: value.KindString, Aliases: []string{"cidr", "cidr_block"} }
+```
+
+Matching is CASE-INSENSITIVE across the canonical name and every alias, so `CidrBlock`,
+`cidrblock`, `cidr_block` and `cidr` all reach the same attribute. `schema.Validate`
+REFUSES a definition whose names fold together — two attributes, or an attribute and an
+alias, or two aliases — which turns the collision hazard into a plugin that will not load
+rather than a silent runtime surprise for whichever spelling wins.
+
+**THE ALIASES ARE THE PLUGIN'S, AND CROSS THE WIRE.** infrata contains no mapping, no
+table and no file: it learns every type, attribute and alias from the schema a plugin
+hands over at load, exactly as it already learns everything else. A curated overlay
+belongs in the plugin's own repository at its codegen time, where infrata never sees it.
+
+Considered and REJECTED: a configuration file infrata reads. It would need a version and a
+compatibility story (§61), a defined location, and rules for reconciling a file that
+disagrees with the schema — and a stale entry would silently map to an attribute the
+plugin no longer declares. The schema already crosses the wire and is already validated
+against the attribute set on arrival, so it is one artifact where a file would be two. The
+cost of this choice, accepted deliberately: **changing an alias requires a plugin
+release.** For a generated plugin that releases whenever upstream schemas change, that is
+no extra cost.
+
+### Canonicalise ONCE, at the compiler boundary
+
+This is the load-bearing rule, and it comes from tracing every place an attribute is
+looked up by name rather than from preference. There are seven:
+
+| Site | |
+| --- | --- |
+| `compiler/schema.go` resource attribute keys | canonicalise |
+| `compiler/schema.go` `defaults:` keys | canonicalise |
+| `compiler/bind.go` reference attributes (`${vpc.vpc_id}`) | canonicalise |
+| `compiler/schema.go` `markSensitive` | exact — downstream |
+| `planner/diff.go` | exact — downstream |
+| `pluginhost/adapter.go` undeclared-attribute refusal | exact — downstream |
+| `generator/generate.go` | exact — downstream |
+
+**The first three are the boundary; the last four are downstream of it and stay exact
+lookups.** Spreading alias-awareness across all seven is how this goes wrong, and two of
+the downstream four show exactly how:
+
+- `markSensitive` applies schema-declared sensitivity by exact name. An alias reaching it
+  unresolved means **a sensitive attribute written under an alias is never marked
+  sensitive**, and appears in plans and reports in clear — §36's redaction guarantee,
+  broken.
+- The planner's diff would see `cidr` from configuration and `CidrBlock` from the provider
+  as two attributes, and propose a change forever — the same non-convergence class this
+  section exists to fix.
+
+References are canonicalised in stage 6 rather than at evaluation, because
+`expressions.ResourceScope` is `map[address]map[name]Value` with no schema access, while
+stage 6 already validates a reference's attribute against the definition. Two spellings of
+one attribute in one resource is an ERROR naming both, the same shape as §4.1's
+name-declared-twice rule.
+
+### Identity versus display, which settles itself
+
+The stable key is the plugin's declared name. Aliases are input and display only.
+
+This needs no enforcement and is not a convention anyone can break: state, the plan
+artifact and the plugin wire are all written DOWNSTREAM of canonicalisation, so they
+cannot carry an alias. Adding a curated `cidr` in a later plugin release therefore changes
+only what a user may type and what a plan renders — never a stored key, and never a
+migration.
+
+`explain` lists every accepted spelling, and plans and generated configuration show the
+friendly alias where one exists, by mapping canonical to display at render time. A pure
+function of the schema, with no storage consequence.
+
+### Out of scope, recorded so each is a decision
+
+- **Keys inside map- and list-valued attributes** (`Tags[].Key`,
+  `PrivateDnsNameOptionsOnLaunch.HostnameType`). infrata does not validate nested keys at
+  all, so a plugin translates those itself.
+- **Nested create-only pointers** (37 on VPC alone) and **`conditionalCreateOnly`**. Real,
+  and neither is blocked by this.
+- **Project-level aliases**, letting a USER rename an attribute for their own project
+  whatever the plugin says. A genuinely different feature, decidable on its own merits.
+
+---
+
 # 15. Resource Lifecycle
 
 Support:
