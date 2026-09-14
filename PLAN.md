@@ -3827,6 +3827,28 @@ terms of the table above, because otherwise "minor" means nothing:
 - **major** — may drop support for an old format version, or remove configuration
   syntax. A plugin may stop working, and the handshake says so by name.
 
+**AMENDED 2026-09-13, because the rule above told me the wrong answer.** Defined purely in
+terms of the format table, it is silent on the change users actually notice: **the engine
+getting STRICTER.** v0.2.0 tightened requirement satisfaction to per-account, so a project
+that validated under v0.1.0 — a database in one provider instance, its network in another —
+stops validating. No format version moved, no configuration syntax was added or removed, so
+the letter of the rule said "patch". A user upgrading by a patch release and finding their
+project refused would be right to call that a broken promise.
+
+So the test is **what an existing project does**, not which numbers in the table moved:
+
+- **A release that refuses configuration a previous release accepted is at least MINOR**,
+  even when nothing in the format table changes. The same goes for a command that starts
+  refusing an operation it used to perform — v0.2.0's `import` refuses adopting a provider
+  ID another address already manages, which was a data-loss fix and still a behaviour
+  change a user can be surprised by.
+- **Adding a key to a format without moving its version is also at least MINOR.** The plan
+  artifact gained `depends_on` and the value wire gained `expr`, both additive, both leaving
+  `PlanVersion` at 1 — correct, because an older reader ignores an unknown key. But an older
+  reader ignoring a key it needed is a behaviour difference, and the release it appears in
+  should say so.
+- **Patch stays what it says**: no format changes, and nothing a working project notices.
+
 **It is not a constant in the source.** A hand-maintained version is wrong by the
 second commit after a release. `runtime/debug.ReadBuildInfo()` reports the module
 version for `go install`, and `-ldflags -X` overrides it for a tagged build; a
