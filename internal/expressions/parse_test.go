@@ -197,14 +197,15 @@ func TestParseEscapedQuoteInLiteral(t *testing.T) {
 // map by canonical address, so without this guard the two collide and a user
 // can reach inside a module. A module exposes outputs, not resources.
 //
-// The nested case is here because a two-level address has `module` at position
-// 0 AND 2, so a guard that checked only the first segment would pass the first
-// case and leak the second.
+// The nested case (`module` at 0, and again at 2 for the module it contains)
+// pins that the guard still fires when the outer target itself is a module
+// qualifier — under this grammar the target is always segments[0], so `module`
+// is only ever a qualifier there; elsewhere it is an ordinary path step (see
+// TestModuleIsOrdinaryOutsideTheTargetSegment).
 func TestReferenceIntoAModuleIsRefused(t *testing.T) {
 	for _, src := range []string{
 		"${module.prod.database.id}",
 		"${module.prod.module.net.vpc.id}",
-		"${prod.module.net.vpc.id}",
 	} {
 		t.Run(src, func(t *testing.T) {
 			e, ds := Parse(src, value.Origin{File: "infra.yml", Line: 3})
@@ -250,6 +251,28 @@ func TestReferenceNamingTheInstanceIsAccepted(t *testing.T) {
 	}
 }
 
+// TestModuleIsOrdinaryOutsideTheTargetSegment pins the fix for the guard
+// scanning every segment instead of just segments[0]: `${prod.module.net.vpc.id}`
+// used to be refused as reaching into a module, even though "module" there is
+// only ATTRIBUTE and PATH text — a map key or a path step the user wrote, never
+// an address qualifier. Under this grammar the target is always exactly one
+// segment, so `module` can only legitimately qualify a reference at position 0.
+func TestModuleIsOrdinaryOutsideTheTargetSegment(t *testing.T) {
+	for _, src := range []string{
+		"${var.tags.module}",
+		"${vpc.module}",
+		"${var.a.module.b}",
+		"${prod.module.net.vpc.id}",
+	} {
+		t.Run(src, func(t *testing.T) {
+			_, ds := Parse(src, value.Origin{File: "infra.yml", Line: 3})
+			if ds.HasErrors() {
+				t.Fatalf("Parse(%q) errored: %v", src, ds)
+			}
+		})
+	}
+}
+
 // TestResourceNamedModuleIsRefusedWithItsOwnReason.
 //
 // ${module.id} is not someone reaching into a module — it is a resource
@@ -287,6 +310,34 @@ func TestQualifiedReferencesDoNotRouteThroughTheParser(t *testing.T) {
 	// point: it is produced, never typed.
 	if _, ds := Parse("${"+qualified.String()+"}", value.Origin{File: "infra.yml", Line: 1}); !ds.HasErrors() {
 		t.Error("the guard does not refuse a rendered qualified address; it must, or a user can type one")
+	}
+}
+
+// TestEmptyKeyBeforeABracketIsMalformed pins that ${var.a.[0]} is refused
+// rather than silently accepted as identical to ${var.a[0]}. The extra dot
+// before the bracket leaves a segment that is nothing but "[0]" — a key-less
+// index, reported as malformed at the point of the mistake rather than quietly
+// parsed as if the dot were never there.
+func TestEmptyKeyBeforeABracketIsMalformed(t *testing.T) {
+	_, ds := Parse("${var.a.[0]}", value.Origin{File: "infra.yml", Line: 3})
+	if !ds.HasErrors() {
+		t.Fatal("${var.a.[0]} parsed cleanly; an empty key before a bracket must be malformed")
+	}
+	if !strings.Contains(ds[0].Summary, "malformed reference") {
+		t.Errorf("wrong diagnostic: %s", ds[0].Summary)
+	}
+}
+
+// TestBracketOnTheTargetIsMalformed pins that ${vpc[0].id} is refused as
+// malformed at parse time, instead of constructing a resource literally named
+// "vpc[0]" that is only reported as undeclared much later.
+func TestBracketOnTheTargetIsMalformed(t *testing.T) {
+	_, ds := Parse("${vpc[0].id}", value.Origin{File: "infra.yml", Line: 3})
+	if !ds.HasErrors() {
+		t.Fatal("${vpc[0].id} parsed cleanly; a resource name must never carry an index")
+	}
+	if !strings.Contains(ds[0].Summary, "malformed reference") {
+		t.Errorf("wrong diagnostic: %s", ds[0].Summary)
 	}
 }
 

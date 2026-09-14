@@ -429,9 +429,23 @@ func parseSteps(segments []string, ref string, origin value.Origin, ds *diag.Dia
 			key = m[1]
 			indices = append([]string{m[2]}, indices...)
 		}
-		if key != "" {
-			out = append(out, value.Step{Kind: value.StepKey, Key: key})
+		if key == "" {
+			// Every segment reaching parseSteps came from the top-level dot
+			// split, which already refuses a segment that is empty outright
+			// (`${var.a..b}`). A segment can still be entirely brackets
+			// (`[0]`) after stripping them here — that is a key-less index,
+			// not a key: there is nothing for [0] to index into.
+			ds.Add(diag.Diagnostic{
+				Severity: diag.SeverityError,
+				Summary:  "malformed reference " + strconv.Quote(ref),
+				Detail: strconv.Quote(seg) + " in ${" + ref + "} has no key before its bracket, so " +
+					"the index has nothing to index.",
+				Action: "Write the key the index applies to before the bracket, as ${var.name[0]}.",
+				Origin: origin,
+			})
+			return nil, false
 		}
+		out = append(out, value.Step{Kind: value.StepKey, Key: key})
 		for _, raw := range indices {
 			n, err := strconv.Atoi(raw)
 			if err != nil {
@@ -500,14 +514,16 @@ func parseReference(src string, origin value.Origin, ds *diag.Diagnostics) *valu
 	// on an already-parsed expression. A guard at the lookup instead would have
 	// to tell "qualified by Qualify" from "typed by the user" when both are the
 	// same bytes, which is not a check that can be made right.
-	for i, s := range segments {
-		if s != "module" {
-			continue
-		}
+	//
+	// Only segments[0] can be a module qualifier — under this grammar the
+	// target is always exactly one segment, so `module` is legitimate spelled
+	// anywhere else: a map key (${var.tags.module}) or a path step
+	// (${vpc.module}) names something the user wrote, not an address.
+	if segments[0] == "module" {
 		// Two different mistakes wear the same segment, and telling a user to
 		// reference an output would be nonsense for the second.
-		if i+2 <= len(segments)-1 {
-			instance := segments[i+1]
+		if len(segments) >= 3 {
+			instance := segments[1]
 			ds.Add(diag.Diagnostic{
 				Severity: diag.SeverityError,
 				Summary:  "reference ${" + src + "} names a module's internals",
@@ -590,6 +606,24 @@ func parseReference(src string, origin value.Origin, ds *diag.Diagnostics) *valu
 	// rule, target-is-everything-but-the-last, could only ever construct a
 	// target nothing is permitted to declare, which is why ${vpc.tags.Name}
 	// reported an undeclared resource "vpc.tags".
+	//
+	// The target is used as-is below, not run through parseSteps — a resource
+	// name is never indexed, only its attributes are. A bracket here
+	// (${vpc[0].id}) would otherwise construct a resource literally named
+	// "vpc[0]", reported much later as an undeclared resource instead of as
+	// malformed at the point of the mistake.
+	if strings.ContainsAny(segments[0], "[]") {
+		ds.Add(diag.Diagnostic{
+			Severity: diag.SeverityError,
+			Summary:  "malformed reference " + strconv.Quote(src),
+			Detail: strconv.Quote(segments[0]) + " is not a valid resource name — a resource is " +
+				"never indexed, only an attribute or a path step is.",
+			Action: "Remove the bracket from the resource name, and index an attribute instead, " +
+				"as ${vpc.id[0]}.",
+			Origin: origin,
+		})
+		return nil
+	}
 	attrSteps, ok := parseSteps(segments[1:2], src, origin, ds)
 	if !ok {
 		return nil
