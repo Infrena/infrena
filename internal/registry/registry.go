@@ -235,14 +235,19 @@ func (r *Registry) Factories() []string {
 // checkDefinitions validates a set of definitions before anything is mutated, so a
 // failed registration leaves the registry untouched.
 //
+// ValidateAll runs first: it covers each definition's own Validate() AND the
+// relationships BETWEEN them (a Reference naming a type or attribute this plugin
+// never declares), which is only checkable here, with the whole set in hand — not
+// at pluginhost's per-definition load-time check.
+//
 // `seen` catches a plugin declaring the same type twice in one call, which the
 // registry-state check alone cannot: nothing has been written yet.
 func (r *Registry) checkDefinitions(pluginName string, defs []*schema.ResourceDefinition) error {
+	if err := schema.ValidateAll(defs); err != nil {
+		return fmt.Errorf("provider %s: %w", pluginName, err)
+	}
 	seen := make(map[string]bool, len(defs))
 	for _, d := range defs {
-		if err := d.Validate(); err != nil {
-			return fmt.Errorf("provider %s: %w", pluginName, err)
-		}
 		if strings.HasPrefix(d.Type, "module.") {
 			// Compiler stage 5 selects module instantiations by this prefix
 			// (PLAN.md §11). A provider claiming the namespace would turn a

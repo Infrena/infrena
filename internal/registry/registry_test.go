@@ -100,6 +100,31 @@ func TestRegisterValidatesDefinitions(t *testing.T) {
 	}
 }
 
+// TestRegisterRefusesADanglingReference. A Reference names another type, and
+// whether that type exists is a fact about the whole set of a plugin's
+// definitions — checkable only here, with the whole set in hand at once, not
+// inside a single definition's own Validate().
+func TestRegisterRefusesADanglingReference(t *testing.T) {
+	r := New()
+	subnet := &schema.ResourceDefinition{
+		Type: "test.subnet",
+		Attributes: map[string]schema.Attribute{
+			"vpc_id": {Kind: value.KindString, Required: true,
+				References: &schema.Reference{Type: "test.vpc", Attribute: "id"}},
+		},
+	}
+	err := r.Register("test", stubProvider{name: "test", defs: []*schema.ResourceDefinition{subnet}})
+	if err == nil {
+		t.Fatal("a reference to a type this plugin does not declare must fail at registration")
+	}
+	if !strings.Contains(err.Error(), "test.vpc") {
+		t.Errorf("error = %q, want it to name the missing type", err)
+	}
+	if _, ok := r.Definition("test.subnet"); ok {
+		t.Error("a failed registration must leave the registry untouched")
+	}
+}
+
 func TestRegisterRefusesTheModuleNamespace(t *testing.T) {
 	r := New()
 	err := r.Register("rogue", stubProvider{name: "rogue", defs: []*schema.ResourceDefinition{
