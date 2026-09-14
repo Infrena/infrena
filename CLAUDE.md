@@ -6,9 +6,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Current state
 
-**PHASES 1 AND 2 ARE COMPLETE. M1-M11 are merged to `main`** (tags `m1`-`m11`, which stay
-LOCAL — the remote carries no tags until a real release), and the provider-plugin cutover has
-landed on top of them. Every one of `PLAN.md` §49's nineteen components exists. Phase 3 (AWS)
+**PHASES 1 AND 2 ARE COMPLETE, and infrata is RELEASED: v0.1.0 and v0.2.0 are tagged and
+published.** M1-M11 are merged to `main` (tags `m1`-`m11`, which stay LOCAL; the `v*` release
+tags are pushed), and the provider-plugin cutover has landed on top of them.
+
+**v0.2.0 is a MINOR because it refuses configuration v0.1.0 accepted** — requirement
+satisfaction is now per provider instance. §61.1 was amended when that came up: it defined
+bumps purely in terms of the format-version table, none of which moved, so it would have
+called a release that breaks projects a patch. The test is what an existing project does. Every one of `PLAN.md` §49's nineteen components exists. Phase 3 (AWS)
 is the next milestone and has not started.
 
 The MVP workflow §48 describes runs end to end: `init` → `validate` → `plan` → `apply` →
@@ -126,8 +131,15 @@ the lifecycle options, sitting between what the resource writes and what the plu
 key no resource type of that plugin declares is an ERROR: it would otherwise apply to nothing,
 in every environment, forever, with no output in which its absence is visible.
 
-**Absent until Phase 3+:** reading a saved plan back, remote state, AWS. Nothing half-implements
-one of those.
+**Absent until Phase 3+:** remote state and AWS. Nothing half-implements either.
+
+**Reading a saved plan back SHIPPED** (`apply --plan <file>`, 2026-09-13), which closed §37's
+last unimplemented surface. It compiles nothing, refreshes nothing and re-plans nothing, and is
+refused outright — no override — when the project, environment or state it was made against has
+moved. Two rules in it are easy to undo by accident: the state fingerprint is of state AS
+LOADED, so a command must hash before mutating anything (apply stamps the project name in, plan
+does not), and an unknown value carries its expression through the artifact, which is what makes
+a plan containing `${net.id}` apply correctly rather than silently leaving the attribute unset.
 
 **BUILT, not planned: provider plugins as separate processes** (`PLAN.md` §31.1, §31.2, §50.1).
 Plugins are separately distributed Go binaries speaking newline-delimited JSON over stdio, with
