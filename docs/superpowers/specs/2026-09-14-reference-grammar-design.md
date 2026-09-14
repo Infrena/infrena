@@ -26,6 +26,12 @@ that name, `${vpc.arn}` reports "reference to undeclared resource or module
 thing named `vpc` does exist; it is a variable, and the message never says so.
 With a resource named `vpc` also present, the variable is shadowed silently.
 
+**A dotted target is constructed that can never exist.** `parseReference`
+takes every segment but the last as the target, so `${vpc.tags.Name}` asks for
+a resource named `vpc.tags` — which `checkResourceName` forbids anyone from
+declaring. The reference is unsatisfiable by construction, and the error names
+the wrong thing.
+
 **The two forms are indistinguishable by eye.** `${vpc}` and `${vpc.arn}` mean
 entirely unrelated things — one a value from `vars/`, the other an attribute a
 provider assigns during apply — and nothing marks which is which.
@@ -48,7 +54,7 @@ today, and this change is what frees it.
 
 ## 2. The grammar
 
-Five forms, each with exactly one meaning, and no rule that depends on counting
+Six forms, each with exactly one meaning, and no rule that depends on counting
 segments:
 
 ```yaml
@@ -56,6 +62,7 @@ ${var.region}          a variable
 ${var.tags.team}       a path into a map variable                     (new)
 ${var.azs[0]}          an entry of a list variable                    (new)
 ${vpc.id}              an attribute of resource `vpc`
+${vpc.tags.Name}       a path into a resource attribute              (new)
 ${vpc}                 the resource `vpc` itself   (reserved here; spec two)
 ```
 
@@ -86,6 +93,27 @@ un-prefixed variable announces itself with a message naming its own fix rather
 than resolving to something wrong. Spec two replaces this error with the
 projection; the diagnostic's existence is what makes that a one-line change
 instead of a new parse path.
+
+### 2.1 How a reference divides
+
+**The first segment is the resource, the second is the attribute, the rest is a
+path.** `${vpc.tags.Name}` is resource `vpc`, attribute `tags`, path `Name`.
+
+This is available because a resource's name can never contain a dot:
+`checkResourceName` (`internal/config/decode_modules.go:335`) refuses one,
+because "a resource's name is its address, and a dot is how an address
+separates module levels." A user-written target is therefore always exactly one
+segment, and `Qualify` adds module paths STRUCTURALLY at stage 6 rather than
+through this parser (contract Amendment 14a).
+
+So `parseReference`'s current rule — target is every segment but the last — can
+only ever construct a dotted target that cannot exist. It is a third lying
+diagnostic of the family §5 deletes: `${vpc.tags.Name}` today reports
+"reference to undeclared resource or module `vpc.tags`", sending a reader after
+a name they spelled correctly.
+
+**What this deletes:** the second half of `parse.go:409`'s segment arithmetic,
+`strings.Join(segments[:len(segments)-1], ".")`.
 
 `module` stays reserved exactly as it is (`parse.go:437`, contract Amendment
 14a). Nothing about that changes.
@@ -215,23 +243,54 @@ evaluator's `OpVarRef` case the only place that knows paths exist.
 changes what segments MEAN, not how they are scanned. §10.4's warning about two
 scanners disagreeing does not apply: no new token is introduced.
 
-### 3.3 Resource attributes get no paths
+### 3.3 Resource attributes take the same paths
 
-`${vpc.tags.Name}` stays an error, though the `var.` prefix now makes it
-unambiguous.
+`${vpc.tags.Name}` works, with the same steps, the same deferral and the same
+resolution as `${vpc.id}`.
 
-The reason is asymmetry, not oversight. A variable's map is a known value at
-compile time, so a path into it is checkable then — wrong key, wrong kind, both
-caught before a plan exists. A resource attribute's map is `Kind: KindMap` in
-`pkg/schema` and nothing more; there is no nested schema describing what is
-inside. A path into one could not be checked at compile time, could not be
-checked at plan time either (the value is unknown until apply), and would fail
-DURING apply — the one place this product promises you will not end up.
+There is nothing extra to build. `ResourceScope.Attribute` returns the map once
+it is known, §3.2's steps apply to it, and `ResolveDeferred` finishes it at
+apply against what the resource actually turned out to be. A path into a
+resource attribute is deferred exactly as a whole attribute is, and for the
+same reason: the value does not exist yet.
 
-Closing it properly means teaching `pkg/schema` nested shape, which crosses the
-plugin wire and belongs with spec two's protocol bump if it happens at all.
-Until then the diagnostic says that, rather than implying the form is
-malformed.
+**One check is weaker, and only one.** `bind.go:400` validates a reference's
+attribute NAME against the schema at compile time, and the comment there
+records why:
+
+> Nothing checked this before M5: a typo here passed `validate`, produced a
+> clean plan, and failed halfway through `apply` after real infrastructure
+> existed.
+
+For `${vpc.tags.Name}`, `tags` gets that check and `Name` does not, because
+`pkg/schema` models `tags` as `Kind: KindMap` and nothing deeper. The reference
+is therefore PARTIALLY checked — better than no reference, worse than a scalar
+one.
+
+Two things keep that acceptable rather than a hole:
+
+- **It fails before dispatch, not during create.** `resolveAfter` runs in
+  `execute` ahead of the provider call (`internal/executor/apply.go:448`), so
+  an unresolvable key fails its operation without a half-made resource.
+- **The apply-time diagnostic carries what a compile-time one would have
+  said** — the keys that DO exist, in the §3 shape. Most of a compile-time
+  check's value is the message, and the message is available here.
+
+**Sensitivity follows §3.1 unchanged.** A schema-sensitive map attribute,
+indexed, yields a sensitive leaf; the host adapter enforces schema sensitivity
+on the way in, and the union rule carries it through the path.
+
+**Closing the gap properly belongs to spec two**, where the protocol moves
+anyway: `Attribute` gains nested shape as DATA, and the key check becomes a
+compile-time error like every other attribute name. Recorded there, not here,
+because a language feature should not wait on a wire-format change.
+
+**What does NOT close it: giving plugins the parser.** A plugin that evaluates
+expressions is a second resolver, and `expressions.ResourceScope`'s doc comment
+names that as the failure it exists to prevent — "a plan that resolves a
+reference differently from the apply that carries it out is a plan that lies."
+Plugins declare data; the engine resolves. Same rule as §31.1's function-typed
+field ban.
 
 ---
 
@@ -321,7 +380,7 @@ graceful, and `init` emitting it costs one line. Added in commit 4.
 
 ## 5. Diagnostics
 
-Ten, all §44 shape (Summary, Detail, Action, Origin), each naming the fix
+Nine, all §44 shape (Summary, Detail, Action, Origin), each naming the fix
 rather than the symptom:
 
 | Trigger | Says |
@@ -335,7 +394,6 @@ rather than the symptom:
 | `${var.tags[0]}` | `var.tags` is a map; index it by key, as `${var.tags.team}` |
 | `${var.azs.first}` | `var.azs` is a list; index it, as `${var.azs[0]}` |
 | `${var.azs[i]}` | an index is a literal integer; a varying index needs iteration, which this language does not have |
-| `${vpc.tags.Name}` | resource attributes have no nested schema to check a path against |
 
 The last two matter most: both are forms a Terraform user types on their first
 day, and both are DELIBERATE refusals. "Malformed reference" would send someone
@@ -363,6 +421,11 @@ Per §46:
   end, proving the rule through the compiler rather than only at the parser.
 - A map with a numeric-looking key (`${var.ports.0}` vs `${var.ports[0]}`) is
   pinned, since that pair is the whole reason the syntaxes differ.
+- A path into a resource attribute survives the plan/apply round trip: unknown
+  at plan with its expression intact, resolved at apply. This is the property
+  `apply --plan` depends on (§37), and the one that breaks silently.
+- An absent key on a resolved resource attribute fails its operation BEFORE
+  dispatch, with the keys that exist named.
 - Commit 3 lands a test asserting a bare single segment errors — the proof the
   expand window closed.
 
@@ -375,8 +438,11 @@ Per §46:
   indexing a read rather than a loop.
 - **Negative indices** (§3) — `[-1]` makes meaning depend on a length the reader
   cannot see. Additive later.
-- **Resource attribute paths** (§3.3) — needs nested schema across the plugin
-  wire; belongs with spec two's protocol bump if at all.
+- **A compile-time check on nested resource attribute KEYS** (§3.3) — needs
+  nested shape in `pkg/schema`, which crosses the plugin wire. Spec two. The
+  paths themselves ship here.
+- **Plugin-side expression evaluation** (§3.3) — a second resolver, free to
+  disagree with the first. The engine resolves; plugins declare data.
 - **A `resource.` prefix** — considered and rejected. Once `var.` is mandatory,
   a bare name is unambiguously a resource, so the prefix would be a second
   spelling for one identity with nothing to disambiguate. §14.1 already records
