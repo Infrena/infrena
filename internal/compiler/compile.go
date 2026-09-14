@@ -218,8 +218,10 @@ func Compile(files []config.File, reg *registry.Registry, opts Options) (Resolve
 // so slipped past this check entirely, letting a project's floor refuse a developer's
 // own build (found via `infrena: ">= 0.5"` in a freshly scaffolded project, 2026-09-14).
 // A suffix is what still marks it: the release workflow stamps a bare MAJOR.MINOR.PATCH
-// with `-ldflags -X`, so anything carrying a `-` (semver.Parse folds a trailing `+meta`
-// into the same field) is, whatever numbers it landed on, not that.
+// with `-ldflags -X`, so anything carrying a `-` (semver.Parse only keeps a suffix as
+// `Pre` when a `-` precedes it; a bare `+meta` with none, as in `0.5.0+dirty`, is
+// dropped and leaves `Pre` empty — that version IS floor-checked) is, whatever numbers
+// it landed on, not that.
 func notARelease(v semver.Version) bool {
 	return (v.Major == 0 && v.Minor == 0 && v.Patch == 0) || v.Pre != ""
 }
