@@ -211,7 +211,7 @@ func (r *remoteProvider) Delete(ctx context.Context, current *resource.ResourceS
 func (r *remoteProvider) Discover(ctx context.Context, req provider.DiscoverRequest) ([]provider.DiscoveredResource, error) {
 	var result pluginproto.DiscoverResult
 	err := r.plugin.client.call(ctx, pluginproto.MethodDiscover, pluginproto.DiscoverParams{
-		Handle: r.handle, Types: req.Types, Region: req.Region,
+		Handle: r.handle, Types: req.Types,
 	}, &result)
 	if err != nil {
 		return nil, err

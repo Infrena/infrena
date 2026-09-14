@@ -157,61 +157,52 @@ resources:
 	}
 }
 
-func TestCompileAlwaysDefinesEnvironmentRegionAndAccount(t *testing.T) {
+// TestCompileAlwaysDefinesEnvironmentAndProject.
+//
+// TWO process variables, not four. This test used to assert four, and it passed by
+// setting Options.Region and Options.Account directly — which no production code path
+// ever did. That is a test that could not fail in the other direction: it proved the
+// mechanism worked when driven, while nothing drove it, so `${region}` was an undefined
+// variable in every real project and the suite was green about it for months. The fields
+// are gone; region and account are ordinary variable names now.
+func TestCompileAlwaysDefinesEnvironmentAndProject(t *testing.T) {
 	files := loadFiles(t, `
 project: myapp
 resources:
   network:
     type: fake.network
-    cidr: ${environment}/${region}/${account}
+    cidr: ${environment}/${project}
 `)
-	cfg, ds := Compile(files, testRegistry(t), Options{
-		Environment: "production",
-		Region:      "us-east-1",
-		Account:     "123456789012",
-	})
+	cfg, ds := Compile(files, testRegistry(t), Options{Environment: "production"})
 	if ds.HasErrors() {
 		t.Fatalf("unexpected diagnostics: %+v", ds)
 	}
 	got, _ := cfg.Resources["network"].Attrs["cidr"].AsString()
-	if got != "production/us-east-1/123456789012" {
-		t.Errorf("cidr = %q, want %q — configuration must be able to name its own environment, region and account", got, "production/us-east-1/123456789012")
+	if got != "production/myapp" {
+		t.Errorf("cidr = %q, want %q — configuration must be able to name its own environment and project", got, "production/myapp")
 	}
 }
 
-func TestCompileLeavesRegionUndefinedWhenNoneWasSupplied(t *testing.T) {
-	// The other direction of the predicate. Injecting an empty string instead
-	// would interpolate silently into a resource name; an undefined variable
-	// is a diagnostic the user can act on.
-	files := loadFiles(t, `
+// TestAnUndeclaredNameTheEngineDoesNotSupplyIsUndefined.
+//
+// The other direction of the predicate, and the half that keeps `region` honest now that
+// nothing seeds it: interpolating an empty string would silently name a resource after
+// nothing, while an undefined variable is a diagnostic the user can act on. `region` is
+// the case worth naming, because it was seeded from a dead Option until 2026-09-13 and is
+// the likeliest name an AWS project reaches for.
+func TestAnUndeclaredNameTheEngineDoesNotSupplyIsUndefined(t *testing.T) {
+	for _, name := range []string{"region", "account", "nosuchthing"} {
+		files := loadFiles(t, `
 project: myapp
 resources:
   network:
     type: fake.network
-    cidr: ${region}
+    cidr: ${`+name+`}
 `)
-	_, ds := Compile(files, testRegistry(t), Options{Environment: "dev"})
-	if !ds.HasErrors() {
-		t.Fatal("${region} with no region supplied must be reported as undefined, not resolved to an empty string")
-	}
-}
-
-// TestCompileLeavesAccountUndefinedWhenNoneWasSupplied is Region's twin.
-// seedProcessVariables guards `account` with the identical `if opts.Account
-// != ""` shape it guards `region` with, and nothing else in the suite
-// exercises that specific guard — Region's own test does not, by
-// construction, say anything about Account.
-func TestCompileLeavesAccountUndefinedWhenNoneWasSupplied(t *testing.T) {
-	files := loadFiles(t, `
-project: myapp
-resources:
-  network:
-    type: fake.network
-    cidr: ${account}
-`)
-	_, ds := Compile(files, testRegistry(t), Options{Environment: "dev"})
-	if !ds.HasErrors() {
-		t.Fatal("${account} with no account supplied must be reported as undefined, not resolved to an empty string")
+		if _, ds := Compile(files, testRegistry(t), Options{Environment: "dev"}); !ds.HasErrors() {
+			t.Errorf("${%s} with nothing declaring or supplying it must be reported as undefined, "+
+				"not resolved to an empty string", name)
+		}
 	}
 }
 

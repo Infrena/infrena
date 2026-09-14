@@ -439,7 +439,7 @@ func sortedDirs(m map[string]map[string]value.Value) []string {
 	return out
 }
 
-// seedProcessVariables adds the four variables that come from the process
+// seedProcessVariables adds the variables that come from the process
 // invocation rather than from any file.
 //
 // `environment` is unconditional and authoritative: configuration names its
@@ -472,8 +472,12 @@ func sortedDirs(m map[string]map[string]value.Value) []string {
 // "environment". The plan asserted the opposite of the code's contract.
 // SuppliedBy is free text at this rung (see its doc comment), so it says what
 // actually supplied the value: the environment argument to the command
-// itself, not a flag. Region and account get the parallel, honest answer —
-// they are read from the invocation's own Options, not from any flag either.
+// itself, not a flag.
+//
+// TWO variables, not four. "region" and "account" were seeded here from Options fields
+// that nothing ever assigned, so they were never in scope and `${region}` was an
+// undefined variable in every project that ever ran. Removed 2026-09-13; see
+// variables.processReservedNames for what that cost while it stood.
 func seedProcessVariables(scope *variables.Scope, project string, opts Options) {
 	origin := value.Origin{File: "<command line>"}
 	set := func(name, text, suppliedBy string) {
@@ -482,10 +486,4 @@ func seedProcessVariables(scope *variables.Scope, project string, opts Options) 
 	}
 	set("environment", opts.Environment, "the environment argument")
 	set("project", project, "the project name")
-	if opts.Region != "" {
-		set("region", opts.Region, "the invocation's region")
-	}
-	if opts.Account != "" {
-		set("account", opts.Account, "the invocation's account")
-	}
 }

@@ -686,14 +686,18 @@ func TestResolveRefusesDashDashVarNamingEnvironment(t *testing.T) {
 }
 
 // TestResolveRefusesVarFileNamingReservedNames is
-// TestResolveRefusesDashDashVarNamingEnvironment's --var-file twin, and
-// covers region/account too — nothing else in this file exercises a
-// --var-file entry naming any of the three reserved names.
+// TestResolveRefusesDashDashVarNamingEnvironment's --var-file twin — nothing
+// else in this file exercises a --var-file entry naming a reserved name.
 func TestResolveRefusesVarFileNamingReservedNames(t *testing.T) {
-	// All FOUR reserved names, because rung 5 (--var-file) and rung 6 (--var)
-	// each consult processReservedNames separately. A name refused on one path
-	// and applied on the other is the shape M4 fixed for `environment`.
-	for _, name := range []string{"environment", "region", "account", "project"} {
+	// Both reserved names, because rung 5 (--var-file) and rung 6 (--var) each
+	// consult processReservedNames separately. A name refused on one path and
+	// applied on the other is the shape M4 fixed for `environment`.
+	//
+	// It was four until 2026-09-13. "region" and "account" were reserved on the
+	// strength of compiler.Options fields nothing assigned, so refusing them
+	// blocked an ordinary variable name with a message about the engine's own
+	// value — which did not exist. See TestRegionAndAccountAreOrdinaryVariableNames.
+	for _, name := range []string{"environment", "project"} {
 		files := map[string]value.Value{
 			name: value.String("nope", value.SourceVariable).
 				WithScope(value.ScopeCLIOverride).
@@ -712,7 +716,7 @@ func TestResolveRefusesVarFileNamingReservedNames(t *testing.T) {
 // side effect. It caught M9 adding `project` (PLAN.md §6.3), which is what it is
 // for — update it only alongside a spec amendment.
 func TestProcessVariablesMatchesWhatOverrideDocuments(t *testing.T) {
-	want := []string{"account", "environment", "project", "region"}
+	want := []string{"environment", "project"}
 	if len(ProcessVariables) != len(want) {
 		t.Fatalf("ProcessVariables = %v, want %v", ProcessVariables, want)
 	}
@@ -764,6 +768,74 @@ func TestTheUnsetMessageNamesTheDirectoryLayoutToo(t *testing.T) {
 	} {
 		if !strings.Contains(action, want) {
 			t.Errorf("the suggested action omits %q, so a project using it is told to edit files it does not have:\n  %s", want, action)
+		}
+	}
+}
+
+// TestRegionAndAccountAreOrDINARYVariableNames.
+//
+// `region` and `account` used to be PROCESS-RESERVED, alongside `environment` and
+// `project`. The other two are genuinely supplied by the engine — the environment
+// argument and the project name — and a --var changing either would make a resource
+// claim one thing while its state recorded another. Region and account were supplied by
+// NOTHING: `compiler.Options.Region` and `.Account` were declared and read and never
+// assigned, so `${region}` was an undefined variable in every project that ever ran.
+//
+// Being reserved on top of that was actively harmful, in two ways this test pins:
+// a declared `region` was skipped by the reserved-name branch, so a project that forgot
+// to set it got "undefined variable" at the use site instead of "variable is not set" at
+// the declaration; and `--var region=...` was refused outright with a message explaining
+// it would be "silently discarded in favour of the engine's own value" — a mechanism
+// that did not exist. `region` is a very likely variable name for an AWS project.
+func TestRegionAndAccountAreOrdinaryVariableNames(t *testing.T) {
+	for _, name := range []string{"region", "account"} {
+		t.Run(name, func(t *testing.T) {
+			decls := []config.VariableDecl{{
+				Name:   name,
+				Type:   value.KindString,
+				Origin: value.Origin{File: "infra.yml", Line: 5, Column: 3},
+			}}
+			chain, _ := environments.Resolve([]config.EnvironmentDecl{{Name: "dev"}}, "dev")
+
+			// Declared and unset: the ordinary diagnostic, not silence.
+			_, ds := Resolve(decls, chain, nil, nil, nil)
+			var found bool
+			for _, d := range ds {
+				if strings.Contains(d.Summary, "is not set") && strings.Contains(d.Summary, name) {
+					found = true
+				}
+			}
+			if !found {
+				t.Errorf("a declared, unset %q reported nothing here, so the user learns of it only "+
+					"as `undefined variable` at the use site: %v", name, ds)
+			}
+
+			// And --var can set it, which the reserved-name refusal forbade.
+			scope, cliDS := Resolve(decls, chain, nil, nil, map[string]string{name: "us-east-1"})
+			if cliDS.HasErrors() {
+				t.Fatalf("--var %s=us-east-1 was refused: %v", name, cliDS)
+			}
+			got, ok := scope.Variable(name)
+			if !ok {
+				t.Fatalf("%q is not in scope after --var set it", name)
+			}
+			if s, _ := got.AsString(); s != "us-east-1" {
+				t.Errorf("%q = %q, want us-east-1", name, s)
+			}
+		})
+	}
+}
+
+// TestEnvironmentAndProjectStayReserved is the control, and the half that must not
+// regress: those two ARE supplied by the engine, so a --var setting them would be
+// silently overridden — which is the reason the refusal exists at all.
+func TestEnvironmentAndProjectStayReserved(t *testing.T) {
+	chain, _ := environments.Resolve([]config.EnvironmentDecl{{Name: "dev"}}, "dev")
+	for _, name := range []string{"environment", "project"} {
+		_, ds := Resolve(nil, chain, nil, nil, map[string]string{name: "x"})
+		if !ds.HasErrors() {
+			t.Errorf("--var %s=x must still be refused: the engine supplies it, so accepting the "+
+				"flag would silently discard what the user typed", name)
 		}
 	}
 }

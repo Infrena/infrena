@@ -42,8 +42,6 @@ type Options struct {
 	RecordLocks bool
 
 	Environment string
-	Region      string
-	Account     string
 
 	// Version is the running build, for a project's `infrata:` floor to be checked
 	// against (PLAN.md §61.2). Empty means a development build, which every floor

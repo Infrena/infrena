@@ -40,16 +40,22 @@ func (s Scope) Names() []string {
 	return out
 }
 
-// ProcessVariables names the three variables that come from the process
-// invocation rather than from any configuration file, sorted.
+// ProcessVariables names the variables that come from the process invocation rather
+// than from any configuration file, sorted.
 //
-// Listed here, once, because two places need the same list and a second copy
-// would drift: compiler.seedProcessVariables sets them, and internal/modules
-// carries them across a module boundary (a module sees these and its own
-// inputs, and nothing else — PLAN.md §11.3). Override's doc comment below has
-// always named exactly these three; this is that sentence made readable by a
-// caller.
-var ProcessVariables = []string{"account", "environment", "project", "region"}
+// Listed here, once, because two places need the same list and a second copy would
+// drift: compiler.seedProcessVariables sets them, and internal/modules carries them
+// across a module boundary (a module sees these and its own inputs, and nothing else —
+// PLAN.md §11.3).
+//
+// TWO, not four. "region" and "account" were here on the strength of compiler.Options
+// fields nothing ever assigned, so neither was ever in scope and neither ever crossed a
+// module boundary — `caller.Variable("region")` simply returned false. Removing them is
+// therefore no behaviour change HERE, and a real one elsewhere: they are ordinary
+// variable names now, which means a project declaring `region` must pass it to a module
+// as an input like any other variable, rather than having it arrive by magic that never
+// worked.
+var ProcessVariables = []string{"environment", "project"}
 
 // Override records a value that comes from the process invocation rather than
 // from any configuration file.
@@ -373,27 +379,18 @@ func checkAgainstSchemas(schemas map[string]Schema, out *Scope, chain environmen
 
 		if processReservedNames[name] {
 			// A project may legally declare one of the process's own
-			// reserved names as its own typed variable — "environment",
-			// "region" and "account" are ordinary identifiers, and a
-			// project might reasonably want them type-checked. But
-			// whether one of these three is ultimately supplied is
-			// decided strictly AFTER Resolve returns, by
-			// compiler.seedProcessVariables (via Scope.Override) — for
-			// "environment" unconditionally, and for "region"/"account"
-			// whenever the corresponding Option is non-empty. Reporting
-			// "is not set" here would report a fact that becomes false
-			// moments later in the only caller, and its suggested fix
-			// ("pass --var environment=...") would itself be silently
-			// overridden by that same Override — recommending an action
-			// that cannot work (spec §44 requires the message and the
-			// action to both be true).
-			//
-			// Left absent rather than filled with a placeholder, exactly
-			// like the !chain.Selected branch above: if a reserved name
-			// genuinely never ends up supplied (region/account with no
-			// Option set), stage 6 reports "undefined variable" at the
-			// use site — the same honest answer an undeclared reserved
-			// name already gets today.
+			// reserved names as its own typed variable — "environment"
+			// and "project" are ordinary identifiers, and a project might
+			// reasonably want them type-checked. But whether either is
+			// ultimately supplied is decided strictly AFTER Resolve
+			// returns, by compiler.seedProcessVariables (via
+			// Scope.Override), and it supplies BOTH unconditionally.
+			// Reporting "is not set" here would report a fact that
+			// becomes false moments later in the only caller, and its
+			// suggested fix ("pass --var environment=...") would itself
+			// be silently overridden by that same Override —
+			// recommending an action that cannot work (spec §44 requires
+			// the message and the action to both be true).
 			continue
 		}
 
@@ -428,15 +425,24 @@ func checkAgainstSchemas(schemas map[string]Schema, out *Scope, chain environmen
 // doc comment for exactly which of the three are unconditional. Declaring one
 // of these names under `variables:` must not make checkAgainstSchemas treat
 // an as-yet-unsupplied value as an error; see the call site above.
+// processReservedNames are the names the process invocation itself supplies, which a
+// --var therefore cannot set: the flag would be silently overridden by the engine's own
+// value, and a flag that cannot change the outcome must be refused rather than ignored.
+//
+// TWO, not four. "region" and "account" were here until 2026-09-13, on the strength of
+// compiler.Options fields that nothing ever assigned — so `${region}` was an undefined
+// variable in every project that ever ran, a DECLARED `region` was skipped by the branch
+// below and reported only as "undefined variable" at its use site, and `--var region=...`
+// was refused with a message about discarding it "in favour of the engine's own value"
+// that named a mechanism which did not exist. They are ordinary variable names now, which
+// matters because `region` is one of the likeliest names an AWS project will use.
+//
+// `project` is here for the same reason `environment` is: it is declared in configuration
+// and recorded in state, so a --var that changed it would make a resource claim one
+// project while its state recorded another.
 var processReservedNames = map[string]bool{
 	"environment": true,
-	"region":      true,
-	"account":     true,
-	// `project` joins them for the same reason `environment` is here: it is
-	// declared in configuration and recorded in state, so a --var that changed
-	// it would make a resource claim one project while its state recorded
-	// another.
-	"project": true,
+	"project":     true,
 }
 
 // reservedNameDiag refuses a --var or --var-file entry naming one of the

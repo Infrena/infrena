@@ -61,9 +61,12 @@ const (
 
 // DiscoverRequest and DiscoveredResource are declared in M1 so the interface
 // does not churn in Phase 2, where discovery is implemented.
+//
+// Region was removed 2026-09-13: nothing in the host ever set it, so every plugin that
+// read it read "". A plugin scanning several regions takes them from its own instance
+// configuration — the host cannot know them, because it does not know what a region IS.
 type DiscoverRequest struct {
-	Types  []string
-	Region string
+	Types []string
 }
 
 // DiscoveredResource is a resource found during discovery.

@@ -496,8 +496,21 @@ available in every scope including inside modules:
 |---|---|
 | `environment` | the environment argument |
 | `project` | `project:` |
-| `region` | `--region`, when supplied |
-| `account` | `--account`, when supplied |
+
+**`region` and `account` were in this table and are REMOVED (2026-09-13).** They were
+listed as coming from `--region` and `--account` "when supplied" — flags that were never
+built. `compiler.Options` carried both fields, `seedProcessVariables` read both, and
+nothing ever assigned either, so `${region}` reported `undefined variable "region"` in
+every project that ever ran. Being reserved on top of that was worse than inert: a
+project declaring its own `region` variable got "undefined variable" at the use site
+instead of "variable is not set" at the declaration, and `--var region=...` was refused
+outright with a message about the value being "silently discarded in favour of the
+engine's own value" — describing a mechanism that did not exist.
+
+They are ordinary variable names now, which is what the agreed AWS model wants anyway:
+every regional type declares `region` as Required and ForceNew, and the instance supplies
+it through `defaults:`. If a flag is ever wanted, it goes in as a flag with the plumbing
+attached, not as a table entry promising one.
 
 `project` is here because a resource name or a tag almost always wants it, and
 threading it through as an ordinary variable makes every project declare the
@@ -889,7 +902,10 @@ there.
 A module is a directory containing `module.yml`. It declares `inputs:`, `resources:`,
 `outputs:` and may itself declare `modules:`. It may NOT declare `project:`,
 `environments:` or `variables:` — a module does not own environments, and the values
-it sees are its inputs plus the ambient `environment`, `region` and `account`.
+it sees are its inputs plus the ambient `environment` and `project`. (It was `environment`,
+`region` and `account` until 2026-09-13; the last two were never actually in scope to
+cross a module boundary, and a project variable named `region` is now passed to a module
+as an ordinary input like any other.)
 
 ```yaml
 inputs:
@@ -1087,13 +1103,13 @@ the built binary, 2026-09-13). `provider.DiscoverRequest.Region` is inert in the
 way: `internal/discovery/walk.go` builds the request without it and no flag sets it, so
 a plugin author implementing against `DiscoverParams.Region` reads `""` forever.
 
-Two dead fields and a documented variable that does not exist. **Phase 3 decides it**:
-either a `--region` flag that fills all three, or region is ordinary configuration and
-the fields come out. The AWS plugin's agreed model (2026-09-13) needs none of them —
-every regional type declares `region` as Required and ForceNew, an instance supplies it
-through `defaults:`, and `discover` takes its scan list from the instance's own
-`config:` — which is evidence for removal rather than for the flag. Until it is decided,
-no example here may use `${region}`.
+**DECIDED AND DONE, 2026-09-13: the fields came out.** The AWS plugin's agreed model
+needs none of them — every regional type declares `region` as Required and ForceNew, an
+instance supplies it through `defaults:`, and `discover` takes its scan list from the
+instance's own `config:`. So `compiler.Options.Region`/`.Account`,
+`provider.DiscoverRequest.Region` and `pluginproto.DiscoverParams.Region` are all
+removed, and `region` is an ordinary variable name. No example here may use `${region}`
+as a process variable, because there is no longer any such thing.
 
 **Variables only — never a resource reference.** A provider's configuration is
 needed before any resource exists, so `iam-role: ${some_resource.arn}` cannot be

@@ -222,7 +222,7 @@ func (s *server) dispatch(ctx context.Context, req pluginproto.Request) (any, er
 		if err != nil {
 			return nil, err
 		}
-		found, err := prov.Discover(ctx, provider.DiscoverRequest{Types: p.Types, Region: p.Region})
+		found, err := prov.Discover(ctx, provider.DiscoverRequest{Types: p.Types})
 		if err != nil {
 			return nil, err
 		}

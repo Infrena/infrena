@@ -173,10 +173,20 @@ type ResourceResult struct {
 }
 
 // DiscoverParams asks what exists.
+//
+// A `region` field was here until 2026-09-13 and the host NEVER populated it —
+// internal/discovery built every request without one and no flag could set it — so a
+// plugin implementing against it read "" forever. A field in a wire contract that can
+// never carry a value is a trap with a doc note taped over it, and the fake provider's
+// authoring guide was about to document it as permanently empty.
+//
+// Removal is safe across the version boundary in both directions: an older plugin sending
+// the key has it ignored, and a newer plugin reading an absent key gets the same zero
+// value it always got. Nothing needed a protocol bump. A plugin that scans regions takes
+// them from its OWN instance configuration, which is the model AWS agreed.
 type DiscoverParams struct {
 	Handle string   `json:"handle"`
 	Types  []string `json:"types,omitempty"`
-	Region string   `json:"region,omitempty"`
 }
 
 // DiscoverResult lists what was found.
