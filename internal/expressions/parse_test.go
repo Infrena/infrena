@@ -1,6 +1,7 @@
 package expressions
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 
@@ -318,5 +319,62 @@ func TestAVariableReferenceRendersItsPrefix(t *testing.T) {
 	e, _ := Parse("${var.region}", value.Origin{})
 	if got := e.String(); got != "${var.region}" {
 		t.Errorf("String() = %q, want %q — a diagnostic must echo what the user wrote", got, "${var.region}")
+	}
+}
+
+func TestAVariablePathParsesToSteps(t *testing.T) {
+	for _, tc := range []struct {
+		src  string
+		name string
+		want []value.Step
+	}{
+		{"${var.tags.team}", "tags", []value.Step{{Kind: value.StepKey, Key: "team"}}},
+		{"${var.azs[0]}", "azs", []value.Step{{Kind: value.StepIndex, Index: 0}}},
+		{"${var.subnets[1].cidr}", "subnets", []value.Step{
+			{Kind: value.StepIndex, Index: 1}, {Kind: value.StepKey, Key: "cidr"}}},
+		{"${var.regions.us_east.azs[2]}", "regions", []value.Step{
+			{Kind: value.StepKey, Key: "us_east"}, {Kind: value.StepKey, Key: "azs"},
+			{Kind: value.StepIndex, Index: 2}}},
+	} {
+		e, ds := Parse(tc.src, value.Origin{})
+		if ds.HasErrors() {
+			t.Errorf("%s: unexpected errors: %v", tc.src, ds)
+			continue
+		}
+		if e.Ref.VarName() != tc.name {
+			t.Errorf("%s: VarName() = %q, want %q", tc.src, e.Ref.VarName(), tc.name)
+		}
+		if !reflect.DeepEqual(e.Ref.Path, tc.want) {
+			t.Errorf("%s: Path = %+v, want %+v", tc.src, e.Ref.Path, tc.want)
+		}
+	}
+}
+
+func TestAnIndexMustBeALiteralInteger(t *testing.T) {
+	_, ds := Parse("${var.azs[i]}", value.Origin{})
+	if !ds.HasErrors() {
+		t.Fatal("${var.azs[i]} must be refused: a varying index needs iteration, which this language does not have")
+	}
+	if got := ds[0].Summary; !strings.Contains(got, "literal") {
+		t.Errorf("Summary = %q, want it to say the index must be a literal", got)
+	}
+}
+
+func TestANegativeIndexIsRefused(t *testing.T) {
+	_, ds := Parse("${var.azs[-1]}", value.Origin{})
+	if !ds.HasErrors() {
+		t.Fatal("${var.azs[-1]} must be refused: meaning would depend on a length the reader cannot see")
+	}
+}
+
+func TestAPathRoundTripsThroughString(t *testing.T) {
+	for _, src := range []string{"${var.tags.team}", "${var.azs[0]}", "${var.subnets[1].cidr}"} {
+		e, ds := Parse(src, value.Origin{})
+		if ds.HasErrors() {
+			t.Fatalf("%s: %v", src, ds)
+		}
+		if got := e.String(); got != src {
+			t.Errorf("String() = %q, want %q", got, src)
+		}
 	}
 }

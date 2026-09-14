@@ -6,6 +6,7 @@ package expressions
 
 import (
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -406,6 +407,66 @@ func parseCall(src string, open int, origin value.Origin, ds *diag.Diagnostics) 
 	return &value.Expr{Op: value.OpCall, Function: name, Args: args, Origin: origin}
 }
 
+// indexSuffix matches a trailing [N] on one segment.
+var indexSuffix = regexp.MustCompile(`^(.*?)\[([^\]]*)\]$`)
+
+// parseSteps turns the segments after a name into path steps.
+//
+// A segment is a map key, optionally carrying ONE trailing [N] that indexes
+// the value that key names. Brackets are scanned here rather than by the
+// expression scanner because they never nest inside a reference: the index is
+// a literal integer, so there is nothing to nest.
+func parseSteps(segments []string, ref string, origin value.Origin, ds *diag.Diagnostics) ([]value.Step, bool) {
+	var out []value.Step
+	for _, seg := range segments {
+		key := seg
+		var indices []string
+		for {
+			m := indexSuffix.FindStringSubmatch(key)
+			if m == nil {
+				break
+			}
+			key = m[1]
+			indices = append([]string{m[2]}, indices...)
+		}
+		if key != "" {
+			out = append(out, value.Step{Kind: value.StepKey, Key: key})
+		}
+		for _, raw := range indices {
+			n, err := strconv.Atoi(raw)
+			if err != nil {
+				bracket := strings.Index(ref, "[")
+				refPrefix := ref
+				if bracket >= 0 {
+					refPrefix = ref[:bracket]
+				}
+				ds.Add(diag.Diagnostic{
+					Severity: diag.SeverityError,
+					Summary:  "index " + strconv.Quote(raw) + " in ${" + ref + "} is not a literal integer",
+					Detail: "An index is a literal integer. A varying index is only useful if something " +
+						"varies it, which is iteration, and this language has none.",
+					Action: "Write a literal, as ${" + refPrefix + "[0]}.",
+					Origin: origin,
+				})
+				return nil, false
+			}
+			if n < 0 {
+				ds.Add(diag.Diagnostic{
+					Severity: diag.SeverityError,
+					Summary:  "index " + raw + " in ${" + ref + "} is negative",
+					Detail: "A negative index would make the reference's meaning depend on a length " +
+						"the reader cannot see.",
+					Action: "Count from the start, as [0].",
+					Origin: origin,
+				})
+				return nil, false
+			}
+			out = append(out, value.Step{Kind: value.StepIndex, Index: n})
+		}
+	}
+	return out, true
+}
+
 func parseReference(src string, origin value.Origin, ds *diag.Diagnostics) *value.Expr {
 	segments := strings.Split(src, ".")
 	for _, s := range segments {
@@ -486,11 +547,28 @@ func parseReference(src string, origin value.Origin, ds *diag.Diagnostics) *valu
 			})
 			return nil
 		}
-		return &value.Expr{
-			Op:     value.OpVarRef,
-			Ref:    value.VarRef(segments[1]),
-			Origin: origin,
+		// The variable's own name may carry an index: ${var.azs[0]}.
+		nameSteps, ok := parseSteps(segments[1:2], src, origin, ds)
+		if !ok {
+			return nil
 		}
+		if len(nameSteps) == 0 || nameSteps[0].Kind != value.StepKey {
+			ds.Add(diag.Diagnostic{
+				Severity: diag.SeverityError,
+				Summary:  "malformed reference " + strconv.Quote(src),
+				Detail:   "`var.` must be followed by a variable name.",
+				Action:   "Name one, as ${var.region}.",
+				Origin:   origin,
+			})
+			return nil
+		}
+		rest, ok := parseSteps(segments[2:], src, origin, ds)
+		if !ok {
+			return nil
+		}
+		ref := value.VarRef(nameSteps[0].Key)
+		ref.Path = append(nameSteps[1:], rest...)
+		return &value.Expr{Op: value.OpVarRef, Ref: ref, Origin: origin}
 	}
 
 	// One segment is a variable; two or more is a resource attribute. The
