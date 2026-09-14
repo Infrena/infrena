@@ -17,7 +17,6 @@ environments:
 variables:
   cloud_file:
     type: string
-    default: .infra/dev-account.json
 providers:
   - plugin: fake
     cloud: ${cloud_file}
@@ -26,6 +25,14 @@ resources:
     type: fake.network
     cidr: 10.0.0.0/16
 `
+
+// varOnlyInTheEnvironment is the half the first version of this fixture got wrong. It
+// gave cloud_file a `default:`, which every command can resolve WITHOUT an environment
+// — so the test passed for `import` while import was still resolving with no
+// environment at all, and the bug it was written to catch went out in the commit that
+// claimed to fix it. A fixture has to contradict its expected output: the value must be
+// obtainable ONLY from the environment the command is given.
+const varOnlyInTheEnvironment = "variables:\n  cloud_file: .infra/dev-account.json\n"
 
 // TestEveryCommandResolvesAVariableInProviderConfiguration.
 //
@@ -46,6 +53,12 @@ resources:
 // regression in any one of them is named rather than hidden behind the first.
 func TestEveryCommandResolvesAVariableInProviderConfiguration(t *testing.T) {
 	dir := project(t, varInProviderConfig)
+	// Set ONLY in the environment, so a command that resolves without one cannot get
+	// it. See varOnlyInTheEnvironment.
+	if err := os.MkdirAll(filepath.Join(dir, "environments"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(dir, "environments", "dev.yml"), varOnlyInTheEnvironment)
 
 	if a := run(t, dir, "apply", "dev", "--auto-approve"); a.ExitCode != 2 {
 		t.Fatalf("apply: %d\n%s", a.ExitCode, a.combined())
@@ -61,15 +74,22 @@ func TestEveryCommandResolvesAVariableInProviderConfiguration(t *testing.T) {
 		args []string
 	}{
 		{"refresh", []string{"refresh", "dev"}},
-		{"discover", []string{"discover"}},
 		{"import", []string{"import", "dev", "fake.network.net-1"}},
 		// destroy last: it removes what the others look at.
 		{"destroy", []string{"destroy", "dev", "--auto-approve"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got := run(t, dir, tc.args...).combined()
-			if strings.Contains(got, "undefined variable") {
-				t.Errorf("%s could not resolve the variable in `providers:`:\n%s", tc.name, got)
+			// BOTH failure texts. "undefined variable" is what an empty scope
+			// produced; "could not be resolved" is what an unresolved instance
+			// produces now. A test asserting only the first passed while `import`
+			// was still resolving without an environment — the bug went out in the
+			// commit that claimed to fix it.
+			for _, unresolved := range []string{"undefined variable", "could not be resolved"} {
+				if strings.Contains(got, unresolved) {
+					t.Errorf("%s could not resolve the variable in `providers:` (%q):\n%s",
+						tc.name, unresolved, got)
+				}
 			}
 			// The old failure mode, kept explicit: these two refused the flag that
 			// the diagnostic told users to reach for.

@@ -46,9 +46,12 @@ func newImportCommand(opts *GlobalOptions) *cobra.Command {
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			environment := args[0]
-			// The same scope discovery has: import adopts what discovery found, so
-			// it must be able to ask the same plugins.
-			reg, tbl, regDiags, closePlugins := discoveryRegistry(opts)
+			// The same PLUGIN scope discovery has — import adopts what discovery
+			// found, so it must be able to ask the same plugins — but with this
+			// command's own environment, which discover does not have. Passing ""
+			// here left a per-environment provider value unresolvable by an `import
+			// dev` that had been handed "dev" on the command line.
+			reg, tbl, regDiags, closePlugins := discoveryRegistry(opts, environment)
 			defer closePlugins()
 			if regDiags.HasErrors() {
 				regDiags.Render(cmd.ErrOrStderr())

@@ -263,7 +263,15 @@ func refuseUnresolvedInstances(table providers.Table, environment string) diag.D
 				if part.values[key].Known {
 					continue
 				}
-				detail := "Its value differs per environment, and this command does not take one."
+				// The empty case covers TWO commands and must describe both: `discover`,
+				// which takes no environment, and a teardown of an environment
+				// configuration no longer declares. "This command does not take one"
+				// was written for the first and is false of the second — and was
+				// briefly false of `import` too, which reached here with a hardcoded
+				// empty environment while holding one on its command line.
+				detail := "No environment was resolved, so a value that differs per environment " +
+					"cannot be determined — either this command takes no environment, or the " +
+					"one named is no longer declared in configuration."
 				if environment != "" {
 					detail = "Its value is not set for environment " + strconv.Quote(environment) + "."
 				}
@@ -436,7 +444,14 @@ func loadConfiguredPlugins(reg *registry.Registry, dir string) diag.Diagnostics 
 // Discovery asks what EXISTS — including resources no configuration mentions, which
 // is the whole point — so its scope is every plugin available to ask, and a project's
 // own `providers:` only decides how those are configured.
-func discoveryRegistry(opts *GlobalOptions) (*registry.Registry, providers.Table, diag.Diagnostics, func()) {
+// The environment is the caller's, and there are two callers with different answers:
+// `import <env>` has one and must use it, `discover` has none and passes "". That
+// distinction was missed once — import went through here with a hardcoded "" and so
+// could not resolve a per-environment provider value despite being handed the
+// environment on the command line.
+func discoveryRegistry(
+	opts *GlobalOptions, environment string,
+) (*registry.Registry, providers.Table, diag.Diagnostics, func()) {
 	reg, loader := buildRegistryWithLoader(opts)
 
 	var ds diag.Diagnostics
@@ -453,10 +468,10 @@ func discoveryRegistry(opts *GlobalOptions) (*registry.Registry, providers.Table
 		}
 	}
 
-	// NO ENVIRONMENT. `discover` is the one command whose scope configuration does
-	// not set, so everything a variable can supply without one is resolved and
-	// anything that needs one is refused by name.
-	table, instanceDS := registerStateInstances(reg, opts, "")
+	// `discover` passes "" here: it is the one command whose scope configuration does
+	// not set, so everything a variable can supply without an environment is resolved
+	// and anything that needs one is refused by name.
+	table, instanceDS := registerStateInstances(reg, opts, environment)
 	ds.Extend(instanceDS)
 	if len(table) == 0 {
 		// ONE INSTANCE PER PLUGIN, which is EveryPlugin and deliberately not Implicit.
