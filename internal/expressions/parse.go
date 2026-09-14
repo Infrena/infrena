@@ -584,9 +584,33 @@ func parseReference(src string, origin value.Origin, ds *diag.Diagnostics) *valu
 			Origin: origin,
 		}
 	}
-	return &value.Expr{
-		Op:     value.OpResourceRef,
-		Ref:    value.LocalRef(strings.Join(segments[:len(segments)-1], "."), segments[len(segments)-1]),
-		Origin: origin,
+
+	// FIRST segment is the resource, SECOND is the attribute, the rest is a
+	// path. A resource's name cannot contain a dot — config.checkResourceName
+	// refuses one, because a name IS an address and a dot separates module
+	// levels — so a user-written target is always exactly one segment. The old
+	// rule, target-is-everything-but-the-last, could only ever construct a
+	// target nothing is permitted to declare, which is why ${vpc.tags.Name}
+	// reported an undeclared resource "vpc.tags".
+	attrSteps, ok := parseSteps(segments[1:2], src, origin, ds)
+	if !ok {
+		return nil
 	}
+	if len(attrSteps) == 0 || attrSteps[0].Kind != value.StepKey {
+		ds.Add(diag.Diagnostic{
+			Severity: diag.SeverityError,
+			Summary:  "malformed reference " + strconv.Quote(src),
+			Detail:   "A resource reference names an attribute after the resource.",
+			Action:   "Write ${" + segments[0] + ".<attribute>}.",
+			Origin:   origin,
+		})
+		return nil
+	}
+	rest, ok := parseSteps(segments[2:], src, origin, ds)
+	if !ok {
+		return nil
+	}
+	ref := value.LocalRef(segments[0], attrSteps[0].Key)
+	ref.Path = append(attrSteps[1:], rest...)
+	return &value.Expr{Op: value.OpResourceRef, Ref: ref, Origin: origin}
 }

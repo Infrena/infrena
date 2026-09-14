@@ -54,6 +54,22 @@ func TestTwoPathsIntoOneAttributeAreTwoReferences(t *testing.T) {
 	}
 }
 
+func TestInModuleCarriesThePath(t *testing.T) {
+	// InModule re-roots a reference written inside a module. If it dropped
+	// Path, a module containing ${vpc.tags.Name} would silently resolve to
+	// the whole tags map instead of the "Name" key — a silently wrong plan,
+	// not an error.
+	r := Reference{
+		Target:    address.Address{Name: "vpc"},
+		Attribute: "tags",
+		Path:      []Step{{Kind: StepKey, Key: "Name"}},
+	}
+	got := r.InModule("net")
+	if len(got.Path) != 1 || got.Path[0].Key != "Name" {
+		t.Errorf("InModule dropped the path: Path = %+v, want one key step Name", got.Path)
+	}
+}
+
 func TestReferenceString(t *testing.T) {
 	r := LocalRef("database", "endpoint")
 	if got := r.String(); got != "database.endpoint" {

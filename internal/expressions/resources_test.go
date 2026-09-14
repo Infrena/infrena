@@ -330,3 +330,42 @@ func TestAttributeRefusesAnUnqualifiedReference(t *testing.T) {
 		t.Errorf("%s resolved to %q", qualified, s)
 	}
 }
+
+func TestAPathIntoAResourceAttributeResolvesAtApply(t *testing.T) {
+	scope := ResourceScope{"vpc": {
+		"tags": {Kind: value.KindMap, Known: true, Source: value.SourceProvider,
+			Raw: map[string]value.Value{"Name": value.String("prod", value.SourceProvider)}},
+	}}
+	e, ds := Parse("${vpc.tags.Name}", value.Origin{})
+	if ds.HasErrors() {
+		t.Fatalf("parse: %v", ds)
+	}
+	got, eds := Evaluate(e, scope)
+	if eds.HasErrors() {
+		t.Fatalf("evaluate: %v", eds)
+	}
+	s, _ := got.AsString()
+	if s != "prod" {
+		t.Errorf("got %q, want %q", s, "prod")
+	}
+}
+
+func TestAPathIntoAnUnresolvedResourceStaysDeferredWithItsExpression(t *testing.T) {
+	// The property `apply --plan` depends on (PLAN.md §37): an unknown must
+	// carry the expression that reproduces it, or a saved plan applies with
+	// the attribute silently unset.
+	e, _ := Parse("${vpc.tags.Name}", value.Origin{})
+	got, eds := Evaluate(e, ResourceScope{})
+	if eds.HasErrors() {
+		t.Fatalf("a not-yet-created dependency is not an error: %v", eds)
+	}
+	if got.Known {
+		t.Fatal("must stay unknown")
+	}
+	if got.Expr == nil {
+		t.Fatal("an unknown must carry its expression, or apply cannot finish it")
+	}
+	if got.Expr.String() != "${vpc.tags.Name}" {
+		t.Errorf("Expr = %q, want %q", got.Expr.String(), "${vpc.tags.Name}")
+	}
+}

@@ -378,3 +378,36 @@ func TestAPathRoundTripsThroughString(t *testing.T) {
 		}
 	}
 }
+
+func TestAResourceReferenceTakesTheFirstSegmentAsItsTarget(t *testing.T) {
+	// A resource name cannot contain a dot (config.checkResourceName), so the
+	// target is always exactly one segment. The old rule took every segment
+	// but the last, which could only ever build a target nothing is allowed
+	// to declare.
+	e, ds := Parse("${vpc.tags.Name}", value.Origin{})
+	if ds.HasErrors() {
+		t.Fatalf("unexpected errors: %v", ds)
+	}
+	if e.Op != value.OpResourceRef {
+		t.Fatalf("Op = %v, want OpResourceRef", e.Op)
+	}
+	if e.Ref.Target.Name != "vpc" {
+		t.Errorf("Target.Name = %q, want %q", e.Ref.Target.Name, "vpc")
+	}
+	if e.Ref.Attribute != "tags" {
+		t.Errorf("Attribute = %q, want %q", e.Ref.Attribute, "tags")
+	}
+	if len(e.Ref.Path) != 1 || e.Ref.Path[0].Key != "Name" {
+		t.Errorf("Path = %+v, want one key step Name", e.Ref.Path)
+	}
+}
+
+func TestATwoSegmentResourceReferenceIsUnchanged(t *testing.T) {
+	e, ds := Parse("${vpc.id}", value.Origin{})
+	if ds.HasErrors() {
+		t.Fatalf("unexpected errors: %v", ds)
+	}
+	if e.Ref.Target.Name != "vpc" || e.Ref.Attribute != "id" || len(e.Ref.Path) != 0 {
+		t.Errorf("got %q/%q/%+v, want vpc/id/no path", e.Ref.Target.Name, e.Ref.Attribute, e.Ref.Path)
+	}
+}

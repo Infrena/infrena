@@ -70,7 +70,16 @@ func evaluate(e *value.Expr, scope Scope, ds *diag.Diagnostics) value.Value {
 			// Not an error: the dependency simply does not exist yet.
 			return unknownFrom(e, value.KindString, false)
 		}
-		return v.WithOrigin(e.Origin)
+		v = v.WithOrigin(e.Origin)
+		if len(e.Ref.Path) == 0 {
+			return v
+		}
+		base := e.Ref.Target.String() + "." + e.Ref.Attribute
+		out, ok := applyPath(v, e.Ref.Path, base, e.Origin, ds)
+		if !ok {
+			return unknownFrom(e, value.KindString, false)
+		}
+		return out
 
 	case value.OpConcat:
 		return evaluateConcat(e, scope, ds)

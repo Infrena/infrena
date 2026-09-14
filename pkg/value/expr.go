@@ -121,7 +121,11 @@ func (r Reference) VarName() string { return r.Target.Name }
 // because that function copies the slice first: appending in place would let
 // one instantiation's re-rooting alias into another's.
 func (r Reference) InModule(module string) Reference {
-	return Reference{Target: r.Target.InModule(module), Attribute: r.Attribute}
+	// Path must come along: re-rooting only Target and Attribute would drop
+	// it silently, and a module containing ${vpc.tags.Name} would resolve to
+	// the whole tags map instead of erroring — a silently wrong plan, not a
+	// mistake anyone would notice.
+	return Reference{Target: r.Target.InModule(module), Attribute: r.Attribute, Path: r.Path}
 }
 
 // String renders a reference in the form used in configuration.
