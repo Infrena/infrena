@@ -40,12 +40,13 @@ const tagsAttribute = "tags"
 // a name is what a person uses to find the thing again. `vpc-0a1b2c3d` can be
 // pasted into a console; `network_2` cannot be matched to anything.
 func Name(reg *registry.Registry, r provider.DiscoveredResource) string {
+	prefix := typePrefix(r.Type)
 	if tag, ok := nameFrom(reg, r.Type, r.Attributes); ok {
-		if s := sanitise(tag); s != "" {
+		if s := prefixed(prefix, tag); s != "" {
 			return s
 		}
 	}
-	if s := sanitise(r.ProviderID); s != "" {
+	if s := prefixed(prefix, r.ProviderID); s != "" {
 		return s
 	}
 	// Reached only by a provider that reported a resource with no ID and no
@@ -81,6 +82,43 @@ func Unique(reg *registry.Registry, taken map[string]string, r provider.Discover
 		}
 		candidate = sanitise(base + "_" + r.ProviderID + "_" + strconv.Itoa(n))
 	}
+}
+
+// typePrefix is the short name a generated resource is prefixed with: the
+// last dotted segment of the resource type.
+//
+// A plugin-published short name was considered and deliberately NOT taken.
+// schema.ResourceDefinition has no such field, adding one raises the protocol,
+// and the AWS generator already collapses unambiguous type names — AWS::EC2::VPC
+// becomes aws.vpc — so the last segment is already the right answer for the
+// types a user meets. An optional ShortName stays available later with this as
+// its fallback, the same partial-coverage shape References uses, where absence
+// costs exactly what it costs today.
+func typePrefix(resourceType string) string {
+	if i := strings.LastIndex(resourceType, "."); i >= 0 {
+		return resourceType[i+1:]
+	}
+	return resourceType
+}
+
+// prefixed joins the type prefix to the text a name came from, and sanitises
+// the RESULT rather than the parts, so one rule decides what a name may
+// contain and a prefix cannot smuggle in a character the parts were checked
+// for separately.
+//
+// The prefix is SKIPPED where the text already carries it. AWS provider IDs are
+// themselves prefixed, so prefixing blindly would give vpc-vpc-0a1b2c3d, and a
+// name a reader cannot match against a console is the thing the provider-ID
+// fallback exists to avoid.
+//
+// "" means there is no usable name here, exactly as sanitise means it, and Name
+// falls through to the next source.
+func prefixed(prefix, text string) string {
+	s := sanitise(text)
+	if s == "" || prefix == "" || strings.HasPrefix(s, prefix+"-") {
+		return s
+	}
+	return sanitise(prefix + "-" + text)
 }
 
 // nameFrom looks for a usable name among the attributes, then inside the

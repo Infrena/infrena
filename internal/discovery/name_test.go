@@ -2,6 +2,7 @@ package discovery
 
 import (
 	"context"
+	"sort"
 	"strings"
 	"testing"
 
@@ -37,8 +38,8 @@ func TestNameComesFromTheNameTagWhenThereIsOne(t *testing.T) {
 			// The ID is deliberately a usable name too, so a build that ignored
 			// the tag would produce something valid rather than something
 			// broken — and would still be wrong.
-			if got := Name(fakeReg(t), discovered("db-9", tc.attrs)); got != "orders" {
-				t.Errorf("Name = %q, want %q from %s", got, "orders", tc.label)
+			if got := Name(fakeReg(t), discovered("db-9", tc.attrs)); got != "database-orders" {
+				t.Errorf("Name = %q, want %q from %s", got, "database-orders", tc.label)
 			}
 		})
 	}
@@ -48,19 +49,22 @@ func TestNameComesFromTheNameTagWhenThereIsOne(t *testing.T) {
 // a console to find the thing again, so it stays spelled the way the provider
 // spells it wherever that is legal.
 func TestNameFallsBackToTheProviderID(t *testing.T) {
+	// The type prefix leads, so the ID is spelled the way the provider spells
+	// it after it rather than at the front.
 	for _, tc := range []struct{ id, want string }{
-		{"net-1", "net-1"},
-		{"i-0abc123", "i-0abc123"},
-		{"vpc-0a1b2c3d", "vpc-0a1b2c3d"},
-		{"db_9", "db_9"},
+		{"net-1", "database-net-1"},
+		{"i-0abc123", "database-i-0abc123"},
+		{"vpc-0a1b2c3d", "database-vpc-0a1b2c3d"},
+		{"db_9", "database-db_9"},
 		// Only what the name rule actually refuses is rewritten.
-		{"my db", "my_db"},
-		{"a.b", "a_b"},
-		{"arn:aws:rds:x", "arn_aws_rds_x"},
-		// A leading digit or hyphen may not lead, and is prefixed rather than
-		// dropped: `0abc` and `abc` are different resources.
-		{"0abc", "_0abc"},
-		{"-abc", "_-abc"},
+		{"my db", "database-my_db"},
+		{"a.b", "database-a_b"},
+		{"arn:aws:rds:x", "database-arn_aws_rds_x"},
+		// A leading digit or hyphen may not lead a name, and the prefix now
+		// leads instead of an underscore — but the ID is still not dropped:
+		// `0abc` and `abc` are different resources.
+		{"0abc", "database-0abc"},
+		{"-abc", "database--abc"},
 	} {
 		if got := Name(fakeReg(t), discovered(tc.id, nil)); got != tc.want {
 			t.Errorf("Name(%q) = %q, want %q", tc.id, got, tc.want)
@@ -108,7 +112,7 @@ func TestCollidingNamesBothSurvive(t *testing.T) {
 	a := Unique(reg, taken, discovered("db-9", map[string]value.Value{"name": str("orders")}))
 	b := Unique(reg, taken, discovered("db-10", map[string]value.Value{"name": str("orders")}))
 
-	if a != "orders" {
+	if a != "database-orders" {
 		t.Errorf("the first `orders` = %q, want the unsuffixed name", a)
 	}
 	if b == a {
@@ -160,7 +164,7 @@ func TestAnEmptyOrUnusableNameTagFallsBack(t *testing.T) {
 		{"no attributes at all", nil},
 	} {
 		t.Run(tc.label, func(t *testing.T) {
-			if got := Name(fakeReg(t), discovered("db-9", tc.attrs)); got != "db-9" {
+			if got := Name(fakeReg(t), discovered("db-9", tc.attrs)); got != "database-db-9" {
 				t.Errorf("Name = %q, want the provider ID fallback for %s", got, tc.label)
 			}
 		})
@@ -183,7 +187,7 @@ func TestNamingIsDeterministic(t *testing.T) {
 			t.Fatalf("run %d named it %q, first run said %q", i, got, first)
 		}
 	}
-	if first != "orders" {
+	if first != "database-orders" {
 		t.Errorf("Name = %q; `name` is first in the documented order", first)
 	}
 }
@@ -265,8 +269,8 @@ func TestNameFindsTheTagMapWhateverThePluginCallsIt(t *testing.T) {
 				},
 			}
 
-			if got := Name(reg, r); got != "app1" {
-				t.Errorf("Name = %q, want app1", got)
+			if got := Name(reg, r); got != "vpc-app1" {
+				t.Errorf("Name = %q, want vpc-app1", got)
 			}
 		})
 	}
@@ -289,8 +293,8 @@ func TestNamePrefersNameOverLowercaseName(t *testing.T) {
 		},
 	}
 
-	if got := Name(reg, r); got != "upper" {
-		t.Errorf("Name = %q, want upper", got)
+	if got := Name(reg, r); got != "vpc-upper" {
+		t.Errorf("Name = %q, want vpc-upper", got)
 	}
 }
 
@@ -303,5 +307,103 @@ func TestNameFallsBackWhenTheTypeIsUnknown(t *testing.T) {
 
 	if got := Name(reg, r); got == "" {
 		t.Error("Name returned empty for an unknown type")
+	}
+}
+
+// registryWithTypes builds a registry holding several resource types, for the
+// tests where the point is that two types do not collide.
+func registryWithTypes(t *testing.T, byType map[string]map[string]schema.Attribute) *registry.Registry {
+	t.Helper()
+	types := make([]string, 0, len(byType))
+	for typeName := range byType {
+		types = append(types, typeName)
+	}
+	sort.Strings(types)
+
+	defs := make([]*schema.ResourceDefinition, 0, len(types))
+	for _, typeName := range types {
+		defs = append(defs, &schema.ResourceDefinition{Type: typeName, Attributes: byType[typeName]})
+	}
+	reg := registry.New()
+	if err := reg.Register("stub", stubProvider{defs: defs}); err != nil {
+		t.Fatal(err)
+	}
+	return reg
+}
+
+func TestTypePrefixIsTheLastDottedSegment(t *testing.T) {
+	// Verified against infrena-provider-aws gen/names.lock.json: the AWS
+	// generator already collapses unambiguous type names, so the last segment
+	// is the right prefix without the plugin publishing a short name and
+	// without a protocol change.
+	for _, tc := range []struct{ in, want string }{
+		{"aws.vpc", "vpc"},
+		{"aws.subnet", "subnet"},
+		{"aws.role", "role"},
+		{"aws.s3.bucket", "bucket"},
+		{"aws.securitygroup", "securitygroup"},
+		{"aws.rds.dbinstance", "dbinstance"},
+		{"fake", "fake"},
+	} {
+		if got := typePrefix(tc.in); got != tc.want {
+			t.Errorf("typePrefix(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+// AWS provider IDs are themselves prefixed, so prefixing blindly gives
+// vpc-vpc-0a1b2c3d.
+func TestNameDoesNotDoublePrefixAProviderID(t *testing.T) {
+	reg := registryWithType(t, "aws.vpc", nil)
+	r := provider.DiscoveredResource{Type: "aws.vpc", ProviderID: "vpc-0a1b2c3d"}
+
+	if got := Name(reg, r); got != "vpc-0a1b2c3d" {
+		t.Errorf("Name = %q, want vpc-0a1b2c3d", got)
+	}
+}
+
+// The prefix makes cross-type collisions impossible, so Unique's provider-ID
+// suffix now only fires for two resources of ONE type sharing a Name tag,
+// which is genuinely two resources and must never be silently merged.
+func TestPrefixSeparatesTwoTypesSharingATag(t *testing.T) {
+	reg := registryWithTypes(t, map[string]map[string]schema.Attribute{
+		"aws.vpc":    {"Tags": {Kind: value.KindMap}},
+		"aws.subnet": {"Tags": {Kind: value.KindMap}},
+	})
+	taken := map[string]string{}
+	tagged := func(typ, id string) provider.DiscoveredResource {
+		return provider.DiscoveredResource{
+			Type: typ, ProviderID: id,
+			Attributes: map[string]value.Value{
+				"Tags": value.Map(map[string]value.Value{
+					"Name": value.String("app1", value.SourceProvider),
+				}, value.SourceProvider),
+			},
+		}
+	}
+
+	a := Unique(reg, taken, tagged("aws.vpc", "vpc-1"))
+	b := Unique(reg, taken, tagged("aws.subnet", "subnet-1"))
+
+	if a != "vpc-app1" || b != "subnet-app1" {
+		t.Errorf("got %q and %q, want vpc-app1 and subnet-app1", a, b)
+	}
+}
+
+// Every generated name must still be one config will accept.
+func TestEveryGeneratedNameIsValid(t *testing.T) {
+	reg := registryWithType(t, "aws.vpc", map[string]schema.Attribute{"Tags": {Kind: value.KindMap}})
+	for _, tag := range []string{"app 1", "app/1", "1app", "-app", "", "ÄPP"} {
+		r := provider.DiscoveredResource{
+			Type: "aws.vpc", ProviderID: "vpc-1",
+			Attributes: map[string]value.Value{
+				"Tags": value.Map(map[string]value.Value{
+					"Name": value.String(tag, value.SourceProvider),
+				}, value.SourceProvider),
+			},
+		}
+		if got := Name(reg, r); !config.ValidResourceName(got) {
+			t.Errorf("Name for tag %q = %q, which config rejects", tag, got)
+		}
 	}
 }

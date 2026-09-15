@@ -44,10 +44,10 @@ func TestWalkNamesEverythingItFinds(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("found %d, want 2: %+v", len(got), got)
 	}
-	if got[0].Name != "orders" {
+	if got[0].Name != "database-orders" {
 		t.Errorf("the database's name = %q, want its name tag", got[0].Name)
 	}
-	if got[1].Name != "net-1" {
+	if got[1].Name != "network-net-1" {
 		t.Errorf("the network's name = %q, want its provider ID", got[1].Name)
 	}
 }
@@ -89,7 +89,7 @@ func TestWalkNamesDeterministically(t *testing.T) {
 	}
 	// The lowest-sorting ID keeps the unsuffixed name, because the sort runs
 	// first. That is arbitrary but it must be STABLE.
-	if first[0] != "db-1=orders" {
+	if first[0] != "db-1=database-orders" {
 		t.Errorf("first[0] = %q, want db-1 to hold the unsuffixed name", first[0])
 	}
 }
@@ -138,13 +138,13 @@ func TestWalkSortsWhatAProviderReturns(t *testing.T) {
 	// lowest-sorting ID keeps the unsuffixed name. Sort after naming instead
 	// and `zeta` keeps it, because zeta arrived first — the returned slice is
 	// still sorted, so only this assertion can tell the two apart.
-	if got[0].Name != "orders" {
+	if got[0].Name != "thing-orders" {
 		t.Errorf("%s is named %q; the first resource in sorted order must hold the unsuffixed "+
 			"name, or which resource gets it depends on the order the provider paginated",
 			got[0].ProviderID, got[0].Name)
 	}
 	for _, r := range got[1:] {
-		if r.Name == "orders" {
+		if r.Name == "thing-orders" {
 			t.Errorf("%s also holds the unsuffixed name", r.ProviderID)
 		}
 		if !strings.Contains(r.Name, r.ProviderID) {
