@@ -81,7 +81,7 @@ func TestGeneratedSubnetReferencesTheDiscoveredVPC(t *testing.T) {
 			"VpcId": value.String("vpc-1023902339", value.SourceProvider)}},
 	}
 
-	files, err := Generate(resources, reg, MinimalOptions())
+	files, _, err := Generate(resources, reg, MinimalOptions())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,7 +108,7 @@ func TestAnUnmatchedReferenceKeepsItsLiteralAndSaysSo(t *testing.T) {
 			"VpcId": value.String("vpc-not-discovered", value.SourceProvider)}},
 	}
 
-	files, err := Generate(resources, reg, MinimalOptions())
+	files, _, err := Generate(resources, reg, MinimalOptions())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,7 +136,7 @@ func TestAListOfReferencesProjectsEachEntry(t *testing.T) {
 			"SubnetIds": value.List([]value.Value{value.String("subnet-a", value.SourceProvider)}, value.SourceProvider)}},
 	}
 
-	files, err := Generate(resources, reg, MinimalOptions())
+	files, _, err := Generate(resources, reg, MinimalOptions())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -148,9 +148,120 @@ func TestAListOfReferencesProjectsEachEntry(t *testing.T) {
 
 // Invariant 3. The reference resolves at compile time to the same literal the
 // attribute held, so the round trip still plans clean.
-func TestReferencesDoNotBreakTheRoundTrip(t *testing.T) {
-	// Build the project from the generated files and assert planner.Compute
-	// returns zero operations, following the existing round-trip test in
-	// tests/integration. Read it and extend it rather than writing a second.
-	t.Skip("implemented as an extension of the existing round-trip integration test in Task 9")
+//
+// The end-to-end half of this claim — discover, import, generate, plan — is
+// TestTheImportRoundTripPlansClean in tests/integration, because only the real
+// binary can make it. What is provable here is the part that broke it: a
+// reference IS a dependency edge, so the edges reported must be exactly the
+// references emitted.
+func TestEveryEmittedReferenceIsReportedAsAnEdge(t *testing.T) {
+	reg := registryWithTypes(t, map[string]map[string]schema.Attribute{
+		"aws.vpc":    {"VpcId": {Kind: value.KindString, Computed: true}},
+		"aws.subnet": {"SubnetId": {Kind: value.KindString, Computed: true}, "VpcId": {Kind: value.KindString, References: &schema.Reference{Type: "aws.vpc", Attribute: "VpcId"}}},
+		"aws.lb": {"SubnetIds": {Kind: value.KindList,
+			References: &schema.Reference{Type: "aws.subnet", Attribute: "SubnetId"}}},
+	})
+	resources := []Resource{
+		{Name: "vpc-app1", Type: "aws.vpc", ProviderID: "vpc-1", Attributes: map[string]value.Value{
+			"VpcId": value.String("vpc-1", value.SourceProvider)}},
+		{Name: "subnet-app1a", Type: "aws.subnet", ProviderID: "subnet-a", Attributes: map[string]value.Value{
+			"SubnetId": value.String("subnet-a", value.SourceProvider),
+			"VpcId":    value.String("vpc-1", value.SourceProvider)}},
+		{Name: "lb-app1", Type: "aws.lb", ProviderID: "lb-1", Attributes: map[string]value.Value{
+			"SubnetIds": value.List([]value.Value{value.String("subnet-a", value.SourceProvider)}, value.SourceProvider)}},
+	}
+
+	files, edges, err := Generate(resources, reg, MinimalOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Read back out of the BYTES, which is what the compiler will do, rather
+	// than trusting the same pass twice.
+	emitted := map[string][]string{
+		"subnet-app1a": {"vpc-app1"},
+		"lb-app1":      {"subnet-app1a"},
+	}
+	for name, want := range emitted {
+		got := strings.Join(edges[name], ",")
+		if got != strings.Join(want, ",") {
+			t.Errorf("edges[%q] = %v, want %v", name, edges[name], want)
+		}
+	}
+	if len(edges) != len(emitted) {
+		t.Errorf("edges = %v, want an entry only for the two resources that reference something", edges)
+	}
+	for _, f := range files {
+		for _, name := range []string{"vpc-app1", "subnet-app1a"} {
+			if !strings.Contains(string(f.Bytes), "${"+name+"}") {
+				continue
+			}
+			// Whatever file it landed in, some resource in edges must claim it.
+			claimed := false
+			for _, targets := range edges {
+				for _, target := range targets {
+					if target == name {
+						claimed = true
+					}
+				}
+			}
+			if !claimed {
+				t.Errorf("%s emits ${%s} but no edge reports it:\n%s", f.Name, name, f.Bytes)
+			}
+		}
+	}
+}
+
+// An edge the file does not declare is the same bug in the other direction:
+// state would carry a dependency configuration never mentions, and the first
+// plan would propose removing it.
+func TestAnUnresolvedReferenceIsNotAnEdge(t *testing.T) {
+	reg := registryWithTypes(t, map[string]map[string]schema.Attribute{
+		"aws.vpc":    {"VpcId": {Kind: value.KindString, Computed: true}},
+		"aws.subnet": {"VpcId": {Kind: value.KindString, References: &schema.Reference{Type: "aws.vpc", Attribute: "VpcId"}}},
+	})
+	resources := []Resource{
+		{Name: "subnet-app1a", Type: "aws.subnet", ProviderID: "subnet-1", Attributes: map[string]value.Value{
+			"VpcId": value.String("vpc-not-discovered", value.SourceProvider)}},
+	}
+
+	_, edges, err := Generate(resources, reg, MinimalOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(edges) != 0 {
+		t.Errorf("edges = %v, want none: the literal survived, so the file declares no dependency", edges)
+	}
+}
+
+// THE REASON THE EDGES COME FROM GENERATION rather than from a second pass over
+// the same attributes. An attribute equal to its default is not written at all,
+// so the file declares no reference and state must record no edge — a recomputed
+// answer that did not know about minimality would record one and the round trip
+// would propose removing it.
+func TestAnAttributeOmittedAsADefaultIsNotAnEdge(t *testing.T) {
+	reg := registryWithTypes(t, map[string]map[string]schema.Attribute{
+		"aws.vpc": {"VpcId": {Kind: value.KindString, Computed: true}},
+		"aws.subnet": {"VpcId": {Kind: value.KindString, Default: "vpc-1",
+			References: &schema.Reference{Type: "aws.vpc", Attribute: "VpcId"}}},
+	})
+	resources := []Resource{
+		{Name: "vpc-app1", Type: "aws.vpc", ProviderID: "vpc-1", Attributes: map[string]value.Value{
+			"VpcId": value.String("vpc-1", value.SourceProvider)}},
+		{Name: "subnet-app1a", Type: "aws.subnet", ProviderID: "subnet-1", Attributes: map[string]value.Value{
+			"VpcId": value.String("vpc-1", value.SourceProvider)}},
+	}
+
+	files, edges, err := Generate(resources, reg, MinimalOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if got := fileNamed(t, files, FileName("aws.subnet")); strings.Contains(got, "${") {
+		t.Fatalf("the fixture no longer omits the attribute, so it proves nothing:\n%s", got)
+	}
+	if len(edges) != 0 {
+		t.Errorf("edges = %v, want none: nothing was written, so nothing is depended on", edges)
+	}
 }

@@ -2,6 +2,7 @@ package generator
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -87,6 +88,56 @@ func buildRefIndex(resources []Resource, reg *registry.Registry) refIndex {
 	return ix
 }
 
+// Edges are the dependency edges the generated configuration IMPLIES, keyed by
+// the generating resource's configuration name and holding the names its
+// emitted `${...}` references point at, sorted and deduplicated.
+//
+// A reference is a dependency edge — the compiler turns `network: ${network-vpc-0a1b}`
+// into exactly one — so `import --generate` has to record the same edges into
+// state, or the first plan after an import proposes
+// `~ depends_on: [] -> [network-vpc-0a1b]` and invariant 3 does not hold.
+//
+// They are collected AS THE FILES ARE RENDERED rather than recomputed by the
+// importer, and that is the whole point of the type. Whether a reference is
+// emitted at all depends on every omission rule in renderResource — computed,
+// sensitive, equal to a default, equal to an instance default, hidden leaf —
+// so a second pass asking "what would this have referenced" would answer a
+// different question than the file on disk, and the disagreement would show up
+// as the same spurious diff this exists to remove.
+type Edges map[string][]string
+
+// record notes that name references target, ignoring a repeat.
+func (e Edges) record(name string, targets []string) {
+	if len(targets) == 0 {
+		return
+	}
+	seen := make(map[string]bool, len(e[name])+len(targets))
+	for _, t := range e[name] {
+		seen[t] = true
+	}
+	for _, t := range targets {
+		if t == "" || t == name || seen[t] {
+			// Self is dropped rather than recorded: the compiler refuses a
+			// resource that depends on itself, so recording one would put
+			// state permanently at odds with configuration that cannot exist.
+			continue
+		}
+		seen[t] = true
+		e[name] = append(e[name], t)
+	}
+}
+
+// sorted puts every edge list in one order, because the planner compares
+// dependencies POSITIONALLY against the compiler's own sorted list, and an
+// import whose edges happened to be recorded in another order would plan a
+// change that is not one.
+func (e Edges) sorted() Edges {
+	for name := range e {
+		sort.Strings(e[name])
+	}
+	return e
+}
+
 // resolve reports the configuration name a declared reference points at, where
 // that target is in the generated set.
 func (ix refIndex) resolve(ref *schema.Reference, v value.Value) (name string, ok bool) {
@@ -120,32 +171,39 @@ func stringLiteral(v value.Value) (string, bool) {
 // project renders an attribute that DECLARES a reference, replacing each
 // literal whose target is in the generated set with ${name}.
 //
-// It returns the node to emit, a note for whatever did not resolve, and
-// whether the value was a shape a reference applies to at all. A false ok
-// means the caller emits the value the ordinary way: a reference declared on
-// something that is not a string or a list of them is a plugin saying
-// something this cannot act on, and dropping the value over it would lose it.
+// It returns the node to emit, the names it actually referenced, a note for
+// whatever did not resolve, and whether the value was a shape a reference
+// applies to at all. A false ok means the caller emits the value the ordinary
+// way: a reference declared on something that is not a string or a list of them
+// is a plugin saying something this cannot act on, and dropping the value over
+// it would lose it.
+//
+// The referenced names are returned rather than worked out again later. Every
+// `${name}` below is a dependency edge the compiler will read back out of the
+// file, and the importer has to record the same set into state; reporting them
+// from the one place that decides them is what keeps the two answers from
+// drifting.
 //
 // The unresolved case keeps the LITERAL and says so. `${vpc-app1}` naming a
 // resource no generated file declares is a compile error in a file the user
 // never wrote, which is a worse outcome than the id they would have had
 // anyway.
-func (ix refIndex) project(ref *schema.Reference, v value.Value) (node *yaml.Node, note string, ok bool) {
+func (ix refIndex) project(ref *schema.Reference, v value.Value) (node *yaml.Node, refs []string, note string, ok bool) {
 	switch v.Kind {
 	case value.KindString:
 		literal, isString := stringLiteral(v)
 		if !isString {
-			return nil, "", false
+			return nil, nil, "", false
 		}
 		if name, hit := ix.resolve(ref, v); hit {
-			return scalarNode("${" + name + "}"), "", true
+			return scalarNode("${" + name + "}"), []string{name}, "", true
 		}
-		return scalarNode(literal), unmatchedNote(ref, []string{literal}), true
+		return scalarNode(literal), nil, unmatchedNote(ref, []string{literal}), true
 
 	case value.KindList:
 		items, isList := v.Raw.([]value.Value)
 		if !isList {
-			return nil, "", false
+			return nil, nil, "", false
 		}
 		seq := &yaml.Node{Kind: yaml.SequenceNode}
 		var unmatched []string
@@ -155,22 +213,23 @@ func (ix refIndex) project(ref *schema.Reference, v value.Value) (node *yaml.Nod
 				// A list of ids with something else in it is not a shape this
 				// can project entry by entry without inventing a rule for the
 				// rest, so the whole attribute is emitted as it stands.
-				return nil, "", false
+				return nil, nil, "", false
 			}
 			if name, hit := ix.resolve(ref, item); hit {
 				seq.Content = append(seq.Content, scalarNode("${"+name+"}"))
+				refs = append(refs, name)
 				continue
 			}
 			seq.Content = append(seq.Content, scalarNode(literal))
 			unmatched = append(unmatched, literal)
 		}
 		if len(seq.Content) == 0 {
-			return nil, "", false
+			return nil, nil, "", false
 		}
-		return seq, unmatchedNote(ref, unmatched), true
+		return seq, refs, unmatchedNote(ref, unmatched), true
 
 	default:
-		return nil, "", false
+		return nil, nil, "", false
 	}
 }
 

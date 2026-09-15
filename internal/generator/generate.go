@@ -89,12 +89,21 @@ func MinimalOptions() Options {
 }
 
 // Generate renders resources into one file per resource type (§27.1: "logical
-// file names, like databases.yml").
+// file names, like databases.yml"), and reports the dependency edges those
+// files declare.
 //
 // Files and the resources inside them are sorted. Generated configuration is
 // read in diffs — a file whose lines reorder between two runs against unchanged
 // infrastructure is a file nobody can review.
-func Generate(resources []Resource, reg *registry.Registry, opts Options) ([]File, error) {
+//
+// THE EDGES COME BACK WITH THE FILES, rather than being something a caller can
+// ask for separately, because a caller that writes one without the other writes
+// configuration and state that disagree. `import --generate` records them, and
+// without that the first plan after an import proposes
+// `~ depends_on: [] -> [network-vpc-0a1b]` on every resource that referenced
+// another — configuration and state saying different things about an edge
+// neither of them changed, which is exactly what invariant 3 forbids. See Edges.
+func Generate(resources []Resource, reg *registry.Registry, opts Options) ([]File, Edges, error) {
 	grouped := map[string][]Resource{}
 	for _, r := range resources {
 		name := FileName(r.Type)
@@ -112,19 +121,23 @@ func Generate(resources []Resource, reg *registry.Registry, opts Options) ([]Fil
 	// scoped to the file being rendered would resolve nothing that matters.
 	ix := buildRefIndex(resources, reg)
 
+	edges := Edges{}
 	out := make([]File, 0, len(names))
 	for _, name := range names {
-		b, err := renderFile(grouped[name], reg, ix, opts)
+		b, err := renderFile(grouped[name], reg, ix, opts, edges)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		out = append(out, File{Name: name, Bytes: b})
 	}
-	return out, nil
+	return out, edges.sorted(), nil
 }
 
-// renderFile writes one `resources:` document.
-func renderFile(resources []Resource, reg *registry.Registry, ix refIndex, opts Options) ([]byte, error) {
+// renderFile writes one `resources:` document, recording into edges whatever
+// references it emitted.
+func renderFile(
+	resources []Resource, reg *registry.Registry, ix refIndex, opts Options, edges Edges,
+) ([]byte, error) {
 	sorted := append([]Resource(nil), resources...)
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Name < sorted[j].Name })
 
@@ -138,10 +151,11 @@ func renderFile(resources []Resource, reg *registry.Registry, ix refIndex, opts 
 			// without becoming something the compiler has to reject.
 			key.HeadComment = "imported from " + r.ProviderID
 		}
-		node, notes, err := renderResource(r, reg, ix, opts)
+		node, notes, refs, err := renderResource(r, reg, ix, opts)
 		if err != nil {
 			return nil, err
 		}
+		edges.record(r.Name, refs)
 		for _, n := range notes {
 			if key.HeadComment != "" {
 				key.HeadComment += "\n"
@@ -191,7 +205,14 @@ func renderFile(resources []Resource, reg *registry.Registry, ix refIndex, opts 
 //
 // The first two say so in a comment. A silent omission tells a reader the
 // resource has no password, rather than that they must supply one.
-func renderResource(r Resource, reg *registry.Registry, ix refIndex, opts Options) (*yaml.Node, []string, error) {
+// It also returns the configuration names it REFERENCED, which the caller
+// records as dependency edges. They are reported from here rather than
+// recomputed because every omission above decides whether a reference is
+// emitted at all, and an answer worked out without them would not match the
+// file (see Edges).
+func renderResource(
+	r Resource, reg *registry.Registry, ix refIndex, opts Options,
+) (*yaml.Node, []string, []string, error) {
 	def, known := reg.Definition(r.Type)
 
 	node := &yaml.Node{Kind: yaml.MappingNode}
@@ -200,6 +221,7 @@ func renderResource(r Resource, reg *registry.Registry, ix refIndex, opts Option
 		&yaml.Node{Kind: yaml.ScalarNode, Value: "type"}, typeVal)
 
 	var notes []string
+	var refs []string
 	if !known {
 		// A type the registry does not know cannot be filtered against a
 		// schema, so nothing is omitted and the file says why. Emitting
@@ -283,14 +305,16 @@ func renderResource(r Resource, reg *registry.Registry, ix refIndex, opts Option
 		projected := false
 		if known && attr.References != nil && len(hidden) == 0 {
 			var n *yaml.Node
-			n, refNote, projected = ix.project(attr.References, v)
+			var referenced []string
+			n, referenced, refNote, projected = ix.project(attr.References, v)
 			if projected {
 				scalar = n
+				refs = append(refs, referenced...)
 			}
 		}
 		if !projected {
 			if err := scalar.Encode(plain); err != nil {
-				return nil, nil, fmt.Errorf("rendering %s.%s: %w", r.Name, name, err)
+				return nil, nil, nil, fmt.Errorf("rendering %s.%s: %w", r.Name, name, err)
 			}
 		}
 		// The FRIENDLY name where the plugin declares one (PLAN.md §14.1). A
@@ -329,7 +353,7 @@ func renderResource(r Resource, reg *registry.Registry, ix refIndex, opts Option
 				" ("+plural(len(omittedSecrets), "marked", "marked")+" sensitive by the provider)")
 		}
 	}
-	return node, notes, nil
+	return node, notes, refs, nil
 }
 
 // equalsInstanceDefault reports whether v is exactly what the resource's provider

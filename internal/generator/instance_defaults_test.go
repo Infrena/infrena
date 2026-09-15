@@ -16,7 +16,7 @@ func renderWith(t *testing.T, rs []Resource, defaults map[string]map[string]valu
 	t.Helper()
 	opts := MinimalOptions()
 	opts.InstanceDefaults = defaults
-	files, err := Generate(rs, testRegistry(t), opts)
+	files, _, err := Generate(rs, testRegistry(t), opts)
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
 	}
@@ -109,7 +109,7 @@ func TestExportWritesAValueItsInstanceDefaults(t *testing.T) {
 	opts := Options{InstanceDefaults: map[string]map[string]value.Value{
 		"main": {"size": value.Int(200, value.SourceDefault)},
 	}}
-	files, err := Generate([]Resource{database("main", map[string]value.Value{
+	files, _, err := Generate([]Resource{database("main", map[string]value.Value{
 		"engine": prov("postgres"),
 		"size":   provInt(200),
 	})}, testRegistry(t), opts)

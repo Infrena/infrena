@@ -68,7 +68,10 @@ func newExportCommand(opts *GlobalOptions) *cobra.Command {
 				})
 			}
 
-			files, err := generator.Generate(resources, reg, generator.Options{
+			// The edges are discarded: export WRITES NOTHING. It renders a
+			// record to stdout, and there is no state alongside it for an edge
+			// to agree or disagree with.
+			files, _, err := generator.Generate(resources, reg, generator.Options{
 				Minimal: false,
 				Header: "infrena export of environment " + environment + "\n" +
 					"Every configurable attribute, including ones equal to a provider default.\n" +

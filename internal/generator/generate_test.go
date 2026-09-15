@@ -31,7 +31,7 @@ func provInt(n int64) value.Value {
 // not exactly one.
 func oneFile(t *testing.T, rs []Resource) File {
 	t.Helper()
-	files, err := Generate(rs, testRegistry(t), MinimalOptions())
+	files, _, err := Generate(rs, testRegistry(t), MinimalOptions())
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
 	}
@@ -148,7 +148,7 @@ func TestGenerationIsDeterministic(t *testing.T) {
 
 	var first string
 	for i := range 20 {
-		files, err := Generate(rs, testRegistry(t), MinimalOptions())
+		files, _, err := Generate(rs, testRegistry(t), MinimalOptions())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -206,7 +206,7 @@ func TestFileNameIsTheTypePluralised(t *testing.T) {
 // a computed attribute emitted, a required one dropped, a name the decoder will
 // not accept.
 func TestGeneratedConfigurationParsesBackAndPlansClean(t *testing.T) {
-	files, err := Generate([]Resource{
+	files, _, err := Generate([]Resource{
 		{Name: "orders", Type: "fake.database", ProviderID: "db-9", Attributes: map[string]value.Value{
 			"engine":   prov("postgres"),
 			"size":     provInt(10), // the default — omitted
@@ -297,7 +297,7 @@ func TestExportModeKeepsDefaultsButStillOmitsSecrets(t *testing.T) {
 		},
 	}}
 
-	full, err := Generate(rs, testRegistry(t), Options{Minimal: false})
+	full, _, err := Generate(rs, testRegistry(t), Options{Minimal: false})
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
 	}
@@ -337,7 +337,7 @@ func TestTheOmissionNoteSuitsItsReader(t *testing.T) {
 	}}
 
 	min := string(oneFile(t, rs).Bytes)
-	full, err := Generate(rs, testRegistry(t), Options{Minimal: false})
+	full, _, err := Generate(rs, testRegistry(t), Options{Minimal: false})
 	if err != nil {
 		t.Fatal(err)
 	}

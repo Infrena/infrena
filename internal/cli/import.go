@@ -164,11 +164,20 @@ func runImport(
 	// after configuration is written leaves a declared resource that is not yet
 	// managed, which the next plan proposes CREATING — visible and refusable.
 	// The other order leaves one it proposes DESTROYING.
+	//
+	// The edges come back with the files for the same reason they are written
+	// first: generated configuration that says `network: ${network-vpc-0a1b}`
+	// declares a dependency, and state that records none disagrees with it
+	// from the moment both are on disk. The next plan then proposes
+	// `~ depends_on: [] -> [network-vpc-0a1b]` on a resource nobody touched,
+	// which is the change invariant 3 says a round trip must not produce.
+	var edges generator.Edges
 	if generate {
-		written, err := writeGenerated(opts.Dir, selected, reg, table, environment)
+		written, generated, err := writeGenerated(opts.Dir, selected, reg, table, environment)
 		if err != nil {
 			return fmt.Errorf("writing configuration: %w (nothing has been imported)", err)
 		}
+		edges = generated
 		for _, f := range written {
 			fmt.Fprintf(cmd.OutOrStdout(), "Wrote %s\n", f)
 		}
@@ -185,6 +194,13 @@ func runImport(
 			return fmt.Errorf("importing %s %s: %w", r.Type, r.ProviderID, err)
 		}
 		rs.Address = address.Address{Name: r.Name}
+		// The SAME edges the configuration just written declares, never a
+		// second opinion computed here: generation is what decides whether an
+		// attribute is emitted at all, so an importer working them out again
+		// would eventually answer differently and this bug would come straight
+		// back. Empty without --generate, where there is no configuration for
+		// an edge to match.
+		rs.Dependencies = dependencyAddresses(edges[r.Name])
 		st.Set(rs)
 		imported++
 		fmt.Fprintf(cmd.OutOrStdout(), "Imported %s as %s\n", r.ProviderID, r.Name)
@@ -474,10 +490,14 @@ func sortedKeys(set map[string]bool) []string {
 // NEVER OVERWRITES. An existing file is read, and only resources it does not
 // already declare are appended. Re-running import must be safe, because it is
 // the command people run when they are unsure what happened the first time.
+// It returns the files it wrote and the dependency edges the generated
+// configuration declares, which the caller records into state. See
+// generator.Edges: the two must be written from one answer or configuration and
+// state disagree the moment both exist.
 func writeGenerated(
 	dir string, selected []discovery.Result, reg *registry.Registry,
 	table providers.Table, environment string,
-) ([]string, error) {
+) ([]string, generator.Edges, error) {
 	resources := make([]generator.Resource, 0, len(selected))
 	for _, r := range selected {
 		resources = append(resources, generator.Resource{
@@ -495,14 +515,14 @@ func writeGenerated(
 	gopts := generator.MinimalOptions()
 	gopts.InstanceDefaults = defaultsByInstance(table)
 
-	files, err := generator.Generate(resources, reg, gopts)
+	files, edges, err := generator.Generate(resources, reg, gopts)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	target := filepath.Join(dir, config.DiscoveredDirName)
 	if err := os.MkdirAll(target, 0o755); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	var written []string
@@ -510,18 +530,41 @@ func writeGenerated(
 		path := filepath.Join(target, f.Name)
 		existing, err := os.ReadFile(path)
 		if err != nil && !os.IsNotExist(err) {
-			return nil, err
+			return nil, nil, err
 		}
 		merged, changed := mergeGenerated(existing, f.Bytes)
 		if !changed {
 			continue
 		}
 		if err := os.WriteFile(path, merged, 0o644); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		written = append(written, filepath.Join(config.DiscoveredDirName, f.Name))
 	}
-	return written, nil
+	// The edges of everything GENERATED, including a resource whose block a
+	// file already declared and so was not appended. That block came from this
+	// same generator, so its references are these references; recording nothing
+	// for it would leave the one resource in the set whose state disagrees with
+	// the file beside it.
+	return written, edges, nil
+}
+
+// dependencyAddresses turns generated reference targets into the dependency
+// list state records.
+//
+// Sorted through address.Sort, the same ordering the compiler puts on
+// ResolvedResource.DependsOn, because the planner compares the two lists
+// POSITIONALLY: two identical sets in different orders would plan as a change.
+func dependencyAddresses(names []string) []address.Address {
+	if len(names) == 0 {
+		return nil
+	}
+	out := make([]address.Address, 0, len(names))
+	for _, n := range names {
+		out = append(out, address.Address{Name: n})
+	}
+	address.Sort(out)
+	return out
 }
 
 // mergeGenerated appends the resource blocks of fresh that existing does not
