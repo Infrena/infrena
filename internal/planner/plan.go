@@ -260,11 +260,18 @@ type planWire struct {
 	Version int `json:"version"`
 	// Type is never set on a plan artifact. It exists on the wire struct only so
 	// DecodePlan can REFUSE a report line, which is the one document that would
-	// otherwise decode cleanly into this struct: report.Version is 1, the same
-	// integer PlanVersion checks for, and encoding/json ignores unknown fields by
-	// default. See the spec's 2.4. A caller that reaches here without going
-	// through the envelope sniffer still fails loudly rather than applying a plan
-	// with no operations.
+	// otherwise decode cleanly into this struct: encoding/json ignores unknown
+	// fields by default, so a report stream's meta line yields a plan with no
+	// operations, which applies nothing, silently. See the spec's 2.4.
+	//
+	// Do not delete this on the grounds that the version check would now catch
+	// it. report.Version is 2 and PlanVersion is 1, so today a meta line happens
+	// to be refused a line later — but they were both 1 until report gained its
+	// plan line, they are independent numbers by §61, and they may collide
+	// again. The version check is also the wrong message for this file: it tells
+	// the user to re-run `infrena plan` over a format mismatch that is not the
+	// problem. A caller that reaches here without going through the envelope
+	// sniffer still fails loudly, and says what it actually got.
 	Type        string           `json:"type,omitempty"`
 	CreatedAt   *time.Time       `json:"created_at,omitempty"`
 	Project     string           `json:"project"`

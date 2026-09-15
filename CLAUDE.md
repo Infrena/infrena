@@ -329,19 +329,47 @@ The CLI surface to implement (§37): `init`, `validate`, `plan <env>`, `apply <e
 `discover`, `graph`, `explain <resource-type>`. Global options: `--var`, `--var-file`,
 `--output`, `--auto-approve`, `--parallelism`, `--verbose`.
 
-`--output` means two different things, deliberately. For `plan` it writes the plan
-ARTIFACT: one JSON document, sensitive values in cleartext, because M6 reads it back to
-apply it and needs the real values. **`operations` lists EVERY resource, including
-`kind: "noop"`** — it describes the whole plan, not just its changes, so a consumer
-counting entries is not counting changes. `Plan.HasChanges()` is what decides the exit
-code. For `validate`, `apply`, `refresh` and `destroy` it
-writes a REPORT: newline-delimited JSON — a `meta` line carrying a format version, then
-`event` or `observation` lines as work happens, `diagnostic` lines keeping §44's four
-parts separate, and a final `result` line, so a consumer tails the file and reads the
-outcome from the last line. Reports REDACT through `pkg/value.Format`, the single
-redaction path: a report is read by things that do not need the secret. Both are 0600.
-The `version` field exists so the wire format can change without breaking consumers;
-never omit it.
+**`--output` means ONE thing now** (2026-09-15, `PLAN.md` §37.2): every command writes the
+same newline-delimited JSON report, and **stdout goes byte-empty**. It used to mean two
+different things and that was called deliberate; it is not any more. A `meta` line carries
+the format version, then `event`, `observation` and `diagnostic` lines as work happens
+(keeping §44's four parts separate), and a final `result` line, so a consumer tails the file
+and reads the outcome from the last line. Reports REDACT through `pkg/value.Format`, the
+single redaction path: a report is read by things that do not need the secret. The
+`version` field exists so the wire format can change without breaking consumers; never
+omit it.
+
+`plan --output` writes that stream too: a `meta` line and a `plan` line carrying the
+artifact verbatim, and **no `result` line**, because the plan is the product. The artifact
+itself is unchanged — sensitive values in cleartext, because `apply --plan` reads it back
+and needs the real ones, which is why every `--output` file is 0600 — and **`operations`
+still lists EVERY resource, including `kind: "noop"`**, so a consumer counting entries is
+not counting changes. `Plan.HasChanges()` decides the exit code. **`apply --plan` reads
+BOTH envelopes**, the bare document and the stream, because plans saved by earlier
+releases are on disk and refusing one would break applying a plan already reviewed.
+
+**`report.Version` is 2; `planner.PlanVersion` deliberately stayed 1.** The report format
+gained a line kind, so a consumer that only understands 1 must be able to tell. The plan
+document's own schema did not move — only the envelope around it — and `DecodePlan`'s
+version check is an outright refusal, so bumping `PlanVersion` would reject every plan
+already on disk in exchange for nothing. §61 keeps the two numbers independent for exactly
+this reason. `DecodePlan` separately refuses ANY document carrying a `type` field: without
+that guard a report stream decodes as its own `meta` line and yields a plan with no
+operations, which applies nothing, silently.
+
+**Progress reaches stdout only when `--output` is absent.** It is human output, never a
+diagnostic, so it does not go to stderr. Lines are append-only with no cursor control, so
+a CI log or a redirected file stays readable and there is no TTY detection to test. They
+are emitted in COMPLETION ORDER and are deliberately not byte-stable, which is why
+invariant 6's determinism test compares from the `Plan for project` line onward.
+
+**Exit 77** (sysexits.h `EX_NOPERM`) is a fourth exit code: changes present, no
+`--auto-approve`, no `--plan`, and approval unobtainable — either `--output` is set so
+nobody can see a prompt, or stdin is at EOF so nobody can type. The two causes are detected
+in two places (the flag check straight after planning, the EOF at the prompt inside
+`confirm`), and both are **before `withLockedEnvironment`**, so a run that exits 77 has
+taken no lock and mutated nothing. It applies to `apply` and `destroy` alike: destroy's
+higher bar does not make approval obtainable.
 
 ## Architecture
 

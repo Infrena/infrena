@@ -3695,6 +3695,77 @@ Useful options:
 --verbose
 ```
 
+## 37.1 Exit codes
+
+| code | meaning |
+| --- | --- |
+| `0` | success, no changes |
+| `1` | error |
+| `2` | success, changes present |
+| `77` | changes require approval that this run cannot obtain |
+
+The first three are what the source calls spec §16. `2` is what makes CI gating possible at
+no cost: `plan` exits 2 when it has something to propose, so a job fails on drift without
+parsing anything. `validate` never exits 2, because it computes no changes.
+
+**77 is sysexits.h's `EX_NOPERM`, added 2026-09-15**, and being a fourth row it is a
+documented change to a product API. It fires when the plan has changes, `--auto-approve` is
+absent, `--plan` is absent, **and** approval cannot be obtained. Two causes, detected in two
+different places:
+
+- **`--output` is set**, so nobody is reading stdout and nobody can see a prompt. Checked
+  explicitly, straight after the plan is computed.
+- **stdin is already at EOF**, so nobody is there to type. Detected at the prompt itself,
+  inside `confirm`.
+
+Both sit **before `withLockedEnvironment`**, which is the property worth keeping: a run that
+exits 77 has taken no lock and mutated nothing, whichever cause fired. It covers `destroy`
+as well as `apply` — destroy's higher bar, typing the environment name, does not make
+approval obtainable.
+
+It replaces a genuinely misleading outcome. A piped `apply` used to reach `confirm()`, read
+end of input, and exit 1 saying you must type `yes` to approve: advice nobody in that
+pipeline could have taken, which is precisely what §44 says a suggested action must never
+be. It now names an escape that works — `--auto-approve`, or a saved plan with `--plan`.
+
+## 37.2 `--output`
+
+**`--output` silences stdout, for every command.** One rule, no exceptions: with the flag
+set, everything the run produces goes into the file and stdout is byte-empty, so a frontend
+tailing the file never has to strip a human-readable half out of the terminal as well.
+Diagnostics are unaffected and stay on stderr, because a run that fails must say so on a
+channel the operator sees whether or not anything is reading the file.
+
+**Progress goes to stdout, and only when `--output` is absent.** It is human output, not a
+diagnostic, so it never goes to stderr — splitting one narrative across two channels helps
+nobody, and the machine-readable file already exists for a consumer that wants the
+structured form. Lines are **append-only**: no cursor control, no in-place rewriting, no
+spinner. stdout here is as often a CI log or a redirected file as a terminal, so escape
+sequences are noise a reader has to strip, and append-only means no TTY detection and one
+behaviour to test rather than two. Lines are emitted in **completion order** and are
+therefore deliberately NOT byte-stable between runs; invariant 6's determinism test compares
+from the `Plan for project` line onward for exactly that reason.
+
+**`--output` writes ONE format for every command**, a newline-delimited JSON report: a `meta`
+line carrying the format version, then `event`, `observation` and `diagnostic` lines as work
+happens, and a final `result` line, so a consumer tails the file and reads the outcome from
+the last line. Reports redact through `pkg/value.Format`, the single redaction path.
+
+**`plan --output` writes that same stream**, not the bare JSON document it used to write: a
+`meta` line and a `plan` line carrying the artifact verbatim, and **no `result` line** — the
+plan is the product. The artifact still holds sensitive values in cleartext, because
+`apply --plan` reads them back and needs the real ones, which is why the file is 0600 like
+every other `--output` file. `operations` still lists EVERY resource, `kind: "noop"`
+included: it describes the whole plan, not only its changes, and `Plan.HasChanges()` is what
+decides the exit code.
+
+**`apply --plan` reads BOTH envelopes** — the bare artifact and the stream. That is a
+compatibility requirement, not a courtesy: plans saved by earlier releases are on disk, and
+refusing one would break applying a plan that was already reviewed. The envelope is sniffed
+on the first line's `type` field, and `planner.DecodePlan` carries an independent guard
+refusing any document that has one, so a caller that skips the sniffer fails loudly instead
+of decoding a meta line into a plan with no operations and applying nothing.
+
 ---
 
 # 38. Production Protection
@@ -4468,14 +4539,15 @@ The most important engineering goal is to make the **core reconciliation engine 
 
 # 61. Versioning
 
-**Decided 2026-09-13.** Six format versions already exist, independently, each at 1:
+**Decided 2026-09-13.** Six format versions already exist, independently, each at 1 when this
+was written:
 
 | Version | Package | Guards | How it moves |
 | --- | --- | --- | --- |
 | `state.CurrentVersion` | `internal/state` | the state file | a migration chain, one step per version |
 | `pluginproto.Version`, `Supported` | `pkg/pluginproto` | the plugin wire | negotiated per plugin; `Supported` is a SET. **At 2 since 2026-09-14** (§14.1's `optional` and `aliases`), with 1 still supported |
-| `planner.PlanVersion` | `internal/planner` | the plan artifact | additive, with a frozen-keys test |
-| `report.Version` | `pkg/report` | `--output` reports | additive |
+| `planner.PlanVersion` | `internal/planner` | the plan artifact | additive, with a frozen-keys test. **Deliberately still 1 after 2026-09-15**: the plan document's own schema did not change, only the envelope it travels in (§37.2), and `DecodePlan`'s version check is an outright refusal — so a bump would reject every plan already saved to disk in exchange for nothing |
+| `report.Version` | `pkg/report` | `--output` reports | additive. **At 2 since 2026-09-15**: the format gained the `plan` line (§37.2), so a consumer that only understands 1 can tell |
 | lockfile `Version` | `internal/modules/source` | `modules.lock` | internal |
 | `plugins.lock` `version` | Phase B (§31.3) | the resolved plugins and their checksums | internal |
 | `pluginmanifest.Version`, `Supported` | `pkg/pluginmanifest` | `plugin.yaml` | **At 2 since the 2026-09-14 rename** — `infrata:` became `infrena:`, a renamed key rather than an added one. 1 stays readable, so a pre-rename release keeps meaning what it meant |
@@ -4596,7 +4668,7 @@ formats
   state             1
   plugin protocol   1
   plan artifact     1
-  report            1
+  report            2
 ```
 
 `--output json` emits the same thing as one object, so a CI job can assert on it. This
