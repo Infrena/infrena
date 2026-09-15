@@ -2,6 +2,7 @@ package modules
 
 import (
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/infrena/infrena/internal/config"
@@ -251,9 +252,57 @@ func (w *walker) evaluateOutputExpression(src string, origin value.Origin, scope
 	if parseDiags.HasErrors() {
 		return value.Unknown(value.KindString, value.SourceModule).WithOrigin(origin)
 	}
-	v, evalDiags := expressions.Evaluate(scope.Qualify(e), scope)
+	qualified := scope.Qualify(e)
+	if refuseWholeResourceOutput(qualified, origin, w.ds) {
+		// Refused, not evaluated: this is the output-side twin of fix round
+		// 1's Critical in evaluateCall. Leaving the value as an Unknown with
+		// no reference matches the parse-error branch above — there is
+		// nothing for a bad output to silently stand in for once it is
+		// reported.
+		return value.Unknown(value.KindString, value.SourceModule).WithOrigin(origin)
+	}
+	v, evalDiags := expressions.Evaluate(qualified, scope)
 	w.ds.Extend(evalDiags)
 	return v
+}
+
+// refuseWholeResourceOutput reports and returns true when e carries a
+// whole-resource reference — a bare `${net}` published as a module output,
+// whose attribute is empty because nothing projects one here.
+//
+// It is the output-side twin of inputs.go's refuseWholeResourceInput, and for
+// the same reason: a module output publishes a VALUE (PLAN.md §14.3), not a
+// schema'd attribute, so there is no consuming declaration anywhere for the
+// reference to be projected against — not here, and not at whatever call site
+// eventually reads this output, because by then the module has been expanded
+// away and the resource behind ${net} no longer has a name.
+//
+// Refusing HERE, before Qualify's BindsModule fold (this file, above) can ever
+// splice the reference into an OpLiteral, is what closes the regression:
+// pkg/value/expr.go's References() does not descend into OpLiteral.Literal.Expr,
+// so a whole-resource reference that reached that fold became invisible to
+// every downstream walk — compiling clean and leaving the attribute that
+// eventually consumed it unset forever.
+func refuseWholeResourceOutput(e *value.Expr, origin value.Origin, ds *diag.Diagnostics) bool {
+	refused := false
+	for _, ref := range e.References() {
+		if ref.Attribute != "" {
+			continue
+		}
+		ds.Add(diag.Diagnostic{
+			Severity: diag.SeverityError,
+			Summary:  "${" + ref.Target.String() + "} publishes a resource as a module output",
+			Detail: "A module output publishes a value, not a resource, so there is nothing to " +
+				"say which of " + strconv.Quote(ref.Target.String()) + "'s attributes is meant. " +
+				"Whatever eventually reads this output has no provider declaration to project " +
+				"against, because by then the module has been expanded and " +
+				strconv.Quote(ref.Target.String()) + " no longer has a name.",
+			Action: "Name the attribute you mean, as ${" + ref.Target.String() + ".<attribute>}.",
+			Origin: origin,
+		})
+		refused = true
+	}
+	return refused
 }
 
 // sortedValueKeys lists a value map's keys for a diagnostic.

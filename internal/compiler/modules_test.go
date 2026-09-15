@@ -339,3 +339,91 @@ resources:
 		t.Errorf("the diagnostic must say why:\n%s", rendered(ds))
 	}
 }
+
+// TestAWholeResourceReferenceAsAModuleOutputDoesNotEscapeAsAnEmptyAttribute is
+// the C1 regression: a module publishing `outputs: {whole: {value: ${net}}}`,
+// where net is a resource INSIDE the module, used to compile clean. Qualify's
+// BindsModule arm folds the still-empty-attribute reference into an OpLiteral
+// at the caller, and pkg/value/expr.go's References() does not descend into
+// OpLiteral.Literal.Expr — so projectRefs, canonicaliseRefs and the whole
+// per-reference walk in bind.go never saw it, and a consuming attribute like
+// vpc_id ended up unknown with an empty-attribute expression that stays
+// deferred forever. This is the module-output sibling to
+// TestAWholeResourceReferenceAsAModuleInputDoesNotEscapeAsAnEmptyAttribute
+// above, and to internal/compiler's own
+// TestNoEmptyAttributeReferenceEscapesStageSix (bind_test.go), which is
+// root-only and module-free and so never exercised this path.
+func TestAWholeResourceReferenceAsAModuleOutputDoesNotEscapeAsAnEmptyAttribute(t *testing.T) {
+	files, dir := moduleFixture(t, map[string]string{
+		"modules/net-maker/module.yml": `
+resources:
+  net:
+    type: fake.vpc
+outputs:
+  whole:
+    value: ${net}
+`,
+		"infra.yml": `
+project: demo
+environments: {dev: {}}
+modules:
+  - ./modules/net-maker
+resources:
+  m:
+    type: module.net_maker
+  sub:
+    type: fake.subnet
+    vpc_id: ${m.whole}
+    cidr: 10.0.0.0/24
+`,
+	})
+
+	_, ds := Compile(files, testRegistry(t), Options{Environment: "dev", Dir: dir})
+	if !ds.HasErrors() {
+		t.Fatal("a whole-resource reference published as a module output must be refused before " +
+			"it can reach a consumer with an empty attribute")
+	}
+	if !strings.Contains(rendered(ds), "module output") {
+		t.Errorf("the diagnostic must say why:\n%s", rendered(ds))
+	}
+}
+
+// TestAWholeResourceReferenceAsAModuleOutputIsRefusedInsideAFunctionCall is
+// the nested case C1 also names: ${lower(m.whole)} at the caller cannot save
+// a bare ${net} published as the module's own output — the reference must be
+// refused where the module PUBLISHES it, not left to whatever expression the
+// caller happens to wrap it in.
+func TestAWholeResourceReferenceAsAModuleOutputIsRefusedInsideAFunctionCall(t *testing.T) {
+	files, dir := moduleFixture(t, map[string]string{
+		"modules/net-maker/module.yml": `
+resources:
+  net:
+    type: fake.vpc
+outputs:
+  whole:
+    value: ${lower(net)}
+`,
+		"infra.yml": `
+project: demo
+environments: {dev: {}}
+modules:
+  - ./modules/net-maker
+resources:
+  m:
+    type: module.net_maker
+  sub:
+    type: fake.subnet
+    vpc_id: ${m.whole}
+    cidr: 10.0.0.0/24
+`,
+	})
+
+	_, ds := Compile(files, testRegistry(t), Options{Environment: "dev", Dir: dir})
+	if !ds.HasErrors() {
+		t.Fatal("a whole-resource reference nested inside a function call in a module output must " +
+			"still be refused")
+	}
+	if !strings.Contains(rendered(ds), "module output") {
+		t.Errorf("the diagnostic must say why:\n%s", rendered(ds))
+	}
+}
