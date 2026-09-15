@@ -167,7 +167,7 @@ func TestAReferenceToAnUndeclaredTypeRefusesTheDefinition(t *testing.T) {
 
 func TestAWellFormedReferenceLoads(t *testing.T) {
 	vpc := &ResourceDefinition{
-		Type: "test.vpc",
+		Type:       "test.vpc",
 		Attributes: map[string]Attribute{"id": {Kind: value.KindString, Computed: true}},
 	}
 	subnet := &ResourceDefinition{

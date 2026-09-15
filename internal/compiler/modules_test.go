@@ -411,7 +411,7 @@ resources:
 
 	_, ds := Compile(files, testRegistry(t), Options{Environment: "dev", Dir: dir})
 	if !ds.HasErrors() {
-		t.Fatal("a bare reference to a module call must be refused even where the consuming "+
+		t.Fatal("a bare reference to a module call must be refused even where the consuming " +
 			"attribute declares no reference at all")
 	}
 	got := rendered(ds)
