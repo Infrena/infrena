@@ -3,7 +3,7 @@
 **Date:** 2026-09-15
 **Status:** draft, awaiting review
 **Amends:** `PLAN.md` §16 (exit codes), §25 (discover), §27 (generation), §37 (CLI surface), §4 (layout)
-**Raises:** the plugin protocol to 4; `planner.PlanVersion`; `report.Version`
+**Raises:** the plugin protocol to 4; `report.Version`. `planner.PlanVersion` deliberately unchanged (§2.4).
 **Ships as:** three independent units — A (output), B (discover), C (init). Each is releasable alone.
 
 ---
@@ -147,8 +147,27 @@ the old shape would break `apply --plan` for every plan saved before this releas
 saved-plan path is explicitly refused-not-degraded everywhere else, so a silent
 misinterpretation here would be the worst possible failure.
 
-`planner.PlanVersion` bumps, and `report.Version` bumps for the new line kind. §61 keeps
-them independent; both move here because both formats genuinely changed.
+**`planner.PlanVersion` does NOT bump.** Only `report.Version` does, for the new line kind.
+The plan document's own schema is byte-identical; what changed is the envelope it travels in.
+Bumping it would make `DecodePlan` refuse every plan saved before this release for no reason
+— its version check is an outright refusal, not a migration.
+
+**The sniff has a silent-failure hazard, and closing it is part of this task.**
+`planner.DecodePlan` uses `json.NewDecoder(...).Decode(&w)`, which reads *one* JSON value and
+stops. Pointed at the new NDJSON file it would decode the **`meta` line** — and succeed,
+because unknown fields are ignored by default and `report.Version` is `1`, the same integer
+`PlanVersion` checks for. The result is a plan with zero operations that applies nothing, with
+no error. That is the worst outcome available on this path.
+
+So two guards, not one:
+
+- The sniffer decides on the first line's `"type"` field: `"meta"` means a stream, and the
+  plan is its `plan` line. A file whose first value carries no `"type"` is the old bare
+  artifact.
+- **`DecodePlan` itself refuses a document carrying a `"type"` field**, naming what it got.
+  A plan artifact has never had one, so nothing legitimate is rejected — and the guard holds
+  even if some future caller reaches `DecodePlan` without going through the sniffer, which is
+  the only way this hazard comes back.
 
 **What does NOT change:** the artifact's contents, its 0600 mode, its cleartext sensitive
 values, and every refusal in `apply --plan` (project, environment or state fingerprint
