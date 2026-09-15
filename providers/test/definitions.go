@@ -53,6 +53,12 @@ func definitions() []*schema.ResourceDefinition {
 			Description: "A fake VPC. Has no dependencies.",
 			Attributes: map[string]schema.Attribute{
 				"id": {Kind: value.KindString, Computed: true, Description: "Assigned VPC identifier"},
+				// A declared map: a path into it is key-checked at compile time.
+				"meta": {Kind: value.KindMap, Description: "Known metadata",
+					Fields: map[string]schema.Attribute{"name": {Kind: value.KindString}}},
+				// An open map, deliberately with no Fields: like AWS tags, it takes
+				// any key, and a path into it is checked at apply, as today.
+				"tags": {Kind: value.KindMap, Description: "Free-form labels"},
 			},
 			Capabilities: schema.Capabilities{Create: true, Read: true, Update: true, Delete: true, Import: true},
 			ImportID:     schema.ImportSpec{Description: "the VPC identifier, e.g. vpc-1"},

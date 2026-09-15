@@ -337,6 +337,65 @@ func checkReferredType(
 	})
 }
 
+// checkReferredFields reports a path into a declared map attribute that names a
+// key the map does not have.
+//
+// It runs only for the steps PAST the attribute axis, and only once that axis
+// has already confirmed ref.Attribute exists — the caller wires it in as the
+// next case, after the one that does that. It walks ref.Path against the
+// target attribute's declared Fields, one key step at a time, descending into
+// the nested Attribute a match names so a path several keys deep is checked at
+// every level, not just the first.
+//
+// NIL Fields — at the top or at any nested level — stops the walk without
+// complaint: that is what "open" means (see Attribute.Fields), and it is not
+// this function's place to decide a provider was wrong to leave a map open. A
+// StepIndex stops the walk the same way: Fields describes a map's keys, not a
+// list's shape, so there is nothing here to check an index against.
+func checkReferredFields(ref value.Reference, t refTarget, origin value.Origin, ds *diag.Diagnostics) bool {
+	if t.def == nil {
+		return false
+	}
+	attr, ok := t.def.Attribute(ref.Attribute)
+	if !ok {
+		return false
+	}
+	fields := attr.Fields
+	described := t.typeName + "." + ref.Attribute
+	for _, step := range ref.Path {
+		if fields == nil || step.Kind != value.StepKey {
+			return false
+		}
+		next, known := fields[step.Key]
+		if !known {
+			ds.Add(diag.Diagnostic{
+				Severity: diag.SeverityError,
+				Summary:  described + " has no key " + strconv.Quote(step.Key),
+				Detail: "${" + ref.String() + "} reads a key that does not exist.\nKeys of " +
+					described + ":\n  " + strings.Join(sortedFieldNames(fields), "\n  "),
+				Action: "Correct the key name.",
+				Origin: origin,
+			})
+			return true
+		}
+		fields = next.Fields
+		described += "." + step.Key
+	}
+	return false
+}
+
+// sortedFieldNames lists a declared map's known keys for a diagnostic, sorted —
+// Go randomises map iteration, and invariant 6 requires the same diagnostic
+// across runs of the same configuration.
+func sortedFieldNames(fields map[string]schema.Attribute) []string {
+	out := make([]string, 0, len(fields))
+	for name := range fields {
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out
+}
+
 // sortedTargets lists the declared addresses for a diagnostic, sorted.
 func sortedTargets(set map[string]refTarget) []string {
 	out := make([]string, 0, len(set))
@@ -542,6 +601,10 @@ func bindOneExpression(
 				Action: "Correct the attribute name.",
 				Origin: origin,
 			})
+		case checkReferredFields(ref, t, origin, ds):
+			// The shape axis, inside a declared map. Diagnostic already added;
+			// nothing downstream should treat a path into the wrong key as a
+			// dependency worth recording.
 		default:
 			recordEdge(edges, target, origin)
 		}

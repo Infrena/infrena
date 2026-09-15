@@ -88,6 +88,21 @@ type Attribute struct {
 	// indistinguishable from an author who meant to fill it in.
 	References *Reference
 
+	// Fields describes a KindMap attribute's known keys, where the provider
+	// knows them.
+	//
+	// NIL MEANS OPEN, and that is a first-class answer rather than a gap: AWS
+	// tags take any key and always will, so declaring Fields for them would be
+	// a lie. A path into an open map is checked at apply, exactly as it is
+	// today.
+	//
+	// Where it IS declared, a typo becomes a compile error listing the keys
+	// that exist — which is what internal/compiler/bind.go already does for a
+	// top-level attribute name, and what its comment says is worth doing: "a
+	// typo here passed `validate`, produced a clean plan, and failed halfway
+	// through `apply` after real infrastructure existed".
+	Fields map[string]Attribute
+
 	// Default is the value this attribute takes when configuration supplies
 	// none: a plain Go datum of the attribute's declared Kind — int64(10),
 	// "gp3", true — or nil for no default. DatumValue converts it.

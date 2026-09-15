@@ -621,3 +621,44 @@ resources:
 		t.Fatal("expected a resolved config")
 	}
 }
+
+func TestAPathIntoADeclaredMapIsKeyCheckedAtCompileTime(t *testing.T) {
+	p := decl(t, `
+project: myapp
+resources:
+  net:
+    type: fake.vpc
+  sub:
+    type: fake.subnet
+    cidr: ${net.meta.nmae}
+`)
+	_, ds := bindReferences(rootOnly(t, p, Options{Environment: "dev"}), Options{Environment: "dev"}, testRegistry(t), testTable())
+	if !ds.HasErrors() {
+		t.Fatal("a typo in a declared map key must fail at compile time, not halfway through apply")
+	}
+	if !strings.Contains(ds[0].Detail, "name") {
+		t.Errorf("Detail = %q, want it to list the keys that exist", ds[0].Detail)
+	}
+}
+
+func TestAPathIntoAnOpenMapIsStillUnchecked(t *testing.T) {
+	// fake.vpc's tags is an open map, exactly as AWS tags are and always will
+	// be. Declaring Fields for them would be a lie, so nil must stay a
+	// first-class answer rather than a gap.
+	p := decl(t, `
+project: myapp
+resources:
+  net:
+    type: fake.vpc
+  sub:
+    type: fake.subnet
+    cidr: ${net.tags.anything}
+`)
+	cfg, ds := bindReferences(rootOnly(t, p, Options{Environment: "dev"}), Options{Environment: "dev"}, testRegistry(t), testTable())
+	if ds.HasErrors() {
+		t.Fatalf("an attribute with no declared Fields must accept any key, as today: %+v", ds)
+	}
+	if cfg.Resources == nil {
+		t.Fatal("expected a resolved config")
+	}
+}
