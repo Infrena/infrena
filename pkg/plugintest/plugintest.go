@@ -41,7 +41,8 @@ type Host struct {
 //
 // It FAILS if the schemas do not pass the checks infrena applies on load — a type
 // outside the plugin's own name prefix, an attribute named after a lifecycle option,
-// a malformed definition, a default that is not the kind its attribute declares.
+// a malformed definition, a default that is not the kind its attribute declares, and
+// a References naming a type or attribute the plugin does not declare.
 // Which makes `Open` worth a test of its own: it is the cheapest possible check that
 // a plugin is loadable at all.
 //

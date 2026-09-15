@@ -178,6 +178,15 @@ func validateFields(typeName, path string, fields map[string]Attribute) error {
 func ValidateAll(defs []*ResourceDefinition) error {
 	byType := make(map[string]*ResourceDefinition, len(defs))
 	for _, d := range defs {
+		// A nil entry is refused rather than dereferenced. This is exported, so a
+		// caller that has not already screened its input can reach it — and the
+		// host adapter's own nil check once sat BELOW its ValidateAll call while a
+		// comment claimed it sat above, which panicked on a null array element. A
+		// public function that panics on malformed input pushes that hazard onto
+		// every caller in turn.
+		if d == nil {
+			return fmt.Errorf("a resource definition is missing")
+		}
 		if err := d.Validate(); err != nil {
 			return err
 		}
