@@ -84,7 +84,12 @@ func runImport(
 	reg *registry.Registry, table providers.Table, backend *state.Local,
 	environment string, selectors []string, generate bool, instance string,
 ) error {
-	selected, problems, err := selectForImport(ctx, reg, selectors, instance)
+	managed, err := managedProviderIDs(ctx, backend)
+	if err != nil {
+		return err
+	}
+
+	selected, problems, err := selectForImport(ctx, reg, managed, selectors, instance)
 	for _, p := range problems {
 		fmt.Fprintf(cmd.ErrOrStderr(), "Warning: %v\n", p)
 	}
@@ -230,11 +235,63 @@ func alreadyManaged(st *state.State, selected []discovery.Result) []string {
 // read the resource. `fake.database.db-9` splits at the LAST dot: a type
 // already contains one.
 func selectForImport(
-	ctx context.Context, reg *registry.Registry, selectors []string, instance string,
+	ctx context.Context, reg *registry.Registry, managed map[string]string,
+	selectors []string, instance string,
 ) ([]discovery.Result, []error, error) {
 	found, problems := discovery.Walk(ctx, reg, nil)
-	out, err := narrowToSelectors(found, selectors, instance)
+	kept, err := withoutManaged(found, selectors, managed)
+	if err != nil {
+		return nil, problems, err
+	}
+	out, err := narrowToSelectors(kept, selectors, instance)
 	return out, problems, err
+}
+
+// withoutManaged drops the discovered resources this project already manages
+// somewhere, and REFUSES a selector that explicitly names one.
+//
+// The two halves are deliberately different. With no selector, import adopts
+// what discovery found, and a resource already under management is simply not
+// part of that question — leaving it out is the answer, not a silence. A
+// selector is a user asking for one specific resource by ID, and quietly
+// adopting nothing would report success for something that did not happen:
+// silently ignoring an explicit selector is worse than refusing it.
+//
+// managed is keyed on the provider ID and carries the environment managing it,
+// so the refusal can say where to look rather than only that something is
+// wrong.
+func withoutManaged(
+	found []discovery.Result, selectors []string, managed map[string]string,
+) ([]discovery.Result, error) {
+	named := make(map[string]bool, len(selectors))
+	for _, s := range selectors {
+		named[s] = true
+	}
+
+	var kept []discovery.Result
+	var refused []string
+	for _, r := range found {
+		environment, isManaged := managed[r.ProviderID]
+		if !isManaged {
+			kept = append(kept, r)
+			continue
+		}
+		if named[r.Type+"."+r.ProviderID] {
+			refused = append(refused,
+				fmt.Sprintf("%s.%s (environment %q)", r.Type, r.ProviderID, environment))
+		}
+	}
+	if len(refused) > 0 {
+		sort.Strings(refused)
+		return nil, fmt.Errorf("already managed: %s\n"+
+			"Adopting one resource twice puts it under two addresses, and the second declares "+
+			"nothing — so the next plan would propose destroying it, and destroying it deletes "+
+			"the resource the first address manages.\n"+
+			"Import something else, or use `infrena state rm <address>` if the existing entry is "+
+			"the one you want to replace",
+			strings.Join(refused, ", "))
+	}
+	return kept, nil
 }
 
 // narrowToSelectors picks the discovered resources to import, optionally restricted to

@@ -310,3 +310,40 @@ func TestProviderNamingNoInstanceIsRefused(t *testing.T) {
 		t.Error("--provider naming an instance that holds nothing must be refused, not treated as an empty import")
 	}
 }
+
+// TestAnUnnamedManagedResourceIsLeftOutRatherThanRefused.
+//
+// The other half of withoutManaged, and the one the end-to-end refusal test
+// cannot see. With no selector, import adopts what discovery found, and a
+// resource already under management is not part of that question — so it is
+// left out silently, which is the answer rather than a silence. Refusing here
+// instead would make `import dev` unusable in any project that has ever
+// imported anything.
+func TestAnUnnamedManagedResourceIsLeftOutRatherThanRefused(t *testing.T) {
+	found := []discovery.Result{
+		{Name: "net", Type: "fake.network", Provider: "main", ProviderID: "net-1"},
+		{Name: "other", Type: "fake.network", Provider: "main", ProviderID: "net-2"},
+	}
+	managed := map[string]string{"net-1": "production"}
+
+	kept, err := withoutManaged(found, nil, managed)
+	if err != nil {
+		t.Fatalf("an unnamed managed resource was refused: %v", err)
+	}
+	if len(kept) != 1 || kept[0].ProviderID != "net-2" {
+		t.Fatalf("kept %+v, want net-2 alone", kept)
+	}
+
+	// The control, in the same test so neither direction can pass alone: named
+	// explicitly, the same resource is refused and the refusal says where it is
+	// managed, because a message a reader cannot act on is a dead end (§44).
+	_, err = withoutManaged(found, []string{"fake.network.net-1"}, managed)
+	if err == nil {
+		t.Fatal("a selector naming a managed resource was accepted")
+	}
+	for _, want := range []string{"already managed", "fake.network.net-1", "production"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal omits %q:\n%v", want, err)
+		}
+	}
+}

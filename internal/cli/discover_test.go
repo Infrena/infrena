@@ -1,10 +1,13 @@
 package cli
 
 import (
+	"context"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/infrena/infrena/internal/discovery"
+	"github.com/infrena/infrena/providers/test"
 )
 
 func result(typ, id, name string) discovery.Result {
@@ -18,7 +21,7 @@ func TestDiscoverShowsTheNameEachResourceWouldGet(t *testing.T) {
 	renderDiscovered(&sb, []discovery.Result{
 		result("fake.database", "db-9", "orders"),
 		result("fake.network", "vpc-0a1b", "vpc-0a1b"),
-	}, nil)
+	}, nil, nil, false)
 	got := sb.String()
 
 	for _, want := range []string{"TYPE", "ID", "NAME", "fake.database", "db-9", "orders", "vpc-0a1b"} {
@@ -42,7 +45,7 @@ func TestDiscoverMakesACollisionVisible(t *testing.T) {
 	renderDiscovered(&sb, []discovery.Result{
 		result("fake.database", "db-9", "orders"),
 		result("fake.database", "db-10", "orders_db-10"),
-	}, nil)
+	}, nil, nil, false)
 	got := sb.String()
 
 	if strings.Count(got, "orders") < 2 {
@@ -71,8 +74,8 @@ func TestDiscoverMakesACollisionVisible(t *testing.T) {
 // user to different next steps.
 func TestDiscoverOnAnEmptyAccountSaysSo(t *testing.T) {
 	var all, filtered strings.Builder
-	renderDiscovered(&all, nil, nil)
-	renderDiscovered(&filtered, nil, []string{"fake.database"})
+	renderDiscovered(&all, nil, nil, nil, false)
+	renderDiscovered(&filtered, nil, []string{"fake.database"}, nil, false)
 
 	if !strings.Contains(all.String(), "Nothing found.") {
 		t.Errorf("unfiltered empty output = %q", all.String())
@@ -87,16 +90,142 @@ func TestDiscoverOnAnEmptyAccountSaysSo(t *testing.T) {
 // the table is long enough to scroll.
 func TestDiscoverCountsWhatItFound(t *testing.T) {
 	var one, two strings.Builder
-	renderDiscovered(&one, []discovery.Result{result("fake.database", "db-9", "orders")}, nil)
+	renderDiscovered(&one, []discovery.Result{result("fake.database", "db-9", "orders")}, nil, nil, false)
 	renderDiscovered(&two, []discovery.Result{
 		result("fake.database", "db-9", "orders"),
 		result("fake.network", "net-1", "net-1"),
-	}, nil)
+	}, nil, nil, false)
 
 	if !strings.Contains(one.String(), "1 resource found") {
 		t.Errorf("singular count is wrong: %q", one.String())
 	}
 	if !strings.Contains(two.String(), "2 resources found") {
 		t.Errorf("plural count is wrong: %q", two.String())
+	}
+}
+
+// newProjectWithDiscoverableResources stands up a project whose fake cloud
+// already holds resources this project never created, which is the only
+// situation discovery exists for.
+//
+// The type is fake.vpc so that a provider ID of `vpc-1` names itself: naming is
+// type-prefixed, and a prefix the ID already carries is not repeated, so the
+// proposed name is the string a reader can match against the cloud file.
+func newProjectWithDiscoverableResources(t *testing.T, ids ...string) string {
+	t.Helper()
+	dir := projectDir(t, "project: myapp\nresources: {}\n")
+	cloud := &test.Cloud{Resources: map[string]*test.CloudResource{}}
+	for _, id := range ids {
+		cloud.Resources[id] = &test.CloudResource{
+			Type:       "fake.vpc",
+			Attributes: map[string]any{"id": id},
+		}
+	}
+	if err := cloud.Save(filepath.Join(dir, test.DefaultCloudPath)); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+// importOne adopts one discovered resource into an environment, so a later
+// assertion is measured against state a real command wrote rather than against
+// a hand-built fixture that could disagree with it.
+func importOne(t *testing.T, dir, environment, providerID string) {
+	t.Helper()
+	_, stderr, code := runCommand(t, dir, "import", environment, "fake.vpc."+providerID)
+	if code != ExitOK {
+		t.Fatalf("importing %s into %s: exit %d\n%s", providerID, environment, code, stderr)
+	}
+}
+
+func TestDiscoverHidesWhatIsAlreadyManaged(t *testing.T) {
+	dir := newProjectWithDiscoverableResources(t, "vpc-1", "vpc-2")
+	importOne(t, dir, "dev", "vpc-1")
+
+	stdout, _, _ := runCommand(t, dir, "discover")
+
+	if strings.Contains(stdout, "vpc-1") {
+		t.Errorf("discover listed a managed resource:\n%s", stdout)
+	}
+	if !strings.Contains(stdout, "vpc-2") {
+		t.Errorf("discover hid an unmanaged resource:\n%s", stdout)
+	}
+	// A count a user cannot see is a count they will assume is zero.
+	if !strings.Contains(stdout, "already managed") {
+		t.Errorf("footer does not state the exclusion:\n%s", stdout)
+	}
+}
+
+// Scope is EVERY environment, not the one you happen to be importing into.
+func TestManagedMeansManagedInAnyEnvironment(t *testing.T) {
+	dir := newProjectWithDiscoverableResources(t, "vpc-1")
+	importOne(t, dir, "production", "vpc-1")
+
+	stdout, _, _ := runCommand(t, dir, "discover")
+
+	if strings.Contains(stdout, "vpc-1") {
+		t.Errorf("discover listed a resource managed in another environment:\n%s", stdout)
+	}
+}
+
+// The STATUS column only earns its place under --all: in the default view
+// every row would read unmanaged, and a column with one value is noise.
+func TestAllShowsEverythingWithAStatusColumn(t *testing.T) {
+	dir := newProjectWithDiscoverableResources(t, "vpc-1", "vpc-2")
+	importOne(t, dir, "dev", "vpc-1")
+
+	all, _, _ := runCommand(t, dir, "discover", "--all")
+	def, _, _ := runCommand(t, dir, "discover")
+
+	if !strings.Contains(all, "STATUS") || !strings.Contains(all, "managed (dev)") {
+		t.Errorf("--all lacks the status column:\n%s", all)
+	}
+	if strings.Contains(def, "STATUS") {
+		t.Errorf("default view grew a status column:\n%s", def)
+	}
+}
+
+// Refused, not silently skipped. A selector that names a managed resource is a
+// user asking for something specific, and quietly importing nothing would
+// report success for a thing that did not happen.
+func TestImportWillNotReadoptAManagedResource(t *testing.T) {
+	dir := newProjectWithDiscoverableResources(t, "vpc-1")
+	importOne(t, dir, "dev", "vpc-1")
+
+	_, stderr, _ := runCommand(t, dir, "import", "dev", "fake.vpc.vpc-1", "--generate")
+
+	if !strings.Contains(stderr, "already managed") {
+		t.Errorf("import re-adopted a managed resource, or did not say why not:\n%s", stderr)
+	}
+}
+
+// The managed index is keyed on PROVIDER ID rather than on the address that was
+// chosen for it: the same real resource adopted twice would have two addresses,
+// and the question discover asks is whether the RESOURCE is under management.
+func TestTheManagedIndexIsKeyedOnTheProviderIDAcrossEnvironments(t *testing.T) {
+	dir := newProjectWithDiscoverableResources(t, "vpc-1", "vpc-2")
+	importOne(t, dir, "dev", "vpc-1")
+	importOne(t, dir, "production", "vpc-2")
+
+	managed, err := managedProviderIDs(context.Background(), backendFor(dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if managed["vpc-1"] != "dev" || managed["vpc-2"] != "production" {
+		t.Errorf("managedProviderIDs = %v, want vpc-1 in dev and vpc-2 in production", managed)
+	}
+}
+
+// A project that has never applied anything is the ordinary case for discover,
+// and it must not be an error.
+func TestTheManagedIndexIsEmptyForAProjectWithNoState(t *testing.T) {
+	dir := newProjectWithDiscoverableResources(t, "vpc-1")
+
+	managed, err := managedProviderIDs(context.Background(), backendFor(dir))
+	if err != nil {
+		t.Fatalf("managedProviderIDs on a project with no state: %v", err)
+	}
+	if len(managed) != 0 {
+		t.Errorf("managedProviderIDs = %v, want empty", managed)
 	}
 }
