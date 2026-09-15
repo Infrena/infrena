@@ -172,3 +172,35 @@ func TestTheHostsRulesApplyThroughTheHarness(t *testing.T) {
 		t.Errorf("Source = %s, want provider", got.Attributes["name"].Source)
 	}
 }
+
+// TestADanglingReferenceIsRefused. An attribute's References names another TYPE, so
+// whether that type exists is a fact about the whole definition SET — no single
+// definition can check it, and Validate() therefore cannot.
+//
+// This is the assertion the harness existed without. The relationship check ran only
+// in internal/registry, on the path the CLI takes, so a dangling reference passed a
+// plugin author's tests and failed later on a USER's machine — which inverts the
+// point of failing at load, namely that a broken relationship is caught by the person
+// who can fix it. Found by the fake provider's author while adopting v0.6.0.
+func TestADanglingReferenceIsRefused(t *testing.T) {
+	_, err := plugintest.Open(context.Background(), danglingRef{}, t.TempDir())
+	if err == nil {
+		t.Fatal("a reference to a type the plugin does not declare must be refused at load")
+	}
+	if !strings.Contains(err.Error(), "demo.nosuch") {
+		t.Errorf("the error does not name the type that is missing: %v", err)
+	}
+}
+
+type danglingRef struct{ demo }
+
+func (danglingRef) Definitions() []*schema.ResourceDefinition {
+	return []*schema.ResourceDefinition{{
+		Type: "demo.thing",
+		Attributes: map[string]schema.Attribute{
+			"name": {Kind: value.KindString, Required: true},
+			"net":  {Kind: value.KindString, References: &schema.Reference{Type: "demo.nosuch", Attribute: "id"}},
+		},
+		Capabilities: schema.Capabilities{Create: true, Read: true, Delete: true},
+	}}
+}

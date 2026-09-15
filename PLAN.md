@@ -2013,6 +2013,23 @@ project. Refusing it at validation is simpler than teaching every consumer of `R
 to recurse, and it keeps the failure at the moment the plugin loads rather than at the
 moment a user's `${vpc}` quietly does not become `${vpc.id}`.
 
+### Adding a `References` is a BREAKING change for that plugin's users
+
+A declaration does not only enable `${vpc}`. It also type-checks the spelling that was
+always legal: once `vpc_id` declares that it refers to an `aws.ec2.vpc`, the configuration
+`vpc_id: ${database.id}` STOPS COMPILING, and it may be configuration a user wrote months
+ago and has already applied.
+
+So a plugin release that adds declarations to attributes that had none is a breaking
+release for that plugin, whatever it does to its own version number, and its notes must say
+so. This is the §61.1 test — what an existing project does — applied to a plugin rather than
+to infrena.
+
+It cuts the other way too, and that is the reassuring half: a plugin that declares NOTHING
+changes nothing for anybody. Coverage buys checking; absence costs exactly what it cost
+before. Which is what makes it safe to add declarations a few at a time rather than all at
+once — provided each batch is released as the breaking change it is.
+
 ### A module boundary carries no `References` in either direction
 
 `${net}` is sugar the ENGINE fills in from a consuming attribute's own `References`

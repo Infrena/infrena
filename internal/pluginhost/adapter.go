@@ -64,13 +64,32 @@ func (p *Plugin) loadSchemas(ctx context.Context) error {
 		return fmt.Errorf("the %s plugin offers no resource types at all", p.Name())
 	}
 
+	// ValidateAll rather than a Validate() per definition, and AFTER the loop so a
+	// nil entry is caught first.
+	//
+	// It covers each definition on its own AND the relationships BETWEEN them, which
+	// no single definition can check: an attribute's References names another TYPE,
+	// and whether that type exists is a fact about the whole set.
+	//
+	// It belongs HERE, in the adapter, and not in pkg/plugintest. plugintest.Open
+	// reaches this same code through pluginhost.InProcess, deliberately — that
+	// package's doc says it "adds no second implementation, because a second one
+	// would drift and the drift would be invisible, each side still agreeing with
+	// itself". Validating in plugintest instead would BE that second implementation.
+	//
+	// Until this existed the relationship check ran only in internal/registry, on the
+	// path the CLI takes. A plugin author testing through plugintest — which the
+	// authoring guide tells them to do — got a pass on a dangling reference that
+	// failed later on a USER's machine, which inverts the point of a load failure:
+	// it exists so a broken relationship is caught by the person who can fix it.
+	if err := schema.ValidateAll(result.Definitions); err != nil {
+		return fmt.Errorf("the %s plugin sent an invalid schema: %w", p.Name(), err)
+	}
+
 	p.byType = make(map[string]*schema.ResourceDefinition, len(result.Definitions))
 	for _, d := range result.Definitions {
 		if d == nil {
 			return fmt.Errorf("the %s plugin sent an empty resource definition", p.Name())
-		}
-		if err := d.Validate(); err != nil {
-			return fmt.Errorf("the %s plugin sent an invalid schema: %w", p.Name(), err)
 		}
 		// A type name says where it came from, and two plugins cannot both claim
 		// one. Without this a plugin could serve `aws.instance` and quietly take
