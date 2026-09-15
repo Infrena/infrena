@@ -484,8 +484,21 @@ func bindAttribute(
 	consumingTypeRegistered := false
 	if def := declared[inst.Address.String()].def; def != nil {
 		consumingTypeRegistered = true
-		if a, ok := def.Attribute(attr.Name); ok {
-			consuming = &a
+		// CANONICALISE FIRST. attr.Name is the user's spelling and Attribute is an
+		// exact lookup, so without this an attribute written as one of its aliases
+		// finds nothing and `vpc: ${vpc}` reports "declares no reference" about an
+		// attribute that plainly declares one.
+		//
+		// That is not a corner: §14.1 shipped aliases so a user writes `cidr` rather
+		// than `CidrBlock`, and the AWS plugin's whole naming design rests on them —
+		// so the friendly spelling is the one people actually write, and it was the
+		// one that did not work. The engine canonicalises the REFERENCE's own
+		// attribute a few lines below, in canonicaliseRefs; this is the same rule on
+		// the consuming side, which was never enumerated.
+		if canonical, ok := def.Canonical(attr.Name); ok {
+			if a, ok := def.Attribute(canonical); ok {
+				consuming = &a
+			}
 		}
 	}
 

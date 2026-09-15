@@ -68,6 +68,10 @@ func definitions() []*schema.ResourceDefinition {
 			Description: "A fake subnet. vpc_id refers to a fake.vpc; cidr declares no reference.",
 			Attributes: map[string]schema.Attribute{
 				"vpc_id": {Kind: value.KindString, Description: "VPC this subnet sits in",
+					// An alias, so a test can write the attribute the way a user of a
+					// real plugin would. The AWS plugin's canonical VpcId carries `vpc`
+					// and `vpc_id` for exactly this reason (§14.1).
+					Aliases:    []string{"vpc"},
 					References: &schema.Reference{Type: "fake.vpc", Attribute: "id"}},
 				"cidr": {Kind: value.KindString, Description: "Address range"},
 			},
