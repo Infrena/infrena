@@ -1,6 +1,7 @@
 package pluginproto
 
 import (
+	"encoding/json"
 	"slices"
 	"testing"
 )
@@ -15,8 +16,8 @@ import (
 // The literal is duplicated on purpose. Reading it from the constant would assert that
 // the constant equals itself.
 func TestTheProtocolVersionIsDeliberate(t *testing.T) {
-	if Version != 3 {
-		t.Errorf("Version = %d, want 3. Changing it is a deliberate act: raise this literal "+
+	if Version != 4 {
+		t.Errorf("Version = %d, want 4. Changing it is a deliberate act: raise this literal "+
 			"together with the constant, and say in PLAN.md §61 what moved and why", Version)
 	}
 }
@@ -59,16 +60,57 @@ func TestSupportedIsNewestFirst(t *testing.T) {
 	}
 }
 
-func TestProtocolIsThreeAndStillSpeaksTwoAndOne(t *testing.T) {
-	if Version != 3 {
-		t.Errorf("Version = %d, want 3 — References is a schema-payload addition, same as optional/aliases were for 2", Version)
+func TestProtocolIsFourAndStillSpeaksThreeTwoAndOne(t *testing.T) {
+	if Version != 4 {
+		t.Errorf("Version = %d, want 4 — a system-owned flag on a discovered resource, the same additive shape optional/aliases and References had", Version)
 	}
-	for _, v := range []int{3, 2, 1} {
+	for _, v := range []int{4, 3, 2, 1} {
 		if !IsSupported(v) {
 			t.Errorf("protocol %d must still be supported — Supported is a set so raising the version does not orphan every plugin", v)
 		}
 	}
-	if IsSupported(4) {
+	if IsSupported(5) {
 		t.Error("an unreleased protocol must not be accepted")
+	}
+}
+
+// TestProtocolFourIsSupportedAlongsideItsPredecessors.
+//
+// 4 carries `system_owned` and `system_owned_reason` on a discovered resource
+// (PLAN.md §31.1): a plugin declaring that the CLOUD created and manages a
+// resource, which the engine cannot work out for itself without learning about
+// AWS. The reason it needs a version is the reason 2 and 3 did — a plugin built
+// with this SDK talking to an OLDER host would have both keys silently dropped,
+// and a default VPC would be offered for adoption with nothing anywhere saying
+// the plugin had flagged it.
+func TestProtocolFourIsSupportedAlongsideItsPredecessors(t *testing.T) {
+	if Version != 4 {
+		t.Errorf("Version = %d, want 4", Version)
+	}
+	// A protocol 3 plugin reports nothing and behaves exactly as today.
+	// Absence costs what it costs now, which is what makes it safe to add a
+	// field before any plugin sets it.
+	for _, v := range []int{4, 3, 2, 1} {
+		if !slices.Contains(Supported, v) {
+			t.Errorf("Supported does not include %d", v)
+		}
+	}
+}
+
+// TestAProtocolThreeDiscoveryStillMeansWhatItMeant.
+//
+// THE COMPATIBILITY CLAIM, asserted rather than assumed. A plugin built before
+// this version sends a discovered resource with neither new key, and the wire
+// form is the contract: absent must decode as "the plugin said nothing", which
+// is not-system-owned with no reason — exactly the behaviour every plugin in
+// existence already gets. Without this, a future reader has only the doc
+// comment's word for it.
+func TestAProtocolThreeDiscoveryStillMeansWhatItMeant(t *testing.T) {
+	var d Discovered
+	if err := json.Unmarshal([]byte(`{"type":"aws.vpc","provider_id":"vpc-1"}`), &d); err != nil {
+		t.Fatal(err)
+	}
+	if d.SystemOwned || d.SystemOwnedReason != "" {
+		t.Errorf("a protocol 3 discovery decoded as %+v, want no claim at all", d)
 	}
 }

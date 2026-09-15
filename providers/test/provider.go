@@ -300,9 +300,11 @@ func (p *Provider) Discover(ctx context.Context, req provider.DiscoverRequest) (
 		// place (spec §36).
 		st := p.toState("", obj.Type, id, obj.Attributes)
 		out = append(out, provider.DiscoveredResource{
-			Type:       obj.Type,
-			ProviderID: id,
-			Attributes: st.Attributes,
+			Type:              obj.Type,
+			ProviderID:        id,
+			Attributes:        st.Attributes,
+			SystemOwned:       obj.SystemOwned,
+			SystemOwnedReason: obj.SystemOwnedReason,
 		})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ProviderID < out[j].ProviderID })

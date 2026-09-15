@@ -107,18 +107,18 @@ func renderDiscovered(
 		// empty account on purpose: the two send a reader to different places.
 		fmt.Fprintln(w, "Nothing unmanaged found.")
 	} else {
+		notes := anyNoted(shown)
 		tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-		if all {
-			fmt.Fprintln(tw, "TYPE\tID\tNAME\tSTATUS")
-		} else {
-			fmt.Fprintln(tw, "TYPE\tID\tNAME")
-		}
+		fmt.Fprintln(tw, strings.Join(discoverHeader(all, notes), "\t"))
 		for _, r := range shown {
-			if !all {
-				fmt.Fprintf(tw, "%s\t%s\t%s\n", r.Type, r.ProviderID, r.Name)
-				continue
+			cells := []string{r.Type, r.ProviderID, r.Name}
+			if all {
+				cells = append(cells, statusOf(r, managed))
 			}
-			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", r.Type, r.ProviderID, r.Name, statusOf(r, managed))
+			if notes {
+				cells = append(cells, r.SystemOwnedReason)
+			}
+			fmt.Fprintln(tw, strings.Join(cells, "\t"))
 		}
 		tw.Flush()
 	}
@@ -127,6 +127,37 @@ func renderDiscovered(
 		len(found), plural(len(found)), len(unmanaged), len(held), showHint(held, all))
 	fmt.Fprintln(w, "Nothing has been imported.")
 	fmt.Fprintln(w, "Run `infrena import <environment> --generate` to adopt them.")
+}
+
+// discoverHeader is the table's header row. STATUS appears only under all,
+// because in the default view every row would read unmanaged and a column with
+// one value in it is noise. NOTE appears only when something is noted, for the
+// same reason.
+func discoverHeader(all, notes bool) []string {
+	header := []string{"TYPE", "ID", "NAME"}
+	if all {
+		header = append(header, "STATUS")
+	}
+	if notes {
+		header = append(header, "NOTE")
+	}
+	return header
+}
+
+// anyNoted reports whether any row carries a plugin's note about itself, which
+// today means a system-owned declaration.
+//
+// The REASON is what the column holds, not the flag. A row reading "system
+// owned" tells a user a resource is special and nothing about why, and a flag a
+// user overrides without understanding it is a flag that may as well not be
+// there — §3.5 requires the plugin to supply words, so they are what is shown.
+func anyNoted(results []discovery.Result) bool {
+	for _, r := range results {
+		if r.SystemOwnedReason != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // statusOf is the STATUS cell: which environment manages this resource, or that

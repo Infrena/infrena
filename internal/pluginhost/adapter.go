@@ -257,7 +257,13 @@ func (r *remoteProvider) Discover(ctx context.Context, req provider.DiscoverRequ
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, provider.DiscoveredResource{Type: f.Type, ProviderID: f.ProviderID, Attributes: attrs})
+		out = append(out, provider.DiscoveredResource{
+			Type: f.Type, ProviderID: f.ProviderID, Attributes: attrs,
+			// Carried, never decided here. The host has no way to tell whether
+			// a resource is one the cloud made for itself, which is why the
+			// field exists on the wire at all.
+			SystemOwned: f.SystemOwned, SystemOwnedReason: f.SystemOwnedReason,
+		})
 	}
 	return out, nil
 }

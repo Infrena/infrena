@@ -20,6 +20,13 @@ type Result struct {
 	ProviderID string
 	Provider   string
 	Attributes map[string]value.Value
+
+	// SystemOwned and SystemOwnedReason are carried from the provider
+	// unchanged. Discovery does not decide them and could not: knowing that a
+	// VPC is an account's default VPC is knowledge about AWS, and the core
+	// engine does not have any (PLAN.md §3.5).
+	SystemOwned       bool
+	SystemOwnedReason string
 }
 
 // Walk asks every registered provider what exists, and names what comes back
@@ -70,8 +77,10 @@ func Walk(ctx context.Context, reg *registry.Registry, types []string) ([]Result
 				// The INSTANCE name, because that is what a resource's
 				// `provider:` selects and what state must record — a plugin name
 				// cannot tell two accounts apart.
-				Provider:   inst.Name,
-				Attributes: r.Attributes,
+				Provider:          inst.Name,
+				Attributes:        r.Attributes,
+				SystemOwned:       r.SystemOwned,
+				SystemOwnedReason: r.SystemOwnedReason,
 			})
 		}
 	}

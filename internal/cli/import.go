@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -41,7 +42,9 @@ func newImportCommand(opts *GlobalOptions) *cobra.Command {
 		Long: "Adopt resources that already exist, so this tool manages them without recreating " +
 			"them.\n\nWith no type.id arguments, everything discovery finds is imported. Pass " +
 			"`fake.database.db-9` to import one. With two provider instances holding the same " +
-			"provider ID, narrow the command with --provider <instance>.\n\n--generate additionally writes the " +
+			"provider ID, narrow the command with --provider <instance>.\n\nResources this project " +
+			"already manages, and resources a provider says the cloud owns, are left out unless a " +
+			"selector names one; naming one that is already managed is refused.\n\n--generate additionally writes the " +
 			"configuration that declares what was imported, under " + config.DiscoveredDirName +
 			"/. Without it you must write that configuration yourself before the next apply: a " +
 			"resource in state that no configuration declares is scheduled for destruction.",
@@ -89,13 +92,14 @@ func runImport(
 		return err
 	}
 
-	selected, problems, err := selectForImport(ctx, reg, managed, selectors, instance)
+	selected, skipped, problems, err := selectForImport(ctx, reg, managed, selectors, instance)
 	for _, p := range problems {
 		fmt.Fprintf(cmd.ErrOrStderr(), "Warning: %v\n", p)
 	}
 	if err != nil {
 		return err
 	}
+	reportSkipped(cmd.ErrOrStderr(), skipped)
 	if len(selected) == 0 {
 		fmt.Fprintln(cmd.OutOrStdout(), "Nothing to import.")
 		return nil
@@ -234,17 +238,69 @@ func alreadyManaged(st *state.State, selected []discovery.Result) []string {
 // types in every provider, and because the type is what the provider needs to
 // read the resource. `fake.database.db-9` splits at the LAST dot: a type
 // already contains one.
+// It also reports what it LEFT OUT, which the caller prints. A selection that
+// silently shrank is the failure this whole area exists to avoid.
 func selectForImport(
 	ctx context.Context, reg *registry.Registry, managed map[string]string,
 	selectors []string, instance string,
-) ([]discovery.Result, []error, error) {
+) (selected, skipped []discovery.Result, problems []error, err error) {
 	found, problems := discovery.Walk(ctx, reg, nil)
 	kept, err := withoutManaged(found, selectors, managed)
 	if err != nil {
-		return nil, problems, err
+		return nil, nil, problems, err
 	}
+	kept, skipped = withoutSystemOwned(kept, selectors)
 	out, err := narrowToSelectors(kept, selectors, instance)
-	return out, problems, err
+	return out, skipped, problems, err
+}
+
+// withoutSystemOwned drops the resources the plugin says the cloud owns, unless
+// a selector names one, and returns what it dropped so the caller can say so.
+//
+// NEVER BY DEFAULT AND NEVER SILENTLY, which is a weaker claim than refusing on
+// purpose. Importing the default VPC and later destroying it when it leaves
+// configuration is the worst foot gun in discovery, so it must not happen by
+// running `import dev` with no arguments. But adopting one is occasionally
+// right — a team that genuinely manages its default VPC exists — and the engine
+// is not the party to forbid it, so naming it explicitly still works.
+func withoutSystemOwned(
+	found []discovery.Result, selectors []string,
+) (kept, skipped []discovery.Result) {
+	named := make(map[string]bool, len(selectors))
+	for _, s := range selectors {
+		named[s] = true
+	}
+
+	for _, r := range found {
+		if r.SystemOwned && !named[r.Type+"."+r.ProviderID] {
+			skipped = append(skipped, r)
+			continue
+		}
+		kept = append(kept, r)
+	}
+	return kept, skipped
+}
+
+// reportSkipped says what was left out and why, in the plugin's own words.
+//
+// On stderr, with the other diagnostics: what it reports is not part of the
+// import, and a frontend reading stdout is reading what happened.
+func reportSkipped(w io.Writer, skipped []discovery.Result) {
+	if len(skipped) == 0 {
+		return
+	}
+	for _, r := range skipped {
+		reason := r.SystemOwnedReason
+		if reason == "" {
+			// A plugin that flags without explaining. Still reported, because a
+			// silent skip is the thing being avoided.
+			reason = "the provider reports the cloud owns it"
+		}
+		fmt.Fprintf(w, "Skipped %s %s: %s\n", r.Type, r.ProviderID, reason)
+	}
+	fmt.Fprintf(w, "%d resource%s skipped as cloud-owned. "+
+		"Name one as `<type>.<provider id>` to adopt it anyway.\n",
+		len(skipped), plural(len(skipped)))
 }
 
 // withoutManaged drops the discovered resources this project already manages

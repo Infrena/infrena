@@ -229,3 +229,65 @@ func TestTheManagedIndexIsEmptyForAProjectWithNoState(t *testing.T) {
 		t.Errorf("managedProviderIDs = %v, want empty", managed)
 	}
 }
+
+// newProjectWithSystemOwnedResource stands up a project whose fake cloud holds
+// one resource THE CLOUD declares it owns.
+//
+// The declaration lives in the cloud file, which is the plugin's own world,
+// because that is the whole point of §3.5: the engine cannot decide that a VPC
+// is a default VPC without learning about AWS, so the plugin is the only party
+// that can say it.
+func newProjectWithSystemOwnedResource(t *testing.T, id, reason string) string {
+	t.Helper()
+	dir := projectDir(t, "project: myapp\nresources: {}\n")
+	cloud := &test.Cloud{Resources: map[string]*test.CloudResource{
+		id: {
+			Type:              "fake.vpc",
+			Attributes:        map[string]any{"id": id},
+			SystemOwned:       true,
+			SystemOwnedReason: reason,
+		},
+	}}
+	if err := cloud.Save(filepath.Join(dir, test.DefaultCloudPath)); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+func TestDiscoverFlagsWhatTheCloudOwns(t *testing.T) {
+	dir := newProjectWithSystemOwnedResource(t, "vpc-default", "the account's default VPC")
+
+	stdout, _, _ := runCommand(t, dir, "discover")
+
+	if !strings.Contains(stdout, "the account's default VPC") {
+		t.Errorf("discover did not say why the resource is flagged:\n%s", stdout)
+	}
+}
+
+// Never adopted by default and never silently. Naming it explicitly is the
+// escape hatch, because adopting a default VPC is occasionally right and the
+// engine should not be the one forbidding it.
+func TestImportSkipsSystemOwnedUnlessNamed(t *testing.T) {
+	dir := newProjectWithSystemOwnedResource(t, "vpc-default", "the account's default VPC")
+
+	_, stderr, _ := runCommand(t, dir, "import", "dev", "--generate")
+	if !strings.Contains(stderr, "skipped") {
+		t.Errorf("import did not report the skip:\n%s", stderr)
+	}
+	// And the plugin's own words, so a user overriding the flag understands
+	// what they are overriding.
+	if !strings.Contains(stderr, "the account's default VPC") {
+		t.Errorf("the skip does not say why:\n%s", stderr)
+	}
+	if stateExists(t, dir, "dev") {
+		t.Error("a system-owned resource was adopted with no selector naming it")
+	}
+
+	_, stderr, code := runCommand(t, dir, "import", "dev", "fake.vpc.vpc-default", "--generate")
+	if code != ExitOK {
+		t.Errorf("naming it explicitly did not import it: exit %d\n%s", code, stderr)
+	}
+	if !stateExists(t, dir, "dev") {
+		t.Error("naming it explicitly wrote no state")
+	}
+}

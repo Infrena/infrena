@@ -74,6 +74,26 @@ type DiscoveredResource struct {
 	Type       string
 	ProviderID string
 	Attributes map[string]value.Value
+
+	// SystemOwned marks a resource the CLOUD created and manages, which a user
+	// did not ask for and generally must not adopt: AWS's default VPC and
+	// default security group, service-linked roles.
+	//
+	// THE PLUGIN DECLARES IT. The engine cannot detect one without learning
+	// about AWS, and "the core engine must not know about AWS" is this
+	// project's first architectural rule. Spotting GroupName: default, or an
+	// aws:cloudformation:* tag, or a service-linked role path, is AWS
+	// knowledge by any reading, and it belongs to whoever owns the API.
+	//
+	// Nothing REFUSES to import one. It is occasionally right, and the engine
+	// is not the party to forbid it. It is never adopted by default and never
+	// silently, which is a different and weaker claim on purpose.
+	SystemOwned bool
+
+	// SystemOwnedReason says why, in the plugin's own words, for the line a
+	// user reads before deciding. A flag with no reason is a flag a user
+	// overrides without understanding it.
+	SystemOwnedReason string
 }
 
 // Plugin is a provider IMPLEMENTATION: the resource types it offers, and how to

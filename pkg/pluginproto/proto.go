@@ -48,7 +48,19 @@ import (
 // plugin plainly declares one, with nothing anywhere explaining why it was not heard.
 //
 // Announcing 3 makes that a refusal that names the plugin and the versions instead.
-const Version = 3
+//
+// RAISED TO 4 on 2026-09-15, for `system_owned` and `system_owned_reason` on a discovered
+// resource (PLAN.md §31.1). This time the MESSAGE gained two keys rather than the schema
+// payload, and the reason is the same one in a new place: a plugin built with this SDK
+// talking to an older host would have both keys dropped by a lenient decode, so a default
+// VPC the plugin plainly flagged would be offered for adoption with nothing anywhere
+// saying it had been flagged — and importing the default VPC, then destroying it when it
+// leaves configuration, is the worst foot gun discovery has.
+//
+// The other direction costs nothing, which is what keeps 3 supported: a protocol 3 plugin
+// sends neither key, absent decodes as "the plugin made no claim", and that is exactly
+// what every plugin in existence means today.
+const Version = 4
 
 // Supported lists every protocol version this build can talk to, newest first.
 //
@@ -56,7 +68,7 @@ const Version = 3
 // means exactly what it meant then — not optional, no aliases. Nothing about an older
 // plugin becomes wrong, so nothing about it should stop working. §61.1 calls this a
 // MINOR: a version added while the previous one keeps working.
-var Supported = []int{3, 2, 1}
+var Supported = []int{4, 3, 2, 1}
 
 // IsSupported reports whether a plugin's protocol version can be spoken here.
 func IsSupported(v int) bool {
@@ -226,6 +238,13 @@ type Discovered struct {
 	Type       string                 `json:"type"`
 	ProviderID string                 `json:"provider_id"`
 	Attributes map[string]value.Value `json:"attributes,omitempty"`
+
+	// SystemOwned and SystemOwnedReason are the plugin's claim that the cloud
+	// created and manages this resource. Protocol 4; omitempty, so a plugin
+	// making no claim sends what it always sent, and an older host reading a
+	// newer plugin is refused at the handshake rather than quietly dropping it.
+	SystemOwned       bool   `json:"system_owned,omitempty"`
+	SystemOwnedReason string `json:"system_owned_reason,omitempty"`
 }
 
 // ImportParams adopts one existing resource by its provider ID.

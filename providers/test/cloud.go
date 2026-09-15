@@ -24,6 +24,15 @@ type CloudResource struct {
 	Type       string         `json:"type"`
 	Address    string         `json:"address,omitempty"`
 	Attributes map[string]any `json:"attributes"`
+
+	// SystemOwned and SystemOwnedReason let the cloud file declare a resource
+	// this fake cloud made for itself, the way AWS's default VPC is made for an
+	// account. The declaration lives HERE, in the provider's own world, because
+	// the engine cannot work it out without knowing about the cloud in question
+	// — which is the whole reason protocol 4 carries the flag rather than the
+	// engine inferring it.
+	SystemOwned       bool   `json:"system_owned,omitempty"`
+	SystemOwnedReason string `json:"system_owned_reason,omitempty"`
 }
 
 // Retryability is how a failure rule names one of the three

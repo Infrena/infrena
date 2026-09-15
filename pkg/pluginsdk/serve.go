@@ -230,6 +230,7 @@ func (s *server) dispatch(ctx context.Context, req pluginproto.Request) (any, er
 		for _, f := range found {
 			out.Found = append(out.Found, pluginproto.Discovered{
 				Type: f.Type, ProviderID: f.ProviderID, Attributes: f.Attributes,
+				SystemOwned: f.SystemOwned, SystemOwnedReason: f.SystemOwnedReason,
 			})
 		}
 		return out, nil
