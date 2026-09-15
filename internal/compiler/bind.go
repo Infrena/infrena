@@ -255,17 +255,39 @@ func canonicaliseRefs(e *value.Expr, declared map[string]refTarget) {
 //
 // consumingTypeRegistered separates two situations a nil consuming otherwise
 // conflates: the consuming resource's own type is unregistered (nothing to
-// check — the reference-target's own attribute-axis check below catches the
-// still-empty attribute, so this must say nothing rather than pile a second,
-// unrelated diagnostic onto that one), versus a registered type whose
-// attribute genuinely declares no reference (an error, naming the fix).
+// check — this must say nothing rather than pile a diagnostic about a schema
+// it does not have), versus a registered type whose attribute genuinely
+// declares no reference (an error, naming the fix).
+//
+// scope is consulted for exactly one thing: whether the reference's target is
+// a MODULE CALL rather than a resource. A module call has outputs, not
+// schema'd attributes, so there is nothing here to project onto — checking
+// this ahead of consuming's own declaration is what stops `${m}` into an
+// attribute that DOES declare References from being told it is missing an
+// output the user never named (I2), and stops the same reference into an
+// attribute that declares no reference from being told it "passes a
+// resource" when it passes a module (I3).
+//
+// handled records, by Reference.String() — which for every reference this
+// function even considers is just the bare target, since it only ever looks
+// at an empty Attribute — every reference this function has already reported
+// on, INCLUDING the cases where it deliberately says nothing. That is what
+// closes I3: once this function has had its say (or its deliberate silence),
+// the attribute-axis and module-output checks in bindOneExpression must not
+// process the same reference again carrying its still-empty attribute — a
+// second, unrelated diagnostic about the symptom is not a second opinion, it
+// is noise pointing at the wrong cause. A reference this function actually
+// projects (the default case) is NOT marked: it now carries a real attribute
+// and must flow through every check exactly like one written out by hand.
 func projectRefs(
 	e *value.Expr,
+	scope *modules.Scope,
 	consuming *schema.Attribute,
 	consumingTypeRegistered bool,
 	consumingName string,
 	origin value.Origin,
 	ds *diag.Diagnostics,
+	handled map[string]bool,
 ) {
 	if e == nil {
 		return
@@ -274,8 +296,26 @@ func projectRefs(
 		switch {
 		case !consumingTypeRegistered:
 			// Nothing to check, and nothing to say: an unregistered type is not
-			// this stage's problem to report, and reporting it here anyway would
-			// double up on whatever else already catches the empty attribute.
+			// this stage's problem to report — stage 7 already reports the
+			// unregistered type itself, and that is the diagnostic that should
+			// stand alone.
+			handled[e.Ref.String()] = true
+		case isModuleCallTarget(scope, e.Ref.Target.Name):
+			// PLAN.md §14.3 / the design spec's own diagnostics table: a module
+			// exposes outputs, not schema'd attributes, so there is nothing on
+			// the call itself to project — regardless of what the consuming
+			// attribute declares.
+			outs, _ := scope.OutputNames(e.Ref.Target.Name)
+			ds.Add(diag.Diagnostic{
+				Severity: diag.SeverityError,
+				Summary:  "${" + e.Ref.Target.String() + "} names a module call, not a resource",
+				Detail: "A module exposes outputs, not attributes, so there is nothing on " +
+					strconv.Quote(e.Ref.Target.String()) + " itself for `" + consumingName +
+					"` to hold.\nOutputs it declares:\n  " + strings.Join(outs, "\n  "),
+				Action: "Name the output you mean, as ${" + e.Ref.Target.String() + ".<output>}.",
+				Origin: origin,
+			})
+			handled[e.Ref.String()] = true
 		case consuming == nil || consuming.References == nil:
 			ds.Add(diag.Diagnostic{
 				Severity: diag.SeverityError,
@@ -287,13 +327,25 @@ func projectRefs(
 				Action: "Name the attribute you mean, as ${" + e.Ref.Target.String() + ".<attribute>}.",
 				Origin: origin,
 			})
+			handled[e.Ref.String()] = true
 		default:
 			e.Ref.Attribute = consuming.References.Attribute
 		}
 	}
 	for _, arg := range e.Args {
-		projectRefs(arg, consuming, consumingTypeRegistered, consumingName, origin, ds)
+		projectRefs(arg, scope, consuming, consumingTypeRegistered, consumingName, origin, ds, handled)
 	}
+}
+
+// isModuleCallTarget reports whether name is bound, at scope, to a module
+// call rather than a resource. A module call is expanded away before
+// `declared` (bind.go) is built and can never appear there, which is exactly
+// why projectRefs needs this second source of truth — the same reason
+// bindOneExpression's own undeclared-reference branch consults
+// scope.OutputNames instead of `declared`.
+func isModuleCallTarget(scope *modules.Scope, name string) bool {
+	b, ok := scope.Lookup(name)
+	return ok && b.Kind == modules.BindsModule
 }
 
 // checkReferredType reports a reference into a resource of the wrong type.
@@ -524,7 +576,13 @@ func bindOneExpression(
 	// BEFORE canonicaliseRefs: a projected name must then be canonicalised like
 	// any other, in case a plugin declares its reference against an attribute
 	// spelling that is itself an alias of another.
-	projectRefs(e, consuming, consumingTypeRegistered, consumingName, origin, ds)
+	//
+	// handled is projectRefs's own report card: every reference it already had
+	// something to say about — including its deliberate silences — so the
+	// checks below do not process the same still-empty attribute a second
+	// time and pile a second, unrelated diagnostic onto it (I3).
+	handled := map[string]bool{}
+	projectRefs(e, inst.Scope, consuming, consumingTypeRegistered, consumingName, origin, ds, handled)
 
 	// BEFORE the attribute axis is checked below, so an alias is rewritten and then
 	// found rather than reported as a typo naming an attribute that does exist.
@@ -532,6 +590,13 @@ func bindOneExpression(
 
 	self := inst.Address.String()
 	for _, ref := range e.References() {
+		if handled[ref.String()] {
+			// projectRefs already reported on this exact reference (or
+			// deliberately said nothing about it), and it still carries the
+			// empty attribute that got it there. Nothing below this point
+			// checks anything projectRefs did not already settle.
+			continue
+		}
 		// The canonical address, not the bare name: two modules may each
 		// declare a `db`, and `declared` is keyed by the same rendering.
 		target := ref.Target.String()

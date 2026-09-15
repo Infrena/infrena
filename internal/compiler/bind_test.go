@@ -472,6 +472,15 @@ resources:
 	if !ds.HasErrors() {
 		t.Fatal("passing a resource to an attribute that declares no reference must be an error, never a guess")
 	}
+	// I3: before this reference was tracked as "handled" once projectRefs had
+	// reported on it, the still-empty attribute flowed on into the
+	// attribute-axis check below and drew a second, unrelated "fake.vpc has
+	// no attribute \"\"" — spec §2.2's promise that a missing declaration
+	// "costs exactly nothing" was not met. Before this branch, the same
+	// configuration was a single parse error.
+	if len(ds) != 1 {
+		t.Errorf("got %d diagnostics, want exactly 1: %s", len(ds), rendered(ds))
+	}
 	if !strings.Contains(ds[0].Detail, "${net.") {
 		t.Errorf("Detail = %q, want it to show naming an attribute explicitly as the fix", ds[0].Detail)
 	}
@@ -530,16 +539,22 @@ func (noRemotes) Resolve(s source.Source, _ string) (source.Resolution, diag.Dia
 }
 
 // TestAnUnregisteredConsumingTypeSkipsProjectionSilently pins fix round 1's
-// Important: consuming == nil in projectRefs was true both when the
-// attribute declares no reference AND when the consuming resource's own type
-// is unregistered (a nil def yields a nil attribute either way), so an
-// unregistered type reaching a whole-resource reference got the "declares no
-// reference" diagnostic AND then a second, unrelated one from the reference
-// target's own attribute-axis check ("fake.vpc has no attribute \"\"") when
-// the misprojected empty attribute reached it. An unregistered type must
-// report nothing here — it already has nowhere else to report from within
-// this stage, but that is the point: stage 6 does not owe it a diagnostic
-// about a problem that is not what stage 6 checks.
+// Important, tightened by fix round 2's I3: consuming == nil in projectRefs
+// was true both when the attribute declares no reference AND when the
+// consuming resource's own type is unregistered (a nil def yields a nil
+// attribute either way), so an unregistered type reaching a whole-resource
+// reference got the "declares no reference" diagnostic AND then a second,
+// unrelated one from the reference target's own attribute-axis check
+// ("fake.vpc has no attribute \"\"") when the misprojected empty attribute
+// reached it.
+//
+// An unregistered type must report NOTHING from this stage — not even the
+// symptom-y "has no attribute \"\"" fix round 1 left standing. It has no
+// schema to check anything against, and stage 7 (bindSchemas) already reports
+// the unregistered type itself; that is the diagnostic that should stand
+// alone, which is why bindReferences on its own must come back clean here.
+// TestAnUnregisteredConsumingTypeStillFailsCompileOverall, below, is what
+// proves the full pipeline still refuses the configuration.
 func TestAnUnregisteredConsumingTypeSkipsProjectionSilently(t *testing.T) {
 	p := decl(t, `
 project: myapp
@@ -551,16 +566,45 @@ resources:
     vpc_id: ${net}
 `)
 	_, ds := bindReferences(rootOnly(t, p, Options{Environment: "dev"}), Options{Environment: "dev"}, testRegistry(t), testTable())
+	if ds.HasErrors() {
+		t.Fatalf("stage 6 has no schema for an unregistered type and nothing useful to say about a "+
+			"reference into one of its attributes — it must say nothing and let stage 7's own "+
+			"\"unknown resource type\" diagnostic stand alone: %+v", ds)
+	}
+}
+
+// TestAnUnregisteredConsumingTypeStillFailsCompileOverall is the full-Compile
+// half of the test above: stage 6 staying silent must not mean the
+// configuration compiles clean. The type is `fake.doesnotexist` rather than a
+// wholly unknown plugin prefix, deliberately — an unrecognised PLUGIN fails
+// earlier still, at stage 4.5 (providers.Prepare), before stage 6 or stage 7
+// ever run; a type the loaded `fake` plugin itself does not define is what
+// actually reaches stage 7 (bindSchemas), which reports the unregistered
+// type on its own. That must be the ONLY diagnostic — not piled on top of a
+// stage 6 symptom about the reference's still-empty attribute.
+func TestAnUnregisteredConsumingTypeStillFailsCompileOverall(t *testing.T) {
+	files, dir := moduleFixture(t, map[string]string{
+		"infra.yml": `
+project: demo
+environments: {dev: {}}
+resources:
+  net:
+    type: fake.vpc
+  sub:
+    type: fake.doesnotexist
+    vpc_id: ${net}
+`,
+	})
+	_, ds := Compile(files, testRegistry(t), Options{Environment: "dev", Dir: dir})
 	if !ds.HasErrors() {
-		t.Fatal("a whole-resource reference on an unregistered type must still be refused somewhere, since its attribute is never filled in")
+		t.Fatal("an unregistered resource type must still fail the compile overall")
 	}
-	if len(ds) != 1 {
-		t.Errorf("got %d diagnostics, want exactly 1 — an unregistered consuming type must not get "+
-			"a second, unrelated complaint on top of whatever caught the still-empty attribute: %+v", len(ds), ds)
+	got := rendered(ds)
+	if !strings.Contains(got, `unknown resource type "fake.doesnotexist"`) {
+		t.Errorf("want stage 7's own diagnostic about the unregistered type:\n%s", got)
 	}
-	if strings.Contains(rendered(ds), "does not say which of") {
-		t.Errorf("an unregistered consuming type must not get projectRefs's \"declares no reference\" "+
-			"diagnostic — it has no schema to have declared anything, registered or not:\n%s", rendered(ds))
+	if strings.Contains(got, "has no attribute") {
+		t.Errorf("must not also show the symptom of the reference's still-empty attribute:\n%s", got)
 	}
 }
 

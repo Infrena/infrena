@@ -340,6 +340,93 @@ resources:
 	}
 }
 
+// TestAWholeResourceReferenceToAModuleCallIsRefusedNotMisprojected is I2: a
+// module call is not a resource with schema'd attributes, so projectRefs must
+// not treat it like one. Before the fix, `vpc_id: ${prod}` against a
+// consuming attribute that DOES declare References — fake.subnet's vpc_id —
+// let Qualify decline to fold (there is no output named ""), then let
+// projectRefs write "id" onto the still-empty attribute anyway, producing a
+// self-contradicting diagnostic: `module call "prod" has no output "id"`,
+// naming an attribute the user never wrote.
+func TestAWholeResourceReferenceToAModuleCallIsRefusedNotMisprojected(t *testing.T) {
+	files, dir := moduleFixture(t, map[string]string{
+		"modules/app-stack/module.yml": appStack,
+		"infra.yml": `
+project: demo
+environments: {dev: {}}
+modules:
+  - ./modules/app-stack
+resources:
+  prod:
+    type: module.app_stack
+  sub:
+    type: fake.subnet
+    vpc_id: ${prod}
+    cidr: 10.0.0.0/24
+`,
+	})
+
+	_, ds := Compile(files, testRegistry(t), Options{Environment: "dev", Dir: dir})
+	if !ds.HasErrors() {
+		t.Fatal("a bare reference to a module call must be refused, not silently projected")
+	}
+	got := rendered(ds)
+	if strings.Contains(got, `has no output "id"`) {
+		t.Errorf("must not name an attribute (\"id\") the user never wrote — that is projectRefs "+
+			"treating a module call as though it were a fake.vpc:\n%s", got)
+	}
+	if !strings.Contains(got, "module") || !strings.Contains(got, "output") {
+		t.Errorf("the diagnostic must say a module exposes outputs and point at naming one, per the "+
+			"design spec's §8 table:\n%s", got)
+	}
+	if !strings.Contains(got, "endpoint") {
+		t.Errorf("the diagnostic must list the outputs the module DOES declare:\n%s", got)
+	}
+}
+
+// TestAWholeResourceReferenceToAModuleCallWithNoConsumingDeclarationIsOneDiagnostic
+// is I3's module-call variant: `cidr: ${prod}`, where cidr declares no
+// References at all. Before the fix this produced BOTH "passes a resource to
+// an attribute" (wrong — prod is a module, not a resource) AND a second,
+// unrelated `module call "prod" has no output ""`, itself naming an
+// attribute nobody wrote (an empty string) and inviting the equally wrong
+// fix "add \"\" to the module's outputs:".
+func TestAWholeResourceReferenceToAModuleCallWithNoConsumingDeclarationIsOneDiagnostic(t *testing.T) {
+	files, dir := moduleFixture(t, map[string]string{
+		"modules/app-stack/module.yml": appStack,
+		"infra.yml": `
+project: demo
+environments: {dev: {}}
+modules:
+  - ./modules/app-stack
+resources:
+  prod:
+    type: module.app_stack
+  sub:
+    type: fake.subnet
+    vpc_id: ${prod.endpoint}
+    cidr: ${prod}
+`,
+	})
+
+	_, ds := Compile(files, testRegistry(t), Options{Environment: "dev", Dir: dir})
+	if !ds.HasErrors() {
+		t.Fatal("a bare reference to a module call must be refused even where the consuming "+
+			"attribute declares no reference at all")
+	}
+	got := rendered(ds)
+	if strings.Contains(got, "passes a resource") {
+		t.Errorf("must not call a module call a \"resource\":\n%s", got)
+	}
+	if strings.Contains(got, `has no output ""`) || strings.Contains(got, `add "" to`) {
+		t.Errorf("must not report on an empty-string output name — that is the same still-empty "+
+			"attribute reaching a second check:\n%s", got)
+	}
+	if !strings.Contains(got, "module") || !strings.Contains(got, "output") {
+		t.Errorf("the diagnostic must say a module exposes outputs and point at naming one:\n%s", got)
+	}
+}
+
 // TestAWholeResourceReferenceAsAModuleOutputDoesNotEscapeAsAnEmptyAttribute is
 // the C1 regression: a module publishing `outputs: {whole: {value: ${net}}}`,
 // where net is a resource INSIDE the module, used to compile clean. Qualify's
