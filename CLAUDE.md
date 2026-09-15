@@ -38,7 +38,14 @@ learn modules exist. Addresses embed the module path (`module.prod.db`), which m
 resource between modules is a destroy plus a create — there is no `state mv`.
 
 **New in M6 — the Phase-1 CLI surface.** `init` scaffolds a project that validates immediately
-and refuses to overwrite; `graph` renders the dependency tree from the same compile `plan` does;
+and refuses to overwrite — the §4 layout (`infra.yml`, `resources/`, `vars/`, `modules/`) into
+`./infrena` by default, `init [dir]` for anywhere else, environments `production` and `staging`
+matching the `vars/` filenames, and the example resource COMMENTED OUT unless `--provider` names
+one, because a shipped infrena carries no provider and the scaffold has to validate on a machine
+with nothing installed. Every command then finds that project with no `--chdir`: `./infra.yml`
+or `./infrena/infra.yml`, closest first, and never upwards (§4.2), so a command run in a
+subdirectory cannot quietly mutate a project the user did not know they were in. `graph` renders
+the dependency tree from the same compile `plan` does;
 `explain` renders a resource type from the registry, so documentation cannot drift from the
 schemas it describes.
 
@@ -237,8 +244,9 @@ gofmt -l .
 AWS integration tests must be opt-in (build tag or env guard) — **normal CI must not
 require AWS credentials** (§46).
 
-**A SHIPPED INFRENA CARRIES NO PROVIDER** (since 2026-09-13). `init` scaffolds `fake.*`,
-and a project installs `infrena-plugin-fake` like any other plugin. The suites divide:
+**A SHIPPED INFRENA CARRIES NO PROVIDER** (since 2026-09-13). `init` therefore scaffolds its
+example resource commented out unless `--provider` names one, and a project installs
+`infrena-plugin-fake` like any other plugin. The suites divide:
 `tests/integration` builds and runs the REAL plugin from the sibling repository, so the
 path a user takes is proved somewhere; every in-process suite injects the fake double via
 `internal/cli`'s TestMain, which is what §31.1's Testing section always specified.
@@ -282,6 +290,11 @@ recover mid-apply, which makes the symbol table the whole diagnostic.
 **The version is stamped only there** (§61.1), so a release build is the only one that
 reports a real version. A step asserts the built binary says the tag — a wrong `-ldflags`
 path would otherwise ship binaries silently reporting `0.0.0-dev`.
+
+**This work must ship as `v0.7.0` or later**, because `init`'s scaffold pins
+`infrena: ">= 0.7"` and a binary tagged below that would be refused by the very project it
+just wrote. A development build reports `0.0.0-dev` and is exempt from the floor (§61.2), so
+the mismatch would only show up on a released binary.
 
 **Versioning (§61).** Six format versions already exist and stay INDEPENDENT —
 `state.CurrentVersion`, `pluginproto.Version`/`Supported`, `planner.PlanVersion`,

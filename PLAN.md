@@ -324,6 +324,26 @@ The directory is named now so the layout does not change when the engine arrives
 choice is made against a stated purpose rather than in the abstract. Nothing reads it yet, and
 a `templates/` directory present today is not an error.
 
+## 4.2 Where a project is found
+
+A command looks in exactly two places, **closest first**: `./infra.yml`, then
+`./infrena/infra.yml`. The first that exists is the project root. A directory holding both is
+a project at its root that also happens to have a directory called `infrena`, and the root is
+the answer. This is what lets infrastructure live beside the application without every command
+needing a flag.
+
+**The search NEVER walks up, deliberately.** Walking up means a command run deep in a tree
+silently operates on a project the user may not have realised they were in, and state mutation
+is the wrong place for that kind of convenience. A directory with no project of its own is an
+error naming both places that were looked in and pointing at `infrena init`, per §44.
+
+**An explicit `--chdir` skips the search entirely.** The flag means what it says, and a user
+who named a directory has already answered the question.
+
+`init` skips the search outright, since it runs where no project exists yet. `version`,
+`explain`, `discover`, `help` and `completion` are searched for like anything else but are not
+refused when nothing is found: they are legitimately projectless.
+
 ---
 
 # 5. Basic YAML Syntax
@@ -3765,6 +3785,28 @@ refusing one would break applying a plan that was already reviewed. The envelope
 on the first line's `type` field, and `planner.DecodePlan` carries an independent guard
 refusing any document that has one, so a caller that skips the sniffer fails loudly instead
 of decoding a meta line into a plan with no operations and applying nothing.
+
+## 37.3 `init`
+
+`infrena init [dir]` takes an optional directory and defaults to **`./infrena`**, so a fresh
+project sits beside the application and §4.2 finds it with no `--chdir`. It writes the §4
+layout — `infra.yml`, `resources/network.yml`, `vars/default.yml`, `vars/production.yml`,
+`vars/staging.yml`, `modules/.gitkeep` and `.gitignore` — and **refuses to overwrite**,
+checked across every path before anything is written, so a refusal leaves the directory
+exactly as it was.
+
+The scaffolded environments are `production` and `staging`, **matching the `vars/`
+filenames**. An environment no file names, or a file naming an environment nothing declares,
+is dead configuration in the one file a user reads to learn the language. `infra.yml` also
+pins the floor `infrena: ">= 0.7"` (§61.2).
+
+**`--provider` decides whether the example resource is live.** `--provider aws` scaffolds a
+real `providers:` block and a live `aws.vpc`; any other value scaffolds `<provider>.network`.
+**With no flag the example is COMMENTED OUT.** A shipped infrena carries no provider, and what
+`init` writes must pass `infrena validate` immediately on a machine with nothing installed —
+an init whose output does not validate teaches the language wrongly at the one moment a user
+has no way to tell. Commented out it validates bare and still shows the shape; naming a
+provider is the user saying they have one.
 
 ---
 
