@@ -563,3 +563,61 @@ resources:
 			"diagnostic — it has no schema to have declared anything, registered or not:\n%s", rendered(ds))
 	}
 }
+
+func TestPassingTheWrongResourceTypeIsACompileError(t *testing.T) {
+	p := decl(t, `
+project: myapp
+resources:
+  db:
+    type: fake.database
+  sub:
+    type: fake.subnet
+    vpc_id: ${db}
+`)
+	_, ds := bindReferences(rootOnly(t, p, Options{Environment: "dev"}), Options{Environment: "dev"}, testRegistry(t), testTable())
+	if !ds.HasErrors() {
+		t.Fatal("vpc_id refers to fake.vpc; passing a fake.database must fail at compile time, not at the API")
+	}
+	if !strings.Contains(ds[0].Summary, "fake.vpc") || !strings.Contains(ds[0].Summary, "fake.database") {
+		t.Errorf("Summary = %q, want both type names", ds[0].Summary)
+	}
+}
+
+func TestNamingAnAttributeDoesNotEscapeTheTypeCheck(t *testing.T) {
+	// The projection is sugar; the type check is not. Writing the attribute
+	// out avoids the projection and must NOT avoid the check.
+	p := decl(t, `
+project: myapp
+resources:
+  db:
+    type: fake.database
+  sub:
+    type: fake.subnet
+    vpc_id: ${db.id}
+`)
+	_, ds := bindReferences(rootOnly(t, p, Options{Environment: "dev"}), Options{Environment: "dev"}, testRegistry(t), testTable())
+	if !ds.HasErrors() {
+		t.Fatal("${db.id} into an attribute that refers to fake.vpc must fail too")
+	}
+}
+
+func TestAnAttributeWithNoDeclarationIsNotTypeChecked(t *testing.T) {
+	// Coverage buys checking; absence costs nothing. `cidr` declares no
+	// reference, so anything may be interpolated into it, exactly as today.
+	p := decl(t, `
+project: myapp
+resources:
+  db:
+    type: fake.database
+  sub:
+    type: fake.subnet
+    cidr: ${db.engine}
+`)
+	cfg, ds := bindReferences(rootOnly(t, p, Options{Environment: "dev"}), Options{Environment: "dev"}, testRegistry(t), testTable())
+	if ds.HasErrors() {
+		t.Fatalf("an attribute with no declared reference must not be type checked: %+v", ds)
+	}
+	if cfg.Resources == nil {
+		t.Fatal("expected a resolved config")
+	}
+}

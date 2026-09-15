@@ -296,6 +296,47 @@ func projectRefs(
 	}
 }
 
+// checkReferredType reports a reference into a resource of the wrong type.
+//
+// It runs for a reference the user wrote in FULL as well as for a projected
+// one. Naming the attribute explicitly escapes the projection — that is what
+// the projection is sugar for — but it must not escape the check: reaching into
+// the wrong resource is the same mistake whichever spelling it wears.
+//
+// It runs ONLY when the consuming attribute declares a reference. An attribute
+// with no declaration is checked exactly as much as it is today, which is not at
+// all — coverage buys checking, and absence costs nothing.
+func checkReferredType(
+	ref value.Reference,
+	consuming *schema.Attribute,
+	consumingName string,
+	declared map[string]refTarget,
+	origin value.Origin,
+	ds *diag.Diagnostics,
+) {
+	if consuming == nil || consuming.References == nil {
+		return
+	}
+	target, known := declared[ref.Target.String()]
+	if !known || target.typeName == "" {
+		// An undeclared target already has its own diagnostic; do not tell the
+		// same reader about a type mismatch with a resource that does not exist.
+		return
+	}
+	if target.typeName == consuming.References.Type {
+		return
+	}
+	ds.Add(diag.Diagnostic{
+		Severity: diag.SeverityError,
+		Summary: consumingName + " refers to " + consuming.References.Type +
+			", and " + strconv.Quote(ref.Target.String()) + " is " + target.typeName,
+		Detail: "${" + ref.String() + "} reaches into a resource of the wrong type.",
+		Action: "Pass a " + consuming.References.Type +
+			", or name the attribute you mean on a resource of that type.",
+		Origin: origin,
+	})
+}
+
 // sortedTargets lists the declared addresses for a diagnostic, sorted.
 func sortedTargets(set map[string]refTarget) []string {
 	out := make([]string, 0, len(set))
@@ -482,6 +523,12 @@ func bindOneExpression(
 				Detail:   "${" + ref.String() + "} cannot be resolved: its own value would be required to compute it.",
 				Origin:   origin,
 			})
+		case consuming != nil && consuming.References != nil && t.typeName != "" && t.typeName != consuming.References.Type:
+			// The type axis. Runs BEFORE the attribute axis below, deliberately:
+			// once the target is the wrong type, whether it happens to have an
+			// attribute of the projected or written name is not the reader's
+			// problem — the type is.
+			checkReferredType(ref, consuming, consumingName, declared, origin, ds)
 		case len(t.names) > 0 && !t.has(ref.Attribute):
 			// The attribute axis. Nothing checked this before M5: a typo here
 			// passed `validate`, produced a clean plan, and failed halfway
