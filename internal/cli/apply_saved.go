@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -105,8 +104,10 @@ func applySavedPlan(
 		// No approvalUnobtainable check here, and none is needed: --plan is
 		// itself one of the escapes that refusal names. A plan reviewed and
 		// saved earlier is the reviewed-then-applied workflow, so the only
-		// question left is whether the operator standing here approves it.
-		if !confirm(bufio.NewReader(cmd.InOrStdin()), ro.Out(), applyPrompt, "yes") {
+		// question left is whether the operator standing here approves it —
+		// and for the same reason no answer is treated no differently from a
+		// wrong one, there being no further escape left to name.
+		if confirm(cmd.InOrStdin(), ro.Out(), applyPrompt, "yes") != approvalGranted {
 			return finishApply(cmd.ErrOrStderr(), rw, report.ApplyResult{},
 				errors.New("apply cancelled: you must type \"yes\" to approve"))
 		}

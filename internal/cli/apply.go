@@ -50,25 +50,33 @@ var errNoApproval = errors.New(
 		"(`infrena plan --output FILE`) and apply it with --plan")
 
 // approvalUnobtainable reports whether asking for approval would be pointless
-// because there is nobody able to answer.
+// because nobody could see the question. --output silences stdout for the
+// whole run (spec 2.1), so a prompt written there would reach nothing.
 //
-// TWO CONDITIONS, and they are the two halves of the same fact. --output
-// silences stdout for the whole run (spec 2.1), so a prompt written there
-// would reach nothing; and stdin already at end of input means nothing is
-// there to type an answer even if it had.
-//
-// in is the run's ONE stdin reader, and the peek below consumes from it,
-// which is why the caller hands the same reader to confirm rather than
-// building a second one: a fresh bufio.Reader wrapping the same file starts
-// its own buffer, and the byte this peek pulled in would be lost — a user who
-// typed "yes" would be read as having typed "es".
-func approvalUnobtainable(opts *GlobalOptions, in *bufio.Reader) bool {
-	if opts.Output != "" {
-		return true
-	}
-	_, err := in.Peek(1)
-	return errors.Is(err, io.EOF)
+// ONE CONDITION, decided up front because a flag is knowable up front. The
+// other half of "nobody can answer" — stdin already at end of input — is not
+// knowable without reading, and an earlier version of this function detected
+// it by peeking a byte off stdin. On a terminal that peek blocks until the
+// user types, so the prompt appeared only after their keystrokes and a user
+// faced a blank screen with no idea they were being asked to approve a
+// mutation. End of input is therefore decided where the answer is read, by
+// confirm, which prints first and reads second — and which still runs before
+// withLockedEnvironment, so refusing there mutates exactly as little.
+func approvalUnobtainable(opts *GlobalOptions) bool {
+	return opts.Output != ""
 }
+
+// approval is confirm's answer, which has three cases rather than two: an
+// answer that is not the required one is a human declining, while no answer
+// at all means nothing was there to ask. They deserve different exit codes,
+// so confirm reports which it was instead of a bare bool.
+type approval int
+
+const (
+	approvalGranted approval = iota
+	approvalDeclined
+	approvalNoInput
+)
 
 // newApplyCommand builds `infra apply <environment>`: compile, refresh,
 // plan, show it, take approval, execute. Spec §16, §9.2, §10.
@@ -188,16 +196,11 @@ func newApplyCommand(opts *GlobalOptions) *cobra.Command {
 			}
 
 			if !opts.AutoApprove {
-				// ONE reader for stdin, shared by the check and the prompt.
-				// See approvalUnobtainable for why a second one would eat the
-				// answer.
-				in := bufio.NewReader(cmd.InOrStdin())
-
 				// BEFORE withLockedEnvironment, and before anything is asked
 				// of a provider: a run that cannot be approved must leave the
 				// environment exactly as it found it, unlocked and unchanged,
 				// rather than discovering the problem at the prompt.
-				if approvalUnobtainable(opts, in) {
+				if approvalUnobtainable(opts) {
 					return finishApply(cmd.ErrOrStderr(), rw, report.ApplyResult{}, errNoApproval)
 				}
 
@@ -214,7 +217,13 @@ func newApplyCommand(opts *GlobalOptions) *cobra.Command {
 						"Type the environment name to confirm: ", environment)
 					want = environment
 				}
-				if !confirm(in, ro.Out(), prompt, want) {
+				// Still before the lock, so end of input discovered here refuses
+				// on exactly the same terms as the flag check above: nothing has
+				// been locked and nothing has been mutated.
+				switch confirm(cmd.InOrStdin(), ro.Out(), prompt, want) {
+				case approvalNoInput:
+					return finishApply(cmd.ErrOrStderr(), rw, report.ApplyResult{}, errNoApproval)
+				case approvalDeclined:
 					return finishApply(cmd.ErrOrStderr(), rw, report.ApplyResult{},
 						errors.New("apply cancelled: you must type \"yes\" to approve"))
 				}
@@ -342,23 +351,30 @@ func computePlan(ctx context.Context, cmd *cobra.Command, backend *state.Local, 
 // refused, not generously accepted: a command about to mutate or destroy
 // infrastructure should fail closed on ambiguous input.
 //
-// Scan returning false — EOF or any other read error — is treated as
-// declined. See this task's doc comment for why that must never block.
+// PRINT, THEN READ, and the order is the whole point rather than the
+// obvious way round. Nothing may touch stdin before the prompt has been
+// written, because on a terminal any read blocks until the user types: a
+// check that read first would hold the most important prompt in the tool
+// back until after the keystrokes it was meant to ask for.
+//
+// Scan returning false is end of input — a closed pipe, /dev/null, a CI job
+// with no terminal — and is reported as approvalNoInput rather than as a
+// decline, because nobody was there to decline. Callers that can offer an
+// escape turn it into errNoApproval and exit 77.
 //
 // The prompt goes to out rather than to cmd.OutOrStdout() directly, because
 // out is the run's own writer: under --output stdout carries nothing at all
 // (spec 2.1), and a prompt is not the exception to that rule.
-//
-// in is passed rather than taken from cmd, because approvalUnobtainable has
-// already peeked at stdin through a buffered reader and this has to be that
-// same reader — see its doc comment for what a second one costs.
-func confirm(in io.Reader, out io.Writer, prompt, want string) bool {
+func confirm(in io.Reader, out io.Writer, prompt, want string) approval {
 	fmt.Fprint(out, prompt)
 	scanner := bufio.NewScanner(in)
 	if !scanner.Scan() {
-		return false
+		return approvalNoInput
 	}
-	return scanner.Text() == want
+	if scanner.Text() != want {
+		return approvalDeclined
+	}
+	return approvalGranted
 }
 
 // dependentsOf builds the `deps` function planner.BuildExecution requires.

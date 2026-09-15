@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/infrena/infrena/internal/state"
@@ -851,9 +852,8 @@ func TestApprovalRuleDoesNotFireWhenItShouldNot(t *testing.T) {
 	}
 }
 
-// The reader handed to confirm must be the SAME one the peek read through, or
-// the peek eats the first byte of what the user actually typed and every
-// answer arrives one character short.
+// One reader for stdin, read exactly once: whatever the user types must
+// arrive at confirm intact, with no earlier read having consumed part of it.
 func TestApprovalPeekDoesNotEatTheAnswer(t *testing.T) {
 	dir := newProjectFixture(t)
 
@@ -864,5 +864,81 @@ func TestApprovalPeekDoesNotEatTheAnswer(t *testing.T) {
 	}
 	if !stateExists(t, dir, "dev") {
 		t.Error("nothing was applied despite an approved apply")
+	}
+}
+
+// lockedBuffer serializes writes so watchedStdin below can read what has
+// already been printed while the command is still running, without racing
+// the progress renderer's own writes under -race.
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+// watchedStdin answers like an ordinary reader but records what stdout held
+// at the moment it was FIRST read, which is the only way to observe the
+// ordering from outside: on a terminal a read blocks, so anything printed
+// after the first read is printed after the user has already typed.
+type watchedStdin struct {
+	out     *lockedBuffer
+	answer  io.Reader
+	read    bool
+	printed string
+}
+
+func (s *watchedStdin) Read(p []byte) (int, error) {
+	if !s.read {
+		s.read = true
+		s.printed = s.out.String()
+	}
+	return s.answer.Read(p)
+}
+
+// TestApprovalPromptIsPrintedBeforeStdinIsRead pins the regression that
+// detecting end of input by peeking a byte off stdin introduced. That peek
+// ran before the prompt was written, and on a terminal it blocks until the
+// user types — so the user saw a blank screen with no indication that the
+// single most important prompt in the tool was waiting on them, and the
+// prompt appeared only after their keystrokes. Nothing may read stdin until
+// the question has reached stdout.
+func TestApprovalPromptIsPrintedBeforeStdinIsRead(t *testing.T) {
+	dir := projectDir(t, `
+project: myapp
+resources:
+  network:
+    type: fake.network
+    cidr: 10.20.0.0/16
+`)
+	out := &lockedBuffer{}
+	stdin := &watchedStdin{out: out, answer: strings.NewReader("yes\n")}
+
+	opts := &GlobalOptions{Dir: dir, Parallelism: 4}
+	cmd := newApplyCommand(opts)
+	cmd.SetArgs([]string{"dev"})
+	cmd.SetIn(stdin)
+	cmd.SetOut(out)
+	var stderr bytes.Buffer
+	cmd.SetErr(&stderr)
+
+	if err := cmd.Execute(); err != nil && !errors.Is(err, errChanges) {
+		t.Fatalf("Execute() = %v, want a successful apply: %s", err, stderr.String())
+	}
+	if !stdin.read {
+		t.Fatal("stdin was never read, so the test proves nothing about the order")
+	}
+	if !strings.Contains(stdin.printed, "Enter a value:") {
+		t.Errorf("stdin was read before the approval prompt reached stdout — a user would face a blank screen.\nprinted before the first read:\n%s", stdin.printed)
 	}
 }
