@@ -162,11 +162,19 @@ Two rules the design leaves behind, and both still bind:
 segments** (2026-09-14, `PLAN.md` §10.5). Six forms, each with exactly one meaning:
 `${var.region}` (a variable), `${var.tags.team}` (a path into a map variable),
 `${var.azs[0]}` (a list entry), `${vpc.id}` (a resource attribute), `${vpc.tags.Name}`
-(a path into one), and `${vpc}` reserved for a later change that projects a
-resource itself. `var` is reserved as a resource name, checked at the declaration; today
-that bare single segment (`${vpc}`) is a parse error naming its own fix rather than a
-variable reference, and the process variables `${var.environment}`/`${var.project}` take
-the prefix like any other.
+(a path into one), and `${vpc}` — pass the resource itself, and the engine projects to
+whichever attribute the PLUGIN declared that consuming attribute refers to (`PLAN.md`
+§14.3). `var` is reserved as a resource name, checked at the declaration, and the process
+variables `${var.environment}`/`${var.project}` take the prefix like any other.
+
+**`${vpc}` projects; it does not guess.** The plugin's schema says that, say, `vpc_id`
+refers to `aws.ec2.vpc`'s `id`, and the engine reads that declaration rather than ever
+inferring one — that knowledge belongs to whoever owns the API being called, not to infrena.
+`${vpc}` is sugar over `${vpc.id}`; both spellings are legal forever. An attribute with no
+declared reference makes `${vpc}` a compile error naming the fix, never a fallback to "it's
+probably the id" — so a relationship the plugin hasn't declared costs nothing beyond what it
+costs today. The type check that catches `vpc_id: ${database}` (wrong resource type) fires
+identically whether the attribute is named explicitly or left for the engine to project.
 
 - A path indexes a map with dotted keys or a list with `[n]` — an integer literal only, no
   arithmetic, no negative indices — and the two compose in either order. A missing key or

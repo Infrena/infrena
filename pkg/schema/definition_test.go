@@ -181,3 +181,35 @@ func TestAWellFormedReferenceLoads(t *testing.T) {
 		t.Fatalf("a well-formed reference must load: %v", err)
 	}
 }
+
+// TestReferencesAndFieldsSurviveTheWire. Same shape as
+// TestAliasesSurviveTheWire, for the two fields protocol 3 added (PLAN.md
+// §14.3): a plugin declares them, and the host learns them only if
+// attributeWire actually carries them across. Spec one's own testing section
+// records that exactly this shape of bug — a schema field that round-trips in
+// memory but is silently dropped by MarshalJSON — reached final review once
+// already, because the in-memory tests never crossed the wire.
+func TestReferencesAndFieldsSurviveTheWire(t *testing.T) {
+	before := Attribute{
+		Kind:       value.KindString,
+		References: &Reference{Type: "test.vpc", Attribute: "id"},
+		Fields:     map[string]Attribute{"name": {Kind: value.KindString}},
+	}
+	data, err := before.MarshalJSON()
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var after Attribute
+	if err := after.UnmarshalJSON(data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if after.References == nil || *after.References != *before.References {
+		t.Errorf("References = %+v, want %+v — a plugin's declared relationship must not be "+
+			"dropped silently, or `${vpc}` would report \"no reference target declared\" against "+
+			"a plugin that clearly declares one", after.References, before.References)
+	}
+	if len(after.Fields) != 1 || after.Fields["name"].Kind != value.KindString {
+		t.Errorf("Fields = %+v, want {name: string} — a declared map shape must not be dropped, "+
+			"or a typo past the top-level key would go back to being caught only at apply", after.Fields)
+	}
+}

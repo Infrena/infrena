@@ -74,6 +74,35 @@ func TestExplainMarksSensitiveAndForceNew(t *testing.T) {
 	}
 }
 
+// TestExplainRendersDeclaredReferences. PLAN.md §14.3: a provider-declared
+// reference is what lets `vpc_id: ${vpc}` project to the right attribute
+// instead of a user guessing id versus arn. `explain` is where that
+// declaration must be discoverable, so a user can learn what a resource may
+// be passed without reading the plugin's source.
+func TestExplainRendersDeclaredReferences(t *testing.T) {
+	out, err := explainOut(t, "explain", "fake.subnet")
+	if err != nil {
+		t.Fatalf("explain: %v\n%s", err, out)
+	}
+	var vpcIDLine, cidrLine string
+	for _, line := range strings.Split(out, "\n") {
+		switch {
+		case strings.Contains(line, "vpc_id"):
+			vpcIDLine = line
+		case strings.Contains(line, "cidr"):
+			cidrLine = line
+		}
+	}
+	if !strings.Contains(vpcIDLine, "refers to fake.vpc.id") {
+		t.Errorf("vpc_id must show its declared reference (target type and attribute):\n%s", out)
+	}
+	// cidr declares no reference (providers/test/definitions.go says so
+	// explicitly), so it must not be marked as one.
+	if strings.Contains(cidrLine, "refers to") {
+		t.Errorf("cidr declares no reference and must not be shown as one:\n%s", out)
+	}
+}
+
 // TestExplainATypeWhoseProviderIsNotInstalledSaysWhereToPutIt.
 //
 // `explain` needs no project: the TYPE names the plugin, so `explain aws.rds` is

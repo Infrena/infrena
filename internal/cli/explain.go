@@ -123,6 +123,13 @@ func section(w io.Writer, title string, names []string, def *schema.ResourceDefi
 		if a.ForceNew {
 			notes = append(notes, "replaces on change")
 		}
+		// PLAN.md §14.3: a declared reference is what lets `${vpc}` project to the
+		// right attribute instead of a user guessing id versus arn. `explain` is
+		// where that declaration must be discoverable without reading the
+		// plugin's source.
+		if a.References != nil {
+			notes = append(notes, fmt.Sprintf("refers to %s.%s", a.References.Type, a.References.Attribute))
+		}
 		if d := describeDefault(a); d != "" {
 			notes = append(notes, d)
 		}

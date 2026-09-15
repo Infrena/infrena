@@ -1895,6 +1895,82 @@ byte-stable however it was written.
 
 ---
 
+## 14.3 Provider-declared resource references
+
+**Agreed 2026-09-14**, from a concrete complaint James had building Terraform:
+
+> I've had this exact issue, creating new terraform, providing an id when it wanted an
+> arn, and vice versa. Just passing the VPC to it seems way easier.
+
+A reference used to name an attribute and stop there — the engine had no idea what the
+attribute MEANT. `vpc_id: ${vpc.arn}` compiled, planned, applied, and was rejected by the
+cloud, or worse, accepted and wrong: `vpc_id` was a string to infrena and `${vpc.arn}` was a
+string to infrena, and nothing in between knew a VPC's id and its arn are different things.
+
+```yaml
+subnet:
+  type: aws.ec2.subnet
+  vpc_id: ${vpc}       # aws.ec2.subnet's vpc_id refers to aws.ec2.vpc's id
+  cidr: 10.0.1.0/24
+```
+
+### THE PLUGIN DECIDES. The engine never guesses.
+
+Infrena cannot know that Cloud Control's `AWS::EC2::Subnet.VpcId` wants a VPC's id rather
+than its arn — that is knowledge about an API, and it belongs to whoever owns the API. So
+`schema.Attribute` gained `References *Reference{Type, Attribute}`, and the engine's whole
+part in it is to READ that declaration and project `${vpc}` into `${vpc.<attribute>}` at
+stage 6, beside canonicalisation. This is DATA, per §31.1's rule that nothing in
+`pkg/schema` may gain a function-typed field: a plugin that resolved its own references
+would be a second resolver, free to disagree with the engine's about what a reference means
+— exactly the class of bug two independent implementations of one fact always produce.
+
+### `${vpc}` is SUGAR over `${vpc.id}`, and that is the property that ships it
+
+Both spellings are legal, forever. `${vpc}` never replaces `${vpc.id}`; it is shorthand for
+it, filled in from the declaration.
+
+That is what makes partial coverage shippable rather than a half-feature. An attribute
+whose plugin has not declared a reference is not a smaller version of this feature — it gets
+the SAME behaviour as before this section existed: `${vpc}` is an error naming the fix
+("name the attribute you mean, as `${vpc.<attribute>}`"), and `${vpc.id}` keeps working
+exactly as it always has. **The engine never falls back to "probably the id".** A missing
+declaration degrades to today's behaviour; it never degrades to a wrong value shipped
+silently. That is what lets a plugin publish references for the relationships it has
+reviewed and say nothing about the rest, rather than blocking on covering every relationship
+before any of them ship.
+
+### The type check fires for both spellings
+
+Naming the attribute explicitly does not escape the check — only the projection.
+`vpc_id: ${database}` and `vpc_id: ${database.id}` are both compile errors when `vpc_id`
+declares `aws.ec2.vpc` and `database` is an `aws.rds.dbinstance`, because reaching into the
+wrong resource is the same mistake whichever spelling it wears. This is half of this
+feature's value: Terraform finds this kind of mistake when the API says no; infrena finds it
+before anything runs.
+
+### `References` and `Requirement`: different axes, not yet reconciled
+
+`schema.Requirement` already declares relationships, and the AWS overlay already
+hand-maintains them — "a subnet needs a VPC to exist at all", which powers §17's
+missing-resource detection before any attribute is examined. `References` is a different
+axis: "this particular attribute holds a VPC's id." A `Requirement` cannot do the
+projection, because it never says which attribute carries the reference, nor which
+attribute of the target is used — the very id-versus-arn question this section exists to
+answer. But `References` CAN derive a `Requirement`: an attribute required to refer to type
+X means the type requires an X.
+
+**Left unreconciled, deliberately, for now.** Two hand-maintained tables saying
+overlapping things about the same relationship is how they come to disagree, so leaving them
+alone is not neutral — but deriving `Requirement` from `References` today would silently
+DROP requirements the overlay already states for relationships the AWS plugin's heuristic
+has not yet found or had approved, since its coverage is partial by design. The correct
+order is populate `References` first, leave `requirements:` alone, and add a
+generation-time check that every `requirements:` entry has a matching `References`
+somewhere — a cross-check rather than a replacement, until coverage earns the derivation.
+
+---
+
 # 15. Resource Lifecycle
 
 Support:
