@@ -1196,6 +1196,8 @@ Add the fourth row to the exit-code table, with the condition spelled out: chang
 
 Record that `--output` silences stdout for every command, that `plan --output` now writes the report stream with the artifact on a `plan` line, and that `apply --plan` reads both envelopes.
 
+- [ ] **Step 2b: Fix the stale comment at `internal/planner/plan.go:263`**, which still says report.Version is 1. Found during Task 2 and left as out of scope there.
+
 - [ ] **Step 3: Update `CLAUDE.md`**
 
 In the `--output` paragraph, which currently says the two meanings are "deliberately" different: they are now one format with a `plan` line, `report.Version` is 2, and `planner.PlanVersion` deliberately did not move because the plan's own schema is unchanged.
