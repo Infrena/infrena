@@ -107,9 +107,14 @@ func Generate(resources []Resource, reg *registry.Registry, opts Options) ([]Fil
 	}
 	sort.Strings(names)
 
+	// ONE index over the WHOLE set, built before any file is rendered: a subnet
+	// and the VPC it points at are written to different files, so an index
+	// scoped to the file being rendered would resolve nothing that matters.
+	ix := buildRefIndex(resources, reg)
+
 	out := make([]File, 0, len(names))
 	for _, name := range names {
-		b, err := renderFile(grouped[name], reg, opts)
+		b, err := renderFile(grouped[name], reg, ix, opts)
 		if err != nil {
 			return nil, err
 		}
@@ -119,7 +124,7 @@ func Generate(resources []Resource, reg *registry.Registry, opts Options) ([]Fil
 }
 
 // renderFile writes one `resources:` document.
-func renderFile(resources []Resource, reg *registry.Registry, opts Options) ([]byte, error) {
+func renderFile(resources []Resource, reg *registry.Registry, ix refIndex, opts Options) ([]byte, error) {
 	sorted := append([]Resource(nil), resources...)
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Name < sorted[j].Name })
 
@@ -133,7 +138,7 @@ func renderFile(resources []Resource, reg *registry.Registry, opts Options) ([]b
 			// without becoming something the compiler has to reject.
 			key.HeadComment = "imported from " + r.ProviderID
 		}
-		node, notes, err := renderResource(r, reg, opts)
+		node, notes, err := renderResource(r, reg, ix, opts)
 		if err != nil {
 			return nil, err
 		}
@@ -186,7 +191,7 @@ func renderFile(resources []Resource, reg *registry.Registry, opts Options) ([]b
 //
 // The first two say so in a comment. A silent omission tells a reader the
 // resource has no password, rather than that they must supply one.
-func renderResource(r Resource, reg *registry.Registry, opts Options) (*yaml.Node, []string, error) {
+func renderResource(r Resource, reg *registry.Registry, ix refIndex, opts Options) (*yaml.Node, []string, error) {
 	def, known := reg.Definition(r.Type)
 
 	node := &yaml.Node{Kind: yaml.MappingNode}
@@ -217,8 +222,10 @@ func renderResource(r Resource, reg *registry.Registry, opts Options) (*yaml.Nod
 			continue
 		}
 
+		var attr schema.Attribute
 		if known {
-			attr, declared := def.Attribute(name)
+			var declared bool
+			attr, declared = def.Attribute(name)
 			if !declared {
 				// The provider reported something its own schema does not
 				// declare. Emitting it produces "no such attribute"; the
@@ -263,9 +270,28 @@ func renderResource(r Resource, reg *registry.Registry, opts Options) (*yaml.Nod
 		if !keep {
 			continue
 		}
+		// A REFERENCE, where the plugin declared one and its target is in this
+		// generated set: `VpcId: ${vpc-app1}` rather than a pasted cloud id.
+		// After the omission checks above, because a reference is not a reason
+		// to emit an attribute that equals its default — §27 stays minimal.
+		//
+		// Skipped where plainValue hid a leaf: an attribute with a secret
+		// inside it is emitted by the path that knows how to strip one, and
+		// projecting the original value here would put it back.
 		scalar := &yaml.Node{}
-		if err := scalar.Encode(plain); err != nil {
-			return nil, nil, fmt.Errorf("rendering %s.%s: %w", r.Name, name, err)
+		var refNote string
+		projected := false
+		if known && attr.References != nil && len(hidden) == 0 {
+			var n *yaml.Node
+			n, refNote, projected = ix.project(attr.References, v)
+			if projected {
+				scalar = n
+			}
+		}
+		if !projected {
+			if err := scalar.Encode(plain); err != nil {
+				return nil, nil, fmt.Errorf("rendering %s.%s: %w", r.Name, name, err)
+			}
 		}
 		// The FRIENDLY name where the plugin declares one (PLAN.md §14.1). A
 		// generated file is configuration a person edits, so it should read the way
@@ -275,8 +301,14 @@ func renderResource(r Resource, reg *registry.Registry, opts Options) (*yaml.Nod
 		if known {
 			shown = def.Display(name)
 		}
-		node.Content = append(node.Content,
-			&yaml.Node{Kind: yaml.ScalarNode, Value: shown}, scalar)
+		key := &yaml.Node{Kind: yaml.ScalarNode, Value: shown}
+		if refNote != "" {
+			// On the ATTRIBUTE, not on the resource, because a reader meets
+			// this literal on the line it is about and the resource-level
+			// notes are for what is not in the file at all.
+			key.HeadComment = refNote
+		}
+		node.Content = append(node.Content, key, scalar)
 	}
 
 	if len(omittedSecrets) > 0 {
