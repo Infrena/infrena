@@ -72,7 +72,10 @@ func NewRootCommand() *cobra.Command {
 	// One place, so a command added later inherits the check rather than
 	// having to remember it.
 	root.PersistentPreRunE = func(cmd *cobra.Command, args []string) error {
-		return checkUnsupportedFlags(opts)
+		if err := checkUnsupportedFlags(opts); err != nil {
+			return err
+		}
+		return resolveProjectRoot(cmd, opts)
 	}
 
 	root.AddCommand(newVersionCommand(opts))
