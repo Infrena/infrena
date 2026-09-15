@@ -257,7 +257,15 @@ func (p Plan) MarshalJSON() ([]byte, error) { return p.encode(true) }
 // derived from the structs so that what is and is not persisted is explicit
 // and cannot drift when a struct gains a field.
 type planWire struct {
-	Version     int              `json:"version"`
+	Version int `json:"version"`
+	// Type is never set on a plan artifact. It exists on the wire struct only so
+	// DecodePlan can REFUSE a report line, which is the one document that would
+	// otherwise decode cleanly into this struct: report.Version is 1, the same
+	// integer PlanVersion checks for, and encoding/json ignores unknown fields by
+	// default. See the spec's 2.4. A caller that reaches here without going
+	// through the envelope sniffer still fails loudly rather than applying a plan
+	// with no operations.
+	Type        string           `json:"type,omitempty"`
 	CreatedAt   *time.Time       `json:"created_at,omitempty"`
 	Project     string           `json:"project"`
 	Environment string           `json:"environment"`
@@ -438,6 +446,12 @@ func DecodePlan(data []byte) (*Plan, error) {
 	dec.UseNumber()
 	if err := dec.Decode(&w); err != nil {
 		return nil, fmt.Errorf("this is not a plan artifact: %w", err)
+	}
+	if w.Type != "" {
+		return nil, fmt.Errorf(
+			"this is a %q line from a report stream, not a plan artifact\n"+
+				"Point --plan at the file `infrena plan --output` wrote, not at a line from it",
+			w.Type)
 	}
 	if w.Version != PlanVersion {
 		return nil, fmt.Errorf("this plan is version %d and this infrena writes version %d\n"+

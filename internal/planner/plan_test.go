@@ -531,3 +531,38 @@ func TestTheArtifactRecordsWhichInstanceAnOperationActsOn(t *testing.T) {
 		t.Errorf("the artifact does not record the instance:\n%s", out)
 	}
 }
+
+// TestDecodePlanRefusesAReportLine pins the hazard in spec 2.4: json.Decoder
+// reads one value and stops, so pointed at a report stream DecodePlan would
+// consume the meta line. Unknown fields are ignored and report.Version is 1,
+// the same integer PlanVersion checks, so it would succeed and yield a plan
+// with no operations that applies nothing, silently.
+func TestDecodePlanRefusesAReportLine(t *testing.T) {
+	meta := []byte(`{"type":"meta","version":1,"command":"plan","environment":"dev"}`)
+
+	_, err := DecodePlan(meta)
+	if err == nil {
+		t.Fatal("DecodePlan accepted a report meta line as a plan artifact")
+	}
+	if !strings.Contains(err.Error(), "meta") {
+		t.Errorf("error does not name what it actually got: %v", err)
+	}
+}
+
+// A plan artifact has never carried a "type" field, so nothing legitimate is
+// refused by the guard above.
+func TestDecodePlanStillAcceptsABareArtifact(t *testing.T) {
+	p := &Plan{Version: PlanVersion, Project: "p", Environment: "dev"}
+	data, err := json.MarshalIndent(p, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := DecodePlan(data)
+	if err != nil {
+		t.Fatalf("DecodePlan refused a bare artifact: %v", err)
+	}
+	if got.Environment != "dev" {
+		t.Errorf("Environment = %q, want dev", got.Environment)
+	}
+}
