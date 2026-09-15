@@ -2013,32 +2013,36 @@ project. Refusing it at validation is simpler than teaching every consumer of `R
 to recurse, and it keeps the failure at the moment the plugin loads rather than at the
 moment a user's `${vpc}` quietly does not become `${vpc.id}`.
 
-### A whole-resource reference is refused as a module input, and as a module output
+### A module boundary carries no `References` in either direction
 
 `${net}` is sugar the ENGINE fills in from a consuming attribute's own `References`
-declaration (above) — and a module's `inputs:` and `outputs:` are not consuming attributes
-in that sense. Both are refused, and for the same reason:
+declaration (above). A MODULE BOUNDARY has no such declaration to read, on either side of
+it, and that is ONE rule, not two: an input declares a TYPE — string, integer, map — not a
+relationship to a resource (§9), and an output PUBLISHES A VALUE with no consuming attribute
+in sight to have declared one. Neither carries `References`, so projecting a whole-resource
+reference at a module boundary would be the engine guessing, which this section forbids
+outright — the same reason, stated once, because it is the same hole seen from both ends.
 
-- **As a module input** (`internal/modules/inputs.go`, `refuseWholeResourceInput`): a
-  module input declares a TYPE — string, integer, map — not a relationship to a resource
-  (§9). There is no `References` anywhere for `${net}` to be projected against, so the
-  engine has nothing honest to fill the attribute in with.
-- **As a module output** (`internal/modules/outputs.go`, `refuseWholeResourceOutput`): a
-  module output PUBLISHES A VALUE. By the time anything reads it, the module has been
-  expanded and the resource behind `${net}` no longer has a name a projection could resolve
-  against — and there is no consuming declaration at the publishing end either, only
-  whatever the eventual caller's attribute happens to declare, which this stage cannot see.
+`internal/modules/inputs.go`'s `refuseWholeResourceInput` and `outputs.go`'s
+`refuseWholeResourceOutput` are the two enforcement points, and BOTH must exist for the rule
+to hold: a boundary closed from only one direction is not a smaller version of this rule, it
+is a hole with a different shape. That is exactly what shipped first — the input side was
+closed, the output side was not, and the output side is the more dangerous half to leave
+open. Passing a whole resource as a module INPUT fails loudly, at compile time, the moment
+it is written. Publishing one as a module OUTPUT compiles clean: the failure is invisible
+until whatever eventually consumes the output reaches apply — after the module's own
+resources already exist.
 
-**Both are a LANGUAGE RULE this branch invented, and it exists to close one specific
-hazard: an empty-attribute reference escaping compiler stage 6.** `expressions.ResourceScope.Attribute`
+**This is a LANGUAGE RULE this branch invented, and it exists to close one specific hazard:
+an empty-attribute reference escaping compiler stage 6.** `expressions.ResourceScope.Attribute`
 looks an attribute up by name in a plain map; `""` misses, so a reference that keeps an
 empty attribute all the way to the executor does not fail at compile time — it stays
 deferred forever, and the run either dies mid-apply after real infrastructure already
-exists, or creates the resource with the attribute silently unset. `${net}` bare, with no
-consuming declaration to project against, is exactly such a reference, so it is refused at
-the one place each side can still say why, naming the fix: write `${net.<attribute>}`
-instead. Nothing downstream of stage 6 (nor of a module boundary) may ever see a reference
-whose `Attribute` is empty.
+exists, or creates the resource with the attribute silently unset. `${net}` bare, at a
+module boundary with no consuming declaration to project against, is exactly such a
+reference, so it is refused at the one place each side can still say why, naming the fix:
+write `${net.<attribute>}` instead. Nothing downstream of stage 6, and nothing that crosses
+a module boundary in either direction, may ever see a reference whose `Attribute` is empty.
 
 ---
 
