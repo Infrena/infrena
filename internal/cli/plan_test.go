@@ -106,7 +106,10 @@ resources:
 	}
 }
 
-func TestPlanOutputWritesA0600JSONFile(t *testing.T) {
+// The file is a report stream now, not a bare artifact — one format for
+// every command (spec 2.4) — but it is still 0600, because the plan line it
+// carries holds the cleartext values apply --plan reads back (spec §12.2).
+func TestPlanOutputWritesA0600ReportStreamCarryingThePlan(t *testing.T) {
 	dir := projectDir(t, `
 project: myapp
 resources:
@@ -114,7 +117,7 @@ resources:
     type: fake.network
     cidr: 10.20.0.0/16
 `)
-	outPath := filepath.Join(t.TempDir(), "plan.json")
+	outPath := filepath.Join(t.TempDir(), "plan.ndjson")
 	opts := &GlobalOptions{Dir: dir, Parallelism: 4, Output: outPath}
 	cmd := newPlanCommand(opts)
 	cmd.SetArgs([]string{"dev"})
@@ -134,9 +137,26 @@ resources:
 	if err != nil {
 		t.Fatalf("reading plan file: %v", err)
 	}
-	var decoded map[string]any
-	if err := json.Unmarshal(data, &decoded); err != nil {
-		t.Fatalf("--output file is not valid JSON: %v", err)
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	if len(lines) < 2 {
+		t.Fatalf("--output is not a stream:\n%s", data)
+	}
+	var meta map[string]any
+	if err := json.Unmarshal([]byte(lines[0]), &meta); err != nil {
+		t.Fatalf("first line is not valid JSON: %v", err)
+	}
+	if meta["type"] != "meta" || meta["command"] != "plan" {
+		t.Errorf("first line is not plan's meta line: %s", lines[0])
+	}
+
+	// Read back through the same door apply --plan uses, which is the only
+	// assertion that says the artifact survived the envelope.
+	p, err := readSavedPlan(outPath)
+	if err != nil {
+		t.Fatalf("readSavedPlan on plan --output: %v", err)
+	}
+	if !p.HasChanges() {
+		t.Error("the plan line carries no operations")
 	}
 }
 

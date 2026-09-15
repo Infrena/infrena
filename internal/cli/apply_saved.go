@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 
 	"github.com/spf13/cobra"
 
@@ -49,11 +48,12 @@ func applySavedPlan(
 				"Re-run `infrena plan` with those variables and save the plan that produces"))
 	}
 
-	data, err := os.ReadFile(planPath)
-	if err != nil {
-		return finishApply(cmd.ErrOrStderr(), rw, report.ApplyResult{}, err)
-	}
-	p, err := planner.DecodePlan(data)
+	// readSavedPlan, not os.ReadFile plus DecodePlan: `infrena plan --output`
+	// now writes the artifact on a `plan` line inside the report stream, and
+	// plans saved by an earlier release are still bare documents on disk.
+	// Both shapes are applied; anything else is refused by name. See
+	// planstream.go.
+	p, err := readSavedPlan(planPath)
 	if err != nil {
 		return finishApply(cmd.ErrOrStderr(), rw, report.ApplyResult{},
 			fmt.Errorf("reading %s: %w", planPath, err))

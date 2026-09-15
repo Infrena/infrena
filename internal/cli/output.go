@@ -83,18 +83,6 @@ func (ro *runOutput) Progress() *progressRenderer { return ro.progress }
 // caller in this package already handles.
 func (ro *runOutput) Report() *report.Writer { return ro.report }
 
-// silentRun is a runOutput that writes nothing anywhere: stdout discarded,
-// progress rendered nowhere, and no report writer to hand out.
-//
-// It exists for `plan --output`, whose output file is a plan artifact
-// written directly by the command rather than a report stream, so there is
-// no report writer for this run — while spec 2.1's stdout rule applies to it
-// exactly as it does to every other command. When plan's artifact moves
-// inside the stream this collapses into a plain openRun.
-func silentRun() *runOutput {
-	return &runOutput{out: io.Discard, progress: newProgressRenderer(nil, time.Now)}
-}
-
 // observationHook feeds one refresh observation to both consumers, and is
 // shared so that plan, apply, destroy and refresh cannot drift into
 // reporting different things. Nil-safe on both halves: the report is nil

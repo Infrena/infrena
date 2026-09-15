@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"strings"
 	"time"
 
@@ -46,22 +45,11 @@ func newPlanCommand(opts *GlobalOptions) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			environment := args[0]
 
-			// --output on plan is still the plan artifact written at the
-			// end of this function rather than a report stream, so this run
-			// has no report writer to open — but spec 2.1's rule, that
-			// --output leaves stdout untouched, is the same one every other
-			// command follows. See silentRun.
-			ro := silentRun()
-			if opts.Output == "" {
-				var (
-					closeRun func()
-					err      error
-				)
-				if ro, closeRun, err = openRun(cmd, opts, "plan", environment); err != nil {
-					return err
-				}
-				defer closeRun()
+			ro, closeRun, err := openRun(cmd, opts, "plan", environment)
+			if err != nil {
+				return err
 			}
+			defer closeRun()
 
 			copts, cds := compilerOptions(opts, environment)
 			if cds.HasErrors() {
@@ -171,17 +159,26 @@ func newPlanCommand(opts *GlobalOptions) *cobra.Command {
 				Definition: reg.Definition,
 			}))
 
-			if opts.Output != "" {
+			if rw := ro.Report(); rw != nil {
 				// The full artifact, CreatedAt included — Canonical() exists
 				// to define determinism over the plan's inputs (spec §12.1)
 				// and deliberately excludes it; a saved plan is a record of
-				// what this run produced. It contains sensitive values, so
-				// 0600 (spec §12.2).
-				data, err := json.MarshalIndent(p, "", "  ")
+				// what this run produced.
+				//
+				// It travels on a `plan` line inside the report stream rather
+				// than as a bare document, so a frontend tails ONE format for
+				// every command (spec 2.4). The file still contains cleartext
+				// values and is still 0600 (spec §12.2) — openReport opens it
+				// that way, which is why nothing here sets a mode.
+				data, err := json.Marshal(p)
 				if err != nil {
 					return fmt.Errorf("serializing plan: %w", err)
 				}
-				if err := os.WriteFile(opts.Output, data, 0o600); err != nil {
+				// Reported, not swallowed: unlike the best-effort hooks that
+				// run on worker goroutines, this is the product of the run,
+				// and a plan file with no plan line in it is worse than a
+				// plan command that failed.
+				if err := rw.WritePlan(data); err != nil {
 					return fmt.Errorf("writing plan: %w", err)
 				}
 			}
