@@ -834,7 +834,8 @@ ${var.tags.team}       a path into a map variable
 ${var.azs[0]}          an entry of a list variable
 ${vpc.id}              an attribute of resource `vpc`
 ${vpc.tags.Name}       a path into a resource attribute
-${vpc}                 the resource `vpc` itself   (reserved here; a later change)
+${vpc}                 the resource `vpc` itself, projected to whichever attribute
+                       the plugin declared it refers to (§14.3)
 ```
 
 Before this, a variable and a resource attribute were told apart by COUNTING
@@ -858,7 +859,11 @@ with no cause.
 anywhere resolves to a variable — and a prefix applied to some variables and
 not others is the kind of exception nobody remembers to check for.
 
-**A bare single segment is an ERROR**, not a resource reference:
+**A bare single segment parses as a WHOLE-RESOURCE reference**, not a variable and
+not a parse error — `${vpc}` becomes `value.OpResourceRef` with an empty attribute,
+and stage 6 fills the attribute in or reports why it cannot (§14.3). This replaced
+an earlier design, kept here because the failure it describes is still worth
+knowing: `${vpc}` used to be an unconditional parse-time error —
 
 ```
 ${vpc} is not a reference.
@@ -867,9 +872,16 @@ Variables are written ${var.vpc}. A resource reference needs an attribute,
 as ${vpc.id}.
 ```
 
-The message names the fix rather than the mistake, which matters most during
-migration: every un-prefixed variable a rewrite missed announces its own
-repair instead of resolving to something silently wrong.
+— which named the fix rather than the mistake, mattering most during the
+migration off counted segments: every un-prefixed variable a rewrite missed
+announced its own repair instead of resolving to something silently wrong.
+§14.3 narrowed that error rather than removing the principle: an un-prefixed
+variable is still impossible to write by accident (`var` is reserved, above),
+and a resource whose consuming attribute declares no reference still gets an
+error naming the fix, just at stage 6 instead of the parser, and phrased as
+"declares no reference" rather than "is not a reference" — because now some
+single segments ARE references, and the message must say why this one is not
+usable rather than deny the whole shape.
 
 **How a reference divides.** The first segment is the resource, the second is
 the attribute, and everything after that is a path — `${vpc.tags.Name}` is

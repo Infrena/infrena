@@ -189,11 +189,27 @@ func TestAWellFormedReferenceLoads(t *testing.T) {
 // records that exactly this shape of bug — a schema field that round-trips in
 // memory but is silently dropped by MarshalJSON — reached final review once
 // already, because the in-memory tests never crossed the wire.
+//
+// The attribute NESTED inside Fields carries its own References and
+// Sensitive, not just a bare Kind, because Fields recurses through
+// Attribute's own MarshalJSON/UnmarshalJSON: a shallow probe here would only
+// prove the outer struct's fields are wired up, not that the recursion itself
+// carries everything a nested attribute can declare. That distinction is the
+// whole point of the probe — this exact defect class (a struct's wire form
+// missing a field a sibling struct just gained) has now shipped on two
+// consecutive branches, so the nested case is what stands between this and a
+// third.
 func TestReferencesAndFieldsSurviveTheWire(t *testing.T) {
 	before := Attribute{
 		Kind:       value.KindString,
 		References: &Reference{Type: "test.vpc", Attribute: "id"},
-		Fields:     map[string]Attribute{"name": {Kind: value.KindString}},
+		Fields: map[string]Attribute{
+			"name": {
+				Kind:       value.KindString,
+				Sensitive:  true,
+				References: &Reference{Type: "test.role", Attribute: "arn"},
+			},
+		},
 	}
 	data, err := before.MarshalJSON()
 	if err != nil {
@@ -208,8 +224,16 @@ func TestReferencesAndFieldsSurviveTheWire(t *testing.T) {
 			"dropped silently, or `${vpc}` would report \"no reference target declared\" against "+
 			"a plugin that clearly declares one", after.References, before.References)
 	}
-	if len(after.Fields) != 1 || after.Fields["name"].Kind != value.KindString {
-		t.Errorf("Fields = %+v, want {name: string} — a declared map shape must not be dropped, "+
-			"or a typo past the top-level key would go back to being caught only at apply", after.Fields)
+	name, ok := after.Fields["name"]
+	if !ok || name.Kind != value.KindString {
+		t.Fatalf("Fields = %+v, want a %q entry of kind string", after.Fields, "name")
+	}
+	if !name.Sensitive {
+		t.Error("a Sensitive attribute nested inside Fields must not lose that flag on the wire — " +
+			"§36's redaction guarantee depends on it surviving as far as the top-level case does")
+	}
+	if name.References == nil || *name.References != *before.Fields["name"].References {
+		t.Errorf("a nested attribute's own References must survive too: got %+v, want %+v",
+			name.References, before.Fields["name"].References)
 	}
 }
