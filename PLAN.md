@@ -2487,6 +2487,38 @@ AWS
 
 The goal is to allow an engineer to rapidly understand an unfamiliar AWS account.
 
+## 25.1 What `discover` leaves out, and how to narrow it
+
+**Added 2026-09-15 (Unit B).** A real account answers with hundreds of rows, and the
+question a user is actually asking is "what have I not adopted yet". So the default view is
+not everything.
+
+- **Resources this project already manages are hidden**, and the footer says how many:
+  `62 resources found: 12 unmanaged, 50 already managed (--all to show them).` A count a
+  user cannot see is one they will assume is zero. `--all` shows them with a `STATUS` column naming the environment
+  that manages each. The column earns its place only under `--all`: in the default view
+  every row would read `unmanaged`, and a column with one value is noise.
+- **Managed means managed in ANY environment**, not in the one you happen to be importing
+  into. A resource adopted in `production` is adopted; offering it again in `dev` would put
+  one real resource under two addresses, and invariant 1 then schedules the one that
+  declares nothing for destruction.
+- **Resources the provider flags as cloud-owned** carry a `NOTE` giving the plugin's own
+  reason — an account's default VPC, a default security group, a service-linked role. They
+  are listed, never hidden: §31.1's `system_owned` is a warning, not a veto. The column
+  holds the REASON and not the flag, because a flag a user overrides without understanding
+  it may as well not be there, and it appears only when something is noted.
+- **`--tag k=v`, `--exclude-type` and `--name` narrow the list**, all repeatable except
+  `--name`, which is a `path.Match` glob. A malformed glob is an ERROR rather than an empty
+  result, because an empty result reads as an empty account. `import` takes the same three
+  flags, so the list a user reads and the list they adopt come from one question.
+- **Filtering happens AFTER naming**, never before. §27.2's uniqueness pass is
+  order-dependent by construction, so filtering first would change the names of the
+  resources that survive it — the same resource would import under a different name
+  depending on a flag that has nothing to do with naming.
+
+`discover` also reports each provider instance as it answers and honours `--output`, the
+same progress-and-report hook the other long commands have (§2.3 of the CLI spec).
+
 ---
 
 # 26. Import
@@ -2513,6 +2545,24 @@ Import should:
 6. Optionally generate configuration.
 
 Import must not blindly destroy or modify infrastructure.
+
+## 26.1 What import leaves out
+
+**Added 2026-09-15 (Unit B).** Import adopts what discovery found, so it inherits §25.1's
+exclusions, with one asymmetry that is deliberate:
+
+- **With no selector**, a resource already managed is simply not part of the question and is
+  dropped silently. That is what makes `infrena import dev` re-runnable: it adopts whatever
+  is new and says `Nothing to import.` when there is nothing. It used to REFUSE the whole
+  run, which turned a 300-resource import into an error because 3 of them were already
+  adopted.
+- **Naming one explicitly is refused**, with the environment that manages it. Silently
+  ignoring an explicit selector is worse than refusing it: the user asked for one specific
+  resource and would be told the run succeeded.
+- **A cloud-owned resource is never adopted by default and never silently.** The skip is
+  reported with the plugin's reason. Naming it as `<type>.<provider id>` adopts it anyway —
+  a team that genuinely manages its default VPC exists, and the engine is not the party to
+  forbid it.
 
 ---
 
@@ -2570,16 +2620,75 @@ made when you want to, not a step you must complete before it is safe to run any
 
 1. A `name` attribute or tag, if the resource has one. This is how people actually label cloud
    resources, and it is the name they will look for.
-2. Otherwise the provider ID, sanitised to an identifier — `net-1` becomes `net_1`.
+2. Otherwise the provider ID, sanitised to an identifier.
+
+**The name is PREFIXED WITH ITS TYPE**, added 2026-09-15 (Unit B): the last dotted segment of
+the resource type, so `aws.vpc` tagged `app1` is `vpc-app1` and `fake.network` with id
+`vpc-0a1b` is `network-vpc-0a1b`. It reads correctly at the point it matters, which is inside
+a reference (§27.0) — `network: ${network-vpc-0a1b}` says what it points at. The prefix is
+skipped where the sanitised text already starts with it, because AWS identifiers are
+themselves prefixed and `vpc-vpc-0a1b2c3d` helps nobody. The last segment is the right prefix
+without a protocol change, because the AWS generator already collapses unambiguous type names;
+an optional plugin-published short name stays available later with this as its fallback.
+
+**The tag map is found by ASKING THE SCHEMA**, through the registry's alias fold
+(`Definition.Canonical`), not by reading `attrs["tags"]`. That literal lowercase key was the
+bug behind every `vpc-129012092`: the AWS plugin's canonical attribute is `Tags`, so the
+lookup missed on every AWS resource and this section's naming rule was dead code against the
+only real provider. A third hard-coded spelling would be the same defect with a longer list.
+Inside the map, `Name` is preferred over `name` — AWS writes the first, most other things
+write the second.
 
 A collision between two resources claiming the same name is resolved by suffixing the provider
 ID, never by dropping one: two resources silently becoming one is the shape this project
-guards against everywhere else.
+guards against everywhere else. The type prefix makes a cross-type collision impossible, so
+that suffix now fires only for two resources of ONE type sharing a `Name` tag — which is
+genuinely two resources.
 
 Names matter more here than they look. A resource's name is part of its address, and an address
 is what state is keyed by — so renaming an imported resource later is a destroy plus a create.
 Generation should therefore produce the name a person would have chosen, not one they will
 immediately want to change.
+
+## 27.3 Generated configuration references what discovery found
+
+**Added 2026-09-15 (Unit B).** A subnet says its VPC BY NAME rather than pasting a cloud
+identifier:
+
+```yaml
+database-db-9:
+  type: fake.database
+  engine: postgres
+  network: ${network-vpc-0a1b}
+```
+
+Four rules govern it, and each exists because its absence produced a specific failure:
+
+1. **The PLUGIN declares the relationship.** `schema.Attribute.References` says that
+   `aws.subnet`'s `VpcId` holds an `aws.vpc`'s `VpcId` (§14.3). The engine never infers that
+   a property whose name ends in `Id` points anywhere; inferring it is how a tool starts
+   knowing about AWS, which is this project's first architectural rule broken.
+2. **A reference is emitted ONLY where its target is in the same generated set.** A
+   `${vpc-app1}` naming a resource no generated file declares is a compile error in a file
+   the user never wrote — strictly worse than the identifier they would otherwise have had.
+   The literal survives, and a comment at that line says the target was not discovered, so a
+   silent literal never reads as a value somebody chose.
+3. **A reference is not a reason to emit an attribute.** The omission rules above run first:
+   an attribute equal to its default is still omitted, and a computed or sensitive one is
+   still gone. §27 stays minimal.
+4. **THE EDGES GO INTO STATE FROM THE SAME PASS.** A reference IS a dependency edge — the
+   compiler turns `${network-vpc-0a1b}` into exactly one — so `import --generate` records
+   the edges the generator emitted, and `generator.Generate` returns them alongside the
+   files for that reason. Without this the first plan after an import proposed
+   `~ depends_on: [] -> [network-vpc-0a1b]` on every resource that referenced another, and
+   §29's invariant did not hold. They come from the rendering pass rather than a second
+   opinion computed by the importer, because rule 3 means whether a reference exists at all
+   depends on every omission rule; two answers computed separately would eventually differ,
+   and the disagreement is invisible until someone runs `plan`.
+
+Rule 4 obeys §26's ordering unchanged: configuration is written FIRST, then state. Failing
+between the two leaves a declared resource that is not yet managed, which the next plan
+proposes CREATING — visible and refusable. The other order leaves one it proposes DESTROYING.
 
 ---
 
@@ -2651,6 +2760,20 @@ A COMPUTED attribute is not an exception to this: it is omitted too, and the
 planner already ignores computed attributes when diffing, so it produces no
 change at all. Nor is an attribute a provider reports that its own schema does
 not declare.
+
+**A REFERENCE is not an exception either, and that took a fix rather than an
+argument.** §27.3's `network: ${network-vpc-0a1b}` compiles to the same literal
+the attribute held, so attributes matched — but it also compiles to a dependency
+edge, and the import path recorded none, so the first plan after an import
+proposed `~ depends_on: [] -> [network-vpc-0a1b]` on a resource nobody had
+touched. Configuration and state disagreed from the moment both were written.
+The fix was to record the edges generation emitted (§27.3 rule 4), NOT to teach
+the planner to overlook dependencies and not to stop emitting the reference:
+either would have traded a visible bug for a silent one — the first hides a real
+edge change, the second throws away the relationship the reference exists to
+keep. `TestTheImportRoundTripPlansClean` now pins all three halves, because each
+passes alone against a broken generator: the file references by name, state
+records the same edge, and the plan is clean.
 
 ## 29.2 Minimality is not tested by the round trip
 
@@ -2779,8 +2902,27 @@ standard library, so **it adds no third-party dependency**.
 
 ### Handshake and version
 
-The plugin's first message is `{"protocol": 1, "name": "aws", "version": "0.3.1"}`, sent
-before any request.
+The plugin's first message is `{"protocol": 4, "name": "aws", "version": "0.3.1"}`, sent
+before any request. **`pluginproto.Version` is 4 since 2026-09-15**, and `Supported` is
+`{4, 3, 2, 1}`.
+
+| Version | Added | Why a bump rather than a silent addition |
+| --- | --- | --- |
+| 2 | `optional` and `aliases` on an attribute (§14.1) | |
+| 3 | `References` on an attribute (§14.3) | |
+| 4 | `system_owned` and `system_owned_reason` on a discovered resource (§25.1) | |
+
+Each one is a KEY ADDED to a payload whose decode is lenient, which is exactly why it is
+announced. A plugin built against a newer SDK talking to an older host has the new key
+silently DROPPED, and the symptom is always a claim the plugin plainly made going unheard
+with nothing anywhere saying so: `${vpc}` reporting "declares no reference" about an
+attribute that declares one, or a default VPC the plugin flagged being offered for adoption
+unflagged. Announcing the version turns each into a refusal that names the plugin and both
+versions.
+
+The other direction costs nothing, which is what keeps every older version supported: a
+protocol 3 plugin sends neither system-owned key, absent decodes as "the plugin made no
+claim", and that is exactly what every plugin in existence means today.
 
 - The host supports a SET of protocol versions and refuses anything else with a §44 error.
   The error names the plugin and the path it was loaded from, gives both sides' versions,
@@ -3025,7 +3167,8 @@ source: https://github.com/infrena/infrena-provider-fake
 
 **Amended 2026-09-14: defined by the RELEASE, not by capability.** It said "every plugin
 protocol version the plugin can speak", which invites exactly the wrong answer. An author
-reads the host's `Supported` — `{2, 1}` since §14.1 — or remembers an older release, and
+reads the host's `Supported` — `{4, 3, 2, 1}` since §31.1's protocol 4 — or remembers an
+older release, and
 writes `[2, 1]`. The binary still announces one number, so the manifest then claims a
 protocol that binary cannot speak. Raised by the `infrena-provider-fake` session, which
 met it the day the protocol moved.
@@ -4587,7 +4730,7 @@ was written:
 | Version | Package | Guards | How it moves |
 | --- | --- | --- | --- |
 | `state.CurrentVersion` | `internal/state` | the state file | a migration chain, one step per version |
-| `pluginproto.Version`, `Supported` | `pkg/pluginproto` | the plugin wire | negotiated per plugin; `Supported` is a SET. **At 2 since 2026-09-14** (§14.1's `optional` and `aliases`), with 1 still supported |
+| `pluginproto.Version`, `Supported` | `pkg/pluginproto` | the plugin wire | negotiated per plugin; `Supported` is a SET. **At 4 since 2026-09-15** (§31.1's table: 2 for `optional` and `aliases`, 3 for `References`, 4 for `system_owned`), with 3, 2 and 1 still supported |
 | `planner.PlanVersion` | `internal/planner` | the plan artifact | additive, with a frozen-keys test. **Deliberately still 1 after 2026-09-15**: the plan document's own schema did not change, only the envelope it travels in (§37.2), and `DecodePlan`'s version check is an outright refusal — so a bump would reject every plan already saved to disk in exchange for nothing |
 | `report.Version` | `pkg/report` | `--output` reports | additive. **At 2 since 2026-09-15**: the format gained the `plan` line (§37.2), so a consumer that only understands 1 can tell |
 | lockfile `Version` | `internal/modules/source` | `modules.lock` | internal |

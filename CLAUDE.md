@@ -71,7 +71,7 @@ showing the name each resource WOULD be given so a collision is visible before i
 `import <env> [--generate]` adopts resources into state and writes the configuration declaring
 them, under `discovered/`. `export <env>` dumps state in full for auditing.
 
-Three rules carry most of the weight, and each is a hazard rather than a nicety:
+Four rules carry most of the weight, and each is a hazard rather than a nicety:
 
 - **A generated file must never hold a secret.** A sensitive attribute is OMITTED and the file
   says so at the point of omission. A secret committed to git is a secret rotated, not deleted.
@@ -82,12 +82,28 @@ Three rules carry most of the weight, and each is a hazard rather than a nicety:
 - **Computed attributes are omitted because they cannot be set**, not for tidiness. Emitting one
   produces "is computed and cannot be set" — a file that does not load, pointing at a file the
   user never wrote.
+- **A reference is emitted only when its target is in the same generated set**, and the
+  dependency edge it implies is recorded into state by the SAME pass that emitted it
+  (§27.3). A `${vpc-app1}` pointing outside the set would be a compile error in a file the
+  user never wrote; and a reference with no edge in state is a `depends_on` change proposed
+  on the first plan after an import, which is invariant 3 failing. `generator.Generate`
+  returns the edges with the files so a caller cannot write one without the other.
 
 Invariant 3 (the round trip) now has its test, the last of the six to get one. Its guarantee is
 qualified — see §29.1: a deliberately omitted secret shows as one pending change, and the two
 alternatives (writing it to disk, or dropping it from state) are both worse. Minimality is
 asserted SEPARATELY from the round trip, because a generator emitting every attribute would
-also plan clean.
+also plan clean. So are references, and for the same reason in reverse: a generator emitting
+NONE would plan clean too.
+
+**Discovery narrows what it shows (Unit B).** Names are prefixed with their type
+(`network-vpc-0a1b`), and the tag they come from is found through the registry's alias fold
+rather than a hard-coded `attrs["tags"]` — that literal key missed on every AWS resource,
+which is why every discovered name used to be a cloud identifier. Resources managed in ANY
+environment are hidden behind `--all`; resources a plugin flags as cloud-owned are shown with
+the plugin's reason and never adopted without being named; `--tag`, `--exclude-type` and
+`--name` narrow both `discover` and `import`, and they run AFTER naming because the
+uniqueness pass is order-dependent.
 
 **New in M9 — environments do what §6 says.** `skip` and `only` on any resource name the
 environments it belongs to, as a scalar, a list, or an expression — which is what lets a module
