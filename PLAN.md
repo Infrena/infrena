@@ -1981,6 +1981,64 @@ order is populate `References` first, leave `requirements:` alone, and add a
 generation-time check that every `requirements:` entry has a matching `References`
 somewhere — a cross-check rather than a replacement, until coverage earns the derivation.
 
+### `Fields`: a declared map's known keys
+
+`schema.Attribute` also gained `Fields map[string]Attribute`, for the same reason
+`References` did: `${vpc.tags.Nmae}` used to pass `validate`, produce a clean plan, and fail
+halfway through `apply` after real infrastructure existed, because nothing checked a path
+PAST the attribute axis. Where a provider knows a map attribute's keys, it declares them in
+`Fields`, and a typo in a path becomes a compile error listing the keys that exist — the
+same promise §14.1 already makes for a top-level attribute name, extended one level deeper.
+
+**NIL MEANS OPEN, and that is deliberate.** AWS tags take any key and always will;
+declaring `Fields` for them would be a LIE — a schema claiming to know a shape it does not.
+An attribute with no `Fields` is checked exactly as it always was: not at all, until apply.
+`Fields` is therefore never something a plugin is obliged to declare — it is something a
+plugin declares only where it genuinely knows the shape, the same partial-coverage promise
+`References` makes: a plugin that has reviewed some relationships and not others ships what
+it has reviewed and says nothing about the rest, rather than blocking on completeness.
+
+The compiler refuses `Fields` on an attribute whose `Kind` is not `KindMap` — a declared
+set of keys is meaningless on anything that is not a map, and a plugin that declared one
+anyway is describing a shape that cannot exist rather than one it has not gotten around to.
+
+A NESTED `References` — one attribute inside a `Fields` map declaring a relationship of its
+own — is refused rather than silently ignored. `projectRefs` (`internal/compiler/bind.go`)
+only ever reads a *top-level* attribute's `References`; nothing walks into `Fields` to
+consult a nested one. A declaration nothing consults is exactly the defect class this
+section exists to close — a plugin author reads the field, believes it does something,
+and discovers otherwise only when a reference silently fails to project. Refusing it at
+validation is simpler than teaching every consumer of `References` to recurse, and it keeps
+the failure at the moment the plugin loads rather than at the moment a user's `${vpc}`
+quietly does not become `${vpc.id}`.
+
+### A whole-resource reference is refused as a module input, and as a module output
+
+`${net}` is sugar the ENGINE fills in from a consuming attribute's own `References`
+declaration (above) — and a module's `inputs:` and `outputs:` are not consuming attributes
+in that sense. Both are refused, and for the same reason:
+
+- **As a module input** (`internal/modules/inputs.go`, `refuseWholeResourceInput`): a
+  module input declares a TYPE — string, integer, map — not a relationship to a resource
+  (§9). There is no `References` anywhere for `${net}` to be projected against, so the
+  engine has nothing honest to fill the attribute in with.
+- **As a module output** (`internal/modules/outputs.go`, `refuseWholeResourceOutput`): a
+  module output PUBLISHES A VALUE. By the time anything reads it, the module has been
+  expanded and the resource behind `${net}` no longer has a name a projection could resolve
+  against — and there is no consuming declaration at the publishing end either, only
+  whatever the eventual caller's attribute happens to declare, which this stage cannot see.
+
+**Both are a LANGUAGE RULE this branch invented, and it exists to close one specific
+hazard: an empty-attribute reference escaping compiler stage 6.** `expressions.ResourceScope.Attribute`
+looks an attribute up by name in a plain map; `""` misses, so a reference that keeps an
+empty attribute all the way to the executor does not fail at compile time — it stays
+deferred forever, and the run either dies mid-apply after real infrastructure already
+exists, or creates the resource with the attribute silently unset. `${net}` bare, with no
+consuming declaration to project against, is exactly such a reference, so it is refused at
+the one place each stage can still say WHY: `${vpc.<attribute>}` for an input, `${vpc.<attribute>}`
+for an output. Nothing downstream of stage 6 (nor of a module boundary) may ever see a
+reference whose `Attribute` is empty.
+
 ---
 
 # 15. Resource Lifecycle

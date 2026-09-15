@@ -101,6 +101,13 @@ func (d *ResourceDefinition) Validate() error {
 			return fmt.Errorf("%s: attribute %q is Computed and also has a Default; the provider supplies computed values", d.Type, name)
 		case attr.Required && attr.Default != nil:
 			return fmt.Errorf("%s: attribute %q is Required and also has a Default; a default makes it optional", d.Type, name)
+		case attr.Fields != nil && attr.Kind != value.KindMap:
+			return fmt.Errorf("%s: attribute %q declares Fields but its Kind is not a map; Fields describes a map's known keys", d.Type, name)
+		}
+		if attr.Fields != nil {
+			if err := validateFields(d.Type, name, attr.Fields); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -114,6 +121,48 @@ func (d *ResourceDefinition) Validate() error {
 		}
 		if len(req.Types) == 0 {
 			return fmt.Errorf("%s: requirement %q names no satisfying types, so it can never be satisfied", d.Type, req.Name)
+		}
+	}
+	return nil
+}
+
+// validateFields checks a declared map's known keys, recursively — Validate's
+// own per-attribute loop only ever looks at the TOP-LEVEL attributes, and
+// without this a nested attribute's Kind and its own References go
+// unchecked entirely.
+//
+// A nested References is REFUSED rather than merely left unchecked:
+// internal/compiler/bind.go's projectRefs only ever reads a top-level
+// attribute's References (PLAN.md §14.3), so one declared inside Fields is
+// consulted by nothing — a declaration nothing consults is exactly the
+// defect class this whole feature keeps running into, and refusing it at
+// load time is simpler than teaching every consumer of References to
+// recurse into a shape most of them have no reason to know about.
+func validateFields(typeName, path string, fields map[string]Attribute) error {
+	names := make([]string, 0, len(fields))
+	for n := range fields {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+
+	for _, n := range names {
+		nested := fields[n]
+		nestedPath := path + "." + n
+		switch {
+		case nested.Kind == value.KindInvalid:
+			return fmt.Errorf("%s: attribute %q has no Kind", typeName, nestedPath)
+		case nested.References != nil:
+			return fmt.Errorf("%s: attribute %q declares References, but a nested attribute's "+
+				"References is never consulted — only a top-level attribute's is ever projected "+
+				"(PLAN.md §14.3)", typeName, nestedPath)
+		case nested.Fields != nil && nested.Kind != value.KindMap:
+			return fmt.Errorf("%s: attribute %q declares Fields but its Kind is not a map; Fields "+
+				"describes a map's known keys", typeName, nestedPath)
+		}
+		if nested.Fields != nil {
+			if err := validateFields(typeName, nestedPath, nested.Fields); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

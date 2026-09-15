@@ -237,3 +237,87 @@ func TestReferencesAndFieldsSurviveTheWire(t *testing.T) {
 			name.References, before.Fields["name"].References)
 	}
 }
+
+// TestValidateRejectsFieldsOnANonMapAttribute. Fields describes a map's known
+// keys (PLAN.md §14.3); declaring it on an attribute of any other Kind
+// describes a shape that cannot exist.
+func TestValidateRejectsFieldsOnANonMapAttribute(t *testing.T) {
+	d := sampleDefinition()
+	d.Attributes["broken"] = Attribute{
+		Kind:   value.KindString,
+		Fields: map[string]Attribute{"name": {Kind: value.KindString}},
+	}
+	err := d.Validate()
+	if err == nil {
+		t.Fatal("Fields on a non-map attribute must be rejected")
+	}
+	if !strings.Contains(err.Error(), "broken") {
+		t.Errorf("error = %q, want it to name the attribute", err)
+	}
+}
+
+// TestValidateRejectsANestedFieldsOnANonMapAttribute is the same check one
+// level down: Fields can nest, and the rule must hold at every level, not
+// only the top one.
+func TestValidateRejectsANestedFieldsOnANonMapAttribute(t *testing.T) {
+	d := sampleDefinition()
+	d.Attributes["broken"] = Attribute{
+		Kind: value.KindMap,
+		Fields: map[string]Attribute{
+			"leaf": {Kind: value.KindString, Fields: map[string]Attribute{"x": {Kind: value.KindString}}},
+		},
+	}
+	if err := d.Validate(); err == nil {
+		t.Fatal("Fields on a non-map attribute nested inside another Fields must be rejected too")
+	}
+}
+
+// TestValidateRejectsANestedReferences pins Minor fix round 2: projectRefs
+// (internal/compiler/bind.go) only ever reads a TOP-LEVEL attribute's
+// References, so one declared inside Fields is a declaration nothing
+// consults — precisely the defect class this branch keeps hitting.
+// Refusing it at load time is simpler than teaching every consumer of
+// References to recurse (PLAN.md §14.3).
+func TestValidateRejectsANestedReferences(t *testing.T) {
+	d := sampleDefinition()
+	d.Attributes["broken"] = Attribute{
+		Kind: value.KindMap,
+		Fields: map[string]Attribute{
+			"vpc_id": {Kind: value.KindString, References: &Reference{Type: "fake.network", Attribute: "id"}},
+		},
+	}
+	err := d.Validate()
+	if err == nil {
+		t.Fatal("a nested attribute's References must be rejected — nothing ever consults it")
+	}
+	if !strings.Contains(err.Error(), "vpc_id") {
+		t.Errorf("error = %q, want it to name the nested attribute", err)
+	}
+}
+
+// TestValidateRejectsANestedMissingKind pins the third unvalidated case:
+// Validate's own per-attribute loop only ever looked at top-level Kind.
+func TestValidateRejectsANestedMissingKind(t *testing.T) {
+	d := sampleDefinition()
+	d.Attributes["broken"] = Attribute{
+		Kind:   value.KindMap,
+		Fields: map[string]Attribute{"empty": {}},
+	}
+	if err := d.Validate(); err == nil {
+		t.Fatal("a nested attribute with no Kind must be rejected")
+	}
+}
+
+// TestValidateAcceptsAWellFormedNestedMap is the positive case: a plugin
+// that declares Fields correctly, with no nested References and every
+// nested attribute a valid Kind, must still load.
+func TestValidateAcceptsAWellFormedNestedMap(t *testing.T) {
+	d := sampleDefinition()
+	d.Attributes["meta"] = Attribute{
+		Kind:   value.KindMap,
+		Fields: map[string]Attribute{"name": {Kind: value.KindString}},
+	}
+	if err := d.Validate(); err != nil {
+		t.Fatalf("a well-formed declared map must load: %v", err)
+	}
+}
