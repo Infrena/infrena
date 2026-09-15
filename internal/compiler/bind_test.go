@@ -528,3 +528,38 @@ type noRemotes struct{}
 func (noRemotes) Resolve(s source.Source, _ string) (source.Resolution, diag.Diagnostics) {
 	panic("compiler bind tests are module-free; nothing should resolve a source: " + s.String())
 }
+
+// TestAnUnregisteredConsumingTypeSkipsProjectionSilently pins fix round 1's
+// Important: consuming == nil in projectRefs was true both when the
+// attribute declares no reference AND when the consuming resource's own type
+// is unregistered (a nil def yields a nil attribute either way), so an
+// unregistered type reaching a whole-resource reference got the "declares no
+// reference" diagnostic AND then a second, unrelated one from the reference
+// target's own attribute-axis check ("fake.vpc has no attribute \"\"") when
+// the misprojected empty attribute reached it. An unregistered type must
+// report nothing here — it already has nowhere else to report from within
+// this stage, but that is the point: stage 6 does not owe it a diagnostic
+// about a problem that is not what stage 6 checks.
+func TestAnUnregisteredConsumingTypeSkipsProjectionSilently(t *testing.T) {
+	p := decl(t, `
+project: myapp
+resources:
+  net:
+    type: fake.vpc
+  sub:
+    type: bogus.thing
+    vpc_id: ${net}
+`)
+	_, ds := bindReferences(rootOnly(t, p, Options{Environment: "dev"}), Options{Environment: "dev"}, testRegistry(t), testTable())
+	if !ds.HasErrors() {
+		t.Fatal("a whole-resource reference on an unregistered type must still be refused somewhere, since its attribute is never filled in")
+	}
+	if len(ds) != 1 {
+		t.Errorf("got %d diagnostics, want exactly 1 — an unregistered consuming type must not get "+
+			"a second, unrelated complaint on top of whatever caught the still-empty attribute: %+v", len(ds), ds)
+	}
+	if strings.Contains(rendered(ds), "does not say which of") {
+		t.Errorf("an unregistered consuming type must not get projectRefs's \"declares no reference\" "+
+			"diagnostic — it has no schema to have declared anything, registered or not:\n%s", rendered(ds))
+	}
+}

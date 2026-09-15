@@ -268,7 +268,11 @@ func (w *walker) evaluateCall(
 					if leaf == nil {
 						return value.Unknown(value.KindString, value.SourceModule).WithOrigin(origin)
 					}
-					v, evalDiags := expressions.Evaluate(caller.Qualify(leaf), caller)
+					qualified := caller.Qualify(leaf)
+					if refuseWholeResourceInput(qualified, origin, w.ds) {
+						return value.Unknown(value.KindString, value.SourceModule).WithOrigin(origin)
+					}
+					v, evalDiags := expressions.Evaluate(qualified, caller)
 					w.ds.Extend(evalDiags)
 					return v
 				})
@@ -277,11 +281,54 @@ func (w *walker) evaluateCall(
 			// Otherwise parseCall already reported the syntax error.
 			continue
 		}
-		v, evalDiags := expressions.Evaluate(caller.Qualify(e), caller)
+		qualified := caller.Qualify(e)
+		if refuseWholeResourceInput(qualified, attr.Origin, w.ds) {
+			// Refused, not evaluated: fix round 1's Critical. Leaving the key
+			// unset matches the syntax-error branch above — Compile halts after
+			// this stage whenever w.ds carries an error, so there is nothing for
+			// a missing entry to silently stand in for.
+			continue
+		}
+		v, evalDiags := expressions.Evaluate(qualified, caller)
 		w.ds.Extend(evalDiags)
 		out[name] = v
 	}
 	return out
+}
+
+// refuseWholeResourceInput reports and returns true when e carries a
+// whole-resource reference — Task 3's bare `${net}`, whose attribute is empty
+// until something projects it from a declaration.
+//
+// Stage 6's bindAttribute projects one from the CONSUMING ATTRIBUTE's own
+// `References` declaration (PLAN.md §14.3). A module input has no such
+// declaration to read: §9 gives it a declared TYPE — string, integer, map —
+// not a relationship to a resource. There being nothing to project against,
+// the only honest outcome is refusal, not a guess.
+//
+// Refusing HERE, before expressions.Evaluate ever sees the reference, is what
+// closes fix round 1's Critical: Evaluate has no diagnostic of its own for an
+// unresolved reference — it returns an Unknown carrying the expression as-is —
+// so a whole-resource reference reaching it silently became the module's
+// input, unset, forever.
+func refuseWholeResourceInput(e *value.Expr, origin value.Origin, ds *diag.Diagnostics) bool {
+	refused := false
+	for _, ref := range e.References() {
+		if ref.Attribute != "" {
+			continue
+		}
+		ds.Add(diag.Diagnostic{
+			Severity: diag.SeverityError,
+			Summary:  "${" + ref.Target.String() + "} passes a resource to a module input",
+			Detail: "A module input declares a type, not a relationship, so there is nothing to " +
+				"say which of " + strconv.Quote(ref.Target.String()) + "'s attributes is meant. " +
+				"The provider declares that for a resource attribute; a module input has no provider.",
+			Action: "Name the attribute you mean, as ${" + ref.Target.String() + ".<attribute>}.",
+			Origin: origin,
+		})
+		refused = true
+	}
+	return refused
 }
 
 // sortedAttributeNames visits attributes in a stable order. Go's map iteration

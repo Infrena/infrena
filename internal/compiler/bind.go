@@ -252,11 +252,18 @@ func canonicaliseRefs(e *value.Expr, declared map[string]refTarget) {
 // THE ENGINE NEVER GUESSES. An attribute with no declaration is an error naming
 // the fix, not a fallback to "probably the id" — a wrong value shipped silently
 // is the failure this whole feature exists to prevent.
+//
+// consumingTypeRegistered separates two situations a nil consuming otherwise
+// conflates: the consuming resource's own type is unregistered (nothing to
+// check — the reference-target's own attribute-axis check below catches the
+// still-empty attribute, so this must say nothing rather than pile a second,
+// unrelated diagnostic onto that one), versus a registered type whose
+// attribute genuinely declares no reference (an error, naming the fix).
 func projectRefs(
 	e *value.Expr,
 	consuming *schema.Attribute,
+	consumingTypeRegistered bool,
 	consumingName string,
-	declared map[string]refTarget,
 	origin value.Origin,
 	ds *diag.Diagnostics,
 ) {
@@ -265,6 +272,10 @@ func projectRefs(
 	}
 	if e.Op == value.OpResourceRef && e.Ref.Attribute == "" {
 		switch {
+		case !consumingTypeRegistered:
+			// Nothing to check, and nothing to say: an unregistered type is not
+			// this stage's problem to report, and reporting it here anyway would
+			// double up on whatever else already catches the empty attribute.
 		case consuming == nil || consuming.References == nil:
 			ds.Add(diag.Diagnostic{
 				Severity: diag.SeverityError,
@@ -281,7 +292,7 @@ func projectRefs(
 		}
 	}
 	for _, arg := range e.Args {
-		projectRefs(arg, consuming, consumingName, declared, origin, ds)
+		projectRefs(arg, consuming, consumingTypeRegistered, consumingName, origin, ds)
 	}
 }
 
@@ -311,11 +322,16 @@ func bindAttribute(
 
 	// The consuming attribute's own declaration, looked up ONCE for every leaf
 	// this attribute has: it is what projectRefs checks a whole-resource
-	// reference against. A nil def means an unregistered type, which already
-	// skips the attribute axis elsewhere and must skip this too rather than
-	// reporting a second diagnostic about the same unknown type.
+	// reference against. Tracked separately from `consuming == nil`: a nil def
+	// (unregistered type) and a registered def whose attribute just is not
+	// found are both "nothing to project against" to the lookup below, but
+	// projectRefs must not treat them alike — an unregistered type already has
+	// nowhere else in this stage to complain, and must not report a second,
+	// unrelated diagnostic on top of whatever else catches the empty attribute.
 	var consuming *schema.Attribute
+	consumingTypeRegistered := false
 	if def := declared[inst.Address.String()].def; def != nil {
+		consumingTypeRegistered = true
 		if a, ok := def.Attribute(attr.Name); ok {
 			consuming = &a
 		}
@@ -334,7 +350,7 @@ func bindAttribute(
 	src, ok := attr.Value.AsString()
 	if !ok {
 		walked := expressions.WalkLeaves(attr.Value, func(leafSrc string, leafOrigin value.Origin) value.Value {
-			return bindOneExpression(inst, leafSrc, leafOrigin, environment, declared, edges, consuming, attr.Name, ds)
+			return bindOneExpression(inst, leafSrc, leafOrigin, environment, declared, edges, consuming, consumingTypeRegistered, attr.Name, ds)
 		})
 		// A composite one of whose leaves did not resolve is itself UNKNOWN
 		// (PLAN.md §10.1). Left Known, the planner would diff a placeholder leaf
@@ -348,7 +364,7 @@ func bindAttribute(
 		return walked
 	}
 
-	return bindOneExpression(inst, src, attr.Origin, environment, declared, edges, consuming, attr.Name, ds)
+	return bindOneExpression(inst, src, attr.Origin, environment, declared, edges, consuming, consumingTypeRegistered, attr.Name, ds)
 }
 
 // bindOneExpression is everything that happens to ONE interpolated string: parse,
@@ -365,6 +381,7 @@ func bindOneExpression(
 	declared map[string]refTarget,
 	edges map[string]value.Origin,
 	consuming *schema.Attribute,
+	consumingTypeRegistered bool,
 	consumingName string,
 	ds *diag.Diagnostics,
 ) value.Value {
@@ -407,7 +424,7 @@ func bindOneExpression(
 	// BEFORE canonicaliseRefs: a projected name must then be canonicalised like
 	// any other, in case a plugin declares its reference against an attribute
 	// spelling that is itself an alias of another.
-	projectRefs(e, consuming, consumingName, declared, origin, ds)
+	projectRefs(e, consuming, consumingTypeRegistered, consumingName, origin, ds)
 
 	// BEFORE the attribute axis is checked below, so an alias is rewritten and then
 	// found rather than reported as a typo naming an attribute that does exist.

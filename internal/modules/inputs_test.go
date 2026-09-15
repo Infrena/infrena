@@ -340,3 +340,85 @@ resources:
 		}
 	}
 }
+
+// TestAWholeResourceReferenceAsAModuleInputIsRefused pins fix round 1's
+// Critical: a module input declares a TYPE (§9), not a relationship, so there
+// is no attribute declaration to project a bare ${net} against the way
+// stage 6's bindAttribute does. Before this fix, evaluateCall handed the
+// unresolved, empty-attribute expression straight to expressions.Evaluate,
+// which returned an Unknown carrying it and no diagnostic — the module's
+// input, and everything inside it built from that input, would be created
+// with the attribute silently unset.
+func TestAWholeResourceReferenceAsAModuleInputIsRefused(t *testing.T) {
+	decl, dir := fixture(t, map[string]string{
+		"infra.yml": `
+project: demo
+modules:
+  - ./m
+resources:
+  net:
+    type: fake.vpc
+  app:
+    type: module.m
+    vpc: ${net}
+`,
+		"m/module.yml": `
+inputs:
+  vpc:
+    type: string
+resources:
+  sub:
+    type: fake.subnet
+`,
+	})
+
+	_, ds := Expand(decl, variables.Scope{}, nil, Env{Name: "dev"}, dir, paths{})
+	if !ds.HasErrors() {
+		t.Fatal("a whole-resource reference passed as a module input must be refused: a module " +
+			"input declares a type, not a relationship, so there is nothing to project against")
+	}
+	var out strings.Builder
+	ds.Render(&out)
+	if !strings.Contains(out.String(), "${net.") {
+		t.Errorf("diagnostic must show naming an attribute explicitly as the fix:\n%s", out.String())
+	}
+}
+
+// TestAModuleInputNamingAnAttributeStillWorks pins the cost of the refusal
+// above at nil: a module input naming an attribute explicitly, which is the
+// only form that ever worked, keeps working.
+func TestAModuleInputNamingAnAttributeStillWorks(t *testing.T) {
+	decl, dir := fixture(t, map[string]string{
+		"infra.yml": `
+project: demo
+modules:
+  - ./m
+resources:
+  net:
+    type: fake.vpc
+  app:
+    type: module.m
+    vpc: ${net.id}
+`,
+		"m/module.yml": `
+inputs:
+  vpc:
+    type: string
+resources:
+  sub:
+    type: fake.subnet
+`,
+	})
+
+	exp, ds := Expand(decl, variables.Scope{}, nil, Env{Name: "dev"}, dir, paths{})
+	if ds.HasErrors() {
+		t.Fatalf("unexpected diagnostics: %+v", ds)
+	}
+	got, ok := scopeOf(t, exp, "sub").Variable("vpc")
+	if !ok {
+		t.Fatal("the module's input must be visible as a variable inside it")
+	}
+	if got.Known {
+		t.Error("a reference to a not-yet-created resource's attribute must be unknown, not known")
+	}
+}

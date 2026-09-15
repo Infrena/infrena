@@ -297,3 +297,45 @@ resources:
 		t.Errorf("the diagnostic must list the outputs the module DOES declare:\n%s", got)
 	}
 }
+
+// TestAWholeResourceReferenceAsAModuleInputDoesNotEscapeAsAnEmptyAttribute is
+// the module-path sibling to internal/compiler's own
+// TestNoEmptyAttributeReferenceEscapesStageSix: that one only exercises a
+// root-level direct reference. A whole-resource reference passed THROUGH a
+// module input takes a different evaluation path (modules.evaluateCall,
+// stage 5), which stage 6's projectRefs never sees — fix round 1's Critical.
+func TestAWholeResourceReferenceAsAModuleInputDoesNotEscapeAsAnEmptyAttribute(t *testing.T) {
+	files, dir := moduleFixture(t, map[string]string{
+		"modules/net-user/module.yml": `
+inputs:
+  vpc:
+    type: string
+resources:
+  sub:
+    type: fake.subnet
+    vpc_id: ${var.vpc}
+    cidr: 10.0.0.0/24
+`,
+		"infra.yml": `
+project: demo
+environments: {dev: {}}
+modules:
+  - ./modules/net-user
+resources:
+  net:
+    type: fake.vpc
+  user:
+    type: module.net_user
+    vpc: ${net}
+`,
+	})
+
+	_, ds := Compile(files, testRegistry(t), Options{Environment: "dev", Dir: dir})
+	if !ds.HasErrors() {
+		t.Fatal("a whole-resource reference passed as a module input must be refused before it " +
+			"can reach the executor with an empty attribute")
+	}
+	if !strings.Contains(rendered(ds), "module input") {
+		t.Errorf("the diagnostic must say why:\n%s", rendered(ds))
+	}
+}
