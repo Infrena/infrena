@@ -6,6 +6,9 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/infrena/infrena/internal/executor"
+	"github.com/infrena/infrena/internal/refresh"
+	"github.com/infrena/infrena/internal/state"
 	"github.com/infrena/infrena/pkg/report"
 )
 
@@ -79,3 +82,52 @@ func (ro *runOutput) Progress() *progressRenderer { return ro.progress }
 // same nil-means-no-report convention openReport already returns and every
 // caller in this package already handles.
 func (ro *runOutput) Report() *report.Writer { return ro.report }
+
+// silentRun is a runOutput that writes nothing anywhere: stdout discarded,
+// progress rendered nowhere, and no report writer to hand out.
+//
+// It exists for `plan --output`, whose output file is a plan artifact
+// written directly by the command rather than a report stream, so there is
+// no report writer for this run — while spec 2.1's stdout rule applies to it
+// exactly as it does to every other command. When plan's artifact moves
+// inside the stream this collapses into a plain openRun.
+func silentRun() *runOutput {
+	return &runOutput{out: io.Discard, progress: newProgressRenderer(nil, time.Now)}
+}
+
+// observationHook feeds one refresh observation to both consumers, and is
+// shared so that plan, apply, destroy and refresh cannot drift into
+// reporting different things. Nil-safe on both halves: the report is nil
+// without --output, and the progress renderer renders nothing with it.
+//
+// st is the state as it was loaded, BEFORE refresh applies anything it
+// learned, because that is what classifyObservation — the one conversion in
+// this package, in report.go — compares each observation against. Passing
+// state mutated by this same refresh would compare a resource against
+// itself.
+func observationHook(ro *runOutput, st *state.State) func(refresh.Observation) {
+	return func(o refresh.Observation) {
+		ro.Progress().Observation(o)
+		if rw := ro.Report(); rw != nil {
+			// Best effort and silent, the same rule OnEvent's call site
+			// already documents: this runs on worker goroutines, so there is
+			// no race-free place here to report a write failure. It surfaces
+			// once, non-concurrently, from the final result line.
+			_ = rw.WriteObservation(classifyObservation(st, o))
+		}
+	}
+}
+
+// eventHook is observationHook's counterpart for executor progress, shared
+// by apply, destroy and the saved-plan path for the same reason: three
+// copies of this wiring is three chances for one of them to stop rendering
+// or stop reporting without anyone noticing.
+func eventHook(ro *runOutput) func(executor.Event) {
+	return func(e executor.Event) {
+		ro.Progress().Event(e)
+		if rw := ro.Report(); rw != nil {
+			// Best effort and silent — see observationHook.
+			_ = rw.WriteEvent(toReportEvent(e))
+		}
+	}
+}

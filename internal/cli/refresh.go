@@ -53,11 +53,12 @@ func newRefreshCommand(opts *GlobalOptions) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			environment := args[0]
 
-			rw, closeReport, err := openReport(opts, "refresh", environment, cmd.ErrOrStderr())
+			ro, closeRun, err := openRun(cmd, opts, "refresh", environment)
 			if err != nil {
 				return err
 			}
-			defer closeReport()
+			defer closeRun()
+			rw := ro.Report()
 
 			reg, _, regDiags, closePlugins := stateOnlyRegistry(opts, environment)
 			defer closePlugins()
@@ -78,23 +79,14 @@ func newRefreshCommand(opts *GlobalOptions) *cobra.Command {
 					return finishRefresh(cmd.ErrOrStderr(), rw, report.RefreshResult{}, errProviderInstances)
 				}
 
-				var onObservation func(refresh.Observation)
-				if rw != nil {
-					onObservation = func(o refresh.Observation) {
-						// Best-effort and silent on failure: this hook runs
-						// concurrently from multiple worker goroutines — the
-						// same contract executor.Options.OnEvent documents —
-						// and there is no safe place to report a write
-						// failure from here without racing a concurrent
-						// write to cmd.ErrOrStderr() from a sibling
-						// goroutine's own failed write. A failure here still
-						// surfaces once, non-concurrently, when
-						// finishRefresh below writes the final result line.
-						_ = rw.WriteObservation(classifyObservation(st, o))
-					}
-				}
-
-				obs, ds := refresh.Refresh(ctx, st, reg, opts.Parallelism, perProviderParallelism, onObservation)
+				// The same hook plan, apply and destroy pass, so the four
+				// commands cannot drift into reporting different things —
+				// this command's own closure was what observationHook was
+				// factored out of. st is still exactly as loaded here;
+				// applyObservations below is what mutates it, and the
+				// comparison classifyObservation makes has to happen first.
+				obs, ds := refresh.Refresh(ctx, st, reg, opts.Parallelism, perProviderParallelism,
+					observationHook(ro, st))
 				renderDiagnostics(cmd.ErrOrStderr(), rw, ds)
 
 				// Built from st and obs BEFORE applyObservations mutates st
@@ -104,7 +96,7 @@ func newRefreshCommand(opts *GlobalOptions) *cobra.Command {
 				// post-refresh state against itself.
 				result := buildRefreshResult(st, obs)
 
-				wrote := applyObservations(st, obs, cmd.OutOrStdout())
+				wrote := applyObservations(st, obs, ro.Out())
 
 				if wrote {
 					if err := backend.Put(ctx, environment, st); err != nil {

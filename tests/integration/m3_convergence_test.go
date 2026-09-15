@@ -257,13 +257,27 @@ func TestPlanAcrossAReferenceIsDeterministic(t *testing.T) {
 	dir := project(t, referencingProject)
 	applied(t, dir)
 
+	// The PLAN is what invariant 6 is about, and the plan begins at the
+	// "Plan for project" line. Everything before it is progress, written as
+	// each provider read COMPLETES: the refresh runs those reads
+	// concurrently, so their order follows whichever finished first and was
+	// never byte-stable to begin with. Comparing from the plan onward keeps
+	// the property this test is named for instead of quietly asserting a
+	// stability progress does not claim.
+	planOf := func(stdout string) string {
+		if i := strings.Index(stdout, "Plan for project"); i >= 0 {
+			return stdout[i:]
+		}
+		return stdout
+	}
+
 	first := run(t, dir, "plan", "dev")
 	for i := 2; i <= 12; i++ {
 		next := run(t, dir, "plan", "dev")
 		if next.ExitCode != first.ExitCode {
 			t.Fatalf("run %d: exit code %d, first run %d", i, next.ExitCode, first.ExitCode)
 		}
-		if next.Stdout != first.Stdout {
+		if planOf(next.Stdout) != planOf(first.Stdout) {
 			t.Fatalf("run %d differs from the first (invariant 6):\n--- first ---\n%s\n--- run %d ---\n%s",
 				i, first.Stdout, i, next.Stdout)
 		}

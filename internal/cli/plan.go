@@ -46,6 +46,23 @@ func newPlanCommand(opts *GlobalOptions) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			environment := args[0]
 
+			// --output on plan is still the plan artifact written at the
+			// end of this function rather than a report stream, so this run
+			// has no report writer to open — but spec 2.1's rule, that
+			// --output leaves stdout untouched, is the same one every other
+			// command follows. See silentRun.
+			ro := silentRun()
+			if opts.Output == "" {
+				var (
+					closeRun func()
+					err      error
+				)
+				if ro, closeRun, err = openRun(cmd, opts, "plan", environment); err != nil {
+					return err
+				}
+				defer closeRun()
+			}
+
 			copts, cds := compilerOptions(opts, environment)
 			if cds.HasErrors() {
 				cds.Render(cmd.ErrOrStderr())
@@ -94,7 +111,7 @@ func newPlanCommand(opts *GlobalOptions) *cobra.Command {
 				_, stateInstanceDiags := registerStateInstances(reg, opts, "")
 				ds.Extend(stateInstanceDiags)
 				cfg = teardownConfig(st, environment)
-				fmt.Fprint(cmd.OutOrStdout(), teardownNotice(environment, declared))
+				fmt.Fprint(ro.Out(), teardownNotice(environment, declared))
 			default:
 				var compileDiags diag.Diagnostics
 				cfg, compileDiags = compiler.Compile(files, reg, copts)
@@ -105,7 +122,12 @@ func newPlanCommand(opts *GlobalOptions) *cobra.Command {
 				return errors.New("configuration is not valid")
 			}
 
-			obs, refreshDiags := refresh.Refresh(cmd.Context(), st, reg, opts.Parallelism, perProviderParallelism, nil)
+			// The refresh hook, which used to be nil here: reading every
+			// resource's provider state is the phase that dominates the wait
+			// on a real account, and a plan that says nothing while it runs
+			// is indistinguishable from one that has hung.
+			obs, refreshDiags := refresh.Refresh(cmd.Context(), st, reg, opts.Parallelism, perProviderParallelism,
+				observationHook(ro, st))
 			ds.Extend(refreshDiags)
 			if ds.HasErrors() {
 				ds.Render(cmd.ErrOrStderr())
@@ -144,7 +166,7 @@ func newPlanCommand(opts *GlobalOptions) *cobra.Command {
 				return errors.New("planning failed")
 			}
 
-			fmt.Fprint(cmd.OutOrStdout(), planner.Render(p, planner.RenderOptions{
+			fmt.Fprint(ro.Out(), planner.Render(p, planner.RenderOptions{
 				Verbose:    opts.Verbose,
 				Definition: reg.Definition,
 			}))

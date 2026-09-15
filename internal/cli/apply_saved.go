@@ -33,8 +33,9 @@ import (
 // state is not the state it was made against. Verifying the premise replaces recomputing
 // the conclusion.
 func applySavedPlan(
-	cmd *cobra.Command, opts *GlobalOptions, environment, planPath string, rw *report.Writer,
+	cmd *cobra.Command, opts *GlobalOptions, environment, planPath string, ro *runOutput,
 ) error {
+	rw := ro.Report()
 	// A saved plan is already resolved, so a variable cannot reach it. Unlike refresh
 	// and destroy — which DO take --var, because they read `providers:` and an instance's
 	// configuration interpolates — there is nothing here for one to affect: the provider
@@ -92,15 +93,15 @@ func applySavedPlan(
 
 	// Shown before the confirmation, and rendered from the artifact rather than
 	// recomputed: what the user is asked to approve has to be what will run.
-	fmt.Fprint(cmd.OutOrStdout(), planner.Render(p, planner.RenderOptions{Verbose: opts.Verbose, Definition: reg.Definition}))
+	fmt.Fprint(ro.Out(), planner.Render(p, planner.RenderOptions{Verbose: opts.Verbose, Definition: reg.Definition}))
 
 	if !p.HasChanges() {
-		fmt.Fprintln(cmd.OutOrStdout(), "This plan proposes no changes.")
+		fmt.Fprintln(ro.Out(), "This plan proposes no changes.")
 		return finishApply(cmd.ErrOrStderr(), rw, report.ApplyResult{}, nil)
 	}
 
 	if !opts.AutoApprove {
-		if !confirm(cmd, applyPrompt, "yes") {
+		if !confirm(cmd, ro.Out(), applyPrompt, "yes") {
 			return finishApply(cmd.ErrOrStderr(), rw, report.ApplyResult{},
 				errors.New("apply cancelled: you must type \"yes\" to approve"))
 		}
@@ -153,13 +154,11 @@ func applySavedPlan(
 		}
 
 		execOpts := executorOptions(opts, reg, backend, environment)
-		if rw != nil {
-			execOpts.OnEvent = func(e executor.Event) { _ = rw.WriteEvent(toReportEvent(e)) }
-		}
+		execOpts.OnEvent = eventHook(ro)
 
 		res, execDiags := executor.Apply(ctx, p, g, st, execOpts)
 		renderDiagnostics(cmd.ErrOrStderr(), rw, execDiags)
-		fmt.Fprint(cmd.OutOrStdout(), executor.Render(res, executor.RenderOptions{Verbose: opts.Verbose}))
+		fmt.Fprint(ro.Out(), executor.Render(res, executor.RenderOptions{Verbose: opts.Verbose}))
 
 		result := applyResultFrom(res)
 		if execDiags.HasErrors() || len(res.Failed) > 0 {

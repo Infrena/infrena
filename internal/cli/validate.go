@@ -50,11 +50,12 @@ func newValidateCommand(opts *GlobalOptions) *cobra.Command {
 			// then diagnostics, then this command's own "result" line — the
 			// same three-part shape apply and refresh open with, minus the
 			// event/observation lines neither has anything to report.
-			rw, closeReport, err := openReport(opts, "validate", environment, cmd.ErrOrStderr())
+			ro, closeRun, err := openRun(cmd, opts, "validate", environment)
 			if err != nil {
 				return err
 			}
-			defer closeReport()
+			defer closeRun()
+			rw := ro.Report()
 
 			envs, ds := environmentsToValidate(opts.Dir, args)
 			if !ds.HasErrors() {
@@ -82,7 +83,7 @@ func newValidateCommand(opts *GlobalOptions) *cobra.Command {
 			if !valid {
 				return errors.New("configuration is not valid")
 			}
-			fmt.Fprintln(cmd.OutOrStdout(), "✓ Configuration valid")
+			fmt.Fprintln(ro.Out(), "✓ Configuration valid")
 			return nil
 		},
 	}

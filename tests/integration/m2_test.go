@@ -275,7 +275,11 @@ resources: {}
 	// names itself on stderr, and — the assertion that matters most — no
 	// plan reaches stdout. A plan that is refused must not also be printed.
 	requireContains(t, res.Stderr, "protected")
-	if res.Stdout != "" {
+	// Progress reaches stdout while the refresh runs ("Reading ... done"),
+	// so the assertion is the one the paragraph above describes — no PLAN is
+	// rendered — rather than an empty stdout, which would now also be
+	// asserting the absence of progress.
+	if strings.Contains(res.Stdout, "Plan:") {
 		t.Errorf("no plan should be rendered when prevent_destroy blocks it, got:\n%s", res.Stdout)
 	}
 }

@@ -48,11 +48,12 @@ func newDestroyCommand(opts *GlobalOptions) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			environment := args[0]
 
-			rw, closeReport, err := openReport(opts, "destroy", environment, cmd.ErrOrStderr())
+			ro, closeRun, err := openRun(cmd, opts, "destroy", environment)
 			if err != nil {
 				return err
 			}
-			defer closeReport()
+			defer closeRun()
+			rw := ro.Report()
 
 			reg, _, regDiags, closePlugins := stateOnlyRegistry(opts, environment)
 			defer closePlugins()
@@ -79,12 +80,12 @@ func newDestroyCommand(opts *GlobalOptions) *cobra.Command {
 			emptyCfg := compiler.ResolvedConfig{Project: st0.Project, Environment: environment}
 
 			// Unlocked preview — identical in spirit to `infra plan`.
-			p, _, err := computePlan(cmd.Context(), cmd, backend, reg, emptyCfg, environment, opts, rw)
+			p, _, err := computePlan(cmd.Context(), cmd, backend, reg, emptyCfg, environment, opts, ro)
 			if err != nil {
 				return finishApply(cmd.ErrOrStderr(), rw, report.ApplyResult{}, err)
 			}
 
-			fmt.Fprint(cmd.OutOrStdout(), planner.Render(p, planner.RenderOptions{Verbose: opts.Verbose, Definition: reg.Definition}))
+			fmt.Fprint(ro.Out(), planner.Render(p, planner.RenderOptions{Verbose: opts.Verbose, Definition: reg.Definition}))
 
 			if !p.HasChanges() {
 				return finishApply(cmd.ErrOrStderr(), rw, report.ApplyResult{}, nil)
@@ -93,7 +94,7 @@ func newDestroyCommand(opts *GlobalOptions) *cobra.Command {
 			if !opts.AutoApprove {
 				prompt := fmt.Sprintf("\nDestroying environment %q will delete every resource infra "+
 					"manages there. This cannot be undone.\nType the environment name to confirm: ", environment)
-				if !confirm(cmd, prompt, environment) {
+				if !confirm(cmd, ro.Out(), prompt, environment) {
 					return finishApply(cmd.ErrOrStderr(), rw, report.ApplyResult{},
 						fmt.Errorf("destroy cancelled: you must type %q to confirm", environment))
 				}
@@ -105,12 +106,12 @@ func newDestroyCommand(opts *GlobalOptions) *cobra.Command {
 				// Re-plan inside the lock — apply's doc comment explains why:
 				// destroy must never execute against state or provider
 				// reality gathered before the lock was held.
-				p2, st, err := computePlan(ctx, cmd, backend, reg, emptyCfg, environment, opts, rw)
+				p2, st, err := computePlan(ctx, cmd, backend, reg, emptyCfg, environment, opts, ro)
 				if err != nil {
 					return finishApply(cmd.ErrOrStderr(), rw, report.ApplyResult{}, err)
 				}
 				if !p2.HasChanges() {
-					fmt.Fprintln(cmd.OutOrStdout(), "\nNothing remained to destroy once the environment lock was acquired.")
+					fmt.Fprintln(ro.Out(), "\nNothing remained to destroy once the environment lock was acquired.")
 					return finishApply(cmd.ErrOrStderr(), rw, report.ApplyResult{}, nil)
 				}
 
@@ -121,20 +122,16 @@ func newDestroyCommand(opts *GlobalOptions) *cobra.Command {
 				}
 
 				execOpts := executorOptions(opts, reg, backend, environment)
-				if rw != nil {
-					execOpts.OnEvent = func(e executor.Event) {
-						// Best-effort and silent on failure — see apply.go's
-						// identical wiring for why.
-						_ = rw.WriteEvent(toReportEvent(e))
-					}
-				}
+				// See apply.go's identical wiring: always set, because the
+				// same hook is what renders progress to stdout.
+				execOpts.OnEvent = eventHook(ro)
 
 				res, execDiags := executor.Apply(ctx, p2, g, st, execOpts)
 				renderDiagnostics(cmd.ErrOrStderr(), rw, execDiags)
 
 				// executor.Render (Task 12) is THE result renderer — see
 				// apply.go's note on why this command does not write its own.
-				fmt.Fprint(cmd.OutOrStdout(), executor.Render(res, executor.RenderOptions{Verbose: opts.Verbose}))
+				fmt.Fprint(ro.Out(), executor.Render(res, executor.RenderOptions{Verbose: opts.Verbose}))
 
 				result := applyResultFrom(res)
 				if execDiags.HasErrors() || len(res.Failed) > 0 {

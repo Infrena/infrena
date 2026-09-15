@@ -2,8 +2,11 @@ package cli
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/spf13/cobra"
@@ -58,5 +61,87 @@ func TestOpenRunWritesToStdoutWhenOutputIsAbsent(t *testing.T) {
 	}
 	if ro.Report() != nil {
 		t.Error("Report() is non-nil with no --output")
+	}
+}
+
+// newProjectFixture builds the same one-resource project against the
+// in-process fake provider that apply_test.go's cases use — projectDir plus
+// the double TestMain installs — rather than a third way of standing a
+// project up.
+func newProjectFixture(t *testing.T) string {
+	t.Helper()
+	return projectDir(t, `
+project: myapp
+resources:
+  network:
+    type: fake.network
+    cidr: 10.20.0.0/16
+`)
+}
+
+// runCommand runs one command through the real root, which is the only way
+// to exercise a persistent flag such as --output, and maps its error to the
+// exit code Execute would have produced. Nothing is written to the process's
+// own stdout, so what the buffer holds is exactly what a terminal would have
+// shown.
+func runCommand(t *testing.T, dir string, args ...string) (string, string, int) {
+	t.Helper()
+	return runCommandWithStdin(t, dir, "", args...)
+}
+
+func runCommandWithStdin(t *testing.T, dir, stdin string, args ...string) (string, string, int) {
+	t.Helper()
+	root := NewRootCommand()
+	var stdout, stderr bytes.Buffer
+	root.SetOut(&stdout)
+	root.SetErr(&stderr)
+	root.SetIn(strings.NewReader(stdin))
+	root.SetArgs(append([]string{"--chdir", dir}, args...))
+
+	code := ExitOK
+	if err := root.Execute(); err != nil {
+		// The same mapping Execute makes, kept here rather than calling
+		// Execute itself, which writes to the process's own stdout and
+		// would defeat the whole point of these tests.
+		if errors.Is(err, errChanges) {
+			code = ExitChanges
+		} else {
+			fmt.Fprintf(&stderr, "Error: %v\n", err)
+			code = ExitError
+		}
+	}
+	return stdout.String(), stderr.String(), code
+}
+
+// The property, asserted directly rather than inferred from any one command's
+// behaviour: with --output set, stdout is byte-empty. A frontend reading the
+// file must not also have to strip a human-readable plan from stdout.
+func TestOutputModeLeavesStdoutByteEmpty(t *testing.T) {
+	for _, command := range []string{"validate", "plan", "apply", "refresh", "destroy"} {
+		t.Run(command, func(t *testing.T) {
+			dir := newProjectFixture(t)
+			out := filepath.Join(t.TempDir(), "run.ndjson")
+
+			stdout, _, _ := runCommand(t, dir, command, "dev", "--output", out, "--auto-approve")
+
+			if stdout != "" {
+				t.Errorf("%s --output wrote %q to stdout, want nothing", command, stdout)
+			}
+			if fi, err := os.Stat(out); err != nil || fi.Size() == 0 {
+				t.Errorf("%s --output wrote no file: %v", command, err)
+			}
+		})
+	}
+}
+
+// The other half: without --output, progress reaches stdout. A test asserting
+// only the silence would pass against a command that prints nothing at all.
+func TestWithoutOutputProgressReachesStdout(t *testing.T) {
+	dir := newProjectFixture(t)
+
+	stdout, _, _ := runCommand(t, dir, "apply", "dev", "--auto-approve")
+
+	if !strings.Contains(stdout, "Creating ") {
+		t.Errorf("no progress on stdout:\n%s", stdout)
 	}
 }

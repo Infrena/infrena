@@ -236,7 +236,11 @@ resources: {}
 		t.Errorf("prevent_destroy diagnostic appears %d times on stderr, want exactly 1 — "+
 			"planDiags and p.Diagnostics carry the same content, so extending ds with both duplicates it:\n%s", n, stderr.String())
 	}
-	if stdout.Len() != 0 {
+	// Progress now reaches stdout while the refresh runs ("Reading ...
+	// done"), so an empty-stdout assertion would be asserting the absence of
+	// that rather than what this test is named for. The property is
+	// unchanged: no PLAN is rendered when planning fails.
+	if strings.Contains(stdout.String(), "Plan:") {
 		t.Errorf("no plan should reach stdout when a plan-time error occurs, got:\n%s", stdout.String())
 	}
 }

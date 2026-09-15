@@ -52,18 +52,19 @@ func newApplyCommand(opts *GlobalOptions) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			environment := args[0]
 
-			rw, closeReport, err := openReport(opts, "apply", environment, cmd.ErrOrStderr())
+			ro, closeRun, err := openRun(cmd, opts, "apply", environment)
 			if err != nil {
 				return err
 			}
-			defer closeReport()
+			defer closeRun()
+			rw := ro.Report()
 
 			// A saved plan takes an entirely separate path rather than branching
 			// through the one below: it compiles nothing, refreshes nothing, and
 			// re-plans nothing, so almost every step here would have to be skipped.
 			// See applySavedPlan.
 			if planPath != "" {
-				return applySavedPlan(cmd, opts, environment, planPath, rw)
+				return applySavedPlan(cmd, opts, environment, planPath, ro)
 			}
 
 			copts, cds := compilerOptions(opts, environment)
@@ -121,7 +122,7 @@ func newApplyCommand(opts *GlobalOptions) *cobra.Command {
 				ds.Extend(stateInstanceDiags)
 				cfg = teardownConfig(st0, environment)
 				teardown = true
-				fmt.Fprint(cmd.OutOrStdout(), teardownNotice(environment, declared))
+				fmt.Fprint(ro.Out(), teardownNotice(environment, declared))
 			default:
 				var compileDiags diag.Diagnostics
 				cfg, compileDiags = compiler.Compile(files, reg, copts)
@@ -143,12 +144,12 @@ func newApplyCommand(opts *GlobalOptions) *cobra.Command {
 
 			// Unlocked preview — identical in spirit to `infra plan`: safe
 			// to run against a locked environment, in CI, or repeatedly.
-			p, _, err := computePlan(cmd.Context(), cmd, backend, reg, cfg, environment, opts, rw)
+			p, _, err := computePlan(cmd.Context(), cmd, backend, reg, cfg, environment, opts, ro)
 			if err != nil {
 				return finishApply(cmd.ErrOrStderr(), rw, report.ApplyResult{}, err)
 			}
 
-			fmt.Fprint(cmd.OutOrStdout(), planner.Render(p, planner.RenderOptions{Verbose: opts.Verbose, Definition: reg.Definition}))
+			fmt.Fprint(ro.Out(), planner.Render(p, planner.RenderOptions{Verbose: opts.Verbose, Definition: reg.Definition}))
 
 			if !p.HasChanges() {
 				return finishApply(cmd.ErrOrStderr(), rw, report.ApplyResult{}, nil)
@@ -168,7 +169,7 @@ func newApplyCommand(opts *GlobalOptions) *cobra.Command {
 						"Type the environment name to confirm: ", environment)
 					want = environment
 				}
-				if !confirm(cmd, prompt, want) {
+				if !confirm(cmd, ro.Out(), prompt, want) {
 					return finishApply(cmd.ErrOrStderr(), rw, report.ApplyResult{},
 						errors.New("apply cancelled: you must type \"yes\" to approve"))
 				}
@@ -187,12 +188,12 @@ func newApplyCommand(opts *GlobalOptions) *cobra.Command {
 				// Re-plan inside the lock — see this task's doc comment above
 				// for why: apply must never execute against state or provider
 				// reality gathered before the lock was held.
-				p2, st, err := computePlan(ctx, cmd, backend, reg, cfg, environment, opts, rw)
+				p2, st, err := computePlan(ctx, cmd, backend, reg, cfg, environment, opts, ro)
 				if err != nil {
 					return finishApply(cmd.ErrOrStderr(), rw, report.ApplyResult{}, err)
 				}
 				if !p2.HasChanges() {
-					fmt.Fprintln(cmd.OutOrStdout(), "\nNo changes remained once the environment lock was acquired; nothing to apply.")
+					fmt.Fprintln(ro.Out(), "\nNo changes remained once the environment lock was acquired; nothing to apply.")
 					return finishApply(cmd.ErrOrStderr(), rw, report.ApplyResult{}, nil)
 				}
 
@@ -203,19 +204,11 @@ func newApplyCommand(opts *GlobalOptions) *cobra.Command {
 				}
 
 				execOpts := executorOptions(opts, reg, backend, environment)
-				if rw != nil {
-					execOpts.OnEvent = func(e executor.Event) {
-						// Best-effort and silent on failure: OnEvent's own
-						// doc comment documents this call as concurrent
-						// across worker goroutines, so there is no safe
-						// place here to report a write failure without
-						// racing a sibling goroutine's own concurrent write
-						// to cmd.ErrOrStderr(). It still surfaces once,
-						// non-concurrently, from finishApply's write of the
-						// final result line below.
-						_ = rw.WriteEvent(toReportEvent(e))
-					}
-				}
+				// Always set now, not only when there is a report to write:
+				// the same hook renders progress to stdout, which is the
+				// half a human watching an apply actually reads. Both halves
+				// are nil-safe — see eventHook.
+				execOpts.OnEvent = eventHook(ro)
 
 				res, execDiags := executor.Apply(ctx, p2, g, st, execOpts)
 				renderDiagnostics(cmd.ErrOrStderr(), rw, execDiags)
@@ -225,7 +218,7 @@ func newApplyCommand(opts *GlobalOptions) *cobra.Command {
 				// renderers for one Result is the duplicate-implementation
 				// defect that put a secret in M2's output, so this calls the
 				// shared one.
-				fmt.Fprint(cmd.OutOrStdout(), executor.Render(res, executor.RenderOptions{Verbose: opts.Verbose}))
+				fmt.Fprint(ro.Out(), executor.Render(res, executor.RenderOptions{Verbose: opts.Verbose}))
 
 				result := applyResultFrom(res)
 				if execDiags.HasErrors() || len(res.Failed) > 0 {
@@ -252,7 +245,8 @@ func newApplyCommand(opts *GlobalOptions) *cobra.Command {
 // what turns "everything currently in state" into a full teardown plan
 // through the planner's own decision table rather than a second, bespoke
 // "destroy everything" code path.
-func computePlan(ctx context.Context, cmd *cobra.Command, backend *state.Local, reg *registry.Registry, cfg compiler.ResolvedConfig, environment string, opts *GlobalOptions, rw *report.Writer) (*planner.Plan, *state.State, error) {
+func computePlan(ctx context.Context, cmd *cobra.Command, backend *state.Local, reg *registry.Registry, cfg compiler.ResolvedConfig, environment string, opts *GlobalOptions, ro *runOutput) (*planner.Plan, *state.State, error) {
+	rw := ro.Report()
 	st, err := backend.Get(ctx, environment)
 	if err != nil {
 		return nil, nil, err
@@ -273,7 +267,12 @@ func computePlan(ctx context.Context, cmd *cobra.Command, backend *state.Local, 
 	// no-op re-assignment on that path.
 	st.Project = cfg.Project
 
-	obs, refreshDiags := refresh.Refresh(ctx, st, reg, opts.Parallelism, perProviderParallelism, nil)
+	// The refresh hook, which used to be nil here: on a real account this
+	// phase dominates the wait, and an apply that says nothing while it runs
+	// is indistinguishable from one that has hung. st is passed as loaded,
+	// before refresh applies anything, which is what observationHook needs.
+	obs, refreshDiags := refresh.Refresh(ctx, st, reg, opts.Parallelism, perProviderParallelism,
+		observationHook(ro, st))
 	renderDiagnostics(cmd.ErrOrStderr(), rw, refreshDiags)
 	if refreshDiags.HasErrors() {
 		return nil, nil, errors.New("refreshing provider state failed")
@@ -300,8 +299,12 @@ func computePlan(ctx context.Context, cmd *cobra.Command, backend *state.Local, 
 //
 // Scan returning false — EOF or any other read error — is treated as
 // declined. See this task's doc comment for why that must never block.
-func confirm(cmd *cobra.Command, prompt, want string) bool {
-	fmt.Fprint(cmd.OutOrStdout(), prompt)
+//
+// The prompt goes to out rather than to cmd.OutOrStdout() directly, because
+// out is the run's own writer: under --output stdout carries nothing at all
+// (spec 2.1), and a prompt is not the exception to that rule.
+func confirm(cmd *cobra.Command, out io.Writer, prompt, want string) bool {
+	fmt.Fprint(out, prompt)
 	scanner := bufio.NewScanner(cmd.InOrStdin())
 	if !scanner.Scan() {
 		return false
