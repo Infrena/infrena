@@ -3,15 +3,17 @@
 // line, each carrying a "type" field. A frontend tails the file; the last
 // line is always the outcome.
 //
-// This is deliberately not what `infra plan --output` writes. A plan
-// artifact (internal/planner.Plan) is a single JSON document with cleartext
-// values, saved at 0600, because M6 reads it back to APPLY it — it is a
-// replayable INPUT (PLAN.md §12.1, §12.2). What this package writes is a
+// `infrena plan --output` writes this format too, carrying its artifact on a
+// single "plan" line (see PlanLine), so a frontend tails one format for
+// every command. That line is the ONE exception to the rule below, and it is
+// an exception rather than a softening of it. A plan artifact
+// (internal/planner.Plan) is a single JSON document with cleartext values,
+// saved at 0600, because M6 reads it back to APPLY it — it is a replayable
+// INPUT (PLAN.md §12.1, §12.2). Everything else this package writes is a
 // REPORT of a run that already happened, consumed by a wider audience (a web
-// frontend), so every value it carries is redacted: see Format below. The
-// two are distinct on purpose and must stay that way — do not point
-// `infra plan --output` at this package, and do not give the plan artifact a
-// second redaction path.
+// frontend), so every value it carries is redacted: see Format below. Do not
+// give the plan artifact a second redaction path, and do not let any other
+// line kind carry a raw value.
 package report
 
 import (
@@ -26,9 +28,14 @@ import (
 // Version is the wire format's schema version, written on every meta line.
 // It is the single most important field in the format: it is the handshake
 // that lets the format evolve later without breaking a consumer that only
-// understands version 1, which is why it is always present and always
-// first.
-const Version = 1
+// understands an older version, which is why it is always present and
+// always first.
+//
+// Version 2 added the "plan" line (see PlanLine), so that
+// `infrena plan --output` writes this format rather than a second one. A
+// consumer written against version 1 can tell from the meta line that a
+// line kind it does not know may appear.
+const Version = 2
 
 // Format renders one attribute value the way every line in this package
 // must: through pkg/value.Format, the engine's one redaction path, so a
@@ -99,6 +106,34 @@ type metaLine struct {
 	Command     string    `json:"command"`
 	Environment string    `json:"environment"`
 	StartedAt   time.Time `json:"startedAt"`
+}
+
+// PlanLine carries a plan artifact inside a report stream, so that
+// `infrena plan --output` writes ONE format rather than a second one (spec
+// 2.4). It is always the last line before the result.
+//
+// Plan is json.RawMessage rather than a decoded type, and that is deliberate
+// twice over. This package must not import internal/planner, which would
+// invert the dependency and drag the planner into a package plugin authors
+// compile against. And the artifact is the executor's complete instruction
+// set: carrying its bytes verbatim means a large integer attribute cannot be
+// reshaped in transit, the hazard planner.DecodePlan's UseNumber guards on
+// the way in.
+//
+// It is the ONE line in this package that is not redacted, and the exception
+// is the whole reason the two formats were kept apart until now: a plan
+// artifact holds cleartext values because apply --plan reads it back and
+// needs the real ones (PLAN.md 12.1). A file containing this line is
+// therefore as sensitive as a plan artifact has always been, and is written
+// 0600 for the same reason.
+type PlanLine struct {
+	Type string          `json:"type"`
+	Plan json.RawMessage `json:"plan"`
+}
+
+// WritePlan writes the plan artifact line.
+func (w *Writer) WritePlan(artifact json.RawMessage) error {
+	return w.writeLine(PlanLine{Type: "plan", Plan: artifact})
 }
 
 // Event is one apply/destroy progress notification, one per

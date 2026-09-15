@@ -91,8 +91,8 @@ resources:
 	if meta["type"] != "meta" {
 		t.Fatalf("first line type = %v, want \"meta\"", meta["type"])
 	}
-	if meta["version"] != float64(1) {
-		t.Errorf("meta.version = %v, want 1", meta["version"])
+	if meta["version"] != float64(2) {
+		t.Errorf("meta.version = %v, want 2", meta["version"])
 	}
 	if meta["command"] != "validate" {
 		t.Errorf("meta.command = %v, want \"validate\"", meta["command"])

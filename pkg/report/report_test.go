@@ -115,3 +115,39 @@ func TestFormatRedactsSensitiveValues(t *testing.T) {
 		t.Fatalf("Format(sensitive value) = %q, want the redacted marker — report.Format must call value.Format, not render Raw directly", got)
 	}
 }
+
+func TestWritePlanEmitsATypedLineCarryingTheArtifact(t *testing.T) {
+	var buf bytes.Buffer
+	w := NewWriter(&buf)
+
+	artifact := json.RawMessage(`{"version":1,"environment":"dev"}`)
+	if err := w.WritePlan(artifact); err != nil {
+		t.Fatal(err)
+	}
+
+	var got struct {
+		Type string          `json:"type"`
+		Plan json.RawMessage `json:"plan"`
+	}
+	if err := json.Unmarshal(bytes.TrimSpace(buf.Bytes()), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Type != "plan" {
+		t.Errorf("type = %q, want plan", got.Type)
+	}
+	// Carried through verbatim: the artifact is the executor's instruction set,
+	// and re-encoding it risks changing a number's exact text, which is the
+	// hazard DecodePlan's UseNumber already guards on the way in.
+	if string(got.Plan) != string(artifact) {
+		t.Errorf("plan = %s, want %s", got.Plan, artifact)
+	}
+}
+
+func TestVersionIsTwo(t *testing.T) {
+	// The format gained a line kind, so a consumer that only understands
+	// version 1 must be able to tell. PLAN.md section 61 keeps this
+	// independent of every other format version.
+	if Version != 2 {
+		t.Errorf("Version = %d, want 2", Version)
+	}
+}
