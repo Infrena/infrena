@@ -1998,19 +1998,20 @@ plugin declares only where it genuinely knows the shape, the same partial-covera
 `References` makes: a plugin that has reviewed some relationships and not others ships what
 it has reviewed and says nothing about the rest, rather than blocking on completeness.
 
-The compiler refuses `Fields` on an attribute whose `Kind` is not `KindMap` — a declared
-set of keys is meaningless on anything that is not a map, and a plugin that declared one
-anyway is describing a shape that cannot exist rather than one it has not gotten around to.
+`schema.Validate` refuses `Fields` on an attribute whose `Kind` is not `KindMap`, at every
+nesting level — a declared set of keys is meaningless on anything that is not a map, and a
+plugin that declared one anyway is describing a shape that cannot exist rather than one it
+has not gotten around to.
 
 A NESTED `References` — one attribute inside a `Fields` map declaring a relationship of its
-own — is refused rather than silently ignored. `projectRefs` (`internal/compiler/bind.go`)
-only ever reads a *top-level* attribute's `References`; nothing walks into `Fields` to
-consult a nested one. A declaration nothing consults is exactly the defect class this
-section exists to close — a plugin author reads the field, believes it does something,
-and discovers otherwise only when a reference silently fails to project. Refusing it at
-validation is simpler than teaching every consumer of `References` to recurse, and it keeps
-the failure at the moment the plugin loads rather than at the moment a user's `${vpc}`
-quietly does not become `${vpc.id}`.
+own — is refused by `schema.Validate` too, rather than silently ignored. `projectRefs`
+(`internal/compiler/bind.go`) only ever reads a *top-level* attribute's `References`;
+nothing walks into `Fields` to consult a nested one. A declaration nothing consults is
+exactly the defect class this section exists to close — a plugin author reads the field,
+believes it does something, and discovers otherwise only when a reference silently fails to
+project. Refusing it at validation is simpler than teaching every consumer of `References`
+to recurse, and it keeps the failure at the moment the plugin loads rather than at the
+moment a user's `${vpc}` quietly does not become `${vpc.id}`.
 
 ### A whole-resource reference is refused as a module input, and as a module output
 
@@ -2035,9 +2036,9 @@ empty attribute all the way to the executor does not fail at compile time — it
 deferred forever, and the run either dies mid-apply after real infrastructure already
 exists, or creates the resource with the attribute silently unset. `${net}` bare, with no
 consuming declaration to project against, is exactly such a reference, so it is refused at
-the one place each stage can still say WHY: `${vpc.<attribute>}` for an input, `${vpc.<attribute>}`
-for an output. Nothing downstream of stage 6 (nor of a module boundary) may ever see a
-reference whose `Attribute` is empty.
+the one place each side can still say why, naming the fix: write `${net.<attribute>}`
+instead. Nothing downstream of stage 6 (nor of a module boundary) may ever see a reference
+whose `Attribute` is empty.
 
 ---
 
