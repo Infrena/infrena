@@ -202,3 +202,49 @@ func runBinary(t *testing.T, bin, dir string, args ...string) result {
 	}
 	return result{Stdout: stdout.String(), Stderr: stderr.String(), ExitCode: code}
 }
+
+// readPlanArtifactBytes reads a file written by `infrena plan --output` and
+// returns the plan artifact itself.
+//
+// That file is a REPORT STREAM, not a bare JSON document: one NDJSON line per
+// event, the artifact riding on the `plan` line so a frontend tails one format
+// for every command (spec 2.4). Decoding the whole file as a document fails
+// with "invalid character '{' after top-level value", and — worse — a test that
+// only greps the raw bytes still matches text from the meta line and the
+// stream's own envelope, so it inspects the wrong level and reports a confident
+// wrong answer.
+//
+// Every test in this package that wants the artifact goes through here. Six
+// inline parsers is how the next envelope change breaks five of them and
+// silently degrades the sixth.
+//
+// The returned bytes are compacted, so a substring assertion against them is
+// about the artifact's content rather than about whether the producer happens
+// to indent it.
+func readPlanArtifactBytes(t *testing.T, path string) []byte {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading the plan report at %s: %v", path, err)
+	}
+	for _, line := range bytes.Split(data, []byte("\n")) {
+		line = bytes.TrimSpace(line)
+		if len(line) == 0 {
+			continue
+		}
+		var pl struct {
+			Type string          `json:"type"`
+			Plan json.RawMessage `json:"plan"`
+		}
+		if err := json.Unmarshal(line, &pl); err != nil || pl.Type != "plan" {
+			continue
+		}
+		var compact bytes.Buffer
+		if err := json.Compact(&compact, pl.Plan); err != nil {
+			t.Fatalf("the plan line in %s does not carry valid JSON: %v", path, err)
+		}
+		return compact.Bytes()
+	}
+	t.Fatalf("%s carries no plan line:\n%s", path, data)
+	return nil
+}

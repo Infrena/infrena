@@ -338,10 +338,7 @@ func TestPlanForConfigurationWithoutLifecycleCarriesNoLifecycle(t *testing.T) {
 	if res := run(t, dir, "plan", "dev", "--output", out); res.ExitCode != 2 {
 		t.Fatalf("plan exit code %d, want 2:\n%s", res.ExitCode, res.combined())
 	}
-	data, err := os.ReadFile(out)
-	if err != nil {
-		t.Fatalf("reading plan: %v", err)
-	}
+	data := readPlanArtifactBytes(t, out)
 	if strings.Contains(string(data), "lifecycle") {
 		t.Fatalf("a plan for a configuration with no lifecycle mentions lifecycle:\n%s", data)
 	}
@@ -353,10 +350,7 @@ func TestPlanForConfigurationWithoutLifecycleCarriesNoLifecycle(t *testing.T) {
 	if res := run(t, guarded, "plan", "dev", "--output", outGuarded); res.ExitCode != 2 {
 		t.Fatalf("plan exit code %d, want 2:\n%s", res.ExitCode, res.combined())
 	}
-	guardedData, err := os.ReadFile(outGuarded)
-	if err != nil {
-		t.Fatalf("reading plan: %v", err)
-	}
+	guardedData := readPlanArtifactBytes(t, outGuarded)
 	var doc struct {
 		Operations []struct {
 			Address   string `json:"address"`

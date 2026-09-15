@@ -38,12 +38,8 @@ type planArtifact struct {
 
 func readPlanArtifact(t *testing.T, path string) planArtifact {
 	t.Helper()
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("reading plan artifact: %v", err)
-	}
 	var p planArtifact
-	if err := json.Unmarshal(data, &p); err != nil {
+	if err := json.Unmarshal(readPlanArtifactBytes(t, path), &p); err != nil {
 		t.Fatalf("decoding plan artifact: %v", err)
 	}
 	return p

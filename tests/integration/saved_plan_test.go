@@ -233,13 +233,12 @@ func TestASavedPlanResolvesAReferenceToAResourceItAlsoCreates(t *testing.T) {
 	if r := run(t, dir, "plan", "dev", "--output", artifact); r.ExitCode != 2 {
 		t.Fatalf("plan exit = %d:\n%s", r.ExitCode, r.combined())
 	}
-	// The expression must be IN the file, or what follows proves nothing about the
-	// artifact — it would only prove the executor works, which was never in doubt.
-	saved, err := os.ReadFile(artifact)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(saved), `"op": "resource_ref"`) {
+	// The expression must be IN the artifact, or what follows proves nothing about it
+	// — it would only prove the executor works, which was never in doubt. Read through
+	// readPlanArtifactBytes: --output writes a report stream, and grepping the whole
+	// file would also be satisfied by text outside the artifact.
+	saved := readPlanArtifactBytes(t, artifact)
+	if !strings.Contains(string(saved), `"op":"resource_ref"`) {
 		t.Fatalf("the artifact carries no expression, so the apply below cannot be resolving one:\n%s", saved)
 	}
 

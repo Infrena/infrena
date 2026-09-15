@@ -329,13 +329,9 @@ resources:
 		t.Errorf("plan file mode = %v, want 0600", info.Mode().Perm())
 	}
 
-	data, err := os.ReadFile(outPath)
-	if err != nil {
-		t.Fatalf("reading plan file: %v", err)
-	}
 	var decoded map[string]any
-	if err := json.Unmarshal(data, &decoded); err != nil {
-		t.Fatalf("--output file is not valid JSON: %v", err)
+	if err := json.Unmarshal(readPlanArtifactBytes(t, outPath), &decoded); err != nil {
+		t.Fatalf("--output file carries no valid plan artifact: %v", err)
 	}
 }
 
@@ -386,13 +382,9 @@ resources:
 // actually holds. Confirmed by reading plan.go's planWire struct directly.
 func readPlanIgnoringCreatedAt(t *testing.T, path string) string {
 	t.Helper()
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("reading %s: %v", path, err)
-	}
 	var decoded map[string]any
-	if err := json.Unmarshal(data, &decoded); err != nil {
-		t.Fatalf("%s is not valid JSON: %v", path, err)
+	if err := json.Unmarshal(readPlanArtifactBytes(t, path), &decoded); err != nil {
+		t.Fatalf("%s carries no valid plan artifact: %v", path, err)
 	}
 	delete(decoded, "created_at")
 	stripped, err := json.Marshal(decoded)
