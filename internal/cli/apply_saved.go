@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -101,7 +102,11 @@ func applySavedPlan(
 	}
 
 	if !opts.AutoApprove {
-		if !confirm(cmd, ro.Out(), applyPrompt, "yes") {
+		// No approvalUnobtainable check here, and none is needed: --plan is
+		// itself one of the escapes that refusal names. A plan reviewed and
+		// saved earlier is the reviewed-then-applied workflow, so the only
+		// question left is whether the operator standing here approves it.
+		if !confirm(bufio.NewReader(cmd.InOrStdin()), ro.Out(), applyPrompt, "yes") {
 			return finishApply(cmd.ErrOrStderr(), rw, report.ApplyResult{},
 				errors.New("apply cancelled: you must type \"yes\" to approve"))
 		}

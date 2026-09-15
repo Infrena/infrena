@@ -38,6 +38,38 @@ const applyPrompt = "\nDo you want to perform these actions?\n" +
 	"  Only 'yes' will be accepted to approve.\n\n" +
 	"  Enter a value: "
 
+// errNoApproval signals that the plan has changes, approval is required, and
+// this run has no way to obtain it. It carries exit code 77 (ExitNoApproval),
+// and its text names an escape the caller can actually take — which is the
+// whole reason it exists, the outcome it replaced being a suggestion to type
+// "yes" into a pipeline with nobody at the other end.
+var errNoApproval = errors.New(
+	"these changes need approval and this run cannot ask for it: with --output set nothing " +
+		"is reading stdout, and with stdin at end of input nothing is there to type.\n" +
+		"Pass --auto-approve to approve without being asked, or review a saved plan " +
+		"(`infrena plan --output FILE`) and apply it with --plan")
+
+// approvalUnobtainable reports whether asking for approval would be pointless
+// because there is nobody able to answer.
+//
+// TWO CONDITIONS, and they are the two halves of the same fact. --output
+// silences stdout for the whole run (spec 2.1), so a prompt written there
+// would reach nothing; and stdin already at end of input means nothing is
+// there to type an answer even if it had.
+//
+// in is the run's ONE stdin reader, and the peek below consumes from it,
+// which is why the caller hands the same reader to confirm rather than
+// building a second one: a fresh bufio.Reader wrapping the same file starts
+// its own buffer, and the byte this peek pulled in would be lost — a user who
+// typed "yes" would be read as having typed "es".
+func approvalUnobtainable(opts *GlobalOptions, in *bufio.Reader) bool {
+	if opts.Output != "" {
+		return true
+	}
+	_, err := in.Peek(1)
+	return errors.Is(err, io.EOF)
+}
+
 // newApplyCommand builds `infra apply <environment>`: compile, refresh,
 // plan, show it, take approval, execute. Spec §16, §9.2, §10.
 func newApplyCommand(opts *GlobalOptions) *cobra.Command {
@@ -156,6 +188,19 @@ func newApplyCommand(opts *GlobalOptions) *cobra.Command {
 			}
 
 			if !opts.AutoApprove {
+				// ONE reader for stdin, shared by the check and the prompt.
+				// See approvalUnobtainable for why a second one would eat the
+				// answer.
+				in := bufio.NewReader(cmd.InOrStdin())
+
+				// BEFORE withLockedEnvironment, and before anything is asked
+				// of a provider: a run that cannot be approved must leave the
+				// environment exactly as it found it, unlocked and unchanged,
+				// rather than discovering the problem at the prompt.
+				if approvalUnobtainable(opts, in) {
+					return finishApply(cmd.ErrOrStderr(), rw, report.ApplyResult{}, errNoApproval)
+				}
+
 				// A teardown apply deletes everything in the environment, so it
 				// gets `destroy`'s stronger confirmation rather than "yes". The
 				// two commands are doing the same thing at this point, and the
@@ -169,7 +214,7 @@ func newApplyCommand(opts *GlobalOptions) *cobra.Command {
 						"Type the environment name to confirm: ", environment)
 					want = environment
 				}
-				if !confirm(cmd, ro.Out(), prompt, want) {
+				if !confirm(in, ro.Out(), prompt, want) {
 					return finishApply(cmd.ErrOrStderr(), rw, report.ApplyResult{},
 						errors.New("apply cancelled: you must type \"yes\" to approve"))
 				}
@@ -303,9 +348,13 @@ func computePlan(ctx context.Context, cmd *cobra.Command, backend *state.Local, 
 // The prompt goes to out rather than to cmd.OutOrStdout() directly, because
 // out is the run's own writer: under --output stdout carries nothing at all
 // (spec 2.1), and a prompt is not the exception to that rule.
-func confirm(cmd *cobra.Command, out io.Writer, prompt, want string) bool {
+//
+// in is passed rather than taken from cmd, because approvalUnobtainable has
+// already peeked at stdin through a buffered reader and this has to be that
+// same reader — see its doc comment for what a second one costs.
+func confirm(in io.Reader, out io.Writer, prompt, want string) bool {
 	fmt.Fprint(out, prompt)
-	scanner := bufio.NewScanner(cmd.InOrStdin())
+	scanner := bufio.NewScanner(in)
 	if !scanner.Scan() {
 		return false
 	}

@@ -102,15 +102,46 @@ func runCommandWithStdin(t *testing.T, dir, stdin string, args ...string) (strin
 	if err := root.Execute(); err != nil {
 		// The same mapping Execute makes, kept here rather than calling
 		// Execute itself, which writes to the process's own stdout and
-		// would defeat the whole point of these tests.
-		if errors.Is(err, errChanges) {
+		// would defeat the whole point of these tests. Every code Execute
+		// distinguishes has to be distinguished here too, or a test asserting
+		// on one of them silently reads ExitError instead.
+		switch {
+		case errors.Is(err, errChanges):
 			code = ExitChanges
-		} else {
+		case errors.Is(err, errNoApproval):
+			fmt.Fprintf(&stderr, "Error: %v\n", err)
+			code = ExitNoApproval
+		default:
 			fmt.Fprintf(&stderr, "Error: %v\n", err)
 			code = ExitError
 		}
 	}
 	return stdout.String(), stderr.String(), code
+}
+
+// withOutputPath substitutes a real temporary path for the "OUT" placeholder
+// in a table-driven case's argument list, so a case can say --output without
+// each one having to build a directory of its own.
+func withOutputPath(t *testing.T, args []string) []string {
+	t.Helper()
+	out := append([]string(nil), args...)
+	for i, a := range out {
+		if a == "OUT" {
+			out[i] = filepath.Join(t.TempDir(), "run.ndjson")
+		}
+	}
+	return out
+}
+
+// stateExists reports whether a command got far enough to persist state for
+// an environment. It reads the backend's file directly rather than through
+// state.Local, because the question is "did anything reach the disk at all",
+// and a loader that answers with an empty state for a missing file cannot
+// tell that apart from a run that wrote one.
+func stateExists(t *testing.T, dir, environment string) bool {
+	t.Helper()
+	_, err := os.Stat(filepath.Join(dir, ".infra", "state", environment+".json"))
+	return err == nil
 }
 
 // The property, asserted directly rather than inferred from any one command's

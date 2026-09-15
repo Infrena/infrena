@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -92,9 +93,19 @@ func newDestroyCommand(opts *GlobalOptions) *cobra.Command {
 			}
 
 			if !opts.AutoApprove {
+				// The identical rule apply applies, and for the identical
+				// reason: a higher confirmation bar does not make the answer
+				// obtainable. This runs before withLockedEnvironment, so a
+				// destroy nobody can approve leaves the environment untouched
+				// and unlocked. One reader for stdin — see approvalUnobtainable.
+				in := bufio.NewReader(cmd.InOrStdin())
+				if approvalUnobtainable(opts, in) {
+					return finishApply(cmd.ErrOrStderr(), rw, report.ApplyResult{}, errNoApproval)
+				}
+
 				prompt := fmt.Sprintf("\nDestroying environment %q will delete every resource infra "+
 					"manages there. This cannot be undone.\nType the environment name to confirm: ", environment)
-				if !confirm(cmd, ro.Out(), prompt, environment) {
+				if !confirm(in, ro.Out(), prompt, environment) {
 					return finishApply(cmd.ErrOrStderr(), rw, report.ApplyResult{},
 						fmt.Errorf("destroy cancelled: you must type %q to confirm", environment))
 				}

@@ -313,10 +313,13 @@ func TestDestroyOutputWritesEventsAndResult(t *testing.T) {
 	dir := seedOneNetwork(t, "dev")
 
 	outPath := filepath.Join(t.TempDir(), "out.ndjson")
-	opts := &GlobalOptions{Dir: dir, Parallelism: 4, Output: outPath}
+	// AutoApprove, because --output now refuses to prompt at all: stdout
+	// carries nothing in output mode, so a confirmation nobody can see is
+	// exit 77 rather than a question. Approval is not what these two cases
+	// are about; the lines written to the file are.
+	opts := &GlobalOptions{Dir: dir, Parallelism: 4, Output: outPath, AutoApprove: true}
 	cmd := newDestroyCommand(opts)
 	cmd.SetArgs([]string{"dev"})
-	cmd.SetIn(strings.NewReader("dev\n"))
 	cmd.SetOut(new(bytes.Buffer))
 	cmd.SetErr(new(bytes.Buffer))
 
@@ -380,10 +383,13 @@ func TestDestroyOutputReportsFailedEventAndResult(t *testing.T) {
 	}
 
 	outPath := filepath.Join(t.TempDir(), "out.ndjson")
-	opts := &GlobalOptions{Dir: dir, Parallelism: 4, Output: outPath}
+	// AutoApprove, because --output now refuses to prompt at all: stdout
+	// carries nothing in output mode, so a confirmation nobody can see is
+	// exit 77 rather than a question. Approval is not what these two cases
+	// are about; the lines written to the file are.
+	opts := &GlobalOptions{Dir: dir, Parallelism: 4, Output: outPath, AutoApprove: true}
 	cmd := newDestroyCommand(opts)
 	cmd.SetArgs([]string{"dev"})
-	cmd.SetIn(strings.NewReader("dev\n"))
 	cmd.SetOut(new(bytes.Buffer))
 	cmd.SetErr(new(bytes.Buffer))
 

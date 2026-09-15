@@ -15,6 +15,19 @@ const (
 	ExitOK      = 0
 	ExitError   = 1
 	ExitChanges = 2
+
+	// ExitNoApproval: the plan has changes, approval is required, and this run
+	// cannot obtain it — --output is set so nobody is reading stdout, or stdin
+	// is already at EOF so nobody is there to type.
+	//
+	// 77 is sysexits.h's EX_NOPERM. It is a fourth row on PLAN.md section 16's
+	// table and therefore a documented product API change.
+	//
+	// It replaces a genuinely misleading outcome: a piped apply reached
+	// confirm(), got EOF from bufio.Scanner, and exited 1 saying "you must
+	// type yes to approve" — advice nobody in that pipeline could have taken,
+	// which is exactly what section 44 says a suggested action must never be.
+	ExitNoApproval = 77
 )
 
 // GlobalOptions holds flags shared by every subcommand.
@@ -91,6 +104,13 @@ func Execute() int {
 			return ExitChanges
 		}
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		// Reported on stderr like any other failure, and only then given its
+		// own code: a run that refuses for want of approval HAS failed, and
+		// the operator reading the terminal needs the reason as much as the
+		// pipeline reading $? needs the number.
+		if errors.Is(err, errNoApproval) {
+			return ExitNoApproval
+		}
 		return ExitError
 	}
 	return ExitOK

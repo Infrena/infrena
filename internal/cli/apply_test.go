@@ -175,17 +175,13 @@ resources:
 	}
 }
 
-// TestApplyEOFOnStdinDeclinesRatherThanHanging pins the second design
-// question this task's brief calls out explicitly: confirm treats
-// bufio.Scanner.Scan returning false (EOF, or any other read error) as
-// "not approved" — the CI-without---auto-approve case. Every other test in
-// this file that supplies changes and declines either supplies a literal
-// "no\n" or supplies AutoApprove: true; neither exercises Scan() itself
-// returning false with real changes on the table, which is the exact
-// branch confirm's own doc comment is about. An empty reader (as opposed
-// to a reader containing "no\n") is what actually reaches EOF on the first
-// Scan call.
-func TestApplyEOFOnStdinDeclinesRatherThanHanging(t *testing.T) {
+// TestApplyEOFOnStdinRefusesRatherThanHanging pins the CI-without-
+// --auto-approve case. It used to assert that confirm read EOF and declined
+// with "you must type yes", which was advice nobody in that pipeline could
+// take; the run now refuses BEFORE the prompt, with errNoApproval and exit
+// 77, naming an escape that works. An empty reader (as opposed to a reader
+// containing "no\n") is what actually reaches EOF on the first read.
+func TestApplyEOFOnStdinRefusesRatherThanHanging(t *testing.T) {
 	dir := projectDir(t, `
 project: myapp
 resources:
@@ -202,11 +198,11 @@ resources:
 	cmd.SetErr(&stderr)
 
 	err := cmd.Execute()
-	if err == nil || errors.Is(err, errChanges) {
-		t.Fatalf("Execute() = %v, want a plain error — EOF on stdin must decline, not hang or apply", err)
+	if !errors.Is(err, errNoApproval) {
+		t.Fatalf("Execute() = %v, want errNoApproval — EOF on stdin must refuse, not hang or apply", err)
 	}
-	if !strings.Contains(err.Error(), `type "yes"`) {
-		t.Errorf("error does not explain how to approve: %v", err)
+	if !strings.Contains(err.Error(), "--auto-approve") {
+		t.Errorf("error does not name an escape this caller can take: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(dir, ".infra", "state", "dev.json")); !os.IsNotExist(err) {
 		t.Error("EOF on stdin must not apply anything")
@@ -789,5 +785,84 @@ resources:
 	}
 	if !strings.Contains(planOut.String(), "No changes.") {
 		t.Errorf("invariant 2: the dependency update did not converge:\n%s", planOut.String())
+	}
+}
+
+func TestApplyRefusesWhenApprovalCannotBeObtained(t *testing.T) {
+	cases := []struct {
+		name  string
+		args  []string
+		stdin string
+	}{
+		// --output means nobody is reading stdout, so nobody can see a prompt.
+		{"output mode", []string{"apply", "dev", "--output", "OUT"}, ""},
+		// stdin at EOF means nobody is there to type.
+		{"stdin at eof", []string{"apply", "dev"}, ""},
+		// destroy asks for more than "yes", which does not make the answer
+		// any more obtainable.
+		{"destroy in output mode", []string{"destroy", "dev", "--output", "OUT"}, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := newProjectFixture(t)
+			args := withOutputPath(t, tc.args)
+
+			// destroy has nothing to destroy in a fresh fixture, so it needs
+			// a state to plan against — applied here, before the run under
+			// test, which also proves the refusal below is about approval
+			// rather than about an empty plan.
+			if args[0] == "destroy" {
+				if _, _, code := runCommand(t, dir, "apply", "dev", "--auto-approve"); code != ExitChanges {
+					t.Fatalf("seeding apply exit = %d, want %d", code, ExitChanges)
+				}
+			}
+
+			_, stderr, code := runCommandWithStdin(t, dir, tc.stdin, args...)
+
+			if code != ExitNoApproval {
+				t.Errorf("exit = %d, want %d", code, ExitNoApproval)
+			}
+			if !strings.Contains(stderr, "--auto-approve") {
+				t.Errorf("stderr does not name the fix:\n%s", stderr)
+			}
+			// The whole point of refusing before the lock: nothing was touched.
+			if args[0] == "apply" && stateExists(t, dir, "dev") {
+				t.Error("apply wrote state despite refusing for want of approval")
+			}
+			if _, err := os.Stat(filepath.Join(dir, ".infra", "state", "dev.lock")); !os.IsNotExist(err) {
+				t.Error("the environment was locked despite refusing for want of approval")
+			}
+		})
+	}
+}
+
+// --auto-approve and --plan are both escapes, and a clean plan never needed
+// approval at all, so none of the three may hit the new code path.
+func TestApprovalRuleDoesNotFireWhenItShouldNot(t *testing.T) {
+	dir := newProjectFixture(t)
+	out := filepath.Join(t.TempDir(), "run.ndjson")
+
+	if _, _, code := runCommand(t, dir, "apply", "dev", "--output", out, "--auto-approve"); code == ExitNoApproval {
+		t.Error("--auto-approve still hit the approval refusal")
+	}
+	// Applied once, so the second run has no changes and must exit 0.
+	if _, _, code := runCommand(t, dir, "apply", "dev", "--output", out); code != ExitOK {
+		t.Errorf("clean apply exit = %d, want %d", code, ExitOK)
+	}
+}
+
+// The reader handed to confirm must be the SAME one the peek read through, or
+// the peek eats the first byte of what the user actually typed and every
+// answer arrives one character short.
+func TestApprovalPeekDoesNotEatTheAnswer(t *testing.T) {
+	dir := newProjectFixture(t)
+
+	_, _, code := runCommandWithStdin(t, dir, "yes\n", "apply", "dev")
+
+	if code != ExitChanges {
+		t.Fatalf("exit = %d, want %d — a typed \"yes\" must still approve", code, ExitChanges)
+	}
+	if !stateExists(t, dir, "dev") {
+		t.Error("nothing was applied despite an approved apply")
 	}
 }
