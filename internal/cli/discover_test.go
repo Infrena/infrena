@@ -291,3 +291,46 @@ func TestImportSkipsSystemOwnedUnlessNamed(t *testing.T) {
 		t.Error("naming it explicitly wrote no state")
 	}
 }
+
+// The filters are wired to both commands, not merely implemented. A Filter with
+// unit tests and no call site would pass internal/discovery's whole suite and do
+// nothing at all for a user.
+func TestDiscoverNarrowsByNameAndTag(t *testing.T) {
+	dir := newProjectWithDiscoverableResources(t, "vpc-1", "vpc-2")
+
+	byName, _, code := runCommand(t, dir, "discover", "--name", "vpc-1")
+	if code != ExitOK {
+		t.Fatalf("discover --name: exit %d\n%s", code, byName)
+	}
+	if !strings.Contains(byName, "vpc-1") || strings.Contains(byName, "vpc-2") {
+		t.Errorf("--name did not narrow the survey:\n%s", byName)
+	}
+
+	// A malformed glob is an error, never a silently empty result: an empty
+	// account and a typo in a flag read identically otherwise.
+	_, stderr, code := runCommand(t, dir, "discover", "--name", "[")
+	if code == ExitOK {
+		t.Errorf("a malformed glob was accepted:\n%s", stderr)
+	}
+
+	// key=value, and a value that is not one is refused rather than ignored.
+	_, stderr, code = runCommand(t, dir, "discover", "--tag", "justakey")
+	if code == ExitOK {
+		t.Errorf("--tag with no value was accepted:\n%s", stderr)
+	}
+}
+
+func TestImportNarrowsByExcludedType(t *testing.T) {
+	dir := newProjectWithDiscoverableResources(t, "vpc-1")
+
+	stdout, stderr, code := runCommand(t, dir, "import", "dev", "--exclude-type", "fake.vpc")
+	if code != ExitOK {
+		t.Fatalf("import --exclude-type: exit %d\n%s", code, stderr)
+	}
+	if !strings.Contains(stdout, "Nothing to import") {
+		t.Errorf("--exclude-type did not reach import:\n%s", stdout)
+	}
+	if stateExists(t, dir, "dev") {
+		t.Error("an excluded type was imported anyway")
+	}
+}

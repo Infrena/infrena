@@ -33,6 +33,7 @@ import (
 func newImportCommand(opts *GlobalOptions) *cobra.Command {
 	var generate bool
 	var instance string
+	var filters filterFlags
 
 	cmd := &cobra.Command{
 		Use:           "import <environment> [type.id...]",
@@ -51,6 +52,13 @@ func newImportCommand(opts *GlobalOptions) *cobra.Command {
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			environment := args[0]
+			// Before a plugin is started, let alone asked: a malformed --tag is
+			// a mistake in the command line, not something to discover after a
+			// survey of a real account.
+			filter, err := filters.filter()
+			if err != nil {
+				return err
+			}
 			// The same PLUGIN scope discovery has — import adopts what discovery
 			// found, so it must be able to ask the same plugins — but with this
 			// command's own environment, which discover does not have. Passing ""
@@ -67,7 +75,7 @@ func newImportCommand(opts *GlobalOptions) *cobra.Command {
 			return withLockedEnvironment(environment, "import", backend, cmd.ErrOrStderr(),
 				func(ctx context.Context) error {
 					return runImport(ctx, cmd, opts, reg, tbl, backend, environment, args[1:],
-						generate, instance)
+						generate, instance, filter)
 				})
 		},
 	}
@@ -79,6 +87,9 @@ func newImportCommand(opts *GlobalOptions) *cobra.Command {
 	// could not say at all.
 	cmd.Flags().StringVar(&instance, "provider", "",
 		"only adopt resources belonging to this provider instance")
+	// The same three narrowing flags `discover` takes, so the list a user read
+	// and the list they adopt are produced by the same question.
+	filters.register(cmd)
 	return cmd
 }
 
@@ -86,13 +97,14 @@ func runImport(
 	ctx context.Context, cmd *cobra.Command, opts *GlobalOptions,
 	reg *registry.Registry, table providers.Table, backend *state.Local,
 	environment string, selectors []string, generate bool, instance string,
+	filter discovery.Filter,
 ) error {
 	managed, err := managedProviderIDs(ctx, backend)
 	if err != nil {
 		return err
 	}
 
-	selected, skipped, problems, err := selectForImport(ctx, reg, managed, selectors, instance)
+	selected, skipped, problems, err := selectForImport(ctx, reg, managed, selectors, instance, filter)
 	for _, p := range problems {
 		fmt.Fprintf(cmd.ErrOrStderr(), "Warning: %v\n", p)
 	}
@@ -242,9 +254,17 @@ func alreadyManaged(st *state.State, selected []discovery.Result) []string {
 // silently shrank is the failure this whole area exists to avoid.
 func selectForImport(
 	ctx context.Context, reg *registry.Registry, managed map[string]string,
-	selectors []string, instance string,
+	selectors []string, instance string, filter discovery.Filter,
 ) (selected, skipped []discovery.Result, problems []error, err error) {
 	found, problems := discovery.Walk(ctx, reg, nil)
+	// AFTER the walk, which is after naming: Unique is order-dependent, so a
+	// filter applied earlier would change the names of what survives it, and a
+	// resource would be adopted under a different name depending on a flag that
+	// has nothing to do with naming.
+	found, err = filter.Apply(reg, found)
+	if err != nil {
+		return nil, nil, problems, err
+	}
 	kept, err := withoutManaged(found, selectors, managed)
 	if err != nil {
 		return nil, nil, problems, err

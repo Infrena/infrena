@@ -23,6 +23,7 @@ import (
 // environment would imply a scoping the command does not have.
 func newDiscoverCommand(opts *GlobalOptions) *cobra.Command {
 	var all bool
+	var filters filterFlags
 
 	cmd := &cobra.Command{
 		Use:           "discover [type...]",
@@ -37,6 +38,14 @@ func newDiscoverCommand(opts *GlobalOptions) *cobra.Command {
 			"what `infrena import` would call each resource, so a collision is visible here " +
 			"rather than after the fact.",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// Before any provider is asked. A malformed --tag or --name is a
+			// mistake in the command line, and answering it with API calls
+			// first would make a typo cost a minute.
+			filter, err := filters.filter()
+			if err != nil {
+				return err
+			}
+
 			reg, _, regDiags, closePlugins := discoveryRegistry(opts, "")
 			defer closePlugins()
 			if regDiags.HasErrors() {
@@ -58,13 +67,77 @@ func newDiscoverCommand(opts *GlobalOptions) *cobra.Command {
 			for _, p := range problems {
 				fmt.Fprintf(cmd.ErrOrStderr(), "Warning: %v\n", p)
 			}
+
+			// AFTER Walk, which is after naming. Unique is order-dependent, so
+			// a filter applied inside the walk would change the names of the
+			// resources that survive it.
+			found, err = filter.Apply(reg, found)
+			if err != nil {
+				return err
+			}
+
 			renderDiscovered(cmd.OutOrStdout(), found, args, managed, all)
 			return nil
 		},
 	}
 	cmd.Flags().BoolVar(&all, "all", false,
 		"also show resources this project already manages, with a STATUS column")
+	filters.register(cmd)
 	return cmd
+}
+
+// filterFlags are the three narrowing flags `discover` and `import` share.
+//
+// One definition for both, because a filter that narrowed a survey and not the
+// import that follows it would be the worst of both: a user reads a short list
+// and adopts a long one.
+type filterFlags struct {
+	tags         []string
+	excludeTypes []string
+	nameGlob     string
+}
+
+func (f *filterFlags) register(cmd *cobra.Command) {
+	cmd.Flags().StringArrayVar(&f.tags, "tag", nil,
+		"only resources carrying this tag, as key=value; repeatable, and every one must match")
+	cmd.Flags().StringArrayVar(&f.excludeTypes, "exclude-type", nil,
+		"leave out every resource of this type; repeatable")
+	cmd.Flags().StringVar(&f.nameGlob, "name", "",
+		"only resources whose proposed name matches this glob, e.g. 'vpc-*'")
+}
+
+func (f *filterFlags) filter() (discovery.Filter, error) {
+	tags, err := parseTagFilters(f.tags)
+	if err != nil {
+		return discovery.Filter{}, err
+	}
+	return discovery.Filter{
+		Tags:         tags,
+		ExcludeTypes: f.excludeTypes,
+		NameGlob:     f.nameGlob,
+	}, nil
+}
+
+// parseTagFilters turns repeated `key=value` flags into a map.
+//
+// A flag with no `=` is REFUSED rather than read as a key with an empty value.
+// `--tag Name` almost certainly means "tagged Name=something", and answering it
+// with the resources whose Name tag is the empty string is an answer to a
+// question nobody asked — and one that looks like an empty account.
+func parseTagFilters(pairs []string) (map[string]string, error) {
+	if len(pairs) == 0 {
+		return nil, nil
+	}
+	out := make(map[string]string, len(pairs))
+	for _, pair := range pairs {
+		key, want, ok := strings.Cut(pair, "=")
+		if !ok || key == "" {
+			return nil, fmt.Errorf("--tag %q is not key=value\n"+
+				"Write it as `--tag Name=app1`, and repeat the flag for more than one tag", pair)
+		}
+		out[key] = want
+	}
+	return out, nil
 }
 
 // renderDiscovered prints §25's table.
