@@ -520,7 +520,21 @@ func TestOperationsOverlapRatherThanSerialise(t *testing.T) {
 
 	const (
 		resources = 4
-		delayMS   = 150
+		// 400ms rather than 150. The threshold below scales with this delay,
+		// but the FIXED cost of a read does not — loading the cloud file,
+		// scheduling four goroutines, and the race detector's own overhead are
+		// the same whatever the simulated latency is. At 150ms that fixed cost
+		// alone could cross a 300ms threshold on a loaded shared runner: this
+		// test passed on a push and failed on the release's own CI check two
+		// minutes later, at 423ms, and blocked the v0.7.0 release until it was
+		// re-run. A re-run only buys another roll of the dice.
+		//
+		// At 400ms the threshold is 800ms, far above any plausible fixed cost,
+		// and the test still catches what it is for: with Read holding the lock
+		// across the delay it measures about 1.6s and fails. Diagnosed and
+		// fixed first in infrena-provider-fake (ced5116), which hit the
+		// identical flake in its copy of this test.
+		delayMS = 400
 	)
 
 	states := make([]*resource.ResourceState, 0, resources)
@@ -564,8 +578,9 @@ func TestOperationsOverlapRatherThanSerialise(t *testing.T) {
 	}
 
 	// Serial execution takes at least resources*delay. Overlapping execution
-	// takes roughly one delay. The midpoint is a generous threshold that is
-	// not sensitive to scheduling noise.
+	// takes roughly one delay. The midpoint is the threshold, which is generous
+	// ONLY while the delay is large enough to dwarf the fixed cost of a read —
+	// see delayMS above, where that stopped being true and cost a release.
 	serial := time.Duration(resources) * delayMS * time.Millisecond
 	if elapsed >= serial/2 {
 		t.Errorf("%d concurrent reads with %dms latency took %v; serial would be ~%v. "+
