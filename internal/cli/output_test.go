@@ -10,6 +10,8 @@ import (
 	"testing"
 
 	"github.com/spf13/cobra"
+
+	"github.com/infrena/infrena/pkg/provider"
 )
 
 // commandWithBuffers builds a bare command wired to buffers, so a test can
@@ -92,11 +94,58 @@ func runCommand(t *testing.T, dir string, args ...string) (string, string, int) 
 func runCommandWithStdin(t *testing.T, dir, stdin string, args ...string) (string, string, int) {
 	t.Helper()
 	root := NewRootCommand()
+	root.SetIn(strings.NewReader(stdin))
+	root.SetArgs(append([]string{"--chdir", dir}, args...))
+	return executeRoot(t, root)
+}
+
+// runCommandIn runs a command as if the user were STANDING IN dir, which is not
+// the same thing as passing --chdir: the flag answers the question
+// findProjectRoot exists to ask, so a test that passed it could never exercise
+// the search at all.
+//
+// The directory is written straight into the flag's value rather than through
+// the flag set, because pflag's Set marks a flag Changed and that bit is
+// precisely what decides whether the search runs.
+func runCommandIn(t *testing.T, dir string, args ...string) (string, string, int) {
+	t.Helper()
+	root := NewRootCommand()
+	if err := root.PersistentFlags().Lookup("chdir").Value.Set(dir); err != nil {
+		t.Fatal(err)
+	}
+	root.SetIn(strings.NewReader(""))
+	root.SetArgs(args)
+	return executeRoot(t, root)
+}
+
+// runCommandInWithoutPlugins is runCommandIn on a machine with no provider
+// installed, which is exactly where someone stands the first time they run
+// init: a shipped infrena carries no provider (§31.1), and this package's
+// TestMain injects one for every other test.
+func runCommandInWithoutPlugins(t *testing.T, dir string, args ...string) (string, string, int) {
+	t.Helper()
+	previous := builtinsFor
+	builtinsFor = func(string) map[string]provider.Plugin { return nil }
+	t.Cleanup(func() { builtinsFor = previous })
+	return runCommandIn(t, dir, args...)
+}
+
+// read returns a file's contents or fails the test, for assertions that are
+// about what was written rather than about whether it could be read.
+func read(t *testing.T, path string) string {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
+func executeRoot(t *testing.T, root *cobra.Command) (string, string, int) {
+	t.Helper()
 	var stdout, stderr bytes.Buffer
 	root.SetOut(&stdout)
 	root.SetErr(&stderr)
-	root.SetIn(strings.NewReader(stdin))
-	root.SetArgs(append([]string{"--chdir", dir}, args...))
 
 	code := ExitOK
 	if err := root.Execute(); err != nil {

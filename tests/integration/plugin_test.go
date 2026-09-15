@@ -113,11 +113,14 @@ func buildFakePlugin() {
 // anything. Sabotage-checked: restoring the builtin makes this say "Configuration valid".
 func TestAShippedBuildCarriesNoProvider(t *testing.T) {
 	dir := t.TempDir()
-	// `init` scaffolds a project using the fake provider, so the scaffold itself is what
-	// needs a plugin — which makes this also a test that `init` emits fake.* rather than
-	// a type nothing serves.
-	if r := runWithoutPlugin(t, dir, "init"); r.ExitCode != 0 {
-		t.Fatalf("init exit = %d:\n%s", r.ExitCode, r.combined())
+	// The project is written here rather than scaffolded. This used to lean on `init`,
+	// whose example declared a live fake.network — but the scaffold's example is now
+	// COMMENTED OUT, precisely so that a fresh project validates on a machine with
+	// nothing installed, so it can no longer be the thing that demands a plugin.
+	// TestTheScaffoldValidatesWithNoProviderInstalled is that other half.
+	body := []byte("project: shipped\nresources:\n  network:\n    type: fake.network\n    cidr: 10.0.0.0/16\n")
+	if err := os.WriteFile(filepath.Join(dir, "infra.yml"), body, 0o644); err != nil {
+		t.Fatal(err)
 	}
 
 	r := runWithoutPlugin(t, dir, "validate")
@@ -130,6 +133,28 @@ func TestAShippedBuildCarriesNoProvider(t *testing.T) {
 		if !strings.Contains(r.combined(), want) {
 			t.Errorf("the error does not mention %q:\n%s", want, r.combined())
 		}
+	}
+}
+
+// TestTheScaffoldValidatesWithNoProviderInstalled proves through the REAL binary what
+// init_test.go proves in process: what `infrena init` writes must pass `infrena validate`
+// on a machine that has installed nothing.
+//
+// An init whose output does not validate is worse than no init at all, because it teaches
+// the language wrongly at the one moment a user has no way to tell — and this suite is the
+// only one where "nothing installed" is the literal truth rather than an injected double.
+func TestTheScaffoldValidatesWithNoProviderInstalled(t *testing.T) {
+	dir := t.TempDir()
+	if r := runWithoutPlugin(t, dir, "init"); r.ExitCode != 0 {
+		t.Fatalf("init exit = %d:\n%s", r.ExitCode, r.combined())
+	}
+
+	// init scaffolds into ./infrena, and --chdir means what it says, so the project is
+	// named directly rather than discovered.
+	r := runWithoutPlugin(t, filepath.Join(dir, "infrena"), "validate")
+	if r.ExitCode != 0 {
+		t.Fatalf("a freshly scaffolded project does not validate with no provider installed:\n%s",
+			r.combined())
 	}
 }
 
