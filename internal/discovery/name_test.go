@@ -1,11 +1,15 @@
 package discovery
 
 import (
+	"context"
 	"strings"
 	"testing"
 
 	"github.com/infrena/infrena/internal/config"
+	"github.com/infrena/infrena/internal/registry"
 	"github.com/infrena/infrena/pkg/provider"
+	"github.com/infrena/infrena/pkg/resource"
+	"github.com/infrena/infrena/pkg/schema"
 	"github.com/infrena/infrena/pkg/value"
 )
 
@@ -33,7 +37,7 @@ func TestNameComesFromTheNameTagWhenThereIsOne(t *testing.T) {
 			// The ID is deliberately a usable name too, so a build that ignored
 			// the tag would produce something valid rather than something
 			// broken — and would still be wrong.
-			if got := Name(discovered("db-9", tc.attrs)); got != "orders" {
+			if got := Name(fakeReg(t), discovered("db-9", tc.attrs)); got != "orders" {
 				t.Errorf("Name = %q, want %q from %s", got, "orders", tc.label)
 			}
 		})
@@ -58,7 +62,7 @@ func TestNameFallsBackToTheProviderID(t *testing.T) {
 		{"0abc", "_0abc"},
 		{"-abc", "_-abc"},
 	} {
-		if got := Name(discovered(tc.id, nil)); got != tc.want {
+		if got := Name(fakeReg(t), discovered(tc.id, nil)); got != tc.want {
 			t.Errorf("Name(%q) = %q, want %q", tc.id, got, tc.want)
 		}
 	}
@@ -79,9 +83,10 @@ func TestEveryGeneratedNameIsOneTheDecoderAccepts(t *testing.T) {
 		"__", "---", "9", "x", "Ünïcödé", "tab\there", "a/b/c", "", "  ",
 		strings.Repeat("z", 300),
 	}
+	reg := fakeReg(t)
 	taken := map[string]string{}
 	for _, id := range ids {
-		for _, name := range []string{Name(discovered(id, nil)), Unique(taken, discovered(id, nil))} {
+		for _, name := range []string{Name(reg, discovered(id, nil)), Unique(reg, taken, discovered(id, nil))} {
 			if name == "" {
 				t.Errorf("id %q produced an empty name", id)
 				continue
@@ -98,9 +103,10 @@ func TestEveryGeneratedNameIsOneTheDecoderAccepts(t *testing.T) {
 // `orders` are TWO resources; a silently merged pair is a resource dropped, and
 // a dropped resource is one invariant 1 proposes destroying.
 func TestCollidingNamesBothSurvive(t *testing.T) {
+	reg := fakeReg(t)
 	taken := map[string]string{}
-	a := Unique(taken, discovered("db-9", map[string]value.Value{"name": str("orders")}))
-	b := Unique(taken, discovered("db-10", map[string]value.Value{"name": str("orders")}))
+	a := Unique(reg, taken, discovered("db-9", map[string]value.Value{"name": str("orders")}))
+	b := Unique(reg, taken, discovered("db-10", map[string]value.Value{"name": str("orders")}))
 
 	if a != "orders" {
 		t.Errorf("the first `orders` = %q, want the unsuffixed name", a)
@@ -122,10 +128,11 @@ func TestCollidingNamesBothSurvive(t *testing.T) {
 // resource already NAMED `orders_db-9` and one tagged `orders` with ID `db-9`
 // generate the same candidate.
 func TestACollidingSuffixAlsoResolves(t *testing.T) {
+	reg := fakeReg(t)
 	taken := map[string]string{}
-	first := Unique(taken, discovered("x-1", map[string]value.Value{"name": str("orders")}))
-	second := Unique(taken, discovered("y-1", map[string]value.Value{"name": str("orders_x-1")}))
-	third := Unique(taken, discovered("x-1", map[string]value.Value{"name": str("orders")}))
+	first := Unique(reg, taken, discovered("x-1", map[string]value.Value{"name": str("orders")}))
+	second := Unique(reg, taken, discovered("y-1", map[string]value.Value{"name": str("orders_x-1")}))
+	third := Unique(reg, taken, discovered("x-1", map[string]value.Value{"name": str("orders")}))
 
 	names := map[string]bool{first: true, second: true, third: true}
 	if len(names) != 3 {
@@ -153,7 +160,7 @@ func TestAnEmptyOrUnusableNameTagFallsBack(t *testing.T) {
 		{"no attributes at all", nil},
 	} {
 		t.Run(tc.label, func(t *testing.T) {
-			if got := Name(discovered("db-9", tc.attrs)); got != "db-9" {
+			if got := Name(fakeReg(t), discovered("db-9", tc.attrs)); got != "db-9" {
 				t.Errorf("Name = %q, want the provider ID fallback for %s", got, tc.label)
 			}
 		})
@@ -169,13 +176,132 @@ func TestNamingIsDeterministic(t *testing.T) {
 		"Name": str("ORDERS"),
 		"tags": value.Map(map[string]value.Value{"Name": str("tagged"), "name": str("also")}, value.SourceProvider),
 	})
-	first := Name(r)
+	reg := fakeReg(t)
+	first := Name(reg, r)
 	for i := range 50 {
-		if got := Name(r); got != first {
+		if got := Name(reg, r); got != first {
 			t.Fatalf("run %d named it %q, first run said %q", i, got, first)
 		}
 	}
 	if first != "orders" {
 		t.Errorf("Name = %q; `name` is first in the documented order", first)
+	}
+}
+
+// stubProvider is the least a registry needs: a name and a set of definitions.
+// Naming never calls a provider, only reads its schema.
+type stubProvider struct {
+	defs []*schema.ResourceDefinition
+}
+
+func (s stubProvider) Name() string                              { return "stub" }
+func (s stubProvider) Definitions() []*schema.ResourceDefinition { return s.defs }
+func (s stubProvider) ClassifyError(error) provider.Retryability { return provider.NotSafeToRetry }
+func (s stubProvider) Read(context.Context, *resource.ResourceState) (*resource.ResourceState, error) {
+	return nil, provider.ErrNotImplemented
+}
+func (s stubProvider) Create(context.Context, *resource.DesiredResource) (*resource.ResourceState, error) {
+	return nil, provider.ErrNotImplemented
+}
+func (s stubProvider) Update(context.Context, *resource.ResourceState, *resource.DesiredResource) (*resource.ResourceState, error) {
+	return nil, provider.ErrNotImplemented
+}
+func (s stubProvider) Delete(context.Context, *resource.ResourceState) error {
+	return provider.ErrNotImplemented
+}
+func (s stubProvider) Discover(context.Context, provider.DiscoverRequest) ([]provider.DiscoveredResource, error) {
+	return nil, provider.ErrNotImplemented
+}
+func (s stubProvider) Import(context.Context, string, string) (*resource.ResourceState, error) {
+	return nil, provider.ErrNotImplemented
+}
+
+// registryWithType builds a registry holding one resource type, so a naming
+// test can say what the plugin calls its tag map.
+func registryWithType(t *testing.T, typeName string, attrs map[string]schema.Attribute) *registry.Registry {
+	t.Helper()
+	reg := registry.New()
+	if err := reg.Register("stub", stubProvider{defs: []*schema.ResourceDefinition{
+		{Type: typeName, Attributes: attrs},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	return reg
+}
+
+// fakeReg is the registry the tests above share: one `fake.database` type whose
+// tag map is spelled the way those tests spell it.
+func fakeReg(t *testing.T) *registry.Registry {
+	t.Helper()
+	return registryWithType(t, "fake.database", map[string]schema.Attribute{
+		"tags": {Kind: value.KindMap},
+	})
+}
+
+// THE REGRESSION. internal/discovery/name.go read attrs["tags"] as a literal
+// lowercase key, and the AWS plugin's canonical attribute is "Tags". The
+// lookup missed on every AWS resource, so section 27.2's documented naming
+// rule was dead code against the only real provider and every name fell
+// through to the sanitised provider ID.
+func TestNameFindsTheTagMapWhateverThePluginCallsIt(t *testing.T) {
+	for _, tc := range []struct {
+		attrName string
+		attr     schema.Attribute
+	}{
+		{"tags", schema.Attribute{Kind: value.KindMap}},
+		{"Tags", schema.Attribute{Kind: value.KindMap}},
+		// TagSet exercises the ALIAS half of the fold, not just case.
+		{"TagSet", schema.Attribute{Kind: value.KindMap, Aliases: []string{"tags"}}},
+	} {
+		t.Run(tc.attrName, func(t *testing.T) {
+			reg := registryWithType(t, "aws.vpc", map[string]schema.Attribute{tc.attrName: tc.attr})
+			r := provider.DiscoveredResource{
+				Type:       "aws.vpc",
+				ProviderID: "vpc-1023902339",
+				Attributes: map[string]value.Value{
+					tc.attrName: value.Map(map[string]value.Value{
+						"Name": value.String("app1", value.SourceProvider),
+					}, value.SourceProvider),
+				},
+			}
+
+			if got := Name(reg, r); got != "app1" {
+				t.Errorf("Name = %q, want app1", got)
+			}
+		})
+	}
+}
+
+// Both spellings inside the map, in the documented order: AWS writes Name,
+// most other things write name.
+func TestNamePrefersNameOverLowercaseName(t *testing.T) {
+	reg := registryWithType(t, "aws.vpc", map[string]schema.Attribute{
+		"Tags": {Kind: value.KindMap},
+	})
+	r := provider.DiscoveredResource{
+		Type:       "aws.vpc",
+		ProviderID: "vpc-1",
+		Attributes: map[string]value.Value{
+			"Tags": value.Map(map[string]value.Value{
+				"name": value.String("lower", value.SourceProvider),
+				"Name": value.String("upper", value.SourceProvider),
+			}, value.SourceProvider),
+		},
+	}
+
+	if got := Name(reg, r); got != "upper" {
+		t.Errorf("Name = %q, want upper", got)
+	}
+}
+
+// A type the registry does not know must not panic and must not lose the
+// resource: discovery reports what a provider returned, and refusing to name
+// something would drop it.
+func TestNameFallsBackWhenTheTypeIsUnknown(t *testing.T) {
+	reg := registryWithType(t, "aws.vpc", nil)
+	r := provider.DiscoveredResource{Type: "aws.mystery", ProviderID: "m-1"}
+
+	if got := Name(reg, r); got == "" {
+		t.Error("Name returned empty for an unknown type")
 	}
 }

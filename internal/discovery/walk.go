@@ -86,7 +86,7 @@ func Walk(ctx context.Context, reg *registry.Registry, types []string) ([]Result
 
 	taken := map[string]string{}
 	for i := range out {
-		out[i].Name = Unique(taken, provider.DiscoveredResource{
+		out[i].Name = Unique(reg, taken, provider.DiscoveredResource{
 			Type:       out[i].Type,
 			ProviderID: out[i].ProviderID,
 			Attributes: out[i].Attributes,
