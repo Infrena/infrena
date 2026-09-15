@@ -127,6 +127,8 @@ resources: {}
 	if narrowed.ExitCode != 0 {
 		t.Fatalf("--provider did not resolve the ambiguity:\n%s", narrowed.combined())
 	}
-	show := run(t, dir, "state", "show", "dev", "net-1")
+	// The ADDRESS, not the provider ID: a discovered name is its type prefix
+	// and its identifier, so net-1 is recorded as network-net-1.
+	show := run(t, dir, "state", "show", "dev", "network-net-1")
 	requireContains(t, show.combined(), "acct2")
 }

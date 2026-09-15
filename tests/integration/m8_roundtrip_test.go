@@ -203,15 +203,23 @@ func TestImportingTwiceIsSafe(t *testing.T) {
 	}
 	first := readGenerated(t, dir, "databases.yml")
 
-	// The second import finds everything already in state and must refuse
-	// rather than overwrite — importing again would replace the recorded
-	// provider IDs with whatever discovery happened to name this time.
+	// The second import finds everything already managed and has nothing left
+	// to do, so it says so and succeeds.
+	//
+	// It used to REFUSE, on the grounds that importing again would replace the
+	// recorded provider IDs. That was the wrong shape for the command: a
+	// selector-less import means "adopt what is not adopted yet", and refusing
+	// the whole run turned a 300-resource import into an error because three of
+	// them were already in state. A resource already managed is simply not part
+	// of the question. Naming one explicitly is still refused, which is where
+	// the overwrite hazard actually lives — a user asked for one specific
+	// resource and must not be told nothing happened.
 	second := run(t, dir, "import", "dev", "--generate")
-	if second.ExitCode == 0 {
-		t.Errorf("a second import of resources already in state succeeded; it must refuse:\n%s",
-			second.combined())
+	if second.ExitCode != 0 {
+		t.Errorf("a second import exit = %d, want 0: everything is already managed, which is "+
+			"an answer rather than an error:\n%s", second.ExitCode, second.combined())
 	}
-	requireContains(t, second.combined(), "already in the state")
+	requireContains(t, second.combined(), "Nothing to import.")
 
 	// Nothing was duplicated in the file, and the plan is still clean.
 	if got := readGenerated(t, dir, "databases.yml"); got != first {
@@ -262,7 +270,9 @@ func TestImportingANewResourceAppendsToTheExistingFile(t *testing.T) {
 		t.Errorf("the new resource was not appended:\n%s", databases)
 	}
 	// The existing ones survive exactly once each.
-	for _, existing := range []string{"db-9", "db-77"} {
+	// By ADDRESS, which is the type-prefixed name discovery gives a resource,
+	// not the provider ID the block's comment carries.
+	for _, existing := range []string{"database-db-9", "database-db-77"} {
 		if n := strings.Count(databases, "\n  "+existing+":"); n != 1 {
 			t.Errorf("%s appears %d times after appending:\n%s", existing, n, databases)
 		}
