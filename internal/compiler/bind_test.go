@@ -706,3 +706,42 @@ resources:
 		t.Fatal("expected a resolved config")
 	}
 }
+
+// TestAWholeResourceReferenceProjectsThroughAnAliasedAttribute. The consuming
+// attribute is written as one of its ALIASES, which is how a user of a real plugin
+// writes it: §14.1 shipped aliases so `cidr` stands for `CidrBlock`, and the AWS
+// plugin's naming design rests on them.
+//
+// The lookup used to be exact against the user's spelling, so `vpc: ${net}` reported
+// "declares no reference" about an attribute that plainly declares one — while the
+// canonical `vpc_id: ${net}` worked. Reported by the AWS plugin's author against
+// v0.6.1, on aws.subnet's VpcId.
+func TestAWholeResourceReferenceProjectsThroughAnAliasedAttribute(t *testing.T) {
+	for _, spelling := range []string{"vpc_id", "vpc"} {
+		t.Run(spelling, func(t *testing.T) {
+			p := decl(t, `
+project: myapp
+resources:
+  net:
+    type: fake.vpc
+  sub:
+    type: fake.subnet
+    `+spelling+`: ${net}
+`)
+			cfg, ds := bindReferences(rootOnly(t, p, Options{Environment: "dev"}), Options{Environment: "dev"}, testRegistry(t), testTable())
+			if ds.HasErrors() {
+				t.Fatalf("unexpected diagnostics: %+v", ds)
+			}
+			// Keyed by the spelling as written: attribute keys are canonicalised
+			// later than this stage, which is itself why the projection's own
+			// lookup had to canonicalise rather than assume.
+			refs := cfg.Resources["sub"].Attrs[spelling].Expr.References()
+			if len(refs) != 1 {
+				t.Fatalf("References() = %v, want exactly one", refs)
+			}
+			if got := refs[0].Attribute; got != "id" {
+				t.Errorf("projected to %q, want %q", got, "id")
+			}
+		})
+	}
+}
