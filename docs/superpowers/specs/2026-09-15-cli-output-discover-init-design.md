@@ -103,18 +103,30 @@ execution. This is why the renderer is a type and not a closure appended to `app
 must be quiesced before the summary is printed. Ordering is therefore: progress lines,
 blank line, summary.
 
-### 2.3 `refresh` gets an event hook, because it is the slow phase
+### 2.3 `plan` and `apply` start using the refresh hook they already ignore
 
-`refresh.Refresh` has no hook at all, and it is the phase that dominates wall-clock on a
-real account: it runs once inside `plan` and **twice** inside `apply` (once unlocked for the
-preview, once inside the lock). Adding progress to the executor and not to refresh would fix
-the visible half of the wait and leave the longer half silent.
+**Correction to an earlier draft of this spec, which claimed `refresh.Refresh` had no hook.
+It has one, and it is fully built.** The signature is
 
-`refresh.Refresh` gains an `OnObservation` hook of the same nil-means-no-hook shape
-`executor.Options.OnEvent` uses. It renders as `Reading aws.vpc.vpc-app1...` and emits an
-`observation` line into the report, which `pkg/report` already defines.
+```go
+func Refresh(ctx, st, reg, parallelism, perProvider int, onObservation func(Observation)) (Observations, diag.Diagnostics)
+```
 
-`discover` gets the same treatment for the same reason — a `Discover` across a real account
+`report.Writer.WriteObservation` exists to receive it, and `internal/cli/refresh.go:97`
+wires it. **`plan.go:108` and `apply.go:276` both pass `nil`** — and refresh is the phase
+that dominates wall clock on a real account, running once inside `plan` and **twice** inside
+`apply` (unlocked for the preview, then again inside the lock).
+
+So the work here is not building a mechanism; it is that two of its three callers discard it.
+Both get a real hook, rendering as `Reading aws.vpc.vpc-app1... done` and emitting the
+`observation` line `pkg/report` already defines.
+
+**This is the same defect class the project has hit repeatedly** — a mechanism implemented,
+tested, and inert at the call site, like `PerProvider: opts.Parallelism` being unreachable by
+construction (`apply.go`'s `perProviderParallelism` comment). A test asserting the hook fires
+from `plan` and `apply`, not only from `refresh`, is what keeps it wired.
+
+`discover` has no such hook and gets one built, for the same reason — a `Discover` across a real account
 is API calls, and Unit B adds filters that make it slower still.
 
 ### 2.4 `plan`'s artifact moves into the stream
