@@ -101,6 +101,13 @@ func (d *ResourceDefinition) Validate() error {
 			return fmt.Errorf("%s: attribute %q is Computed and also has a Default; the provider supplies computed values", d.Type, name)
 		case attr.Required && attr.Default != nil:
 			return fmt.Errorf("%s: attribute %q is Required and also has a Default; a default makes it optional", d.Type, name)
+		case attr.Fields != nil && attr.Kind != value.KindMap:
+			return fmt.Errorf("%s: attribute %q declares Fields but its Kind is not a map; Fields describes a map's known keys", d.Type, name)
+		}
+		if attr.Fields != nil {
+			if err := validateFields(d.Type, name, attr.Fields); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -114,6 +121,98 @@ func (d *ResourceDefinition) Validate() error {
 		}
 		if len(req.Types) == 0 {
 			return fmt.Errorf("%s: requirement %q names no satisfying types, so it can never be satisfied", d.Type, req.Name)
+		}
+	}
+	return nil
+}
+
+// validateFields checks a declared map's known keys, recursively — Validate's
+// own per-attribute loop only ever looks at the TOP-LEVEL attributes, and
+// without this a nested attribute's Kind and its own References go
+// unchecked entirely.
+//
+// A nested References is REFUSED rather than merely left unchecked:
+// internal/compiler/bind.go's projectRefs only ever reads a top-level
+// attribute's References (PLAN.md §14.3), so one declared inside Fields is
+// consulted by nothing — a declaration nothing consults is exactly the
+// defect class this whole feature keeps running into, and refusing it at
+// load time is simpler than teaching every consumer of References to
+// recurse into a shape most of them have no reason to know about.
+func validateFields(typeName, path string, fields map[string]Attribute) error {
+	names := make([]string, 0, len(fields))
+	for n := range fields {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+
+	for _, n := range names {
+		nested := fields[n]
+		nestedPath := path + "." + n
+		switch {
+		case nested.Kind == value.KindInvalid:
+			return fmt.Errorf("%s: attribute %q has no Kind", typeName, nestedPath)
+		case nested.References != nil:
+			return fmt.Errorf("%s: attribute %q declares References, but a nested attribute's "+
+				"References is never consulted — only a top-level attribute's is ever projected "+
+				"(PLAN.md §14.3)", typeName, nestedPath)
+		case nested.Fields != nil && nested.Kind != value.KindMap:
+			return fmt.Errorf("%s: attribute %q declares Fields but its Kind is not a map; Fields "+
+				"describes a map's known keys", typeName, nestedPath)
+		}
+		if nested.Fields != nil {
+			if err := validateFields(typeName, nestedPath, nested.Fields); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// ValidateAll validates each definition on its own and then the relationships
+// BETWEEN them, which no single definition can check: a Reference names another
+// type, and whether that type exists is a fact about the whole set.
+//
+// A plugin with a dangling relationship does not load. §14.1 took the same line
+// for colliding alias spellings, for the same reason — a silent runtime surprise
+// about which relationship won is worse than a plugin that refuses to start.
+func ValidateAll(defs []*ResourceDefinition) error {
+	byType := make(map[string]*ResourceDefinition, len(defs))
+	for _, d := range defs {
+		if err := d.Validate(); err != nil {
+			return err
+		}
+		byType[d.Type] = d
+	}
+
+	// Sorted, so a plugin with two broken relationships reports the same one
+	// first on every run (invariant 6).
+	types := make([]string, 0, len(byType))
+	for t := range byType {
+		types = append(types, t)
+	}
+	sort.Strings(types)
+
+	for _, t := range types {
+		d := byType[t]
+		names := make([]string, 0, len(d.Attributes))
+		for n := range d.Attributes {
+			names = append(names, n)
+		}
+		sort.Strings(names)
+		for _, n := range names {
+			ref := d.Attributes[n].References
+			if ref == nil {
+				continue
+			}
+			target, ok := byType[ref.Type]
+			if !ok {
+				return fmt.Errorf("%s: attribute %q refers to type %q, which this plugin does not declare",
+					d.Type, n, ref.Type)
+			}
+			if _, ok := target.Attributes[ref.Attribute]; !ok {
+				return fmt.Errorf("%s: attribute %q refers to %s.%s, and %s has no attribute %q",
+					d.Type, n, ref.Type, ref.Attribute, ref.Type, ref.Attribute)
+			}
 		}
 	}
 	return nil

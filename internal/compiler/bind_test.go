@@ -427,6 +427,93 @@ resources:
 	}
 }
 
+func TestAWholeResourceReferenceIsProjectedToTheDeclaredAttribute(t *testing.T) {
+	// fake.subnet's vpc_id declares References{fake.vpc, "id"}, so ${net}
+	// must become ${net.id} before anything downstream sees it.
+	p := decl(t, `
+project: myapp
+resources:
+  net:
+    type: fake.vpc
+  sub:
+    type: fake.subnet
+    vpc_id: ${net}
+`)
+	cfg, ds := bindReferences(rootOnly(t, p, Options{Environment: "dev"}), Options{Environment: "dev"}, testRegistry(t), testTable())
+	if ds.HasErrors() {
+		t.Fatalf("unexpected diagnostics: %+v", ds)
+	}
+	refs := cfg.Resources["sub"].Attrs["vpc_id"].Expr.References()
+	if len(refs) != 1 {
+		t.Fatalf("References() = %v, want exactly one", refs)
+	}
+	got := refs[0]
+	if got.Attribute != "id" {
+		t.Errorf("Attribute = %q, want %q — the projection reads the consuming attribute's declaration", got.Attribute, "id")
+	}
+	if got.Target.Name != "net" {
+		t.Errorf("Target.Name = %q, want %q", got.Target.Name, "net")
+	}
+}
+
+func TestAWholeResourceReferenceWithNoDeclarationIsAnError(t *testing.T) {
+	// fake.subnet's `cidr` declares no References, so ${net} there cannot be
+	// projected. The engine must NOT guess.
+	p := decl(t, `
+project: myapp
+resources:
+  net:
+    type: fake.vpc
+  sub:
+    type: fake.subnet
+    cidr: ${net}
+`)
+	_, ds := bindReferences(rootOnly(t, p, Options{Environment: "dev"}), Options{Environment: "dev"}, testRegistry(t), testTable())
+	if !ds.HasErrors() {
+		t.Fatal("passing a resource to an attribute that declares no reference must be an error, never a guess")
+	}
+	// I3: before this reference was tracked as "handled" once projectRefs had
+	// reported on it, the still-empty attribute flowed on into the
+	// attribute-axis check below and drew a second, unrelated "fake.vpc has
+	// no attribute \"\"" — spec §2.2's promise that a missing declaration
+	// "costs exactly nothing" was not met. Before this branch, the same
+	// configuration was a single parse error.
+	if len(ds) != 1 {
+		t.Errorf("got %d diagnostics, want exactly 1: %s", len(ds), rendered(ds))
+	}
+	if !strings.Contains(ds[0].Detail, "${net.") {
+		t.Errorf("Detail = %q, want it to show naming an attribute explicitly as the fix", ds[0].Detail)
+	}
+}
+
+func TestNoEmptyAttributeReferenceEscapesStageSix(t *testing.T) {
+	// The invariant Task 3's parser comment relies on. An empty attribute
+	// downstream means ResourceScope misses, the value stays deferred forever,
+	// and the resource is created with the attribute silently unset.
+	p := decl(t, `
+project: myapp
+resources:
+  net:
+    type: fake.vpc
+  sub:
+    type: fake.subnet
+    vpc_id: ${net}
+`)
+	cfg, ds := bindReferences(rootOnly(t, p, Options{Environment: "dev"}), Options{Environment: "dev"}, testRegistry(t), testTable())
+	if ds.HasErrors() {
+		t.Fatalf("unexpected diagnostics: %+v", ds)
+	}
+	for _, rc := range cfg.Resources {
+		for name, v := range rc.Attrs {
+			for _, ref := range v.Expr.References() {
+				if ref.Attribute == "" {
+					t.Errorf("%s.%s kept an empty-attribute reference past stage 6", rc.Address, name)
+				}
+			}
+		}
+	}
+}
+
 // rootOnly wraps a project as stage 5 would when it contains no modules: every
 // resource an instance at the root, each sharing the root scope.
 //
@@ -449,4 +536,173 @@ type noRemotes struct{}
 
 func (noRemotes) Resolve(s source.Source, _ string) (source.Resolution, diag.Diagnostics) {
 	panic("compiler bind tests are module-free; nothing should resolve a source: " + s.String())
+}
+
+// TestAnUnregisteredConsumingTypeSkipsProjectionSilently pins fix round 1's
+// Important, tightened by fix round 2's I3: consuming == nil in projectRefs
+// was true both when the attribute declares no reference AND when the
+// consuming resource's own type is unregistered (a nil def yields a nil
+// attribute either way), so an unregistered type reaching a whole-resource
+// reference got the "declares no reference" diagnostic AND then a second,
+// unrelated one from the reference target's own attribute-axis check
+// ("fake.vpc has no attribute \"\"") when the misprojected empty attribute
+// reached it.
+//
+// An unregistered type must report NOTHING from this stage — not even the
+// symptom-y "has no attribute \"\"" fix round 1 left standing. It has no
+// schema to check anything against, and stage 7 (bindSchemas) already reports
+// the unregistered type itself; that is the diagnostic that should stand
+// alone, which is why bindReferences on its own must come back clean here.
+// TestAnUnregisteredConsumingTypeStillFailsCompileOverall, below, is what
+// proves the full pipeline still refuses the configuration.
+func TestAnUnregisteredConsumingTypeSkipsProjectionSilently(t *testing.T) {
+	p := decl(t, `
+project: myapp
+resources:
+  net:
+    type: fake.vpc
+  sub:
+    type: bogus.thing
+    vpc_id: ${net}
+`)
+	_, ds := bindReferences(rootOnly(t, p, Options{Environment: "dev"}), Options{Environment: "dev"}, testRegistry(t), testTable())
+	if ds.HasErrors() {
+		t.Fatalf("stage 6 has no schema for an unregistered type and nothing useful to say about a "+
+			"reference into one of its attributes — it must say nothing and let stage 7's own "+
+			"\"unknown resource type\" diagnostic stand alone: %+v", ds)
+	}
+}
+
+// TestAnUnregisteredConsumingTypeStillFailsCompileOverall is the full-Compile
+// half of the test above: stage 6 staying silent must not mean the
+// configuration compiles clean. The type is `fake.doesnotexist` rather than a
+// wholly unknown plugin prefix, deliberately — an unrecognised PLUGIN fails
+// earlier still, at stage 4.5 (providers.Prepare), before stage 6 or stage 7
+// ever run; a type the loaded `fake` plugin itself does not define is what
+// actually reaches stage 7 (bindSchemas), which reports the unregistered
+// type on its own. That must be the ONLY diagnostic — not piled on top of a
+// stage 6 symptom about the reference's still-empty attribute.
+func TestAnUnregisteredConsumingTypeStillFailsCompileOverall(t *testing.T) {
+	files, dir := moduleFixture(t, map[string]string{
+		"infra.yml": `
+project: demo
+environments: {dev: {}}
+resources:
+  net:
+    type: fake.vpc
+  sub:
+    type: fake.doesnotexist
+    vpc_id: ${net}
+`,
+	})
+	_, ds := Compile(files, testRegistry(t), Options{Environment: "dev", Dir: dir})
+	if !ds.HasErrors() {
+		t.Fatal("an unregistered resource type must still fail the compile overall")
+	}
+	got := rendered(ds)
+	if !strings.Contains(got, `unknown resource type "fake.doesnotexist"`) {
+		t.Errorf("want stage 7's own diagnostic about the unregistered type:\n%s", got)
+	}
+	if strings.Contains(got, "has no attribute") {
+		t.Errorf("must not also show the symptom of the reference's still-empty attribute:\n%s", got)
+	}
+}
+
+func TestPassingTheWrongResourceTypeIsACompileError(t *testing.T) {
+	p := decl(t, `
+project: myapp
+resources:
+  db:
+    type: fake.database
+  sub:
+    type: fake.subnet
+    vpc_id: ${db}
+`)
+	_, ds := bindReferences(rootOnly(t, p, Options{Environment: "dev"}), Options{Environment: "dev"}, testRegistry(t), testTable())
+	if !ds.HasErrors() {
+		t.Fatal("vpc_id refers to fake.vpc; passing a fake.database must fail at compile time, not at the API")
+	}
+	if !strings.Contains(ds[0].Summary, "fake.vpc") || !strings.Contains(ds[0].Summary, "fake.database") {
+		t.Errorf("Summary = %q, want both type names", ds[0].Summary)
+	}
+}
+
+func TestNamingAnAttributeDoesNotEscapeTheTypeCheck(t *testing.T) {
+	// The projection is sugar; the type check is not. Writing the attribute
+	// out avoids the projection and must NOT avoid the check.
+	p := decl(t, `
+project: myapp
+resources:
+  db:
+    type: fake.database
+  sub:
+    type: fake.subnet
+    vpc_id: ${db.id}
+`)
+	_, ds := bindReferences(rootOnly(t, p, Options{Environment: "dev"}), Options{Environment: "dev"}, testRegistry(t), testTable())
+	if !ds.HasErrors() {
+		t.Fatal("${db.id} into an attribute that refers to fake.vpc must fail too")
+	}
+}
+
+func TestAnAttributeWithNoDeclarationIsNotTypeChecked(t *testing.T) {
+	// Coverage buys checking; absence costs nothing. `cidr` declares no
+	// reference, so anything may be interpolated into it, exactly as today.
+	p := decl(t, `
+project: myapp
+resources:
+  db:
+    type: fake.database
+  sub:
+    type: fake.subnet
+    cidr: ${db.engine}
+`)
+	cfg, ds := bindReferences(rootOnly(t, p, Options{Environment: "dev"}), Options{Environment: "dev"}, testRegistry(t), testTable())
+	if ds.HasErrors() {
+		t.Fatalf("an attribute with no declared reference must not be type checked: %+v", ds)
+	}
+	if cfg.Resources == nil {
+		t.Fatal("expected a resolved config")
+	}
+}
+
+func TestAPathIntoADeclaredMapIsKeyCheckedAtCompileTime(t *testing.T) {
+	p := decl(t, `
+project: myapp
+resources:
+  net:
+    type: fake.vpc
+  sub:
+    type: fake.subnet
+    cidr: ${net.meta.nmae}
+`)
+	_, ds := bindReferences(rootOnly(t, p, Options{Environment: "dev"}), Options{Environment: "dev"}, testRegistry(t), testTable())
+	if !ds.HasErrors() {
+		t.Fatal("a typo in a declared map key must fail at compile time, not halfway through apply")
+	}
+	if !strings.Contains(ds[0].Detail, "name") {
+		t.Errorf("Detail = %q, want it to list the keys that exist", ds[0].Detail)
+	}
+}
+
+func TestAPathIntoAnOpenMapIsStillUnchecked(t *testing.T) {
+	// fake.vpc's tags is an open map, exactly as AWS tags are and always will
+	// be. Declaring Fields for them would be a lie, so nil must stay a
+	// first-class answer rather than a gap.
+	p := decl(t, `
+project: myapp
+resources:
+  net:
+    type: fake.vpc
+  sub:
+    type: fake.subnet
+    cidr: ${net.tags.anything}
+`)
+	cfg, ds := bindReferences(rootOnly(t, p, Options{Environment: "dev"}), Options{Environment: "dev"}, testRegistry(t), testTable())
+	if ds.HasErrors() {
+		t.Fatalf("an attribute with no declared Fields must accept any key, as today: %+v", ds)
+	}
+	if cfg.Resources == nil {
+		t.Fatal("expected a resolved config")
+	}
 }

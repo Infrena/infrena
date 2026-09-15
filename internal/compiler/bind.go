@@ -236,6 +236,218 @@ func canonicaliseRefs(e *value.Expr, declared map[string]refTarget) {
 	}
 }
 
+// projectRefs fills in the attribute of every WHOLE-RESOURCE reference, from
+// the declaration on the attribute that consumes it (PLAN.md §14.3).
+//
+// `vpc_id: ${vpc}` becomes `${vpc.id}` here and nowhere else, which is what lets
+// the planner, the executor, the plan artifact and the wire format stay exactly
+// as they are: downstream sees an ordinary two-part reference and cannot tell
+// the difference.
+//
+// IN PLACE on the AST, and BEFORE canonicaliseRefs, for the same reason that one
+// runs before the attribute-axis check: a projected name must then be
+// canonicalised like any other, in case a plugin declares its reference against
+// an attribute spelling that is itself an alias of another.
+//
+// THE ENGINE NEVER GUESSES. An attribute with no declaration is an error naming
+// the fix, not a fallback to "probably the id" — a wrong value shipped silently
+// is the failure this whole feature exists to prevent.
+//
+// consumingTypeRegistered separates two situations a nil consuming otherwise
+// conflates: the consuming resource's own type is unregistered (nothing to
+// check — this must say nothing rather than pile a diagnostic about a schema
+// it does not have), versus a registered type whose attribute genuinely
+// declares no reference (an error, naming the fix).
+//
+// scope is consulted for exactly one thing: whether the reference's target is
+// a MODULE CALL rather than a resource. A module call has outputs, not
+// schema'd attributes, so there is nothing here to project onto — checking
+// this ahead of consuming's own declaration is what stops `${m}` into an
+// attribute that DOES declare References from being told it is missing an
+// output the user never named (I2), and stops the same reference into an
+// attribute that declares no reference from being told it "passes a
+// resource" when it passes a module (I3).
+//
+// handled records, by Reference.String() — which for every reference this
+// function even considers is just the bare target, since it only ever looks
+// at an empty Attribute — every reference this function has already reported
+// on, INCLUDING the cases where it deliberately says nothing. That is what
+// closes I3: once this function has had its say (or its deliberate silence),
+// the attribute-axis and module-output checks in bindOneExpression must not
+// process the same reference again carrying its still-empty attribute — a
+// second, unrelated diagnostic about the symptom is not a second opinion, it
+// is noise pointing at the wrong cause. A reference this function actually
+// projects (the default case) is NOT marked: it now carries a real attribute
+// and must flow through every check exactly like one written out by hand.
+func projectRefs(
+	e *value.Expr,
+	scope *modules.Scope,
+	consuming *schema.Attribute,
+	consumingTypeRegistered bool,
+	consumingName string,
+	origin value.Origin,
+	ds *diag.Diagnostics,
+	handled map[string]bool,
+) {
+	if e == nil {
+		return
+	}
+	if e.Op == value.OpResourceRef && e.Ref.Attribute == "" {
+		switch {
+		case !consumingTypeRegistered:
+			// Nothing to check, and nothing to say: an unregistered type is not
+			// this stage's problem to report — stage 7 already reports the
+			// unregistered type itself, and that is the diagnostic that should
+			// stand alone.
+			handled[e.Ref.String()] = true
+		case isModuleCallTarget(scope, e.Ref.Target.Name):
+			// PLAN.md §14.3 / the design spec's own diagnostics table: a module
+			// exposes outputs, not schema'd attributes, so there is nothing on
+			// the call itself to project — regardless of what the consuming
+			// attribute declares.
+			outs, _ := scope.OutputNames(e.Ref.Target.Name)
+			ds.Add(diag.Diagnostic{
+				Severity: diag.SeverityError,
+				Summary:  "${" + e.Ref.Target.String() + "} names a module call, not a resource",
+				Detail: "A module exposes outputs, not attributes, so there is nothing on " +
+					strconv.Quote(e.Ref.Target.String()) + " itself for `" + consumingName +
+					"` to hold.\nOutputs it declares:\n  " + strings.Join(outs, "\n  "),
+				Action: "Name the output you mean, as ${" + e.Ref.Target.String() + ".<output>}.",
+				Origin: origin,
+			})
+			handled[e.Ref.String()] = true
+		case consuming == nil || consuming.References == nil:
+			ds.Add(diag.Diagnostic{
+				Severity: diag.SeverityError,
+				Summary:  "${" + e.Ref.Target.String() + "} passes a resource to an attribute that declares no reference",
+				Detail: "`" + consumingName + "` does not say which of " +
+					strconv.Quote(e.Ref.Target.String()) + "'s attributes it holds, so there is " +
+					"nothing to pick — write ${" + e.Ref.Target.String() + ".<attribute>} instead. " +
+					"The provider declares that, not infrena.",
+				Action: "Name the attribute you mean, as ${" + e.Ref.Target.String() + ".<attribute>}.",
+				Origin: origin,
+			})
+			handled[e.Ref.String()] = true
+		default:
+			e.Ref.Attribute = consuming.References.Attribute
+		}
+	}
+	for _, arg := range e.Args {
+		projectRefs(arg, scope, consuming, consumingTypeRegistered, consumingName, origin, ds, handled)
+	}
+}
+
+// isModuleCallTarget reports whether name is bound, at scope, to a module
+// call rather than a resource. A module call is expanded away before
+// `declared` (bind.go) is built and can never appear there, which is exactly
+// why projectRefs needs this second source of truth — the same reason
+// bindOneExpression's own undeclared-reference branch consults
+// scope.OutputNames instead of `declared`.
+func isModuleCallTarget(scope *modules.Scope, name string) bool {
+	b, ok := scope.Lookup(name)
+	return ok && b.Kind == modules.BindsModule
+}
+
+// checkReferredType reports a reference into a resource of the wrong type.
+//
+// It runs for a reference the user wrote in FULL as well as for a projected
+// one. Naming the attribute explicitly escapes the projection — that is what
+// the projection is sugar for — but it must not escape the check: reaching into
+// the wrong resource is the same mistake whichever spelling it wears.
+//
+// It runs ONLY when the consuming attribute declares a reference. An attribute
+// with no declaration is checked exactly as much as it is today, which is not at
+// all — coverage buys checking, and absence costs nothing.
+func checkReferredType(
+	ref value.Reference,
+	consuming *schema.Attribute,
+	consumingName string,
+	declared map[string]refTarget,
+	origin value.Origin,
+	ds *diag.Diagnostics,
+) {
+	if consuming == nil || consuming.References == nil {
+		return
+	}
+	target, known := declared[ref.Target.String()]
+	if !known || target.typeName == "" {
+		// An undeclared target already has its own diagnostic; do not tell the
+		// same reader about a type mismatch with a resource that does not exist.
+		return
+	}
+	if target.typeName == consuming.References.Type {
+		return
+	}
+	ds.Add(diag.Diagnostic{
+		Severity: diag.SeverityError,
+		Summary: consumingName + " refers to " + consuming.References.Type +
+			", and " + strconv.Quote(ref.Target.String()) + " is " + target.typeName,
+		Detail: "${" + ref.String() + "} reaches into a resource of the wrong type.",
+		Action: "Pass a " + consuming.References.Type +
+			", or name the attribute you mean on a resource of that type.",
+		Origin: origin,
+	})
+}
+
+// checkReferredFields reports a path into a declared map attribute that names a
+// key the map does not have.
+//
+// It runs only for the steps PAST the attribute axis, and only once that axis
+// has already confirmed ref.Attribute exists — the caller wires it in as the
+// next case, after the one that does that. It walks ref.Path against the
+// target attribute's declared Fields, one key step at a time, descending into
+// the nested Attribute a match names so a path several keys deep is checked at
+// every level, not just the first.
+//
+// NIL Fields — at the top or at any nested level — stops the walk without
+// complaint: that is what "open" means (see Attribute.Fields), and it is not
+// this function's place to decide a provider was wrong to leave a map open. A
+// StepIndex stops the walk the same way: Fields describes a map's keys, not a
+// list's shape, so there is nothing here to check an index against.
+func checkReferredFields(ref value.Reference, t refTarget, origin value.Origin, ds *diag.Diagnostics) bool {
+	if t.def == nil {
+		return false
+	}
+	attr, ok := t.def.Attribute(ref.Attribute)
+	if !ok {
+		return false
+	}
+	fields := attr.Fields
+	described := t.typeName + "." + ref.Attribute
+	for _, step := range ref.Path {
+		if fields == nil || step.Kind != value.StepKey {
+			return false
+		}
+		next, known := fields[step.Key]
+		if !known {
+			ds.Add(diag.Diagnostic{
+				Severity: diag.SeverityError,
+				Summary:  described + " has no key " + strconv.Quote(step.Key),
+				Detail: "${" + ref.String() + "} reads a key that does not exist.\nKeys of " +
+					described + ":\n  " + strings.Join(sortedFieldNames(fields), "\n  "),
+				Action: "Correct the key name.",
+				Origin: origin,
+			})
+			return true
+		}
+		fields = next.Fields
+		described += "." + step.Key
+	}
+	return false
+}
+
+// sortedFieldNames lists a declared map's known keys for a diagnostic, sorted —
+// Go randomises map iteration, and invariant 6 requires the same diagnostic
+// across runs of the same configuration.
+func sortedFieldNames(fields map[string]schema.Attribute) []string {
+	out := make([]string, 0, len(fields))
+	for name := range fields {
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out
+}
+
 // sortedTargets lists the declared addresses for a diagnostic, sorted.
 func sortedTargets(set map[string]refTarget) []string {
 	out := make([]string, 0, len(set))
@@ -260,6 +472,23 @@ func bindAttribute(
 		return attr.Value
 	}
 
+	// The consuming attribute's own declaration, looked up ONCE for every leaf
+	// this attribute has: it is what projectRefs checks a whole-resource
+	// reference against. Tracked separately from `consuming == nil`: a nil def
+	// (unregistered type) and a registered def whose attribute just is not
+	// found are both "nothing to project against" to the lookup below, but
+	// projectRefs must not treat them alike — an unregistered type already has
+	// nowhere else in this stage to complain, and must not report a second,
+	// unrelated diagnostic on top of whatever else catches the empty attribute.
+	var consuming *schema.Attribute
+	consumingTypeRegistered := false
+	if def := declared[inst.Address.String()].def; def != nil {
+		consumingTypeRegistered = true
+		if a, ok := def.Attribute(attr.Name); ok {
+			consuming = &a
+		}
+	}
+
 	// A COMPOSITE carrying interpolations is walked leaf by leaf (PLAN.md
 	// §10.1). Until M10 this was refused, and the refusal was right for the code
 	// that existed: HasExpressions is set whenever any leaf holds "${" while the
@@ -273,7 +502,7 @@ func bindAttribute(
 	src, ok := attr.Value.AsString()
 	if !ok {
 		walked := expressions.WalkLeaves(attr.Value, func(leafSrc string, leafOrigin value.Origin) value.Value {
-			return bindOneExpression(inst, leafSrc, leafOrigin, environment, declared, edges, ds)
+			return bindOneExpression(inst, leafSrc, leafOrigin, environment, declared, edges, consuming, consumingTypeRegistered, attr.Name, ds)
 		})
 		// A composite one of whose leaves did not resolve is itself UNKNOWN
 		// (PLAN.md §10.1). Left Known, the planner would diff a placeholder leaf
@@ -287,7 +516,7 @@ func bindAttribute(
 		return walked
 	}
 
-	return bindOneExpression(inst, src, attr.Origin, environment, declared, edges, ds)
+	return bindOneExpression(inst, src, attr.Origin, environment, declared, edges, consuming, consumingTypeRegistered, attr.Name, ds)
 }
 
 // bindOneExpression is everything that happens to ONE interpolated string: parse,
@@ -303,6 +532,9 @@ func bindOneExpression(
 	environment string,
 	declared map[string]refTarget,
 	edges map[string]value.Origin,
+	consuming *schema.Attribute,
+	consumingTypeRegistered bool,
+	consumingName string,
 	ds *diag.Diagnostics,
 ) value.Value {
 	e, parseDiags := expressions.Parse(src, origin)
@@ -341,12 +573,30 @@ func bindOneExpression(
 
 	e = inst.Scope.Qualify(e)
 
+	// BEFORE canonicaliseRefs: a projected name must then be canonicalised like
+	// any other, in case a plugin declares its reference against an attribute
+	// spelling that is itself an alias of another.
+	//
+	// handled is projectRefs's own report card: every reference it already had
+	// something to say about — including its deliberate silences — so the
+	// checks below do not process the same still-empty attribute a second
+	// time and pile a second, unrelated diagnostic onto it (I3).
+	handled := map[string]bool{}
+	projectRefs(e, inst.Scope, consuming, consumingTypeRegistered, consumingName, origin, ds, handled)
+
 	// BEFORE the attribute axis is checked below, so an alias is rewritten and then
 	// found rather than reported as a typo naming an attribute that does exist.
 	canonicaliseRefs(e, declared)
 
 	self := inst.Address.String()
 	for _, ref := range e.References() {
+		if handled[ref.String()] {
+			// projectRefs already reported on this exact reference (or
+			// deliberately said nothing about it), and it still carries the
+			// empty attribute that got it there. Nothing below this point
+			// checks anything projectRefs did not already settle.
+			continue
+		}
 		// The canonical address, not the bare name: two modules may each
 		// declare a `db`, and `declared` is keyed by the same rendering.
 		target := ref.Target.String()
@@ -397,6 +647,12 @@ func bindOneExpression(
 				Detail:   "${" + ref.String() + "} cannot be resolved: its own value would be required to compute it.",
 				Origin:   origin,
 			})
+		case consuming != nil && consuming.References != nil && t.typeName != "" && t.typeName != consuming.References.Type:
+			// The type axis. Runs BEFORE the attribute axis below, deliberately:
+			// once the target is the wrong type, whether it happens to have an
+			// attribute of the projected or written name is not the reader's
+			// problem — the type is.
+			checkReferredType(ref, consuming, consumingName, declared, origin, ds)
 		case len(t.names) > 0 && !t.has(ref.Attribute):
 			// The attribute axis. Nothing checked this before M5: a typo here
 			// passed `validate`, produced a clean plan, and failed halfway
@@ -410,6 +666,10 @@ func bindOneExpression(
 				Action: "Correct the attribute name.",
 				Origin: origin,
 			})
+		case checkReferredFields(ref, t, origin, ds):
+			// The shape axis, inside a declared map. Diagnostic already added;
+			// nothing downstream should treat a path into the wrong key as a
+			// dependency worth recording.
 		default:
 			recordEdge(edges, target, origin)
 		}

@@ -2,6 +2,7 @@ package schema
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/infrena/infrena/pkg/value"
@@ -122,5 +123,201 @@ func TestValidateRejectsRequirementWithNoTypes(t *testing.T) {
 	d.Requirements = append(d.Requirements, Requirement{Name: "cluster"})
 	if err := d.Validate(); err == nil {
 		t.Error("a requirement that names no satisfying types can never be satisfied")
+	}
+}
+
+func TestAReferenceToAnUndeclaredAttributeRefusesTheDefinition(t *testing.T) {
+	// A plugin whose relationship names an attribute the target does not have
+	// is a plugin that will not load, on §14.1's precedent that a name
+	// collision should fail at load rather than surprise someone at apply.
+	vpc := &ResourceDefinition{
+		Type: "test.vpc",
+		Attributes: map[string]Attribute{
+			"id": {Kind: value.KindString, Computed: true},
+		},
+	}
+	subnet := &ResourceDefinition{
+		Type: "test.subnet",
+		Attributes: map[string]Attribute{
+			"vpc_id": {Kind: value.KindString, Required: true,
+				References: &Reference{Type: "test.vpc", Attribute: "arn"}},
+		},
+	}
+	err := ValidateAll([]*ResourceDefinition{vpc, subnet})
+	if err == nil {
+		t.Fatal("a reference to an attribute the target does not declare must refuse the definition")
+	}
+	if !strings.Contains(err.Error(), "arn") || !strings.Contains(err.Error(), "test.vpc") {
+		t.Errorf("error = %q, want it to name both the attribute and the target type", err)
+	}
+}
+
+func TestAReferenceToAnUndeclaredTypeRefusesTheDefinition(t *testing.T) {
+	subnet := &ResourceDefinition{
+		Type: "test.subnet",
+		Attributes: map[string]Attribute{
+			"vpc_id": {Kind: value.KindString, Required: true,
+				References: &Reference{Type: "test.nosuch", Attribute: "id"}},
+		},
+	}
+	if err := ValidateAll([]*ResourceDefinition{subnet}); err == nil {
+		t.Fatal("a reference to a type the plugin does not declare must refuse the definition")
+	}
+}
+
+func TestAWellFormedReferenceLoads(t *testing.T) {
+	vpc := &ResourceDefinition{
+		Type: "test.vpc",
+		Attributes: map[string]Attribute{"id": {Kind: value.KindString, Computed: true}},
+	}
+	subnet := &ResourceDefinition{
+		Type: "test.subnet",
+		Attributes: map[string]Attribute{
+			"vpc_id": {Kind: value.KindString, Required: true,
+				References: &Reference{Type: "test.vpc", Attribute: "id"}},
+		},
+	}
+	if err := ValidateAll([]*ResourceDefinition{vpc, subnet}); err != nil {
+		t.Fatalf("a well-formed reference must load: %v", err)
+	}
+}
+
+// TestReferencesAndFieldsSurviveTheWire. Same shape as
+// TestAliasesSurviveTheWire, for the two fields protocol 3 added (PLAN.md
+// §14.3): a plugin declares them, and the host learns them only if
+// attributeWire actually carries them across. Spec one's own testing section
+// records that exactly this shape of bug — a schema field that round-trips in
+// memory but is silently dropped by MarshalJSON — reached final review once
+// already, because the in-memory tests never crossed the wire.
+//
+// The attribute NESTED inside Fields carries its own References and
+// Sensitive, not just a bare Kind, because Fields recurses through
+// Attribute's own MarshalJSON/UnmarshalJSON: a shallow probe here would only
+// prove the outer struct's fields are wired up, not that the recursion itself
+// carries everything a nested attribute can declare. That distinction is the
+// whole point of the probe — this exact defect class (a struct's wire form
+// missing a field a sibling struct just gained) has now shipped on two
+// consecutive branches, so the nested case is what stands between this and a
+// third.
+func TestReferencesAndFieldsSurviveTheWire(t *testing.T) {
+	before := Attribute{
+		Kind:       value.KindString,
+		References: &Reference{Type: "test.vpc", Attribute: "id"},
+		Fields: map[string]Attribute{
+			"name": {
+				Kind:       value.KindString,
+				Sensitive:  true,
+				References: &Reference{Type: "test.role", Attribute: "arn"},
+			},
+		},
+	}
+	data, err := before.MarshalJSON()
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var after Attribute
+	if err := after.UnmarshalJSON(data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if after.References == nil || *after.References != *before.References {
+		t.Errorf("References = %+v, want %+v — a plugin's declared relationship must not be "+
+			"dropped silently, or `${vpc}` would report \"no reference target declared\" against "+
+			"a plugin that clearly declares one", after.References, before.References)
+	}
+	name, ok := after.Fields["name"]
+	if !ok || name.Kind != value.KindString {
+		t.Fatalf("Fields = %+v, want a %q entry of kind string", after.Fields, "name")
+	}
+	if !name.Sensitive {
+		t.Error("a Sensitive attribute nested inside Fields must not lose that flag on the wire — " +
+			"§36's redaction guarantee depends on it surviving as far as the top-level case does")
+	}
+	if name.References == nil || *name.References != *before.Fields["name"].References {
+		t.Errorf("a nested attribute's own References must survive too: got %+v, want %+v",
+			name.References, before.Fields["name"].References)
+	}
+}
+
+// TestValidateRejectsFieldsOnANonMapAttribute. Fields describes a map's known
+// keys (PLAN.md §14.3); declaring it on an attribute of any other Kind
+// describes a shape that cannot exist.
+func TestValidateRejectsFieldsOnANonMapAttribute(t *testing.T) {
+	d := sampleDefinition()
+	d.Attributes["broken"] = Attribute{
+		Kind:   value.KindString,
+		Fields: map[string]Attribute{"name": {Kind: value.KindString}},
+	}
+	err := d.Validate()
+	if err == nil {
+		t.Fatal("Fields on a non-map attribute must be rejected")
+	}
+	if !strings.Contains(err.Error(), "broken") {
+		t.Errorf("error = %q, want it to name the attribute", err)
+	}
+}
+
+// TestValidateRejectsANestedFieldsOnANonMapAttribute is the same check one
+// level down: Fields can nest, and the rule must hold at every level, not
+// only the top one.
+func TestValidateRejectsANestedFieldsOnANonMapAttribute(t *testing.T) {
+	d := sampleDefinition()
+	d.Attributes["broken"] = Attribute{
+		Kind: value.KindMap,
+		Fields: map[string]Attribute{
+			"leaf": {Kind: value.KindString, Fields: map[string]Attribute{"x": {Kind: value.KindString}}},
+		},
+	}
+	if err := d.Validate(); err == nil {
+		t.Fatal("Fields on a non-map attribute nested inside another Fields must be rejected too")
+	}
+}
+
+// TestValidateRejectsANestedReferences pins Minor fix round 2: projectRefs
+// (internal/compiler/bind.go) only ever reads a TOP-LEVEL attribute's
+// References, so one declared inside Fields is a declaration nothing
+// consults — precisely the defect class this branch keeps hitting.
+// Refusing it at load time is simpler than teaching every consumer of
+// References to recurse (PLAN.md §14.3).
+func TestValidateRejectsANestedReferences(t *testing.T) {
+	d := sampleDefinition()
+	d.Attributes["broken"] = Attribute{
+		Kind: value.KindMap,
+		Fields: map[string]Attribute{
+			"vpc_id": {Kind: value.KindString, References: &Reference{Type: "fake.network", Attribute: "id"}},
+		},
+	}
+	err := d.Validate()
+	if err == nil {
+		t.Fatal("a nested attribute's References must be rejected — nothing ever consults it")
+	}
+	if !strings.Contains(err.Error(), "vpc_id") {
+		t.Errorf("error = %q, want it to name the nested attribute", err)
+	}
+}
+
+// TestValidateRejectsANestedMissingKind pins the third unvalidated case:
+// Validate's own per-attribute loop only ever looked at top-level Kind.
+func TestValidateRejectsANestedMissingKind(t *testing.T) {
+	d := sampleDefinition()
+	d.Attributes["broken"] = Attribute{
+		Kind:   value.KindMap,
+		Fields: map[string]Attribute{"empty": {}},
+	}
+	if err := d.Validate(); err == nil {
+		t.Fatal("a nested attribute with no Kind must be rejected")
+	}
+}
+
+// TestValidateAcceptsAWellFormedNestedMap is the positive case: a plugin
+// that declares Fields correctly, with no nested References and every
+// nested attribute a valid Kind, must still load.
+func TestValidateAcceptsAWellFormedNestedMap(t *testing.T) {
+	d := sampleDefinition()
+	d.Attributes["meta"] = Attribute{
+		Kind:   value.KindMap,
+		Fields: map[string]Attribute{"name": {Kind: value.KindString}},
+	}
+	if err := d.Validate(); err != nil {
+		t.Fatalf("a well-formed declared map must load: %v", err)
 	}
 }

@@ -27,15 +27,23 @@ type attributeWire struct {
 	// every plugin ever sent — the hazard pkg/value keeps its own wire-name table
 	// to avoid. The names come from Kind.String()/ParseKind, which are already a
 	// frozen contract because they are what a user writes as `type:`.
-	Kind        string       `json:"kind"`
-	Required    bool         `json:"required,omitempty"`
-	Computed    bool         `json:"computed,omitempty"`
-	Sensitive   bool         `json:"sensitive,omitempty"`
-	ForceNew    bool         `json:"force_new,omitempty"`
-	Optional    bool         `json:"optional,omitempty"`
-	Aliases     []string     `json:"aliases,omitempty"`
-	Default     *value.Value `json:"default,omitempty"`
-	Description string       `json:"description,omitempty"`
+	Kind      string   `json:"kind"`
+	Required  bool     `json:"required,omitempty"`
+	Computed  bool     `json:"computed,omitempty"`
+	Sensitive bool     `json:"sensitive,omitempty"`
+	ForceNew  bool     `json:"force_new,omitempty"`
+	Optional  bool     `json:"optional,omitempty"`
+	Aliases   []string `json:"aliases,omitempty"`
+	// References and Fields are protocol 3 (PLAN.md §14.3, §6 of the resource-
+	// references design). Reference has no custom wire form of its own — Type
+	// and Attribute are both plain strings — so the struct crosses as-is.
+	// Fields recurses through Attribute's own MarshalJSON/UnmarshalJSON, the
+	// same way a top-level attribute does, since encoding/json calls a nested
+	// value's own methods.
+	References  *Reference           `json:"references,omitempty"`
+	Fields      map[string]Attribute `json:"fields,omitempty"`
+	Default     *value.Value         `json:"default,omitempty"`
+	Description string               `json:"description,omitempty"`
 }
 
 // MarshalJSON writes an attribute, converting its default against its declared kind.
@@ -60,6 +68,8 @@ func (a Attribute) MarshalJSON() ([]byte, error) {
 		ForceNew:    a.ForceNew,
 		Optional:    a.Optional,
 		Aliases:     a.Aliases,
+		References:  a.References,
+		Fields:      a.Fields,
 		Description: a.Description,
 	}
 	if a.Default != nil {
@@ -96,6 +106,8 @@ func (a *Attribute) UnmarshalJSON(b []byte) error {
 		ForceNew:    w.ForceNew,
 		Optional:    w.Optional,
 		Aliases:     w.Aliases,
+		References:  w.References,
+		Fields:      w.Fields,
 		Description: w.Description,
 	}
 	if w.Default != nil {

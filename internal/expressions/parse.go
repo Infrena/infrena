@@ -588,15 +588,21 @@ func parseReference(src string, origin value.Origin, ds *diag.Diagnostics) *valu
 	}
 
 	if len(segments) == 1 {
-		ds.Add(diag.Diagnostic{
-			Severity: diag.SeverityError,
-			Summary:  "${" + src + "} is not a reference",
-			Detail: "Variables are written ${var." + src + "}. A resource reference needs an " +
-				"attribute, as ${" + src + ".id}.",
-			Action: "Add the `var.` prefix, or name an attribute.",
+		// A WHOLE-RESOURCE reference: the attribute is not written, and stage 6
+		// fills it in from the consuming attribute's own `References`
+		// declaration (PLAN.md §14.3).
+		//
+		// An empty Attribute must never escape stage 6. Downstream,
+		// expressions.ResourceScope looks an attribute up by name in a plain
+		// map, so "" would miss, report unavailable, and leave the value
+		// deferred forever — the resource would be created with the attribute
+		// silently unset. Stage 6 therefore either fills it or reports an
+		// error; internal/compiler has the test that pins it.
+		return &value.Expr{
+			Op:     value.OpResourceRef,
+			Ref:    value.LocalRef(segments[0], ""),
 			Origin: origin,
-		})
-		return nil
+		}
 	}
 
 	// FIRST segment is the resource, SECOND is the attribute, the rest is a

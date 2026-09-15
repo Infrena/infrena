@@ -123,6 +123,22 @@ func section(w io.Writer, title string, names []string, def *schema.ResourceDefi
 		if a.ForceNew {
 			notes = append(notes, "replaces on change")
 		}
+		// PLAN.md §14.3: a declared reference is what lets `${vpc}` project to the
+		// right attribute instead of a user guessing id versus arn. `explain` is
+		// where that declaration must be discoverable without reading the
+		// plugin's source.
+		if a.References != nil {
+			notes = append(notes, fmt.Sprintf("refers to %s.%s", a.References.Type, a.References.Attribute))
+		}
+		// PLAN.md §14.3: NIL Fields means the map is open, and there is
+		// nothing to print — that IS the answer, and printing nothing for it
+		// says so correctly. Where Fields IS declared, its keys are the
+		// whole point of declaring it: a typo in one is a compile error, so
+		// leaving the keys themselves undiscoverable here means the only way
+		// to find out what belongs is to get one wrong first.
+		if len(a.Fields) > 0 {
+			notes = append(notes, "keys: "+strings.Join(sortedFieldKeys(a.Fields), ", "))
+		}
 		if d := describeDefault(a); d != "" {
 			notes = append(notes, d)
 		}
@@ -179,6 +195,18 @@ func sortedAttrNames(attrs map[string]schema.Attribute) []string {
 	out := make([]string, 0, len(attrs))
 	for n := range attrs {
 		out = append(out, n)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// sortedFieldKeys lists a declared map's known keys for `explain`, sorted —
+// Go randomises map iteration, and invariant 6 requires the same output on
+// every run.
+func sortedFieldKeys(fields map[string]schema.Attribute) []string {
+	out := make([]string, 0, len(fields))
+	for k := range fields {
+		out = append(out, k)
 	}
 	sort.Strings(out)
 	return out

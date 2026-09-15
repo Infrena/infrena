@@ -834,7 +834,8 @@ ${var.tags.team}       a path into a map variable
 ${var.azs[0]}          an entry of a list variable
 ${vpc.id}              an attribute of resource `vpc`
 ${vpc.tags.Name}       a path into a resource attribute
-${vpc}                 the resource `vpc` itself   (reserved here; a later change)
+${vpc}                 the resource `vpc` itself, projected to whichever attribute
+                       the plugin declared it refers to (§14.3)
 ```
 
 Before this, a variable and a resource attribute were told apart by COUNTING
@@ -858,7 +859,11 @@ with no cause.
 anywhere resolves to a variable — and a prefix applied to some variables and
 not others is the kind of exception nobody remembers to check for.
 
-**A bare single segment is an ERROR**, not a resource reference:
+**A bare single segment parses as a WHOLE-RESOURCE reference**, not a variable and
+not a parse error — `${vpc}` becomes `value.OpResourceRef` with an empty attribute,
+and stage 6 fills the attribute in or reports why it cannot (§14.3). This replaced
+an earlier design, kept here because the failure it describes is still worth
+knowing: `${vpc}` used to be an unconditional parse-time error —
 
 ```
 ${vpc} is not a reference.
@@ -867,9 +872,16 @@ Variables are written ${var.vpc}. A resource reference needs an attribute,
 as ${vpc.id}.
 ```
 
-The message names the fix rather than the mistake, which matters most during
-migration: every un-prefixed variable a rewrite missed announces its own
-repair instead of resolving to something silently wrong.
+— which named the fix rather than the mistake, mattering most during the
+migration off counted segments: every un-prefixed variable a rewrite missed
+announced its own repair instead of resolving to something silently wrong.
+§14.3 narrowed that error rather than removing the principle: an un-prefixed
+variable is still impossible to write by accident (`var` is reserved, above),
+and a resource whose consuming attribute declares no reference still gets an
+error naming the fix, just at stage 6 instead of the parser, and phrased as
+"declares no reference" rather than "is not a reference" — because now some
+single segments ARE references, and the message must say why this one is not
+usable rather than deny the whole shape.
 
 **How a reference divides.** The first segment is the resource, the second is
 the attribute, and everything after that is a path — `${vpc.tags.Name}` is
@@ -1892,6 +1904,145 @@ byte-stable however it was written.
   cross to a plugin at all.
 - **The product version** is a MINOR, by §61.1's amended rule: this adds configuration
   syntax, and a project using it cannot be read by an older build.
+
+---
+
+## 14.3 Provider-declared resource references
+
+**Agreed 2026-09-14**, from a concrete complaint James had building Terraform:
+
+> I've had this exact issue, creating new terraform, providing an id when it wanted an
+> arn, and vice versa. Just passing the VPC to it seems way easier.
+
+A reference used to name an attribute and stop there — the engine had no idea what the
+attribute MEANT. `vpc_id: ${vpc.arn}` compiled, planned, applied, and was rejected by the
+cloud, or worse, accepted and wrong: `vpc_id` was a string to infrena and `${vpc.arn}` was a
+string to infrena, and nothing in between knew a VPC's id and its arn are different things.
+
+```yaml
+subnet:
+  type: aws.ec2.subnet
+  vpc_id: ${vpc}       # aws.ec2.subnet's vpc_id refers to aws.ec2.vpc's id
+  cidr: 10.0.1.0/24
+```
+
+### THE PLUGIN DECIDES. The engine never guesses.
+
+Infrena cannot know that Cloud Control's `AWS::EC2::Subnet.VpcId` wants a VPC's id rather
+than its arn — that is knowledge about an API, and it belongs to whoever owns the API. So
+`schema.Attribute` gained `References *Reference{Type, Attribute}`, and the engine's whole
+part in it is to READ that declaration and project `${vpc}` into `${vpc.<attribute>}` at
+stage 6, beside canonicalisation. This is DATA, per §31.1's rule that nothing in
+`pkg/schema` may gain a function-typed field: a plugin that resolved its own references
+would be a second resolver, free to disagree with the engine's about what a reference means
+— exactly the class of bug two independent implementations of one fact always produce.
+
+### `${vpc}` is SUGAR over `${vpc.id}`, and that is the property that ships it
+
+Both spellings are legal, forever. `${vpc}` never replaces `${vpc.id}`; it is shorthand for
+it, filled in from the declaration.
+
+That is what makes partial coverage shippable rather than a half-feature. An attribute
+whose plugin has not declared a reference is not a smaller version of this feature — it gets
+the SAME behaviour as before this section existed: `${vpc}` is an error naming the fix
+("name the attribute you mean, as `${vpc.<attribute>}`"), and `${vpc.id}` keeps working
+exactly as it always has. **The engine never falls back to "probably the id".** A missing
+declaration degrades to today's behaviour; it never degrades to a wrong value shipped
+silently. That is what lets a plugin publish references for the relationships it has
+reviewed and say nothing about the rest, rather than blocking on covering every relationship
+before any of them ship.
+
+### The type check fires for both spellings
+
+Naming the attribute explicitly does not escape the check — only the projection.
+`vpc_id: ${database}` and `vpc_id: ${database.id}` are both compile errors when `vpc_id`
+declares `aws.ec2.vpc` and `database` is an `aws.rds.dbinstance`, because reaching into the
+wrong resource is the same mistake whichever spelling it wears. This is half of this
+feature's value: Terraform finds this kind of mistake when the API says no; infrena finds it
+before anything runs.
+
+### `References` and `Requirement`: different axes, not yet reconciled
+
+`schema.Requirement` already declares relationships, and the AWS overlay already
+hand-maintains them — "a subnet needs a VPC to exist at all", which powers §17's
+missing-resource detection before any attribute is examined. `References` is a different
+axis: "this particular attribute holds a VPC's id." A `Requirement` cannot do the
+projection, because it never says which attribute carries the reference, nor which
+attribute of the target is used — the very id-versus-arn question this section exists to
+answer. But `References` CAN derive a `Requirement`: an attribute required to refer to type
+X means the type requires an X.
+
+**Left unreconciled, deliberately, for now.** Two hand-maintained tables saying
+overlapping things about the same relationship is how they come to disagree, so leaving them
+alone is not neutral — but deriving `Requirement` from `References` today would silently
+DROP requirements the overlay already states for relationships the AWS plugin's heuristic
+has not yet found or had approved, since its coverage is partial by design. The correct
+order is populate `References` first, leave `requirements:` alone, and add a
+generation-time check that every `requirements:` entry has a matching `References`
+somewhere — a cross-check rather than a replacement, until coverage earns the derivation.
+
+### `Fields`: a declared map's known keys
+
+`schema.Attribute` also gained `Fields map[string]Attribute`, for the same reason
+`References` did: `${vpc.tags.Nmae}` used to pass `validate`, produce a clean plan, and fail
+halfway through `apply` after real infrastructure existed, because nothing checked a path
+PAST the attribute axis. Where a provider knows a map attribute's keys, it declares them in
+`Fields`, and a typo in a path becomes a compile error listing the keys that exist — the
+same promise §14.1 already makes for a top-level attribute name, extended one level deeper.
+
+**NIL MEANS OPEN, and that is deliberate.** AWS tags take any key and always will;
+declaring `Fields` for them would be a LIE — a schema claiming to know a shape it does not.
+An attribute with no `Fields` is checked exactly as it always was: not at all, until apply.
+`Fields` is therefore never something a plugin is obliged to declare — it is something a
+plugin declares only where it genuinely knows the shape, the same partial-coverage promise
+`References` makes: a plugin that has reviewed some relationships and not others ships what
+it has reviewed and says nothing about the rest, rather than blocking on completeness.
+
+`schema.Validate` refuses `Fields` on an attribute whose `Kind` is not `KindMap`, at every
+nesting level — a declared set of keys is meaningless on anything that is not a map, and a
+plugin that declared one anyway is describing a shape that cannot exist rather than one it
+has not gotten around to.
+
+A NESTED `References` — one attribute inside a `Fields` map declaring a relationship of its
+own — is refused by `schema.Validate` too, rather than silently ignored. `projectRefs`
+(`internal/compiler/bind.go`) only ever reads a *top-level* attribute's `References`;
+nothing walks into `Fields` to consult a nested one. A declaration nothing consults is
+exactly the defect class this section exists to close — a plugin author reads the field,
+believes it does something, and discovers otherwise only when a reference silently fails to
+project. Refusing it at validation is simpler than teaching every consumer of `References`
+to recurse, and it keeps the failure at the moment the plugin loads rather than at the
+moment a user's `${vpc}` quietly does not become `${vpc.id}`.
+
+### A module boundary carries no `References` in either direction
+
+`${net}` is sugar the ENGINE fills in from a consuming attribute's own `References`
+declaration (above). A MODULE BOUNDARY has no such declaration to read, on either side of
+it, and that is ONE rule, not two: an input declares a TYPE — string, integer, map — not a
+relationship to a resource (§9), and an output PUBLISHES A VALUE with no consuming attribute
+in sight to have declared one. Neither carries `References`, so projecting a whole-resource
+reference at a module boundary would be the engine guessing, which this section forbids
+outright — the same reason, stated once, because it is the same hole seen from both ends.
+
+`internal/modules/inputs.go`'s `refuseWholeResourceInput` and `outputs.go`'s
+`refuseWholeResourceOutput` are the two enforcement points, and BOTH must exist for the rule
+to hold: a boundary closed from only one direction is not a smaller version of this rule, it
+is a hole with a different shape. That is exactly what shipped first — the input side was
+closed, the output side was not, and the output side is the more dangerous half to leave
+open. Passing a whole resource as a module INPUT fails loudly, at compile time, the moment
+it is written. Publishing one as a module OUTPUT compiles clean: the failure is invisible
+until whatever eventually consumes the output reaches apply — after the module's own
+resources already exist.
+
+**This is a LANGUAGE RULE this branch invented, and it exists to close one specific hazard:
+an empty-attribute reference escaping compiler stage 6.** `expressions.ResourceScope.Attribute`
+looks an attribute up by name in a plain map; `""` misses, so a reference that keeps an
+empty attribute all the way to the executor does not fail at compile time — it stays
+deferred forever, and the run either dies mid-apply after real infrastructure already
+exists, or creates the resource with the attribute silently unset. `${net}` bare, at a
+module boundary with no consuming declaration to project against, is exactly such a
+reference, so it is refused at the one place each side can still say why, naming the fix:
+write `${net.<attribute>}` instead. Nothing downstream of stage 6, and nothing that crosses
+a module boundary in either direction, may ever see a reference whose `Attribute` is empty.
 
 ---
 
