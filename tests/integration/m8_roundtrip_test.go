@@ -1,6 +1,7 @@
 package integration
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -18,6 +19,11 @@ import (
 // preexistingCloud is infrastructure this project never created: no `address`
 // field on anything, which is what the fake provider writes when IT created a
 // resource.
+//
+// The databases hold the VPC's id in `network`, which the fake plugin declares
+// as a reference to fake.network. So the set is not three unrelated resources:
+// one points at another, which is the shape that makes the round trip worth
+// testing at all.
 const preexistingCloud = `{"resources":{
   "vpc-0a1b":{"type":"fake.network","attributes":{
     "cidr":"10.0.0.0/16","id":"vpc-0a1b"}},
@@ -71,7 +77,34 @@ func TestTheImportRoundTripPlansClean(t *testing.T) {
 		t.Fatalf("import exit = %d: %s", i.ExitCode, i.combined())
 	}
 
-	// 3. Plan. ZERO operations.
+	// 3. The generated configuration REFERENCES rather than pasting the id.
+	//
+	// Asserted before the plan, and both halves are needed. A clean plan alone
+	// would pass against a generator that emitted no reference at all — pasting
+	// `network: vpc-0a1b` into every file plans just as clean and loses the
+	// relationship — so this half is what proves §27's references are there,
+	// and the plan below is what proves they cost nothing.
+	databases := readGenerated(t, dir, "databases.yml")
+	if !strings.Contains(databases, "${network-vpc-0a1b}") {
+		t.Errorf("the generated database does not reference the discovered network:\n%s", databases)
+	}
+	if strings.Contains(databases, "network: vpc-0a1b") {
+		t.Errorf("the generated database pasted the cloud id instead:\n%s", databases)
+	}
+
+	// 4. And STATE carries the same edge, which is the half that keeps the plan
+	// below honest. A reference is a dependency, so configuration declaring one
+	// and state recording none is a real disagreement — it planned as
+	// `~ depends_on: [] -> [network-vpc-0a1b]` on the very first plan after an
+	// import, on a resource nobody had touched. Pinning it here means a future
+	// clean plan cannot be bought by teaching the planner to overlook
+	// dependencies, which would hide a genuine edge change too.
+	if got := recordedDependencies(t, dir, "dev", "database-db-9"); len(got) != 1 ||
+		got[0] != "network-vpc-0a1b" {
+		t.Errorf("state records dependencies %v for database-db-9, want [network-vpc-0a1b]", got)
+	}
+
+	// 5. Plan. ZERO operations.
 	p := run(t, dir, "plan", "dev")
 	if p.ExitCode != 0 {
 		t.Fatalf("the round trip is not clean; plan exit = %d (0 means no changes):\n%s\n\n%s",
@@ -281,6 +314,45 @@ func TestImportingANewResourceAppendsToTheExistingFile(t *testing.T) {
 		t.Errorf("the plan is not clean after adopting a new resource; exit = %d:\n%s",
 			p.ExitCode, p.combined())
 	}
+}
+
+// recordedDependencies reads one resource's dependency edges out of the state
+// file.
+//
+// Decoded rather than grepped, and by field rather than by substring, because
+// the address of the network is itself the text a substring search would find:
+// a grep for "network-vpc-0a1b" passes against a state file recording no
+// dependency at all.
+//
+// The state file is parsed here with encoding/json rather than by importing
+// internal/state, so this suite keeps depending on nothing but the binary it
+// runs. `go list -deps ./tests/integration` printing only itself is what the
+// Makefile's -count=1 note is about.
+func recordedDependencies(t *testing.T, dir, environment, name string) []string {
+	t.Helper()
+	body, err := os.ReadFile(filepath.Join(dir, ".infra", "state", environment+".json"))
+	if err != nil {
+		t.Fatalf("reading state: %v", err)
+	}
+	var file struct {
+		Resources map[string]struct {
+			Dependencies []struct {
+				Name string `json:"name"`
+			} `json:"dependencies"`
+		} `json:"resources"`
+	}
+	if err := json.Unmarshal(body, &file); err != nil {
+		t.Fatalf("decoding state: %v\n%s", err, body)
+	}
+	r, ok := file.Resources[name]
+	if !ok {
+		t.Fatalf("state holds no resource %q:\n%s", name, body)
+	}
+	out := make([]string, 0, len(r.Dependencies))
+	for _, d := range r.Dependencies {
+		out = append(out, d.Name)
+	}
+	return out
 }
 
 func readGenerated(t *testing.T, dir, name string) string {
