@@ -321,3 +321,19 @@ func TestValidateAcceptsAWellFormedNestedMap(t *testing.T) {
 		t.Fatalf("a well-formed declared map must load: %v", err)
 	}
 }
+
+// TestValidateAllRefusesANilDefinitionRatherThanPanicking. ValidateAll is exported,
+// so a caller that has not screened its input can reach it. It once dereferenced a
+// nil entry: the host adapter had its nil check BELOW the ValidateAll call while a
+// comment claimed it was above, and a plugin sending a null array element panicked
+// instead of being told what was wrong.
+func TestValidateAllRefusesANilDefinitionRatherThanPanicking(t *testing.T) {
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("ValidateAll panicked on a nil definition: %v", r)
+		}
+	}()
+	if err := ValidateAll([]*ResourceDefinition{nil}); err == nil {
+		t.Fatal("a nil definition must be refused")
+	}
+}
