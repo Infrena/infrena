@@ -7,6 +7,8 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"time"
 )
 
@@ -21,8 +23,12 @@ func NewLocal(root string) *Local { return &Local{root: root} }
 
 var _ Backend = (*Local)(nil)
 
+// stateDir is the one directory Local keeps state and locks in. statePath,
+// lockPath and List all derive from it so a layout change stays in one place.
+func (l *Local) stateDir() string { return filepath.Join(l.root, "state") }
+
 func (l *Local) statePath(environment string) string {
-	return filepath.Join(l.root, "state", environment+".json")
+	return filepath.Join(l.stateDir(), environment+".json")
 }
 
 // Get loads the state for an environment. A missing environment is an empty
@@ -134,4 +140,46 @@ func (l *Local) Put(ctx context.Context, environment string, s *State) error {
 	}
 	committed = true
 	return nil
+}
+
+// List reports the environments that have state, sorted.
+//
+// PLAN.md section 6.1 makes an environment reachable if it is DECLARED or it
+// HAS STATE, and until now the second half was only ever answered for one
+// named environment at a time. Discover needs the whole set: a resource
+// managed in production is managed whichever environment you are importing
+// into, and adopting it twice would put one real resource under two addresses
+// for invariant 1 to then schedule for destruction under whichever loses.
+//
+// A missing directory is an empty list, not an error: a project that has
+// never applied anything is the ordinary case for the command that needs
+// this.
+//
+// Only files named exactly as statePath writes them count. Lock files
+// (.lock) and Put's in-flight temporaries (.state-*.tmp) sit in the same
+// directory, and reporting either as an environment would have discover
+// exclude resources against a file holding no resources at all.
+func (l *Local) List() ([]string, error) {
+	entries, err := os.ReadDir(l.stateDir())
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	var environments []string
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		env, ok := strings.CutSuffix(name, ".json")
+		if !ok || env == "" {
+			continue
+		}
+		environments = append(environments, env)
+	}
+	slices.Sort(environments)
+	return environments, nil
 }

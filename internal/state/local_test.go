@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -253,5 +254,68 @@ func TestMultiplePutsSucceedUnderOneHeldLock(t *testing.T) {
 	}
 	if s.Serial != 3 {
 		t.Errorf("Serial = %d after 3 Puts under one lock, want 3", s.Serial)
+	}
+}
+
+func TestListReportsEnvironmentsThatHaveState(t *testing.T) {
+	dir := t.TempDir()
+	l := NewLocal(dir)
+	ctx := context.Background()
+
+	for _, env := range []string{"production", "dev"} {
+		if _, err := l.Lock(ctx, env); err != nil {
+			t.Fatal(err)
+		}
+		if err := l.Put(ctx, env, New("myapp", env)); err != nil {
+			t.Fatal(err)
+		}
+		if err := l.Unlock(ctx, env); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got, err := l.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Sorted, because a caller renders this and a run-to-run reorder is a
+	// diff nobody can review.
+	if !reflect.DeepEqual(got, []string{"dev", "production"}) {
+		t.Errorf("List = %v, want [dev production]", got)
+	}
+}
+
+// A project that has never applied anything is the common case for discover,
+// so this must be an empty list and not an error.
+func TestListOnAProjectWithNoStateIsEmpty(t *testing.T) {
+	got, err := NewLocal(t.TempDir()).List()
+	if err != nil {
+		t.Fatalf("List errored on a project with no state: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("List = %v, want empty", got)
+	}
+}
+
+// Locks live beside state files. Listing must not report a lock as an
+// environment, or discover would exclude resources against a file that holds
+// no resources at all.
+func TestListIgnoresLockFiles(t *testing.T) {
+	dir := t.TempDir()
+	l := NewLocal(dir)
+	ctx := context.Background()
+	if _, err := l.Lock(ctx, "dev"); err != nil {
+		t.Fatal(err)
+	}
+	if err := l.Put(ctx, "dev", New("myapp", "dev")); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := l.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, []string{"dev"}) {
+		t.Errorf("List = %v, want [dev]", got)
 	}
 }

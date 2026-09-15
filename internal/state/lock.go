@@ -13,7 +13,7 @@ import (
 )
 
 func (l *Local) lockPath(environment string) string {
-	return filepath.Join(l.root, "state", environment+".lock")
+	return filepath.Join(l.stateDir(), environment+".lock")
 }
 
 // Lock acquires an exclusive environment lock by writing the lock content to
