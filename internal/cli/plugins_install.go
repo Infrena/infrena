@@ -392,11 +392,6 @@ func currentPlatform() pluginmanifest.Platform {
 	return pluginmanifest.Platform{OS: runtime.GOOS, Arch: runtime.GOARCH}
 }
 
-// platformKey is how a platform is spelled in plugins.lock.
-func platformKey() string {
-	return runtime.GOOS + "/" + runtime.GOARCH
-}
-
 // recordInstall writes the lock entry for what is now on disk.
 //
 // READ, MODIFY, WRITE WHOLE, so installing a second plugin does not drop the
@@ -435,7 +430,7 @@ func recordInstall(dir string, warn io.Writer, name string, c plugins.Candidate,
 	}
 	entry.Version = c.Manifest.Version.String()
 	entry.Source = c.Source.String()
-	entry.Checksums[platformKey()] = sum
+	entry.Checksums[plugins.PlatformKey()] = sum
 	lock.Plugins[name] = entry
 
 	if err := lock.Write(dir); err != nil {
@@ -539,7 +534,7 @@ func verifyOne(ro *runOutput, lock *plugins.Lockfile, search pluginhost.SearchOp
 	if err != nil {
 		return err
 	}
-	if err := lock.Check(name, platformKey(), sum); err != nil {
+	if err := lock.Check(name, plugins.PlatformKey(), sum); err != nil {
 		return fmt.Errorf("%w\n\nThe binary checked was %s.", err, path)
 	}
 	return nil

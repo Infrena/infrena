@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 )
@@ -21,6 +22,18 @@ const LockfileName = "plugins.lock"
 // only guess, and guessing about the file that says which executables are
 // trustworthy is the one place guessing is worst.
 const LockVersion = 1
+
+// PlatformKey is how the machine running is spelled in a lock entry's
+// checksums, and it lives here because the lock's format owns it.
+//
+// ONE SPELLING, ONE PLACE. Install writes a checksum under this key and the
+// host reads one back under it before launching a binary; the two agreeing is
+// the entire mechanism, and two functions that each build "GOOS/GOARCH" are two
+// chances for them to stop agreeing silently - a lock that verifies nothing
+// looks exactly like a lock that verifies everything.
+func PlatformKey() string {
+	return runtime.GOOS + "/" + runtime.GOARCH
+}
 
 // LockEntry is one plugin's record: the version install resolved to, where it
 // came from, and a checksum for each platform it was recorded on.

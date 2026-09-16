@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/infrena/infrena/internal/plugins"
 	"github.com/infrena/infrena/pkg/provider"
 	"github.com/infrena/infrena/pkg/semver"
 )
@@ -59,6 +60,18 @@ type Loader struct {
 	loaded  map[string]*Plugin
 	failed  map[string]error
 	started bool
+
+	// lock is plugins.lock, read from Dir the first time a binary is about to be
+	// launched and remembered for the rest of the command.
+	//
+	// READ HERE RATHER THAN PASSED IN, and that is the whole reason this is a
+	// field the loader fills rather than one a caller sets. Four paths load
+	// plugins; a lock handed in by three of them is a lock nobody can rely on,
+	// and the failure mode of forgetting is silence - everything keeps working,
+	// and nothing is checked.
+	lock     *plugins.Lockfile
+	lockErr  error
+	lockRead bool
 }
 
 // Load returns the named plugin, launching it the first time it is asked for.
@@ -113,6 +126,12 @@ func (l *Loader) load(ctx context.Context, name string) (*Plugin, error) {
 func (l *Loader) open(ctx context.Context, name string) (*Plugin, error) {
 	path, searched, findErr := Find(name, l.Search)
 	if findErr == nil {
+		// BEFORE THE PROCESS STARTS, because after it has started is after its
+		// code has run. Section 31.3: the host verifies on every launch once a
+		// lock exists.
+		if err := l.checkLock(name, path); err != nil {
+			return nil, err
+		}
 		if l.Verbose != nil {
 			fmt.Fprintf(l.Verbose, "[infrena] plugin %s loaded from %s\n", name, path)
 		}
@@ -128,6 +147,60 @@ func (l *Loader) open(ctx context.Context, name string) (*Plugin, error) {
 
 	_ = searched
 	return nil, findErr
+}
+
+// checkLock refuses a binary that is not the one plugins.lock recorded.
+//
+// NO NETWORK AND ALMOST NO COST. The lock is read once per command, and the
+// only work per plugin is hashing a file that is about to be read and executed
+// anyway - and only when the lock has something to say about that plugin.
+//
+// A BUILTIN IS NOT CHECKED, because there is no file: it is served from inside
+// this process, so nothing was fetched and nothing can have been replaced. The
+// check belongs on the path where a binary came from somewhere else.
+func (l *Loader) checkLock(name, path string) error {
+	lock, err := l.lockfile()
+	if err != nil {
+		// A LOCK NOBODY CAN READ REFUSES, rather than being treated as absent.
+		// This file is what says which executables are trustworthy, and reading
+		// it wrong in the permissive direction turns a corrupt file into a
+		// silent loss of the only check there is.
+		return err
+	}
+	if lock == nil {
+		return nil
+	}
+
+	// Lockfile.Check is the authority on what an absent entry means, and it
+	// says a plugin the lock does not mention passes - a hand-placed binary
+	// keeps working. Asking first is only so a project that installed one
+	// plugin does not hash the other nine on every command; the two answers
+	// must stay the same, and this is the line to change if Check's ever does.
+	if _, recorded := lock.Plugins[name]; !recorded {
+		return nil
+	}
+
+	sum, err := plugins.FileChecksum(path)
+	if err != nil {
+		return err
+	}
+	if err := lock.Check(name, plugins.PlatformKey(), sum); err != nil {
+		return fmt.Errorf("%w\n\nThe binary checked was %s.", err, path)
+	}
+	return nil
+}
+
+// lockfile reads plugins.lock once and remembers the answer, error included.
+//
+// Called with mu held, from load. A command that loads four plugins reads the
+// file once; a project with no lock at all still reads it once, which is one
+// stat of a file that is not there.
+func (l *Loader) lockfile() (*plugins.Lockfile, error) {
+	if !l.lockRead {
+		l.lock, l.lockErr = plugins.ReadLockfile(l.Dir)
+		l.lockRead = true
+	}
+	return l.lock, l.lockErr
 }
 
 // checkVersion refuses a plugin outside the range the project accepts.
