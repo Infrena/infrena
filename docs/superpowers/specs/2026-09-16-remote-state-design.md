@@ -59,6 +59,31 @@ Nothing is invented: every method exists on `*state.Local` today, and `List` was
 2026-09-15 for discovery. `backendFor(dir)` — called from eight places in `internal/cli` —
 becomes the single place that decides local or plugin.
 
+Two signatures normalise on the way: `Inspect` and `ForceUnlock` are synchronous on `*Local` and
+gain a `context.Context`, because over a wire they can block and must be cancellable. That is a
+change to existing callers, all of them in `internal/cli`, and it is mechanical.
+
+### Where the public surface lives
+
+Backends are third-party code, so they need the same public footing providers have. Mirroring
+the existing split exactly, rather than inventing a second shape:
+
+| Providers | Backends | Holds |
+| --- | --- | --- |
+| `pkg/pluginproto` | `pkg/backendproto` | the wire contract and its version |
+| `pkg/pluginsdk` | `pkg/backendsdk` | the whole of a backend's `main()` |
+| `pkg/provider` | `pkg/backend` | the interface and its types |
+| `internal/pluginhost` | `internal/backendhost` | the host side |
+
+**`state.Lock` must move to `pkg/backend`.** It is currently in `internal/state`, and a backend
+author cannot implement locking against a type they cannot import. Its fields — user, host, PID,
+operation, timestamp — become part of the public contract, which is the right outcome: they are
+what the stale-lock diagnostic prints, so they were already a user-facing shape.
+
+**`state.State` does NOT move, and that is the point of §6.** A backend stores bytes and never
+parses them, so `pkg/backend` needs no state type at all. The SDK surface stays genuinely small:
+seven methods and a lock struct.
+
 **LOCAL IS BUILT IN AND IS NOT A BACKEND PLUGIN.** It is the bootstrap: it works before anything
 is installed, the way `init` works with no provider. Every REMOTE backend is a plugin, and a
 shipped infrena carries none — which is what keeps the plugin path the only path and therefore
@@ -124,9 +149,10 @@ state lives. Remote state does not make `.infra/` go away.
 
 ## 5. The protocol, and the demand it makes
 
-A second wire protocol sharing `pluginproto`'s transport — newline-delimited JSON over stdio, the
-handshake, the cookie — with its own message set and **its own version number**, per §61's rule
-that each boundary carries exactly one. It is not a new version of the provider protocol: the two
+A second wire protocol in `pkg/backendproto`, sharing `pluginproto`'s transport — newline-delimited
+JSON over stdio, the handshake, the cookie — with its own message set and **its own version
+number**, `backendproto.Version`, per §61's rule that each boundary carries exactly one. It joins
+that section's table as the seventh format. It is not a new version of the provider protocol: the two
 evolve for unrelated reasons and one shared number would mean a state format change forcing a
 provider release.
 
