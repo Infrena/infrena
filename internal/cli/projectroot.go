@@ -69,6 +69,19 @@ var projectOptionalCommands = map[string]bool{
 	"completion": true,
 }
 
+// isProjectOptional reports whether a command answers a question that never
+// mentioned a project.
+//
+// `plugins list` is matched on its PARENT rather than its own name, because
+// `state list` shares the leaf name and is emphatically about a project. What
+// plugins are installed is a fact about the machine.
+func isProjectOptional(cmd *cobra.Command) bool {
+	if projectOptionalCommands[cmd.Name()] {
+		return true
+	}
+	return cmd.Parent() != nil && cmd.Parent().Name() == "plugins"
+}
+
 // resolveProjectRoot points opts.Dir at the project, so that infrastructure can
 // live in ./infrena beside an application without every command needing
 // --chdir.
@@ -90,7 +103,7 @@ func resolveProjectRoot(cmd *cobra.Command, opts *GlobalOptions) error {
 
 	root, err := findProjectRoot(opts.Dir)
 	if err != nil {
-		if projectOptionalCommands[cmd.Name()] {
+		if isProjectOptional(cmd) {
 			return nil
 		}
 		return err

@@ -91,6 +91,7 @@ func NewRootCommand() *cobra.Command {
 	root.AddCommand(newDiscoverCommand(opts))
 	root.AddCommand(newImportCommand(opts))
 	root.AddCommand(newExportCommand(opts))
+	root.AddCommand(newPluginsCommand(opts))
 
 	return root
 }

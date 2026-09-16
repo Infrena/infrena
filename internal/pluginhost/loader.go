@@ -164,6 +164,27 @@ func (l *Loader) checkVersion(name string, p *Plugin) error {
 	}
 }
 
+// Resolved reports where a plugin was loaded from and the version it reported,
+// for a plugin this loader has already loaded.
+//
+// For `infrena plugins list`, which answers "what am I actually running". It
+// reads what was OPENED rather than searching again, because a fresh search
+// answers a subtly different question — where a binary would be found now — and
+// two implementations of the same answer drift.
+//
+// path is empty for a builtin, which is served in this process and has no
+// binary. ok is false for a plugin that has not been loaded, or whose load
+// failed.
+func (l *Loader) Resolved(name string) (path, version string, ok bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	p, loaded := l.loaded[name]
+	if !loaded {
+		return "", "", false
+	}
+	return p.client.Path(), p.Version(), true
+}
+
 // Close shuts down every plugin this loader started.
 //
 // Best effort and never fails the command: the work is already done by the time
