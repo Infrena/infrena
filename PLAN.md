@@ -3447,6 +3447,31 @@ Phase 3, not two phases later.
 The goal in one sentence: **a project says which plugins it uses, and infrena can find,
 check, and install them without the user hunting for a URL.**
 
+### What of this exists today
+
+**Implemented 2026-09-16 (Unit 1).** This section is a design written ahead of the code, so
+it says what is built and what is still only designed, rather than leaving a reader to go
+looking for code that is not there.
+
+Built:
+
+- **Source parsing** — both forms, in `internal/plugins`. A repository that breaks the
+  `infrena-provider-<name>` convention is refused when it is written.
+- **Trusted sources** — `~/.config/infrena/plugins.yml`, read by `plugins.LoadTrusted`.
+  `github.com/infrena` is always first and cannot be removed; a malformed file is an error
+  naming the file, never a silent fallback.
+- **A project naming a source** — the additive mapping form of `plugins:`
+  (`version` and `source`), decoded and validated at its line in `infra.yml`.
+- **`infrena plugins list`** — what is installed, its version and where it was loaded from,
+  with no network request.
+
+Still designed and not built: `plugins search`, `plugins install`, `plugins verify`, the
+lock file, checksums, and the interactive offer to install a missing plugin. Nothing in
+infrena makes a network request yet.
+
+`internal/plugins` imports no HTTP client, and a test in that package fails if one is ever
+added: Unit 2's client goes ABOVE this package, never inside it.
+
 ### What the manifest already bought
 
 §31.2 designed `plugin.yaml` for exactly this and the reasoning holds, so it is not

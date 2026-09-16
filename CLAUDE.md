@@ -353,6 +353,34 @@ plugin reporting no version (`0.0.0`, the SDK's answer when `Version()` is absen
 satisfies nothing and says so in its own words; that is deliberately the opposite of
 §61.2's `infrena:` floor, which exempts a 0.0.0 build because it is the user's own.
 
+**Where a plugin may come from** (§31.3, built 2026-09-16). A source has two forms:
+`github.com/<owner>` means search that owner for repositories named `infrena-provider-*`,
+and `github.com/<owner>/infrena-provider-<name>` means that one repository exactly. The
+naming convention is load-bearing — an owner search works by repository name — so
+`internal/plugins.ParseSource` refuses a repository that breaks it at the moment it is
+written, rather than letting it silently never match.
+
+**A project may NAME a source; only a user may TRUST one.** `infra.yml`'s `plugins:` key
+takes an additive mapping form (`version:` and `source:`) beside the scalar form, and a
+source written there is a CANDIDATE, not a permission: that file is checked into git and
+travels with a clone, so if it could grant a download source then `git clone && infrena
+plan` would be enough for a repository to introduce a place infrena fetches executables
+from. Trust lives only in the user's own `~/.config/infrena/plugins.yml`, read by
+`plugins.LoadTrusted`. `github.com/infrena` is always trusted and cannot be removed — a
+default that can be configured away is one that gets configured away, after which
+`plugin: aws` reports that nothing matches with no visible cause. A malformed trust file is
+an error naming the file, never a quiet fallback.
+
+**THE NETWORK IS NEVER ON THE HOT PATH.** `validate`, `plan`, `apply`, `destroy`,
+`refresh`, `discover`, `import`, `graph`, `explain` and `state` must never make a network
+request for plugin discovery, ever — a `plan` that consults the network behaves
+differently on a train, in a locked-down CI runner and during a GitHub outage, which
+invariant 6 forbids. `infrena plugins list` answers "what am I actually running" entirely
+offline. Searching and installing are the only places a request belongs, and Unit 2's HTTP
+client goes ABOVE `internal/plugins`, never inside it: a test in that package fails if
+`net/http` ever appears in its dependency graph, and `internal/cli` separately checks that
+`plugins list` dials nothing.
+
 The CLI surface to implement (§37): `init`, `validate`, `plan <env>`, `apply <env>`,
 `destroy <env>`, `state` / `state show <address>`, `refresh <env>`, `import`, `export`,
 `discover`, `graph`, `explain <resource-type>`. Global options: `--var`, `--var-file`,
