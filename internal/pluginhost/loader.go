@@ -192,7 +192,7 @@ func (l *Loader) checkLock(name, path string) error {
 		return err
 	}
 	if err := lock.Check(name, plugins.PlatformKey(), sum); err != nil {
-		return fmt.Errorf("%w\n\nThe binary checked was %s.", err, path)
+		return &LockError{Plugin: name, Path: path, Err: err}
 	}
 	return nil
 }

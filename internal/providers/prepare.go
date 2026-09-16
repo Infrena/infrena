@@ -117,6 +117,23 @@ func load(ctx context.Context, project *config.ProjectDecl, reg *registry.Regist
 			})
 			continue
 		}
+		// A plugin that IS installed and does not match plugins.lock is a third
+		// thing again, and the generic message got this one backwards too: it
+		// said "not available" about a binary on disk and advised installing
+		// the thing already installed. What is wrong is that it CHANGED, and
+		// the lock's own message says so and says what to do.
+		if _, ok := errorsAsLock(err); ok {
+			ds.Add(diag.Diagnostic{
+				Severity: diag.SeverityError,
+				Summary: "the " + name + " plugin does not match the checksum recorded for it in " +
+					"plugins.lock" + neededBySummary(neededBy[name]),
+				Detail: err.Error(),
+				Action: "Run `infrena plugins install " + name + "` to fetch it again, or restore " +
+					"the binary the lock records. Until then infrena will not run it.",
+				Origin: wanted[name],
+			})
+			continue
+		}
 		ds.Add(diag.Diagnostic{
 			Severity: diag.SeverityError,
 			// The implying type goes in the SUMMARY, not only the detail: a user did
@@ -144,6 +161,11 @@ func neededBySummary(reasons []string) string {
 // errorsAsVersion reports whether a load failed its version constraint.
 func errorsAsVersion(err error) (*pluginhost.VersionError, bool) {
 	return errors.AsType[*pluginhost.VersionError](err)
+}
+
+// errorsAsLock reports whether a load failed against plugins.lock.
+func errorsAsLock(err error) (*pluginhost.LockError, bool) {
+	return errors.AsType[*pluginhost.LockError](err)
 }
 
 // constraintOrigin points a version failure at the `plugins:` line that caused it,

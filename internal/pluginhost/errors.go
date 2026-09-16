@@ -68,6 +68,29 @@ func (e *WrongPluginError) Error() string {
 		e.Expected, e.Actual, e.Path, e.Expected, e.Actual)
 }
 
+// LockError is a binary that is not the one plugins.lock recorded.
+//
+// A TYPE RATHER THAN A WRAPPED STRING, because the caller that reports this to
+// a user has to tell it apart from a plugin that is not installed at all. Found
+// by hand against a real release on 2026-09-16: a corrupted binary was
+// summarised as "the aws plugin is not available", advising the user to install
+// something already sitting on their disk. The version-constraint case had
+// already needed its own type for exactly this reason; this is the same mistake
+// through a different door, and section 44 calls a suggested action the user
+// cannot act on the worst kind.
+type LockError struct {
+	Plugin, Path string
+	// Err is the lockfile's own explanation, which already names the plugin,
+	// the platform, both checksums and what to do.
+	Err error
+}
+
+func (e *LockError) Error() string {
+	return fmt.Sprintf("%v\n\nThe binary checked was %s.", e.Err, e.Path)
+}
+
+func (e *LockError) Unwrap() error { return e.Err }
+
 // stderrTail keeps the last few lines a plugin logged, for a crash message.
 //
 // Bounded, because a plugin that logs enthusiastically before dying would

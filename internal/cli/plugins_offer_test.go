@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/infrena/infrena/internal/pluginhost"
+	"github.com/infrena/infrena/internal/plugins"
 	"github.com/infrena/infrena/pkg/provider"
 )
 
@@ -212,5 +214,57 @@ func TestNothingButACharacterDeviceLooksLikeATerminal(t *testing.T) {
 	defer w.Close()
 	if stdinIsTerminal(r) {
 		t.Error("a pipe was taken for a terminal")
+	}
+}
+
+// FOUND BY HAND, against the real GitHub, 2026-09-16. A binary that fails its
+// checksum was reported as "the aws plugin is not available" and the suggested
+// action was to install it - about a plugin sitting right there, already
+// installed, whose problem is that it changed since. Same mistake the version
+// constraint case already has its own branch for, through a different door.
+func TestAPluginThatFailsItsChecksumIsNotReportedAsMissing(t *testing.T) {
+	dir := newProjectFixture(t)
+	trustSources(t)
+	atATerminal(t)
+	blocked := blockNetwork(t)
+
+	// A binary IS installed. It is simply not the one the lock records.
+	pluginDir := filepath.Join(dir, ".infra", "plugins")
+	if err := os.MkdirAll(pluginDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pluginDir, pluginhost.BinaryName("fake")),
+		[]byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	lock := &plugins.Lockfile{Version: plugins.LockVersion, Plugins: map[string]plugins.LockEntry{
+		"fake": {Version: "1.0.0", Source: "github.com/infrena/infrena-provider-fake",
+			Checksums: map[string]string{plugins.PlatformKey(): "sha256:not-the-one-on-disk"}},
+	}}
+	if err := lock.Write(dir); err != nil {
+		t.Fatal(err)
+	}
+
+	stdout, stderr, code := runMissingPlugin(t, dir, "yes\n", "validate")
+
+	if code == ExitOK {
+		t.Fatal("a binary that does not match the lock was accepted")
+	}
+	if strings.Contains(stderr, "is not available") {
+		t.Errorf("a binary that is installed was reported as missing:\n%s", stderr)
+	}
+	for _, want := range []string{plugins.LockfileName, "infrena plugins install fake"} {
+		if !strings.Contains(stderr, want) {
+			t.Errorf("the failure does not mention %q:\n%s", want, stderr)
+		}
+	}
+	// AND IT IS NOT OFFERED FOR INSTALL, which is the same mistake said out
+	// loud: searching a forge for a plugin the machine already has answers a
+	// question nobody asked.
+	if strings.Contains(stdout, "Looking for it") {
+		t.Errorf("a plugin that is installed was searched for:\n%s", stdout)
+	}
+	if n := blocked.Attempts(); n != 0 {
+		t.Errorf("%d network attempts for a plugin that is installed, want 0", n)
 	}
 }
