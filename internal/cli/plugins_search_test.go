@@ -82,6 +82,61 @@ func TestSearchFindingNothingSaysSoAndExitsZero(t *testing.T) {
 	}
 }
 
+// AN UNAUTHENTICATED SEARCH DOES NOT KNOW THAT NOTHING EXISTS, so it must not
+// say so. A private repository answers an unauthenticated listing with 200 and
+// an empty array - indistinguishable, from here, from an owner who publishes
+// nothing - and "No plugin named %q in any source. Check the spelling" sends a
+// user to check a spelling that was right. Same defect as reporting a rate
+// limit as not-found (PLAN.md §31.3), through a different door.
+func TestSearchWithoutATokenDoesNotClaimNothingExists(t *testing.T) {
+	dir := newProjectFixture(t)
+	trustSources(t)
+	srv := fakeGitHubEmpty(t)
+	t.Setenv("INFRENA_GITHUB_API", srv.URL)
+
+	stdout, _, code := runCommand(t, dir, "plugins", "search", "aws")
+
+	if code != ExitOK {
+		t.Errorf("exit = %d, want %d", code, ExitOK)
+	}
+	// The definitive wording belongs to a search that could actually see.
+	if strings.Contains(stdout, "in any source") {
+		t.Errorf("an unauthenticated search claimed nothing exists anywhere:\n%s", stdout)
+	}
+	// §44: a suggested action the user can take.
+	for _, want := range []string{"INFRENA_GITHUB_TOKEN", "GITHUB_TOKEN", "private"} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("output does not mention %q:\n%s", want, stdout)
+		}
+	}
+	// The spelling hint stays, just not as the only explanation.
+	if !strings.Contains(stdout, "spelling") {
+		t.Errorf("output dropped the spelling hint:\n%s", stdout)
+	}
+}
+
+// With a token, infrena really did look, so the definitive wording is right and
+// telling the reader to set a token they already set would be noise.
+func TestSearchWithATokenSaysNothingExistsPlainly(t *testing.T) {
+	dir := newProjectFixture(t)
+	trustSources(t)
+	srv := fakeGitHubEmpty(t)
+	t.Setenv("INFRENA_GITHUB_API", srv.URL)
+	t.Setenv("INFRENA_GITHUB_TOKEN", "a-token")
+
+	stdout, _, code := runCommand(t, dir, "plugins", "search", "aws")
+
+	if code != ExitOK {
+		t.Errorf("exit = %d, want %d", code, ExitOK)
+	}
+	if !strings.Contains(stdout, "in any source") {
+		t.Errorf("an authenticated search did not give the definitive answer:\n%s", stdout)
+	}
+	if strings.Contains(stdout, "INFRENA_GITHUB_TOKEN") {
+		t.Errorf("output tells a reader to set the token they already set:\n%s", stdout)
+	}
+}
+
 // A SOURCE THAT COULD NOT BE READ IS A WARNING, NEVER A SILENCE. A rate limit
 // rendered as "nothing found" sends a user to check a spelling that was right.
 func TestSearchReportsASourceThatCouldNotBeReadRatherThanSayingNothingExists(t *testing.T) {
@@ -186,6 +241,11 @@ func trustSources(t *testing.T, sources ...string) {
 	t.Setenv("HOME", home)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "config"))
 	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, "cache"))
+	// Whether a token is set changes what an empty result MEANS, so no test
+	// inherits the developer's own. A test about the authenticated wording sets
+	// one itself, after this.
+	t.Setenv("INFRENA_GITHUB_TOKEN", "")
+	t.Setenv("GITHUB_TOKEN", "")
 
 	if len(sources) == 0 {
 		return

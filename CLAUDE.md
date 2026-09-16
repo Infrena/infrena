@@ -408,6 +408,12 @@ in it are easy to break:
   completely different places, one to wait or set `INFRENA_GITHUB_TOKEN` (falling back to
   `GITHUB_TOKEN`), the other to check a spelling. `ForbiddenError` is the third case — a
   403 that is not a rate limit — for the same reason.
+- **"Nothing found" is only ever said by a search that could SEE.** An unauthenticated
+  listing of an owner with private repositories returns 200 and an empty array, so with no
+  token `plugins search` says what it saw - that it ran unauthenticated, that a private
+  repository is invisible that way, and which variable to set - rather than "no plugin
+  named X in any source. Check the spelling". Same rule as the rate limit, different door;
+  the definitive wording is used only when a token was set.
 - **Two owners publishing one name are both shown, and infrena never picks.** Not the first
   alphabetically, not the higher version, not the official one. `plugins.Search` sorts by
   source then newest version so repeated searches render identically, and that ordering is

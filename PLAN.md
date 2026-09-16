@@ -3659,10 +3659,25 @@ owners with several repositories each can exhaust that in a single invocation.
   repeated search is free. `--refresh` bypasses it.
 - **A token is accepted**, from `INFRENA_GITHUB_TOKEN` or `GITHUB_TOKEN`, and raises the
   limit. It is optional and only read for search.
-- **A rate limit must never be reported as "not found".** This is the specific mistake to
-  avoid: both come back from the same API call, and conflating them tells a user their
-  plugin does not exist when what actually happened is that they searched four times in an
-  hour. The message says the limit was reached, when it resets, and that a token raises it.
+- **INFRENA MUST NEVER CLAIM A PLUGIN DOES NOT EXIST WHEN IT MERELY COULD NOT SEE IT.**
+  This is the general rule, and it has at least two doors:
+  - **A rate limit reported as "not found".** Both come back from the same API call, and
+    conflating them tells a user their plugin does not exist when what actually happened is
+    that they searched four times in an hour. The message says the limit was reached, when
+    it resets, and that a token raises it.
+  - **An empty unauthenticated listing reported as "not found".** A private repository
+    answers an unauthenticated listing with 200 and an empty array, which is
+    indistinguishable from an owner who publishes nothing, so a search with no token has
+    learned nothing about whether the plugin exists. The quiet door is the more dangerous
+    of the two: a refusal is at least visible, while this one looks exactly like a complete
+    answer. `plugins search` says it ran unauthenticated, that private repositories are
+    invisible that way, and names `INFRENA_GITHUB_TOKEN` and `GITHUB_TOKEN` as the action
+    (§44). The spelling hint stays, but never as the only explanation. With a token, the
+    definitive wording is correct and is used.
+
+  The test for any future search path is the same question: could this answer have come
+  back identically from a thing that exists? If yes, the wording says what infrena saw,
+  not what is.
 
 ### The commands
 

@@ -173,14 +173,16 @@ func newPluginsSearchCommand(opts *GlobalOptions) *cobra.Command {
 				return err
 			}
 
-			found, problems := plugins.Search(cmd.Context(), searchFetcher(refresh),
+			fetcher := searchFetcher(refresh)
+			found, problems := plugins.Search(cmd.Context(), fetcher,
 				sources, name, searchEnvironment(opts.Dir, name))
 
 			// DIAGNOSTICS GO TO STDERR, which --output does not silence: a
 			// source that could not be searched has to reach the operator
 			// whether or not a frontend is reading the file.
 			renderSearchWarnings(cmd.ErrOrStderr(), problems, found)
-			renderSearch(ro.Out(), name, found, untrusted, len(problems) > 0)
+			renderSearch(ro.Out(), name, found, untrusted,
+				len(problems) > 0, fetcher.authenticated())
 			return nil
 		},
 	}
@@ -291,7 +293,7 @@ func searchEnvironment(dir, name string) plugins.Environment {
 // be named, the search runs without one rather than refusing: the user asked
 // where a plugin is, and answering that with a message about a cache directory
 // would break a command for a reason that has nothing to do with the question.
-func searchFetcher(refresh bool) plugins.Fetcher {
+func searchFetcher(refresh bool) *cachedFetcher {
 	client := remote.NewClient()
 	if base := os.Getenv(githubAPIVar); base != "" {
 		client.BaseURL = base
@@ -321,6 +323,13 @@ type cachedFetcher struct {
 	// cache is nil when there is nowhere to put one, and every method still
 	// works.
 	cache *remote.Cache
+}
+
+// authenticated reports whether a forge token was found, which decides WHAT AN
+// EMPTY RESULT MEANS: without one, a private repository answers a listing with
+// an empty array, so nothing found is not the same answer as nothing existing.
+func (f *cachedFetcher) authenticated() bool {
+	return f.client.Token != ""
 }
 
 // Repositories lists an owner's repositories, from the cache when it is fresh.
@@ -442,9 +451,9 @@ func renderSearchWarnings(w io.Writer, problems []error, found []plugins.Candida
 // ORDER IS PRESENTATION. Search sorts by source and then newest version so two
 // runs render identically; the first row is not a recommendation and this
 // function does not mark one.
-func renderSearch(w io.Writer, name string, found []plugins.Candidate, untrusted map[string]bool, partial bool) {
+func renderSearch(w io.Writer, name string, found []plugins.Candidate, untrusted map[string]bool, partial, authenticated bool) {
 	if len(found) == 0 {
-		renderNothingFound(w, name, partial)
+		renderNothingFound(w, name, partial, authenticated)
 		return
 	}
 
@@ -471,17 +480,37 @@ func renderSearch(w io.Writer, name string, found []plugins.Candidate, untrusted
 	}
 }
 
-// renderNothingFound says so, and says it differently when part of the search
-// could not be done — because "nothing published this" and "nobody would tell
-// me" send a reader to completely different places.
-func renderNothingFound(w io.Writer, name string, partial bool) {
-	if partial {
+// renderNothingFound says so, and says it differently when infrena could not
+// actually see — because "nothing published this" and "nobody would tell me"
+// send a reader to completely different places.
+//
+// THERE ARE TWO WAYS OF NOT SEEING AND ONLY ONE OF THEM LOOKS LIKE A FAILURE.
+// A source that refused is the loud one, and it arrives as a warning. The quiet
+// one is a search that ran WITHOUT A TOKEN: a private repository answers an
+// unauthenticated listing with 200 and an empty array, which is
+// indistinguishable from an owner who publishes nothing. Saying "in any source.
+// Check the spelling" there states something infrena does not know, and sends
+// the user to check a spelling that was right when the truth is that they
+// cannot see the repository at all. §31.3's rule for rate limits, through a
+// different door: infrena never reports what it could not see as what does not
+// exist.
+func renderNothingFound(w io.Writer, name string, partial, authenticated bool) {
+	switch {
+	case partial:
 		fmt.Fprintf(w, "No plugin named %q in the sources that answered.\n", name)
 		fmt.Fprintln(w, "Some sources could not be searched, so this is not the same as there being none; see the warnings above.")
-		return
+
+	case !authenticated:
+		fmt.Fprintf(w, "No plugin named %q was visible to this search, which ran without a github token.\n", name)
+		fmt.Fprintln(w, "A private repository is invisible to an unauthenticated search, so this is not the same as there being none.")
+		fmt.Fprintf(w, "Set %s (or %s) to a personal access token and search again.\n",
+			remote.TokenVar, remote.GitHubTokenVar)
+		fmt.Fprintln(w, "If it should be public, check the spelling, or add the owner that publishes it to the `sources:` list in your infrena plugins.yml.")
+
+	default:
+		fmt.Fprintf(w, "No plugin named %q in any source.\n", name)
+		fmt.Fprintln(w, "Check the spelling, or add the owner that publishes it to the `sources:` list in your infrena plugins.yml.")
 	}
-	fmt.Fprintf(w, "No plugin named %q in any source.\n", name)
-	fmt.Fprintln(w, "Check the spelling, or add the owner that publishes it to the `sources:` list in your infrena plugins.yml.")
 }
 
 // countSources is how many distinct places answered, which is the number worth
