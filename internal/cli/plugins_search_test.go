@@ -44,6 +44,25 @@ func TestSearchPrintsUsableAndRejectedWithReasons(t *testing.T) {
 	}
 }
 
+// github.com/infrena is an ORGANISATION, and an organisation's repositories do
+// not appear in GitHub's user listing at all - so a search that asks only
+// /users/{owner}/repos reports a released, official plugin as non-existent.
+func TestSearchFindsAPluginAnOrganisationPublishes(t *testing.T) {
+	dir := newProjectFixture(t)
+	trustSources(t)
+	srv := fakeGitHubOrg(t)
+	t.Setenv("INFRENA_GITHUB_API", srv.URL)
+
+	stdout, stderr, code := runCommand(t, dir, "plugins", "search", "aws")
+
+	if code != ExitOK {
+		t.Fatalf("exit = %d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	if !strings.Contains(stdout, "github.com/infrena") || !strings.Contains(stdout, "3.0.0") {
+		t.Errorf("the organisation's plugin was not found:\n%s", stdout)
+	}
+}
+
 // Nothing found is an answer and exits 0. It is also the moment a clear
 // message matters most, because the user is deciding whether they typed the
 // name wrong.
@@ -191,6 +210,9 @@ func fakeGitHub(t *testing.T) *httptest.Server {
 	t.Helper()
 	here := fmt.Sprintf("%s/%s", runtime.GOOS, runtime.GOARCH)
 	return fakeForge(t, forge{
+		// infrena is an ORGANISATION, as it is in reality, and mycorp a user:
+		// one fixture covering both owner shapes.
+		orgs: map[string]bool{"infrena": true},
 		repos: map[string][]string{
 			"infrena": {"infrena-provider-hetzner", "website"},
 			"mycorp":  {"infrena-provider-hetzner"},
@@ -202,6 +224,21 @@ func fakeGitHub(t *testing.T) *httptest.Server {
 		files: map[string]string{
 			"infrena/infrena-provider-hetzner@v1.0.0": manifestYAML("hetzner", "1.0.0", "windows/amd64"),
 			"mycorp/infrena-provider-hetzner@v2.0.0":  manifestYAML("hetzner", "2.0.0", here),
+		},
+	})
+}
+
+// fakeGitHubOrg is the official owner as it really is: an organisation, whose
+// repositories GitHub serves under /orgs and not under /users.
+func fakeGitHubOrg(t *testing.T) *httptest.Server {
+	t.Helper()
+	here := fmt.Sprintf("%s/%s", runtime.GOOS, runtime.GOARCH)
+	return fakeForge(t, forge{
+		orgs:  map[string]bool{"infrena": true},
+		repos: map[string][]string{"infrena": {"infrena-provider-aws"}},
+		tags:  map[string]string{"infrena/infrena-provider-aws": "v3.0.0"},
+		files: map[string]string{
+			"infrena/infrena-provider-aws@v3.0.0": manifestYAML("aws", "3.0.0", here),
 		},
 	})
 }
@@ -230,6 +267,11 @@ type forge struct {
 	repos map[string][]string
 	tags  map[string]string
 	files map[string]string
+	// orgs are the owners that are ORGANISATIONS rather than users. GitHub
+	// lists those under /orgs/{owner}/repos, answers /users/{owner}/repos with
+	// an empty array, and has no /orgs listing at all for a user - so an owner
+	// search that asks only one shape sees half the world.
+	orgs map[string]bool
 }
 
 func manifestYAML(name, version, platform string) string {
@@ -249,11 +291,20 @@ func fakeForge(t *testing.T, f forge) *httptest.Server {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
 		switch {
-		case len(parts) == 3 && parts[0] == "users" && parts[2] == "repos":
+		case len(parts) == 3 && (parts[0] == "users" || parts[0] == "orgs") && parts[2] == "repos":
+			owner, isOrg := parts[1], f.orgs[parts[1]]
+			if parts[0] == "orgs" && !isOrg {
+				// A user has no organisation listing. The 404 is ordinary, not
+				// a failure, whenever the other shape answers.
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
 			names := []map[string]string{}
-			// Page 2 onwards is empty; the client stops on a short page.
-			if r.URL.Query().Get("page") == "1" {
-				for _, name := range f.repos[parts[1]] {
+			// Page 2 onwards is empty; the client stops on a short page. An
+			// organisation's repositories are invisible to the user listing,
+			// which is how a published plugin came back as "no plugin named".
+			if r.URL.Query().Get("page") == "1" && !(parts[0] == "users" && isOrg) {
+				for _, name := range f.repos[owner] {
 					names = append(names, map[string]string{"name": name})
 				}
 			}

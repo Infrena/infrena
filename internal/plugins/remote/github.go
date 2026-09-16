@@ -13,6 +13,7 @@ package remote
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -79,16 +80,73 @@ func NewClient() *Client {
 	}
 }
 
+// ownerShapes are the two ways GitHub will list an owner's repositories.
+//
+// THERE IS NO SINGLE ENDPOINT FOR BOTH. An owner is either a user or an
+// organisation, `/orgs/{owner}/repos` answers for one and `/users/{owner}/repos`
+// for the other, and asking only one shape makes every owner of the other kind
+// look empty. github.com/infrena is an organisation, so `/users/infrena/repos`
+// answers 200 with an empty array and a released plugin comes back as "no
+// plugin named aws in any source" - the exact failure this package exists to
+// make impossible.
+//
+// The organisation shape is asked first because that is where infrena's own
+// plugins live, and a hit there costs the cheaper of the two orders.
+var ownerShapes = []string{"orgs", "users"}
+
 // Repositories lists every repository an owner publishes, UNFILTERED: the
 // caller decides what the naming convention means, so the convention lives in
 // one place rather than in every transport.
+//
+// BOTH SHAPES ARE TRIED AND THEIR ANSWERS UNIONED. A 404 from one is not a
+// failure when the other answered: an organisation has no user listing and a
+// user has no organisation listing, so exactly one 404 is the ordinary case.
+// Only both failing means the owner could not be read, and that is reported as
+// one NotFoundError naming the owner.
+//
+// ANY OTHER REFUSAL STOPS THE SEARCH RATHER THAN BEING UNIONED AWAY. A rate
+// limit or a forbidden on one shape, combined with an empty list from the
+// other, would produce an empty result that reads as "this owner publishes
+// nothing" - which is §31.3's forbidden "could not see" rendered as "does not
+// exist", arriving through the second endpoint.
 func (c *Client) Repositories(ctx context.Context, owner string) ([]string, error) {
+	var names []string
+	seen := map[string]bool{}
+	answered := false
+
+	for _, shape := range ownerShapes {
+		found, err := c.repositoriesUnder(ctx, shape, owner)
+		if err != nil {
+			var missing *NotFoundError
+			if errors.As(err, &missing) {
+				// The owner is not of this kind. The other shape is the answer.
+				continue
+			}
+			return nil, err
+		}
+		answered = true
+		for _, name := range found {
+			if !seen[name] {
+				seen[name] = true
+				names = append(names, name)
+			}
+		}
+	}
+
+	if !answered {
+		return nil, &NotFoundError{What: fmt.Sprintf("repositories of %q", owner)}
+	}
+	return names, nil
+}
+
+// repositoriesUnder pages through one of the two owner shapes.
+func (c *Client) repositoriesUnder(ctx context.Context, shape, owner string) ([]string, error) {
 	what := fmt.Sprintf("repositories of %q", owner)
 
 	var names []string
 	for page := 1; page <= maxPages; page++ {
-		endpoint := fmt.Sprintf("%s/users/%s/repos?per_page=%d&page=%d",
-			strings.TrimSuffix(c.base(), "/"), url.PathEscape(owner), perPage, page)
+		endpoint := fmt.Sprintf("%s/%s/%s/repos?per_page=%d&page=%d",
+			strings.TrimSuffix(c.base(), "/"), shape, url.PathEscape(owner), perPage, page)
 
 		body, err := c.get(ctx, endpoint, what, "application/vnd.github+json")
 		if err != nil {

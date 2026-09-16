@@ -3465,8 +3465,9 @@ Built:
 - **`infrena plugins list`** — what is installed, its version and where it was loaded from,
   with no network request.
 - **The forge client** — `internal/plugins/remote`, on `net/http` and `encoding/json`
-  alone. It lists an owner's repositories, resolves a latest release tag and reads a file
-  at that tag. A rate limit and a missing repository arrive from the same call and are
+  alone. It lists an owner's repositories under BOTH of GitHub's owner shapes
+  (`/orgs/{owner}/repos` and `/users/{owner}/repos`, because no endpoint covers a user and
+  an organisation at once), resolves a latest release tag and reads a file at that tag. A rate limit and a missing repository arrive from the same call and are
   DIFFERENT ERRORS, never collapsed.
 - **A disk cache** — `remote.Cache`, an hour's TTL under the user's cache directory. Every
   failure on the read path is a miss, so a cache can never fail a command.

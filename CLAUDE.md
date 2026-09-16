@@ -394,6 +394,13 @@ in it are easy to break:
   branch describes unreleased code, so judging compatibility from it reports a plugin as
   compatible that nobody can install. `FileAtTag` puts the tag in the PATH rather than a
   query parameter, so a request that lost it cannot fall back to a branch.
+- **An owner is a user OR an organisation, and both listings are tried.** GitHub serves
+  `/orgs/{owner}/repos` for one and `/users/{owner}/repos` for the other, with no endpoint
+  covering both: an organisation answers the user listing with 200 and an empty array, so
+  asking one shape reported `github.com/infrena`, which IS an organisation, as publishing
+  nothing. `Repositories` asks both and unions them; a 404 from one shape is ordinary when
+  the other answered, only both failing is a failure, and any OTHER refusal (a rate limit,
+  a forbidden) stops the search rather than being unioned away into an empty list.
 - **A rate limit is NEVER reported as not-found.** GitHub answers an exhausted allowance
   with 403 and a missing-or-private repository with 404, and an unauthenticated caller gets
   sixty requests an hour — which one owner search can spend. `RateLimitError` and

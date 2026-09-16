@@ -185,3 +185,146 @@ func TestNewClientSetsATimeout(t *testing.T) {
 		t.Error("the default http client has no timeout")
 	}
 }
+
+// GITHUB HAS NO ENDPOINT THAT COVERS BOTH. `/users/{owner}/repos` answers for a
+// user and `/orgs/{owner}/repos` for an organisation, and an owner is one or the
+// other — so asking only one shape makes every owner of the other kind look
+// empty. github.com/infrena is an organisation, which is how a released plugin
+// came back as "no plugin named aws in any source".
+func TestRepositoriesFindsAnOrganisationsRepositories(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/orgs/"):
+			if r.URL.Query().Get("page") == "1" {
+				fmt.Fprint(w, `[{"name":"infrena-provider-aws"},{"name":"website"}]`)
+				return
+			}
+			fmt.Fprint(w, `[]`)
+		case strings.HasPrefix(r.URL.Path, "/users/"):
+			// What GitHub really answers for an organisation: 200, and empty.
+			fmt.Fprint(w, `[]`)
+		default:
+			t.Errorf("unexpected path %q", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+	c := &Client{HTTP: srv.Client(), BaseURL: srv.URL}
+
+	got, err := c.Repositories(context.Background(), "infrena")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Errorf("Repositories = %v, want the organisation's two repositories", got)
+	}
+}
+
+// The other shape, which must keep working: an owner that IS a user has no
+// `/orgs/{owner}` at all, and the 404 that comes back is not an error when the
+// other shape answered.
+func TestRepositoriesFindsAUsersRepositories(t *testing.T) {
+	var asked []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		asked = append(asked, r.URL.Path)
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/orgs/"):
+			w.WriteHeader(http.StatusNotFound)
+			fmt.Fprint(w, `{"message":"Not Found"}`)
+		case strings.HasPrefix(r.URL.Path, "/users/"):
+			if r.URL.Query().Get("page") == "1" {
+				fmt.Fprint(w, `[{"name":"infrena-provider-hetzner"}]`)
+				return
+			}
+			fmt.Fprint(w, `[]`)
+		default:
+			t.Errorf("unexpected path %q", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+	c := &Client{HTTP: srv.Client(), BaseURL: srv.URL}
+
+	got, err := c.Repositories(context.Background(), "someone")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0] != "infrena-provider-hetzner" {
+		t.Errorf("Repositories = %v, want the user's one repository", got)
+	}
+	// Both shapes were tried: the organisation one first, and its 404 did not
+	// stop the search.
+	if !contains(asked, "/orgs/someone/repos") {
+		t.Errorf("the organisation shape was never asked for: %v", asked)
+	}
+}
+
+// Only BOTH shapes failing is a failure. An owner that is neither a user nor an
+// organisation genuinely does not exist, and that is a NotFoundError naming the
+// owner rather than an empty list a reader would take for "publishes nothing".
+func TestRepositoriesFailsOnlyWhenNeitherOwnerShapeAnswers(t *testing.T) {
+	var asked []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		asked = append(asked, r.URL.Path)
+		w.WriteHeader(http.StatusNotFound)
+		fmt.Fprint(w, `{"message":"Not Found"}`)
+	}))
+	defer srv.Close()
+	c := &Client{HTTP: srv.Client(), BaseURL: srv.URL}
+
+	got, err := c.Repositories(context.Background(), "nobody")
+
+	var nf *NotFoundError
+	if !errors.As(err, &nf) {
+		t.Fatalf("error is %T (%v), want *NotFoundError", err, err)
+	}
+	if got != nil {
+		t.Errorf("Repositories = %v, want nothing alongside the error", got)
+	}
+	if !strings.Contains(err.Error(), "nobody") {
+		t.Errorf("message does not name the owner: %v", err)
+	}
+	// Failing before both shapes were tried is the bug, not the answer.
+	for _, want := range []string{"/orgs/nobody/repos", "/users/nobody/repos"} {
+		if !contains(asked, want) {
+			t.Errorf("%s was never asked for: %v", want, asked)
+		}
+	}
+}
+
+// contains reports whether a path was among those the fake forge was asked for.
+func contains(paths []string, want string) bool {
+	for _, p := range paths {
+		if p == want {
+			return true
+		}
+	}
+	return false
+}
+
+// A refusal on one shape must NEVER be swallowed by the other shape's empty
+// list: that is the rate-limit mistake arriving through the second endpoint,
+// and it would report a plugin as non-existent because nobody would answer.
+func TestARefusalOnOneShapeIsNotAnEmptyListing(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/orgs/") {
+			w.Header().Set("X-RateLimit-Remaining", "0")
+			w.WriteHeader(http.StatusForbidden)
+			fmt.Fprint(w, `{"message":"API rate limit exceeded"}`)
+			return
+		}
+		fmt.Fprint(w, `[]`)
+	}))
+	defer srv.Close()
+	c := &Client{HTTP: srv.Client(), BaseURL: srv.URL}
+
+	got, err := c.Repositories(context.Background(), "infrena")
+
+	var rl *RateLimitError
+	if !errors.As(err, &rl) {
+		t.Fatalf("error is %T (%v), want *RateLimitError", err, err)
+	}
+	if got != nil {
+		t.Errorf("Repositories = %v, want nothing alongside the error", got)
+	}
+}
