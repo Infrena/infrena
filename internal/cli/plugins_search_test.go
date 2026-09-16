@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/infrena/infrena/internal/plugins/remote"
 	"github.com/infrena/infrena/pkg/pluginproto"
 )
 
@@ -359,6 +360,11 @@ type forge struct {
 	// an empty array, and has no /orgs listing at all for a user - so an owner
 	// search that asks only one shape sees half the world.
 	orgs map[string]bool
+	// visibleTo is the token that can see any of this. Empty means everything
+	// is public. A caller without it is served the empty world GitHub serves
+	// for a private repository, which is the whole point: an empty answer here
+	// means "you could not see", not "it is not there".
+	visibleTo string
 }
 
 func manifestYAML(name, version, platform string) string {
@@ -377,6 +383,16 @@ func fakeForge(t *testing.T, f forge) *httptest.Server {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+		if f.visibleTo != "" && r.Header.Get("Authorization") != "Bearer "+f.visibleTo {
+			// The empty world: a listing with nothing in it, and nothing else
+			// findable. Exactly what an unauthorised caller sees on GitHub.
+			if len(parts) == 3 && parts[2] == "repos" {
+				_ = json.NewEncoder(w).Encode([]map[string]string{})
+				return
+			}
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
 		switch {
 		case len(parts) == 3 && (parts[0] == "users" || parts[0] == "orgs") && parts[2] == "repos":
 			owner, isOrg := parts[1], f.orgs[parts[1]]
@@ -420,4 +436,132 @@ func fakeForge(t *testing.T, f forge) *httptest.Server {
 	}))
 	t.Cleanup(srv.Close)
 	return srv
+}
+
+// THE CACHE KEY MUST INCLUDE WHO IS ASKING. This is the sequence a user
+// actually follows: search, be told to set a token, set it, search again. An
+// unauthenticated "I could not see it" persisted under a key that ignores the
+// credential is replayed for the whole TTL as if it were "it does not exist" -
+// which is the same defect as reporting a rate limit as not-found, and it
+// defeats the remedy infrena itself suggested.
+func TestSearchAfterSettingATokenIsNotServedTheUnauthenticatedEmptyResult(t *testing.T) {
+	dir := newProjectFixture(t)
+	trustSources(t)
+	srv := fakeGitHubPrivateOrg(t, "a-token")
+	t.Setenv("INFRENA_GITHUB_API", srv.URL)
+
+	// Nothing is visible without a token, and that answer goes into the cache.
+	stdout, stderr, code := runCommand(t, dir, "plugins", "search", "aws")
+	if code != ExitOK {
+		t.Fatalf("unauthenticated search: exit = %d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	if strings.Contains(stdout, "3.0.0") {
+		t.Fatalf("the fixture is wrong: an unauthenticated search saw the plugin:\n%s", stdout)
+	}
+
+	// The user does exactly what they were told to do, and does NOT pass
+	// --refresh, because nothing told them to.
+	t.Setenv("INFRENA_GITHUB_TOKEN", "a-token")
+
+	stdout, stderr, code = runCommand(t, dir, "plugins", "search", "aws")
+	if code != ExitOK {
+		t.Fatalf("authenticated search: exit = %d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	if !strings.Contains(stdout, "github.com/infrena") || !strings.Contains(stdout, "3.0.0") {
+		t.Errorf("the authenticated search was served the unauthenticated empty result:\n%s", stdout)
+	}
+}
+
+// TWO TOKENS ARE TWO DIFFERENT VIEWS OF THE FORGE. A repository one user can
+// read is invisible to another, so one user's answer must never be served to
+// the next - which on a shared machine, or under one account with two tokens,
+// is the same replayed "could not see" wearing a different hat.
+func TestSearchWithADifferentTokenIsNotServedTheOtherTokensResult(t *testing.T) {
+	dir := newProjectFixture(t)
+	trustSources(t)
+	srv := fakeGitHubPrivateOrg(t, "the-token-that-can-see")
+	t.Setenv("INFRENA_GITHUB_API", srv.URL)
+
+	t.Setenv("INFRENA_GITHUB_TOKEN", "a-token-that-cannot")
+	stdout, stderr, code := runCommand(t, dir, "plugins", "search", "aws")
+	if code != ExitOK {
+		t.Fatalf("first search: exit = %d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	if strings.Contains(stdout, "3.0.0") {
+		t.Fatalf("the fixture is wrong: the wrong token saw the plugin:\n%s", stdout)
+	}
+
+	t.Setenv("INFRENA_GITHUB_TOKEN", "the-token-that-can-see")
+
+	stdout, stderr, code = runCommand(t, dir, "plugins", "search", "aws")
+	if code != ExitOK {
+		t.Fatalf("second search: exit = %d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	if !strings.Contains(stdout, "3.0.0") {
+		t.Errorf("one token's answer was served to another token:\n%s", stdout)
+	}
+}
+
+// A KEY BECOMES A FILENAME, so the credential's identity may be in the key only
+// as a hash. A token written into a path leaks it to anything that lists a
+// directory - a backup, a crash report, a shoulder - and a cache file is the
+// last place a secret should be legible.
+func TestSearchNeverWritesTheTokenIntoACacheFilename(t *testing.T) {
+	dir := newProjectFixture(t)
+	trustSources(t)
+	srv := fakeGitHubPrivateOrg(t, "sekrit-token-value")
+	t.Setenv("INFRENA_GITHUB_API", srv.URL)
+	t.Setenv("INFRENA_GITHUB_TOKEN", "sekrit-token-value")
+
+	stdout, stderr, code := runCommand(t, dir, "plugins", "search", "aws")
+	if code != ExitOK {
+		t.Fatalf("exit = %d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	if !strings.Contains(stdout, "3.0.0") {
+		t.Fatalf("the search found nothing, so it may not have written a cache entry:\n%s", stdout)
+	}
+
+	cacheDir := filepath.Join(os.Getenv("XDG_CACHE_HOME"), "infrena", "plugins")
+	entries, err := os.ReadDir(cacheDir)
+	if err != nil {
+		t.Fatalf("reading the cache directory %s: %v", cacheDir, err)
+	}
+	if len(entries) == 0 {
+		t.Fatalf("no cache entries in %s, so this test asserts nothing", cacheDir)
+	}
+	for _, e := range entries {
+		if strings.Contains(e.Name(), "sekrit-token-value") {
+			t.Errorf("cache filename %q contains the token", e.Name())
+		}
+	}
+
+	// The filename is a hash of the key, so it would hide a token in the key by
+	// accident. The key itself is what must not carry one, since that is the
+	// thing a future change could hand to something that does not hash.
+	f := &cachedFetcher{client: &remote.Client{BaseURL: srv.URL, Token: "sekrit-token-value"}}
+	key := f.key("repos", "infrena")
+	if strings.Contains(key, "sekrit-token-value") {
+		t.Errorf("the cache key carries the token: %q", key)
+	}
+	if key == (&cachedFetcher{client: &remote.Client{BaseURL: srv.URL}}).key("repos", "infrena") {
+		t.Error("a token and no token produce the same cache key")
+	}
+}
+
+// fakeGitHubPrivateOrg is the official owner publishing a repository only a
+// caller bearing token can see. Without it the forge answers exactly as GitHub
+// does for a private repository: 200 and an empty array, indistinguishable from
+// an owner who publishes nothing.
+func fakeGitHubPrivateOrg(t *testing.T, token string) *httptest.Server {
+	t.Helper()
+	here := fmt.Sprintf("%s/%s", runtime.GOOS, runtime.GOARCH)
+	return fakeForge(t, forge{
+		visibleTo: token,
+		orgs:      map[string]bool{"infrena": true},
+		repos:     map[string][]string{"infrena": {"infrena-provider-aws"}},
+		tags:      map[string]string{"infrena/infrena-provider-aws": "v3.0.0"},
+		files: map[string]string{
+			"infrena/infrena-provider-aws@v3.0.0": manifestYAML("aws", "3.0.0", here),
+		},
+	})
 }

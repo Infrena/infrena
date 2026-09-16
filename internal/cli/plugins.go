@@ -2,6 +2,8 @@ package cli
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -402,12 +404,38 @@ func (f *cachedFetcher) FileAtTag(ctx context.Context, owner, repo, tag, path st
 // be able to read, or leave behind, an entry written against GitHub itself, and
 // including the host makes that impossible rather than unlikely. NUL separates
 // the parts because no owner, repository, tag or path can contain one.
+//
+// SO IS THE CREDENTIAL (credentialID). Without it, the answer an
+// unauthenticated search got - an empty listing, because a private repository
+// is invisible rather than absent - is replayed for the whole TTL to a search
+// that CAN see, including the one the user runs immediately after setting the
+// token infrena just told them to set. That turns "could not see" into "is not
+// there" and defeats its own remedy. It also keeps one token's view of the
+// forge out of another's, since two tokens can see two different sets of
+// repositories.
 func (f *cachedFetcher) key(parts ...string) string {
-	key := f.client.BaseURL
+	key := f.client.BaseURL + "\x00" + credentialID(f.client.Token)
 	for _, p := range parts {
 		key += "\x00" + p
 	}
 	return key
+}
+
+// credentialID identifies the credential an answer was read with, WITHOUT
+// CARRYING IT. A key becomes a filename on disk, so a token in a key is a token
+// in a path - legible to anything that lists a directory, and copied into every
+// backup. A SHA-256 distinguishes two tokens exactly as well as the tokens
+// themselves do and says nothing about either.
+//
+// No token gets its own marker rather than an empty string, so an absent
+// credential is a state of its own rather than the absence of one, and no hash
+// can collide with it: a hash is hex, and this is not.
+func credentialID(token string) string {
+	if token == "" {
+		return "anonymous"
+	}
+	sum := sha256.Sum256([]byte(token))
+	return "token-" + hex.EncodeToString(sum[:])
 }
 
 // get reads a fresh entry, and misses when there is no cache at all.
