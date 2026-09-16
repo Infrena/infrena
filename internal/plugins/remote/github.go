@@ -60,9 +60,14 @@ type Client struct {
 	// RawURL is the root for file bytes. Empty means BaseURL, which is what
 	// lets one test server answer both.
 	RawURL string
-	// Token authenticates the requests. It is used FOR SEARCH ONLY: nothing in
-	// this package downloads or runs anything.
+	// Token authenticates the requests. Search reads text with it, and install
+	// downloads a release archive with it; nothing in this package RUNS
+	// anything, and nothing here writes to disk.
 	Token string
+	// MaxAssetBytes overrides the release download cap. Zero means maxAsset. It
+	// exists so the cap is testable without moving a quarter of a gigabyte
+	// through a test server.
+	MaxAssetBytes int64
 }
 
 // NewClient returns a client pointed at GitHub, with a request timeout and a
@@ -216,31 +221,12 @@ func (c *Client) FileAtTag(ctx context.Context, owner, repo, tag, path string) (
 
 // get performs one request and returns the body, or the error the caller must
 // be able to tell apart.
+//
+// Text responses are bounded by maxBody; fetch, in download.go, is the shared
+// implementation, so search and install build their requests, send their token
+// and classify their refusals in exactly one place.
 func (c *Client) get(ctx context.Context, endpoint, what, accept string) ([]byte, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
-	if err != nil {
-		return nil, fmt.Errorf("building a request for %s: %w: %q is not a usable URL", what, err, endpoint)
-	}
-	req.Header.Set("Accept", accept)
-	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
-	if c.Token != "" {
-		req.Header.Set("Authorization", "Bearer "+c.Token)
-	}
-
-	resp, err := c.httpClient().Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("reading %s: %w: check the network connection, or try again", what, err)
-	}
-	defer resp.Body.Close()
-
-	if err := c.classify(resp, what); err != nil {
-		return nil, err
-	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBody))
-	if err != nil {
-		return nil, fmt.Errorf("reading the body of %s: %w: the response ended early, so try again", what, err)
-	}
-	return body, nil
+	return c.fetch(ctx, endpoint, what, accept, maxBody)
 }
 
 // classify turns a response into the error the caller must be able to tell
