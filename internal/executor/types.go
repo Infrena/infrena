@@ -12,6 +12,7 @@ import (
 	"github.com/infrena/infrena/internal/registry"
 	"github.com/infrena/infrena/internal/state"
 	"github.com/infrena/infrena/pkg/address"
+	"github.com/infrena/infrena/pkg/resource"
 )
 
 // Result is what one Apply run produced.
@@ -78,6 +79,22 @@ type Options struct {
 	Backend state.Backend
 	// Environment names which environment's lock and state this run uses.
 	Environment string
+	// Observed is what the refresh that immediately preceded planning saw on
+	// the real infrastructure, keyed by address.Address.String(). It is what
+	// the executor builds the `current` argument of Provider.Update and
+	// Provider.Delete out of — see currentFor (observed.go) for the merge, and
+	// for why the last persisted state alone is the wrong answer.
+	//
+	// An address may be missing from it, and an entry may be nil: nil means
+	// the refresh found nothing there (the read failed, or the resource is
+	// gone), and `infrena apply --plan`, which applies a saved plan without
+	// refreshing at all, passes no observations whatever. Every one of those
+	// falls back to the last persisted state, which is what the executor used
+	// for every operation before observations existed.
+	//
+	// Read-only for the whole run: Apply never writes to it, and worker
+	// goroutines read it concurrently.
+	Observed map[string]*resource.ResourceState
 	// Retry governs how a failed provider call is retried, per the
 	// classification table in retry.go.
 	Retry RetryPolicy
