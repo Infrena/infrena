@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"testing"
 
@@ -365,6 +366,17 @@ type forge struct {
 	// for a private repository, which is the whole point: an empty answer here
 	// means "you could not see", not "it is not there".
 	visibleTo string
+	// releases are the assets a release publishes, keyed "owner/repo@tag" and
+	// then by asset name. `plugins install` reads these; `plugins search` never
+	// asks for one, which is itself worth keeping true.
+	//
+	// GitHub HAS NO ENDPOINT THAT TAKES AN ASSET NAME, so the fake models the
+	// two requests the real one forces: the release is read at
+	// /repos/{o}/{r}/releases/tags/{tag} for the ids, and each asset is fetched
+	// at /repos/{o}/{r}/releases/assets/{id}. A fake that served an asset by
+	// name would answer whatever the client asked and prove nothing about the
+	// path a user takes.
+	releases map[string]map[string][]byte
 }
 
 func manifestYAML(name, version, platform string) string {
@@ -381,6 +393,20 @@ description: a plugin, for a test
 // what remote.Client's RawURL fallback is for.
 func fakeForge(t *testing.T, f forge) *httptest.Server {
 	t.Helper()
+
+	// Asset ids, assigned once and deterministically, so the listing and the
+	// download agree without the handler having to search.
+	assetIDs := map[string]int64{}
+	assetBodies := map[string][]byte{}
+	next := int64(1000)
+	for _, release := range sortedReleaseKeys(f.releases) {
+		for _, name := range sortedAssetKeys(f.releases[release]) {
+			next++
+			assetIDs[release+"/"+name] = next
+			assetBodies[fmt.Sprint(next)] = f.releases[release][name]
+		}
+	}
+
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
 		if f.visibleTo != "" && r.Header.Get("Authorization") != "Bearer "+f.visibleTo {
@@ -420,6 +446,48 @@ func fakeForge(t *testing.T, f forge) *httptest.Server {
 				return
 			}
 			_ = json.NewEncoder(w).Encode(map[string]string{"tag_name": tag})
+
+		case len(parts) == 5 && parts[0] == "repos" && parts[3] == "releases" && parts[4] == "tags":
+			// Never reached: the tag is a sixth segment. Kept out of the
+			// default arm so a malformed request is still an error.
+			w.WriteHeader(http.StatusNotFound)
+
+		case len(parts) == 6 && parts[0] == "repos" && parts[3] == "releases" && parts[4] == "tags":
+			assets, ok := f.releases[parts[1]+"/"+parts[2]+"@"+parts[5]]
+			if !ok {
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+			var listed []map[string]any
+			for _, name := range sortedAssetKeys(assets) {
+				listed = append(listed, map[string]any{
+					"name": name,
+					"id":   assetIDs[parts[1]+"/"+parts[2]+"@"+parts[5]+"/"+name],
+					// The real API returns a browser_download_url too. It is
+					// served here so a client that followed it instead of
+					// building its own URL would be caught by the assertion in
+					// the default arm rather than silently working.
+					"browser_download_url": "http://elsewhere.invalid/" + name,
+				})
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"tag_name": parts[5], "assets": listed})
+
+		case len(parts) == 5 && parts[0] == "repos" && parts[3] == "releases" && parts[4] == "assets":
+			w.WriteHeader(http.StatusNotFound)
+
+		case len(parts) == 6 && parts[0] == "repos" && parts[3] == "releases" && parts[4] == "assets":
+			body, ok := assetBodies[parts[5]]
+			if !ok {
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+			// The real endpoint serves the bytes only for this Accept; with
+			// the JSON one it describes the asset instead.
+			if r.Header.Get("Accept") != "application/octet-stream" {
+				t.Errorf("asset fetched with Accept %q, want application/octet-stream", r.Header.Get("Accept"))
+			}
+			w.Header().Set("Content-Type", "application/octet-stream")
+			_, _ = w.Write(body)
 
 		case len(parts) == 4 && parts[3] == "plugin.yaml":
 			body, ok := f.files[parts[0]+"/"+parts[1]+"@"+parts[2]]
@@ -564,4 +632,24 @@ func fakeGitHubPrivateOrg(t *testing.T, token string) *httptest.Server {
 			"infrena/infrena-provider-aws@v3.0.0": manifestYAML("aws", "3.0.0", here),
 		},
 	})
+}
+
+// sortedReleaseKeys and sortedAssetKeys keep the fake's asset ids stable across
+// runs, so a failure is reproducible rather than depending on map order.
+func sortedReleaseKeys(m map[string]map[string][]byte) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func sortedAssetKeys(m map[string][]byte) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }

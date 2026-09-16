@@ -37,7 +37,12 @@ func newPluginsCommand(opts *GlobalOptions) *cobra.Command {
 		Use:   "plugins",
 		Short: "Inspect the provider plugins on this machine",
 	}
-	cmd.AddCommand(newPluginsListCommand(opts), newPluginsSearchCommand(opts))
+	cmd.AddCommand(
+		newPluginsListCommand(opts),
+		newPluginsSearchCommand(opts),
+		newPluginsInstallCommand(opts),
+		newPluginsVerifyCommand(opts),
+	)
 	return cmd
 }
 
