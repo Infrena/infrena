@@ -80,7 +80,7 @@ func newDestroyCommand(opts *GlobalOptions) *cobra.Command {
 			emptyCfg := compiler.ResolvedConfig{Project: st0.Project, Environment: environment}
 
 			// Unlocked preview — identical in spirit to `infra plan`.
-			p, _, err := computePlan(cmd.Context(), cmd, backend, reg, emptyCfg, environment, opts, ro)
+			p, _, _, err := computePlan(cmd.Context(), cmd, backend, reg, emptyCfg, environment, opts, ro)
 			if err != nil {
 				return finishApply(cmd.ErrOrStderr(), rw, report.ApplyResult{}, err)
 			}
@@ -119,7 +119,7 @@ func newDestroyCommand(opts *GlobalOptions) *cobra.Command {
 				// Re-plan inside the lock — apply's doc comment explains why:
 				// destroy must never execute against state or provider
 				// reality gathered before the lock was held.
-				p2, st, err := computePlan(ctx, cmd, backend, reg, emptyCfg, environment, opts, ro)
+				p2, st, obs, err := computePlan(ctx, cmd, backend, reg, emptyCfg, environment, opts, ro)
 				if err != nil {
 					return finishApply(cmd.ErrOrStderr(), rw, report.ApplyResult{}, err)
 				}
@@ -135,6 +135,10 @@ func newDestroyCommand(opts *GlobalOptions) *cobra.Command {
 				}
 
 				execOpts := executorOptions(opts, reg, backend, environment)
+				// See apply.go's identical wiring, and executor.currentFor for what
+				// a destroy does with them: Delete receives `current` too, so it
+				// wants the same observed-now view an update does.
+				execOpts.Observed = obs.States()
 				// See apply.go's identical wiring: always set, because the
 				// same hook is what renders progress to stdout.
 				execOpts.OnEvent = eventHook(ro)

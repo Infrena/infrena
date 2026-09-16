@@ -17,13 +17,28 @@ import (
 // destroy:<addr> then create:<addr>, both carrying Kind == OpReplace), and
 // neither is Kind by itself — Phase is what tells the two apart.
 //
-// current is the live resource.ResourceState the caller already holds for
-// this address (nil when there is none, e.g. a plain create); it, not
-// op.Before, is what Update and Delete receive, because Before is a bare
-// map[string]value.Value with no ProviderID, and a provider cannot find the
-// object it manages without one. desired is the fully-resolved
-// DesiredResource Task 7 built from op.After; dispatch does not evaluate
-// expressions itself.
+// current is the resource as it now stands: the attributes the refresh
+// immediately before planning OBSERVED, carrying the host's own bookkeeping
+// — the provider instance, Dependencies, Lifecycle, the timestamps — from
+// the last state persisted. executor.currentFor (observed.go) builds it, and
+// its doc comment is the authority on the merge. It falls back to the last
+// persisted state alone when nothing was observed for the address, and is
+// nil when there is no record at all (a plain create).
+//
+// This comment used to say current was "the live resource.ResourceState",
+// which was false: the executor handed over the state the previous apply had
+// written, refreshed observations reaching the planner and no further. A
+// plugin that read this and diffed current against desired to build a patch
+// — which is what the sentence invites, and what pkg/provider.Provider.Read
+// invites in as many words — therefore skipped precisely the drift the plan
+// had proposed to correct. The comment was half the bug: the code misled,
+// and the documentation confirmed the misreading.
+//
+// It is current, not op.Before, that Update and Delete receive, because
+// Before is a bare map[string]value.Value with no ProviderID, and a provider
+// cannot find the object it manages without one. desired is the
+// fully-resolved DesiredResource Task 7 built from op.After; dispatch does
+// not evaluate expressions itself.
 //
 // OpForget makes no provider call at all: dropping a resource from
 // management without touching the real infrastructure is retain's entire

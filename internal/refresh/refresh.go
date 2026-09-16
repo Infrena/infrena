@@ -137,6 +137,27 @@ func Refresh(ctx context.Context, st *state.State, reg *registry.Registry, paral
 	return out, ds
 }
 
+// States is what Refresh observed, reduced to the one thing the executor
+// needs: the resource state seen at each address, keyed exactly as
+// Observations is (address.Address.String()).
+//
+// An address whose read FAILED, and one whose resource no longer exists,
+// both map to a nil entry. That is deliberate and not a flattening of two
+// different facts into one: Refresh's callers already act on the
+// distinction — a read error fails planning for that resource, so an apply
+// never reaches the executor with one — and by the time the executor is
+// running, the only question left about an address with no usable
+// observation is what to hand the provider, for which both answers are the
+// same (see executor.currentFor). Nothing downstream of here may use a nil
+// entry to conclude a resource was deleted.
+func (o Observations) States() map[string]*resource.ResourceState {
+	out := make(map[string]*resource.ResourceState, len(o))
+	for key, obs := range o {
+		out[key] = obs.State
+	}
+	return out
+}
+
 // readOne reads one resource's current provider state.
 func readOne(ctx context.Context, st *state.State, reg *registry.Registry, addr address.Address) (Observation, diag.Diagnostics) {
 	rs, ok := st.Get(addr)

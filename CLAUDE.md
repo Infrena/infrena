@@ -447,6 +447,20 @@ Key architectural rules, in rough order of how easy they are to violate:
   when it sees one (`moveCandidates` in `internal/planner/render.go`), which is
   the only warning a user gets; do not remove it without replacing it with
   something a user reads before typing `apply`.
+- **State is the last thing persisted; the observation is what is out there now, and
+  they must not be merged before the planner has run.** `planner.Compute` takes both
+  because its diff IS one against the other; write observations into state first and
+  the diff collapses, the plan proposes nothing, and drift silently stops being
+  corrected. State stays "what the last apply recorded" everywhere, and the merge
+  happens strictly between planning and execution, in `executor.currentFor`
+  (`internal/executor/observed.go`), which is what builds the `current` a provider's
+  `Update` and `Delete` receive: the OBSERVED attributes carrying the host's own
+  bookkeeping — provider instance, `Dependencies`, `Lifecycle`, the timestamps — from
+  state. Not a straight swap: `internal/pluginhost.rebuild` builds the state that gets
+  PERSISTED out of `current`, so a `current` missing its `Lifecycle` writes a vanished
+  `prevent_destroy` guard to disk. The executor used to hand providers state alone, and
+  a plugin that diffed `current` against `desired` therefore skipped exactly the drift
+  the plan had proposed to correct.
 - **Environments are first-class, not workspaces.** Each environment has independent
   state and its own lock. Inheritance (`extends`) resolution order is
   provider defaults → base config → module defaults → environment inheritance →

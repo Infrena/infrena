@@ -160,6 +160,15 @@ func applySavedPlan(
 		}
 
 		execOpts := executorOptions(opts, reg, backend, environment)
+		// NO OBSERVATIONS, deliberately: this path applies a plan saved
+		// earlier and does not refresh, which is the whole reason it is fast
+		// and does not need the compile. executor.Options.Observed is left nil,
+		// and executor.currentFor then falls back to the last persisted state
+		// for every address — exactly what the executor used before
+		// observations existed. Refreshing here to fill it in would contradict
+		// what --plan is: the before-values the operator reviewed and approved
+		// are the plan's, and CheckApplicable above has already refused the run
+		// if the state they describe has moved.
 		execOpts.OnEvent = eventHook(ro)
 
 		res, execDiags := executor.Apply(ctx, p, g, st, execOpts)

@@ -184,7 +184,7 @@ func newApplyCommand(opts *GlobalOptions) *cobra.Command {
 
 			// Unlocked preview — identical in spirit to `infra plan`: safe
 			// to run against a locked environment, in CI, or repeatedly.
-			p, _, err := computePlan(cmd.Context(), cmd, backend, reg, cfg, environment, opts, ro)
+			p, _, _, err := computePlan(cmd.Context(), cmd, backend, reg, cfg, environment, opts, ro)
 			if err != nil {
 				return finishApply(cmd.ErrOrStderr(), rw, report.ApplyResult{}, err)
 			}
@@ -242,7 +242,7 @@ func newApplyCommand(opts *GlobalOptions) *cobra.Command {
 				// Re-plan inside the lock — see this task's doc comment above
 				// for why: apply must never execute against state or provider
 				// reality gathered before the lock was held.
-				p2, st, err := computePlan(ctx, cmd, backend, reg, cfg, environment, opts, ro)
+				p2, st, obs, err := computePlan(ctx, cmd, backend, reg, cfg, environment, opts, ro)
 				if err != nil {
 					return finishApply(cmd.ErrOrStderr(), rw, report.ApplyResult{}, err)
 				}
@@ -258,6 +258,12 @@ func newApplyCommand(opts *GlobalOptions) *cobra.Command {
 				}
 
 				execOpts := executorOptions(opts, reg, backend, environment)
+				// What the provider reports NOW, which is what a provider's
+				// `current` is built from — see executor.currentFor. These are the
+				// observations the in-lock re-plan just took, never the pre-lock
+				// ones: executing against reality gathered before the lock was held
+				// is the exact thing re-planning inside the lock exists to prevent.
+				execOpts.Observed = obs.States()
 				// Always set now, not only when there is a report to write:
 				// the same hook renders progress to stdout, which is the
 				// half a human watching an apply actually reads. Both halves
@@ -293,17 +299,29 @@ func newApplyCommand(opts *GlobalOptions) *cobra.Command {
 
 // computePlan runs the same unlocked, side-effect-free sequence `infra
 // plan` uses — backend.Get, refresh.Refresh, planner.Compute — and returns
-// the resulting plan together with the state it was computed against.
+// the resulting plan, the state it was computed against, and the
+// observations it was computed against.
+//
+// THE THREE ARE RETURNED SEPARATELY AND MUST STAY SEPARATE. st is the last
+// state persisted and obs is what the provider reports NOW; the planner's
+// entire diff is the one against the other. Folding the observations into
+// st here — the tidy-looking "one current truth" refactor — collapses that
+// diff to nothing: the planner would propose no change, and every drift
+// would silently stop being corrected. The executor needs the observations
+// too (they are what a provider's `current` is built from, see
+// executor.currentFor) and that is why they come back from here, but the
+// merge happens strictly between planning and execution, inside the
+// executor, and never before planner.Compute.
 // apply calls it twice (before and after taking the lock); destroy (task
 // 14) reuses it unchanged with an empty desired configuration, which is
 // what turns "everything currently in state" into a full teardown plan
 // through the planner's own decision table rather than a second, bespoke
 // "destroy everything" code path.
-func computePlan(ctx context.Context, cmd *cobra.Command, backend *state.Local, reg *registry.Registry, cfg compiler.ResolvedConfig, environment string, opts *GlobalOptions, ro *runOutput) (*planner.Plan, *state.State, error) {
+func computePlan(ctx context.Context, cmd *cobra.Command, backend *state.Local, reg *registry.Registry, cfg compiler.ResolvedConfig, environment string, opts *GlobalOptions, ro *runOutput) (*planner.Plan, *state.State, refresh.Observations, error) {
 	rw := ro.Report()
 	st, err := backend.Get(ctx, environment)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	// Stamp the project name from the compiled configuration into the state
 	// this run will persist if it reaches executor.Apply. Before this fix,
@@ -329,7 +347,7 @@ func computePlan(ctx context.Context, cmd *cobra.Command, backend *state.Local, 
 		observationHook(ro, st))
 	renderDiagnostics(cmd.ErrOrStderr(), rw, refreshDiags)
 	if refreshDiags.HasErrors() {
-		return nil, nil, errors.New("refreshing provider state failed")
+		return nil, nil, nil, errors.New("refreshing provider state failed")
 	}
 
 	p, planDiags := planner.Compute(cfg, st, obs, planner.Options{
@@ -339,9 +357,9 @@ func computePlan(ctx context.Context, cmd *cobra.Command, backend *state.Local, 
 	})
 	renderDiagnostics(cmd.ErrOrStderr(), rw, planDiags)
 	if planDiags.HasErrors() {
-		return nil, nil, errors.New("planning failed")
+		return nil, nil, nil, errors.New("planning failed")
 	}
-	return p, st, nil
+	return p, st, obs, nil
 }
 
 // confirm prints prompt to stdout and reads exactly one line from stdin,

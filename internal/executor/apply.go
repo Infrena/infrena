@@ -431,7 +431,12 @@ func (r *run) execute(node planner.OpNode, snapshot map[string]*resource.Resourc
 		r.emit(Event{Kind: EventSucceeded, Address: node.Address, Op: op.Kind, Attempt: attempt, At: r.now()})
 	}()
 
-	current := snapshot[node.Address.String()]
+	// currentFor (observed.go), not snapshot[addr] as this used to be: the
+	// snapshot is the last state PERSISTED, and what a provider needs in
+	// order to act on a resource is what is out there NOW. See currentFor's
+	// doc comment for the whole argument, including why the merge cannot
+	// happen any earlier than this.
+	current := currentFor(node.Address, snapshot, r.opts.Observed)
 
 	var prov provider.Provider
 	if node.Kind != planner.OpForget {
