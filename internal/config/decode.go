@@ -9,6 +9,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/infrena/infrena/internal/diag"
+	"github.com/infrena/infrena/internal/plugins"
 	"github.com/infrena/infrena/pkg/semver"
 	"github.com/infrena/infrena/pkg/value"
 )
@@ -321,14 +322,21 @@ func decodeRequiredVersion(path string, key, node *yaml.Node, out *ProjectDecl, 
 }
 
 // decodePluginConstraints reads `plugins:`, a map of plugin name to version
-// constraint (PLAN.md §31.1).
+// constraint (PLAN.md §31.1), or to a mapping of `version` and `source` (§31.3).
 //
 //	plugins:
 //	  aws: ">= 0.3.0, < 0.4.0"
+//	  hetzner:
+//	    version: ">= 1.2"
+//	    source: github.com/someone/infrena-provider-hetzner
 //
 // A MAPPING, unlike `providers:`, and for the opposite reason: `providers:` is a list
 // because a project may declare two instances of one plugin, while a plugin has exactly
 // one version however many instances use it — they share one process.
+//
+// The mapping form is ADDITIVE (PLAN.md §58): the scalar form means exactly what it
+// meant before this key learned about sources, so every project already written keeps
+// decoding unchanged.
 func decodePluginConstraints(path string, node *yaml.Node, out *ProjectDecl, ds *diag.Diagnostics) {
 	if node.Kind != yaml.MappingNode {
 		ds.Add(diag.Diagnostic{
@@ -358,26 +366,114 @@ func decodePluginConstraints(path string, node *yaml.Node, out *ProjectDecl, ds 
 			continue
 		}
 
-		text, ok := requireScalar(path, "the constraint for plugin "+strconv.Quote(key.Value), val, ds)
+		entry, ok := decodePluginEntry(path, key.Value, val, origin, ds)
 		if !ok {
-			continue
-		}
-		constraint, err := semver.ParseConstraint(text)
-		if err != nil {
-			ds.Add(diag.Diagnostic{
-				Severity: diag.SeverityError,
-				Summary:  "plugin " + strconv.Quote(key.Value) + " has an invalid constraint: " + err.Error(),
-				Detail: "A constraint is comparison operators on MAJOR.MINOR.PATCH, with a comma " +
-					"meaning AND — `>= 0.3.0`, or `>= 0.3.0, < 0.4.0`.",
-				Origin: origin,
-			})
 			continue
 		}
 		if out.Plugins == nil {
 			out.Plugins = make(map[string]PluginConstraint)
 		}
-		out.Plugins[key.Value] = PluginConstraint{Constraint: constraint, Origin: origin}
+		out.Plugins[key.Value] = entry
 	}
+}
+
+// decodePluginEntry reads one `plugins:` value in either of its two forms.
+func decodePluginEntry(path, name string, val *yaml.Node, origin value.Origin, ds *diag.Diagnostics) (PluginConstraint, bool) {
+	if val.Kind == yaml.MappingNode {
+		return decodePluginMapping(path, name, val, origin, ds)
+	}
+
+	text, ok := requireScalar(path, "the constraint for plugin "+strconv.Quote(name), val, ds)
+	if !ok {
+		return PluginConstraint{}, false
+	}
+	constraint, ok := pluginVersionConstraint(name, text, origin, ds)
+	if !ok {
+		return PluginConstraint{}, false
+	}
+	return PluginConstraint{Constraint: constraint, Origin: origin}, true
+}
+
+// decodePluginMapping reads the `version`/`source` form (PLAN.md §31.3).
+//
+// Both keys are optional — `source` alone is a plugin whose home is stated but
+// whose version is not pinned, and `version` alone is the scalar form written
+// long-hand. Any other key is an error: this language fails closed on unknown
+// keys everywhere, because a silently ignored `versoin:` reads to its author as
+// a constraint that took effect.
+func decodePluginMapping(path, name string, node *yaml.Node, origin value.Origin, ds *diag.Diagnostics) (PluginConstraint, bool) {
+	entry := PluginConstraint{Origin: origin}
+	ok := true
+
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		key, val := node.Content[i], node.Content[i+1]
+		keyOrigin := originOf(path, key)
+
+		switch key.Value {
+		case "version":
+			text, got := requireScalar(path, "the version for plugin "+strconv.Quote(name), val, ds)
+			if !got {
+				ok = false
+				continue
+			}
+			constraint, got := pluginVersionConstraint(name, text, keyOrigin, ds)
+			if !got {
+				ok = false
+				continue
+			}
+			entry.Constraint = constraint
+		case "source":
+			text, got := requireScalar(path, "the source for plugin "+strconv.Quote(name), val, ds)
+			if !got {
+				ok = false
+				continue
+			}
+			// Validated HERE, at decode time, so a typo points at the line in
+			// infra.yml rather than surfacing much later out of an install.
+			// internal/plugins imports nothing of infrena's, so there is no
+			// cycle to route around.
+			if _, err := plugins.ParseSource(text); err != nil {
+				ds.Add(diag.Diagnostic{
+					Severity: diag.SeverityError,
+					Summary:  "plugin " + strconv.Quote(name) + " names an invalid source: " + err.Error(),
+					Detail: "A source is a host, an owner, and optionally one repository — " +
+						"`github.com/someone` to search an owner, or " +
+						"`github.com/someone/infrena-provider-" + name + "` for one repository.",
+					Action: "Correct the source, or remove it and let the sources you trust decide.",
+					Origin: keyOrigin,
+				})
+				ok = false
+				continue
+			}
+			entry.Source = text
+			entry.SourceOrigin = keyOrigin
+		default:
+			ds.Add(diag.Diagnostic{
+				Severity: diag.SeverityError,
+				Summary:  "plugin " + strconv.Quote(name) + " has an unknown key " + strconv.Quote(key.Value),
+				Detail:   "A plugin entry understands `version` and `source`.",
+				Origin:   keyOrigin,
+			})
+			ok = false
+		}
+	}
+	return entry, ok
+}
+
+// pluginVersionConstraint parses a constraint, reporting it against origin.
+func pluginVersionConstraint(name, text string, origin value.Origin, ds *diag.Diagnostics) (semver.Constraint, bool) {
+	constraint, err := semver.ParseConstraint(text)
+	if err != nil {
+		ds.Add(diag.Diagnostic{
+			Severity: diag.SeverityError,
+			Summary:  "plugin " + strconv.Quote(name) + " has an invalid constraint: " + err.Error(),
+			Detail: "A constraint is comparison operators on MAJOR.MINOR.PATCH, with a comma " +
+				"meaning AND — `>= 0.3.0`, or `>= 0.3.0, < 0.4.0`.",
+			Origin: origin,
+		})
+		return semver.Constraint{}, false
+	}
+	return constraint, true
 }
 
 func decodeResources(path string, node *yaml.Node, dst *[]*ResourceDecl, ds *diag.Diagnostics, seen map[string]value.Origin) {

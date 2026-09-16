@@ -89,3 +89,61 @@ plugins:
 		t.Errorf("the diagnostic names %v, want both lines:\n%s", got, out)
 	}
 }
+
+// PLAN.md §31.3's additive mapping form: a project may also say where a plugin
+// comes from.
+
+// The scalar form is what every existing project writes and must behave
+// EXACTLY as it does today. The mapping form is additive (section 58).
+func TestPluginsAcceptsBothTheScalarAndMappingForms(t *testing.T) {
+	p, ds := decodeTree(t, map[string]string{
+		ProjectFileName: projectWithNoResources + `
+plugins:
+  aws: ">= 0.3.0, < 0.4.0"
+  hetzner:
+    version: ">= 1.2"
+    source: github.com/someone/infrena-provider-hetzner
+`,
+	})
+	if ds.HasErrors() {
+		t.Fatalf("unexpected errors: %v", ds)
+	}
+
+	if got := p.Plugins["aws"]; got.Source != "" {
+		t.Errorf("scalar form gained a source: %q", got.Source)
+	}
+	if got := p.Plugins["aws"].Constraint.String(); got != ">= 0.3.0, < 0.4.0" {
+		t.Errorf("scalar constraint = %q", got)
+	}
+	hetzner := p.Plugins["hetzner"]
+	if hetzner.Source != "github.com/someone/infrena-provider-hetzner" {
+		t.Errorf("source = %q", hetzner.Source)
+	}
+	if got := hetzner.Constraint.String(); got != ">= 1.2" {
+		t.Errorf("mapping constraint = %q", got)
+	}
+	if hetzner.SourceOrigin.Line == 0 {
+		t.Error("source carries no origin, so a diagnostic cannot point at it")
+	}
+}
+
+// Fails closed on unknown keys, like every other block in this language.
+func TestAnUnknownKeyInThePluginMappingIsAnError(t *testing.T) {
+	_, ds := decodeTree(t, map[string]string{
+		ProjectFileName: projectWithNoResources + "plugins:\n  aws:\n    versoin: \">= 1\"\n",
+	})
+	if !ds.HasErrors() {
+		t.Fatal("an unknown key was accepted")
+	}
+}
+
+// A source the project names must be WELL FORMED at decode time, so the error
+// points at the line in infra.yml rather than surfacing later from an install.
+func TestAMalformedProjectSourceIsRefusedAtItsLine(t *testing.T) {
+	_, ds := decodeTree(t, map[string]string{
+		ProjectFileName: projectWithNoResources + "plugins:\n  aws:\n    source: not-a-source\n",
+	})
+	if !ds.HasErrors() {
+		t.Fatal("a malformed source was accepted")
+	}
+}

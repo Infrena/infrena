@@ -18,6 +18,18 @@ import (
 type PluginConstraint struct {
 	Constraint semver.Constraint
 	Origin     value.Origin
+
+	// Source is where this plugin comes from, when the project says so
+	// (PLAN.md §31.3). Empty means the trusted sources decide.
+	//
+	// A SOURCE NAMED HERE IS A CANDIDATE, NOT A PERMISSION. This file is
+	// checked into git and travels to whoever clones it, so if it could grant
+	// a download source then `git clone && infrena plan` would be enough for a
+	// repository to introduce a place infrena fetches executables from. Only
+	// the user's own configuration trusts an owner, and installing from an
+	// untrusted one takes an explicit confirmation that names it.
+	Source       string
+	SourceOrigin value.Origin
 }
 
 // AttributeDecl is one configured attribute.
