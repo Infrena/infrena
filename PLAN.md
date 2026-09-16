@@ -3689,6 +3689,29 @@ Recorded so that each is a decision rather than an oversight:
 
 ### Build order within this section
 
+**AMENDED 2026-09-16, and the amendment swaps steps 1 and 2.** As written, step 1 built
+`plugins.lock` and `verify` before anything could WRITE a lock — a reader with no writer,
+which is the "declaration nothing consults" defect this document refuses elsewhere. Nobody
+hand-writes SHA-256 checksums, so `verify` shipped first would have been untestable against
+anything a user could actually produce.
+
+The lock now arrives WITH install, in step 4, which is the first thing that writes one. The
+original rationale — settle the file formats before the network code depends on them —
+still holds for the formats the network code actually reads, which is `plugin.yaml`
+(§31.2, already shipped). Nothing in search reads the lock.
+
+The implemented order is therefore:
+
+1. Sources and trust, plus `infrena plugins list` — no network at all. **SHIPPED
+   2026-09-16.**
+2. Manifest fetch plus `infrena plugins search` — the first network code, read-only, and
+   the place where compatibility filtering and its messages get written.
+3. `infrena plugins install`, download, checksum verification, `plugins.lock` and
+   `infrena plugins verify` — the lock format and its only writer together.
+4. The interactive offer on a missing plugin, which is everything above plus a prompt.
+
+Superseded, retained so the change is visible:
+
 1. `plugins.lock` and `infrena plugins verify` — the parts with no network at all.
 2. `infrena plugins list` — no network, immediate value, exercises the loader's reporting.
 3. Manifest fetch plus `infrena plugins search` — the first network code, read-only, and
