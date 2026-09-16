@@ -3721,6 +3721,34 @@ Recorded so that each is a decision rather than an oversight:
 - **Install scripts.** A plugin is one static binary. Nothing in an archive is ever
   executed except the binary the manifest names, and only when a command needs it.
 
+### Extraction is a security boundary
+
+**ADDED 2026-09-16.** This section described downloading and unpacking archives without
+saying what unpacking may do, and the omission is the dangerous kind: an archive is
+attacker-controlled data, and a naive extractor is how it becomes attacker-controlled
+FILESYSTEM.
+
+The rules, and each is a refusal rather than a sanitisation:
+
+- **An entry whose path escapes the destination is refused, and the archive with it.** Not
+  sanitised, not skipped — refused, naming the entry. `../../../.ssh/authorized_keys` inside
+  a tarball is not a mistake to tidy up, and an extractor that quietly drops it will happily
+  extract whatever came next.
+- **Exactly one file is extracted: the binary the manifest names.** Everything else in the
+  archive is ignored. A plugin is one static binary (above), so an archive carrying more is
+  either careless or hostile and there is no case where infrena needs the rest.
+- **No symlinks, no hard links, no devices, no directories with surprising modes.** Only a
+  regular file. A symlink is the same escape as a `..` path wearing different clothes.
+- **A decompression bound.** A few hundred kilobytes of gzip can expand to gigabytes, and an
+  install that fills the disk is a denial of service that survives a reboot. Cap the bytes
+  written and refuse past the cap.
+- **The binary is written to a temporary path, verified, then moved into place**, so a failed
+  or refused install never leaves something runnable where a later command would find it.
+
+`SHA256SUMS` is verified BEFORE extraction, so a tampered archive is refused without being
+opened at all. That ordering is the cheapest of these defences and the one that must never be
+reversed for convenience.
+
 ### Build order within this section
 
 **AMENDED 2026-09-16, and the amendment swaps steps 1 and 2.** As written, step 1 built
