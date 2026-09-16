@@ -3477,11 +3477,13 @@ Built:
   source, each with its version, protocol and either "usable" or why not. It never picks
   between two sources answering one name, and `--refresh` asks the forge again.
 
-Still designed and not built: `plugins install`, `plugins verify`, the lock file, checksums,
-and the interactive offer to install a missing plugin. The only commands that make a network
-request are `plugins search` and, when they land, `plugins install` and the one interactive
-prompt — never `validate`, `plan`, `apply`, `destroy`, `refresh`, `discover`, `import`,
-`graph`, `explain` or `state`.
+**Implemented 2026-09-16 (Unit 3), which completes this section:** `plugins install`,
+`plugins verify`, `plugins.lock`, checksum verification on every launch, and the interactive
+offer to install a missing plugin. Nothing in this section is now unbuilt.
+
+The only commands that make a network request are `plugins search`, `plugins install`, and
+the one interactive prompt — never `validate`, `plan`, `apply`, `destroy`, `refresh`,
+`discover`, `import`, `graph`, `explain` or `state`.
 
 `internal/plugins` imports no HTTP client, and a test in that package fails if one is ever
 added: the client in `internal/plugins/remote` sits ABOVE this package, never inside it.
@@ -3749,6 +3751,50 @@ The rules, and each is a refusal rather than a sanitisation:
 opened at all. That ordering is the cheapest of these defences and the one that must never be
 reversed for convenience.
 
+### What Unit 3 shipped, and the three limits worth knowing
+
+**ADDED 2026-09-16, after installing the real `infrena-plugin-aws` 0.5.0 from the real
+GitHub and then corrupting it on disk.** Everything above is now built; these are the edges
+a reader will meet that the design above does not imply.
+
+- **`install <name>@<version>` can only satisfy the repository's LATEST release.** A search
+  reads each repository's latest tag and its manifest at that tag, which is what makes a
+  search cost one request per repository instead of one per release. So a version that is
+  not the latest is refused, naming the versions that ARE published, rather than silently
+  installing something else. Installing an older release needs a search that walks a
+  repository's releases, which is not built and is not pretended to be.
+
+- **The launch check hashes the binary and compares it under `GOOS/GOARCH`**, the same key
+  install wrote (`plugins.PlatformKey`, in the lock's own package so there is one spelling
+  of it). It happens BEFORE the process is started, in `pluginhost.Loader.open`, because
+  after the process has started is after its code has run. A plugin the lock does not
+  mention is not hashed at all, so a project that installed one plugin does not pay for the
+  other nine. A lock that cannot be READ refuses every launch rather than being treated as
+  absent: the file is what says which executables are trustworthy.
+
+- **A binary that fails its checksum gets its OWN error, not the missing-plugin one.**
+  `pluginhost.LockError`, reported by `internal/providers` as "does not match the checksum
+  recorded for it in plugins.lock" with the advice to install it again or restore it. The
+  first version of this reported a corrupted binary as "the aws plugin is not available"
+  and advised installing a plugin already sitting on disk — §44's worst case, a suggested
+  action the reader cannot act on. Found by hand, not by the suite, which is why the
+  hand-verification step exists.
+
+### The offer, in practice
+
+The three conditions are `stdin` being a terminal, `--output` being unset, and
+`INFRENA_NO_PLUGIN_SEARCH` being unset. The offer hangs off the path a command takes when
+its configuration did not compile — which, for a missing plugin, it never can — so "install,
+then stop" is structural rather than remembered: by the time anything is installed the
+command has already failed and its only remaining act is to return.
+
+**Detecting a terminal without an ioctl is the one compromise.** The third-party budget has
+no room for a terminal library, so the test is "stdin is a character device, and is not
+`/dev/null`". The second half is not a nicety: `/dev/null` is a character device, and is what
+`go test`, cron, systemd and most CI runners hand a process. Without that exclusion this
+package's own suite made a real request to api.github.com from a failing `plan`, which is
+the hot-path rule broken by the very feature meant to respect it.
+
 ### Build order within this section
 
 **AMENDED 2026-09-16, and the amendment swaps steps 1 and 2.** As written, step 1 built
@@ -3770,8 +3816,10 @@ The implemented order is therefore:
    the place where compatibility filtering and its messages get written. **SHIPPED
    2026-09-16.**
 3. `infrena plugins install`, download, checksum verification, `plugins.lock` and
-   `infrena plugins verify` — the lock format and its only writer together.
+   `infrena plugins verify` — the lock format and its only writer together. **SHIPPED
+   2026-09-16.**
 4. The interactive offer on a missing plugin, which is everything above plus a prompt.
+   **SHIPPED 2026-09-16.**
 
 Superseded, retained so the change is visible:
 

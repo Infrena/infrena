@@ -433,6 +433,46 @@ in it are easy to break:
   as a TTL of zero, which makes everything stale. A cache that can fail a command is worse
   than no cache at all.
 
+**Install, the lock, and verification on launch** (§31.3, built 2026-09-16). The order of
+`plugins install` IS the design: search, filter to what can run here, refuse if that leaves
+anything other than exactly one, check trust, prompt ONLY if a person is there, fetch
+`SHA256SUMS`, download, VERIFY, extract, move into place, write the lock. Every step is a
+refusal rather than a repair, and a refusal at any step leaves NOTHING on disk. Verification
+comes before extraction because a tampered archive must be refused without being opened;
+the lock is written last because it records what is already there. **A run with nobody at
+the terminal never approves a source**, and infrena never chooses between two sources
+answering one name.
+
+`plugins.lock` is committed, keyed by plugin name, with a checksum per `GOOS/GOARCH`
+(`plugins.PlatformKey` — one spelling, in the lock's own package, because install writing
+one key and the host reading another is a lock that verifies nothing while looking exactly
+like one that verifies everything). **TWO ABSENCES, TWO ANSWERS:** a plugin the lock does
+not mention passes, because a hand-placed binary keeps working and the lock governs what
+INSTALL put there; a plugin the lock DOES mention on a platform it does not record FAILS,
+because "no entry for your machine" is a gap to see rather than permission to run whatever
+is there.
+
+`pluginhost.Loader` hashes a locked binary BEFORE launching it — after the process starts is
+after its code has run — and a lock that cannot be read refuses every launch rather than
+being treated as absent. A binary that fails its checksum is a `pluginhost.LockError` with
+its OWN diagnostic: reporting it as "the plugin is not available" and advising an install
+tells a user to install something already on their disk, which is exactly the §44 failure
+the version-constraint branch beside it already exists to avoid.
+
+**The interactive offer** (`internal/cli/plugins_offer.go`) fires only when stdin is a
+terminal, `--output` is unset and `INFRENA_NO_PLUGIN_SEARCH` is unset; it searches, shows
+every candidate with its reason, asks, installs, and then STOPS. Stopping is structural
+rather than remembered: it hangs off the path a command takes when its configuration did not
+compile, so there is no second half of the run to get wrong. **Its terminal test excludes
+`/dev/null`**, which is a character device like any tty and is what `go test` and most CI
+runners hand a process — without that, a failing `plan` reaches the network, which is the
+hot-path rule broken by the feature meant to respect it. `stdinIsTerminal` is a package
+variable because there is no terminal inside `go test` to stand one up against.
+
+**Known limit:** `install <name>@<version>` can only satisfy a version that is the
+repository's latest release, because a search reads only the latest tag. It refuses, naming
+what IS published, rather than installing something else.
+
 `plugins.Fetcher` is why `plugins.Search` stays in the network-free package: it names the
 SHAPE of the three calls, `remote.Client` satisfies it, and `internal/cli` is the one place
 that knows about both. `INFRENA_GITHUB_API` redirects the client at another host and is a
