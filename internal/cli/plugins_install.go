@@ -67,7 +67,7 @@ func newPluginsInstallCommand(opts *GlobalOptions) *cobra.Command {
 			}
 			defer closeRun()
 
-			return runInstall(cmd, opts, ro, args[0], global)
+			return runInstall(cmd, opts, ro.Out(), args[0], global)
 		},
 	}
 
@@ -77,7 +77,7 @@ func newPluginsInstallCommand(opts *GlobalOptions) *cobra.Command {
 }
 
 // runInstall is the whole sequence, in the order its doc comment sets out.
-func runInstall(cmd *cobra.Command, opts *GlobalOptions, ro *runOutput, arg string, global bool) error {
+func runInstall(cmd *cobra.Command, opts *GlobalOptions, out io.Writer, arg string, global bool) error {
 	name, wantVersion, err := parsePluginArg(arg)
 	if err != nil {
 		return err
@@ -109,7 +109,7 @@ func runInstall(cmd *cobra.Command, opts *GlobalOptions, ro *runOutput, arg stri
 	}
 
 	// 4 and 5. TRUST, and the prompt that is the only way to grant it.
-	if err := ensureTrusted(cmd, opts, ro, *chosen, untrusted); err != nil {
+	if err := ensureTrusted(cmd, opts, out, *chosen, untrusted); err != nil {
 		return err
 	}
 
@@ -131,7 +131,7 @@ func runInstall(cmd *cobra.Command, opts *GlobalOptions, ro *runOutput, arg stri
 		return err
 	}
 
-	fmt.Fprintf(ro.Out(), "Installed %s %s from %s\n  %s\n",
+	fmt.Fprintf(out, "Installed %s %s from %s\n  %s\n",
 		name, chosen.Manifest.Version, chosen.Source, path)
 	return nil
 }
@@ -278,7 +278,7 @@ func describeCandidates(found []plugins.Candidate) string {
 // watching stdout; end of input means nothing was there to answer. Either way
 // the answer is an error naming the owner and how to approve it, never a
 // default of yes and never a block on input that cannot come.
-func ensureTrusted(cmd *cobra.Command, opts *GlobalOptions, ro *runOutput, c plugins.Candidate, untrusted map[string]bool) error {
+func ensureTrusted(cmd *cobra.Command, opts *GlobalOptions, out io.Writer, c plugins.Candidate, untrusted map[string]bool) error {
 	if !untrusted[c.Source.String()] {
 		return nil
 	}
@@ -296,7 +296,7 @@ func ensureTrusted(cmd *cobra.Command, opts *GlobalOptions, ro *runOutput, c plu
 			"Type yes to approve and install: ",
 		c.Source, c.Manifest.Name, c.Manifest.Version)
 
-	switch confirm(cmd.InOrStdin(), ro.Out(), prompt, "yes") {
+	switch confirm(cmd.InOrStdin(), out, prompt, "yes") {
 	case approvalNoInput:
 		return untrustedError(c)
 	case approvalDeclined:

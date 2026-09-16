@@ -110,7 +110,7 @@ func newApplyCommand(opts *GlobalOptions) *cobra.Command {
 			copts, cds := compilerOptions(opts, environment)
 			if cds.HasErrors() {
 				renderDiagnostics(cmd.ErrOrStderr(), rw, cds)
-				return finishApply(cmd.ErrOrStderr(), rw, report.ApplyResult{}, errors.New("configuration is not valid"))
+				return finishApply(cmd.ErrOrStderr(), rw, report.ApplyResult{}, errNotValid)
 			}
 
 			files, err := config.Load(opts.Dir)
@@ -118,8 +118,8 @@ func newApplyCommand(opts *GlobalOptions) *cobra.Command {
 				return finishApply(cmd.ErrOrStderr(), rw, report.ApplyResult{}, err)
 			}
 
-			reg, closePlugins := buildRegistry(opts)
-			defer closePlugins()
+			reg, loader := buildRegistryWithLoader(opts)
+			defer loader.Close()
 			// apply is permitted to change the project directory, so it is
 			// where a pin first gets recorded. validate and plan only compare.
 			copts.RecordLocks = true
@@ -177,7 +177,8 @@ func newApplyCommand(opts *GlobalOptions) *cobra.Command {
 			// apply.
 			renderDiagnostics(cmd.ErrOrStderr(), rw, ds)
 			if ds.HasErrors() {
-				return finishApply(cmd.ErrOrStderr(), rw, report.ApplyResult{}, errors.New("configuration is not valid"))
+				return finishApply(cmd.ErrOrStderr(), rw, report.ApplyResult{},
+					configurationIsNotValid(cmd, opts, ro.Out(), loader))
 			}
 
 			backend := backendFor(opts.Dir)

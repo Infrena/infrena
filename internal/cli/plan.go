@@ -54,7 +54,7 @@ func newPlanCommand(opts *GlobalOptions) *cobra.Command {
 			copts, cds := compilerOptions(opts, environment)
 			if cds.HasErrors() {
 				cds.Render(cmd.ErrOrStderr())
-				return errors.New("configuration is not valid")
+				return errNotValid
 			}
 
 			files, err := config.Load(opts.Dir)
@@ -62,8 +62,8 @@ func newPlanCommand(opts *GlobalOptions) *cobra.Command {
 				return err
 			}
 
-			reg, closePlugins := buildRegistry(opts)
-			defer closePlugins()
+			reg, loader := buildRegistryWithLoader(opts)
+			defer loader.Close()
 
 			// State is read BEFORE compiling, because §6.1's rule needs it: an
 			// environment is reachable if it is declared OR it has state.
@@ -107,7 +107,7 @@ func newPlanCommand(opts *GlobalOptions) *cobra.Command {
 			}
 			if ds.HasErrors() {
 				ds.Render(cmd.ErrOrStderr())
-				return errors.New("configuration is not valid")
+				return configurationIsNotValid(cmd, opts, ro.Out(), loader)
 			}
 
 			// The refresh hook, which used to be nil here: reading every

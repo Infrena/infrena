@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"errors"
 	"fmt"
 	"sort"
 	"strconv"
@@ -11,6 +10,7 @@ import (
 	"github.com/infrena/infrena/internal/compiler"
 	"github.com/infrena/infrena/internal/config"
 	"github.com/infrena/infrena/internal/diag"
+	"github.com/infrena/infrena/internal/pluginhost"
 	"github.com/infrena/infrena/internal/registry"
 	"github.com/infrena/infrena/pkg/report"
 )
@@ -58,9 +58,14 @@ func newValidateCommand(opts *GlobalOptions) *cobra.Command {
 			rw := ro.Report()
 
 			envs, ds := environmentsToValidate(opts.Dir, args)
+			// Declared out here so the failure path below can ask it what was
+			// missing. It stays nil when the environments themselves did not
+			// resolve, and configurationIsNotValid handles that.
+			var loader *pluginhost.Loader
 			if !ds.HasErrors() {
-				reg, closePlugins := buildRegistry(opts)
-				defer closePlugins()
+				reg, l := buildRegistryWithLoader(opts)
+				loader = l
+				defer loader.Close()
 				perEnv := make([]diag.Diagnostics, len(envs))
 				for i, env := range envs {
 					copts, cds := compilerOptions(opts, env)
@@ -81,7 +86,7 @@ func newValidateCommand(opts *GlobalOptions) *cobra.Command {
 			}
 
 			if !valid {
-				return errors.New("configuration is not valid")
+				return configurationIsNotValid(cmd, opts, ro.Out(), loader)
 			}
 			fmt.Fprintln(ro.Out(), "✓ Configuration valid")
 			return nil

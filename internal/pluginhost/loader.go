@@ -2,6 +2,7 @@ package pluginhost
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -60,6 +61,10 @@ type Loader struct {
 	loaded  map[string]*Plugin
 	failed  map[string]error
 	started bool
+	// order is the names that failed, in the order they were asked for, so a
+	// report about them reads in the order the run met them rather than in Go
+	// map order, which changes between runs.
+	order []string
 
 	// lock is plugins.lock, read from Dir the first time a binary is about to be
 	// launched and remembered for the rest of the command.
@@ -93,6 +98,7 @@ func (l *Loader) load(ctx context.Context, name string) (*Plugin, error) {
 	if !l.started {
 		l.loaded = map[string]*Plugin{}
 		l.failed = map[string]error{}
+		l.order = nil
 		l.started = true
 	}
 	if p, ok := l.loaded[name]; ok {
@@ -115,6 +121,7 @@ func (l *Loader) load(ctx context.Context, name string) (*Plugin, error) {
 			_ = p.Close()
 		}
 		l.failed[name] = err
+		l.order = append(l.order, name)
 		return nil, err
 	}
 	l.loaded[name] = p
@@ -256,6 +263,33 @@ func (l *Loader) Resolved(name string) (path, version string, ok bool) {
 		return "", "", false
 	}
 	return p.client.Path(), p.Version(), true
+}
+
+// Missing names every plugin this loader was asked for and could not find, in
+// the order it was asked.
+//
+// For section 31.3's offer to install one. It reports ONLY the plugins whose
+// binary was nowhere - a plugin that was found and failed its version
+// constraint, or that crashed on startup, is a different problem with a
+// different answer, and offering to install one that is already installed would
+// be advice the user cannot act on.
+//
+// It reads what was ASKED FOR rather than searching again: the question is
+// which plugins this command needed and did not get, and configuration is what
+// decides that.
+func (l *Loader) Missing() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	var out []string
+	for _, name := range l.order {
+		if err, failed := l.failed[name]; failed {
+			if _, ok := errors.AsType[*NotFoundError](err); ok {
+				out = append(out, name)
+			}
+		}
+	}
+	return out
 }
 
 // Close shuts down every plugin this loader started.

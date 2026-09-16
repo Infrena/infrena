@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"errors"
 	"fmt"
 	"io"
 	"sort"
@@ -32,19 +31,21 @@ func newGraphCommand(opts *GlobalOptions) *cobra.Command {
 			copts, cds := compilerOptions(opts, args[0])
 			if cds.HasErrors() {
 				cds.Render(cmd.ErrOrStderr())
-				return errors.New("configuration is not valid")
+				return errNotValid
 			}
 			files, err := config.Load(opts.Dir)
 			if err != nil {
 				return err
 			}
-			reg, closePlugins := buildRegistry(opts)
-			defer closePlugins()
+			reg, loader := buildRegistryWithLoader(opts)
+			defer loader.Close()
 			cfg, ds := compiler.Compile(files, reg, copts)
 			ds.Extend(cds)
 			if ds.HasErrors() {
 				ds.Render(cmd.ErrOrStderr())
-				return errors.New("configuration is not valid")
+				// graph has no runOutput: it takes no --output and prints
+				// straight to stdout, so that is where the offer goes too.
+				return configurationIsNotValid(cmd, opts, cmd.OutOrStdout(), loader)
 			}
 			renderGraph(cmd.OutOrStdout(), cfg.Resources)
 			return nil
