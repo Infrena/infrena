@@ -3514,7 +3514,10 @@ Two forms, and the distinction is whether a repository is named:
   repositories named `infrena-provider-*`*.
 - **A repository** (`github.com/<owner>/infrena-provider-<name>`) means *this one, exactly*.
 
-**`github.com/infrena` is always searched and cannot be removed.** It is where the official
+**`github.com/infrena` is always searched and cannot be removed**, and that includes a
+machine with no config directory at all: `os.UserConfigDir` fails with neither HOME nor
+XDG_CONFIG_HOME, and a missing config DIRECTORY degrades exactly like a missing config
+FILE - the official owner, and nothing else. A malformed file is still an error. It is where the official
 plugins live, and a user who wants to avoid it can simply not name a plugin that lives
 there. It is not a configurable default because a configurable default is a thing that gets
 misconfigured into an empty list, after which `plugin: aws` reports that nothing matches —

@@ -32,6 +32,29 @@ func TestNoConfigFileStillTrustsTheOfficialOwner(t *testing.T) {
 	}
 }
 
+// A MISSING CONFIG DIRECTORY MUST DEGRADE EXACTLY LIKE A MISSING CONFIG FILE.
+// A minimal container or a CI runner can have no HOME at all, and os.UserConfigDir
+// then has nothing to return; a user in that position still gets the official
+// owner, because being unable to name a config directory says nothing about
+// where infrena's own plugins live.
+//
+// The empty config home must also not be joined into a RELATIVE path: reading
+// `infrena/plugins.yml` out of whatever directory the command happens to be run
+// from would make a file in a checkout silently decide what infrena trusts.
+func TestNoConfigDirectoryStillTrustsTheOfficialOwner(t *testing.T) {
+	cwd := t.TempDir()
+	writeTrusted(t, cwd, "sources:\n  - github.com/from-the-working-directory\n")
+	t.Chdir(cwd)
+
+	got, err := LoadTrusted("")
+	if err != nil {
+		t.Fatalf("LoadTrusted with no config directory: %v", err)
+	}
+	if len(got) != 1 || got[0].String() != "github.com/infrena" {
+		t.Errorf("LoadTrusted = %v, want just the official owner", got)
+	}
+}
+
 func TestUserSourcesAreAddedAfterTheOfficialOwner(t *testing.T) {
 	home := t.TempDir()
 	writeTrusted(t, home, "sources:\n  - github.com/mycorp\n  - github.com/someone/infrena-provider-hetzner\n")

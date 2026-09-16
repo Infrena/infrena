@@ -61,12 +61,23 @@ func TrustedPath(configHome string) string {
 // the file, never a quiet fallback to the official owner alone - this file is a
 // security decision the user wrote down, and silently ignoring it would either
 // hide a source they meant to add or leave them believing they had removed one.
+//
+// AN EMPTY configHome MEANS THERE IS NO CONFIG DIRECTORY AT ALL, and it degrades
+// exactly like a missing file: the official owner, and nothing else. A minimal
+// container or a CI runner can have neither HOME nor XDG_CONFIG_HOME, and being
+// unable to name a config directory says nothing about where infrena's own
+// plugins live, so failing there would deny a search the one source that needs
+// no configuration. It is handled HERE rather than by a caller passing "",
+// because TrustedPath("") is the RELATIVE path `infrena/plugins.yml`, and
+// reading that would let a file in whatever directory a command was run from
+// decide what infrena trusts.
 func LoadTrusted(configHome string) ([]Source, error) {
-	path := TrustedPath(configHome)
-
-	user, err := readTrusted(path)
-	if err != nil {
-		return nil, err
+	var user []Source
+	if configHome != "" {
+		var err error
+		if user, err = readTrusted(TrustedPath(configHome)); err != nil {
+			return nil, err
+		}
 	}
 
 	sources := make([]Source, 0, len(user)+1)

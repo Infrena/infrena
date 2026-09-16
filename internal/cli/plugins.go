@@ -204,9 +204,16 @@ func newPluginsSearchCommand(opts *GlobalOptions) *cobra.Command {
 // an explicit confirmation. Returned alongside is the set of source strings that
 // are untrusted, so the table can say which.
 func searchSources(dir, name string) ([]plugins.Source, map[string]bool, error) {
+	// NO CONFIG DIRECTORY IS NOT A FAILED SEARCH. os.UserConfigDir fails
+	// outright with neither HOME nor XDG_CONFIG_HOME, which is an ordinary
+	// minimal container or CI runner, and refusing there would deny the user
+	// even the official owner - a source that is trusted whatever the file
+	// says, precisely so it cannot be configured away. So a missing
+	// DIRECTORY degrades exactly like a missing FILE; a malformed file is
+	// still an error.
 	home, err := os.UserConfigDir()
 	if err != nil {
-		return nil, nil, fmt.Errorf("finding the user configuration directory: %w: set XDG_CONFIG_HOME or HOME, so infrena can read the plugin sources you trust", err)
+		home = ""
 	}
 	trusted, err := plugins.LoadTrusted(home)
 	if err != nil {

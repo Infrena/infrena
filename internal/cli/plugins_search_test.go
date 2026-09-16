@@ -137,6 +137,33 @@ func TestSearchWithATokenSaysNothingExistsPlainly(t *testing.T) {
 	}
 }
 
+// NO HOME MUST NOT MEAN NO SEARCH. `os.UserConfigDir` fails outright on a
+// machine with neither HOME nor XDG_CONFIG_HOME - a minimal container, some CI
+// runners - and refusing the whole command there denies a user the official
+// owner, which needs no configuration file to be trusted. A missing config
+// DIRECTORY degrades exactly like a missing config FILE.
+func TestSearchWithoutAConfigDirectoryStillSearchesTheOfficialOwner(t *testing.T) {
+	dir := newProjectFixture(t)
+	trustSources(t)
+	// After trustSources, so these win: no config home of any kind.
+	t.Setenv("HOME", "")
+	t.Setenv("XDG_CONFIG_HOME", "")
+	srv := fakeGitHubOrg(t)
+	t.Setenv("INFRENA_GITHUB_API", srv.URL)
+
+	stdout, stderr, code := runCommand(t, dir, "plugins", "search", "aws")
+
+	if code != ExitOK {
+		t.Fatalf("exit = %d, want %d\nstdout:\n%s\nstderr:\n%s", code, ExitOK, stdout, stderr)
+	}
+	if strings.Contains(stderr, "user configuration directory") {
+		t.Errorf("a missing config directory failed the search:\n%s", stderr)
+	}
+	if !strings.Contains(stdout, "github.com/infrena") || !strings.Contains(stdout, "3.0.0") {
+		t.Errorf("the official owner was not searched:\n%s", stdout)
+	}
+}
+
 // A SOURCE THAT COULD NOT BE READ IS A WARNING, NEVER A SILENCE. A rate limit
 // rendered as "nothing found" sends a user to check a spelling that was right.
 func TestSearchReportsASourceThatCouldNotBeReadRatherThanSayingNothingExists(t *testing.T) {

@@ -369,7 +369,14 @@ from. Trust lives only in the user's own `~/.config/infrena/plugins.yml`, read b
 `plugins.LoadTrusted`. `github.com/infrena` is always trusted and cannot be removed — a
 default that can be configured away is one that gets configured away, after which
 `plugin: aws` reports that nothing matches with no visible cause. A malformed trust file is
-an error naming the file, never a quiet fallback.
+an error naming the file, never a quiet fallback. A MISSING CONFIG DIRECTORY degrades
+exactly like a missing config file: `os.UserConfigDir` fails outright with neither HOME nor
+XDG_CONFIG_HOME, which is an ordinary minimal container, and `LoadTrusted("")` then returns
+the official owner alone rather than erroring - a search that cannot name a config
+directory must still be able to search the owner that needs no configuration. The empty
+config home is handled inside `LoadTrusted`, because `TrustedPath("")` is a RELATIVE path
+and reading it would let a file in the current working directory decide what infrena
+trusts.
 
 **THE NETWORK IS NEVER ON THE HOT PATH.** `validate`, `plan`, `apply`, `destroy`,
 `refresh`, `discover`, `import`, `graph`, `explain` and `state` must never make a network
