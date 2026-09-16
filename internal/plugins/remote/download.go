@@ -50,9 +50,8 @@ const (
 // tars everything else, so asking for a .tar.gz on windows would be a request
 // for an asset that does not exist - and a 404 on this path reads as "this
 // plugin publishes no build for your machine", which is section 31.3's
-// forbidden "could not see it" rendered as "it is not there". Extraction
-// handles tarballs only today, so a windows install fails at extraction with
-// something true rather than at download with something false.
+// forbidden "could not see it" rendered as "it is not there". The extractor
+// unpacks both shapes and decides which from the bytes, not from this name.
 func AssetName(plugin, version string, p pluginmanifest.Platform) string {
 	ext := ".tar.gz"
 	if p.OS == "windows" {

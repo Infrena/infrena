@@ -92,7 +92,7 @@ func TestExtractsExactlyTheNamedBinary(t *testing.T) {
 	})
 	dest := filepath.Join(t.TempDir(), "infrena-plugin-aws")
 
-	if err := ExtractBinary(bytes.NewReader(tarball), "infrena-plugin-aws", dest, 1<<20); err != nil {
+	if err := ExtractBinary(tarball, "infrena-plugin-aws", dest, 1<<20); err != nil {
 		t.Fatal(err)
 	}
 
@@ -123,7 +123,7 @@ func TestExtractsABinaryNestedInsideTheReleaseDirectory(t *testing.T) {
 	})
 	dest := filepath.Join(t.TempDir(), "infrena-plugin-aws")
 
-	if err := ExtractBinary(bytes.NewReader(tarball), "infrena-plugin-aws", dest, 1<<20); err != nil {
+	if err := ExtractBinary(tarball, "infrena-plugin-aws", dest, 1<<20); err != nil {
 		t.Fatal(err)
 	}
 	if got, err := os.ReadFile(dest); err != nil || string(got) != "ELF" {
@@ -147,7 +147,7 @@ func TestATraversingEntryFailsTheWholeArchive(t *testing.T) {
 			})
 			dir := t.TempDir()
 
-			err := ExtractBinary(bytes.NewReader(tarball), "infrena-plugin-aws", filepath.Join(dir, "infrena-plugin-aws"), 1<<20)
+			err := ExtractBinary(tarball, "infrena-plugin-aws", filepath.Join(dir, "infrena-plugin-aws"), 1<<20)
 			if err == nil {
 				t.Fatal("an escaping entry was accepted")
 			}
@@ -173,7 +173,7 @@ func TestATraversingEntryAfterTheBinaryStillFailsTheWholeArchive(t *testing.T) {
 	})
 	dir := t.TempDir()
 
-	err := ExtractBinary(bytes.NewReader(tarball), "infrena-plugin-aws", filepath.Join(dir, "infrena-plugin-aws"), 1<<20)
+	err := ExtractBinary(tarball, "infrena-plugin-aws", filepath.Join(dir, "infrena-plugin-aws"), 1<<20)
 	if err == nil {
 		t.Fatal("an escaping entry after the binary was accepted")
 	}
@@ -187,7 +187,7 @@ func TestASymlinkEntryIsRefused(t *testing.T) {
 	tarball := buildTarWithLink(t, "infrena-plugin-aws", "/etc/passwd")
 	dir := t.TempDir()
 
-	if err := ExtractBinary(bytes.NewReader(tarball), "infrena-plugin-aws", filepath.Join(dir, "infrena-plugin-aws"), 1<<20); err == nil {
+	if err := ExtractBinary(tarball, "infrena-plugin-aws", filepath.Join(dir, "infrena-plugin-aws"), 1<<20); err == nil {
 		t.Fatal("a symlink was accepted")
 	}
 	if entries, _ := os.ReadDir(dir); len(entries) != 0 {
@@ -214,7 +214,7 @@ func TestAHardLinkEntryIsRefused(t *testing.T) {
 	zw.Close()
 	dir := t.TempDir()
 
-	if err := ExtractBinary(bytes.NewReader(buf.Bytes()), "infrena-plugin-aws", filepath.Join(dir, "infrena-plugin-aws"), 1<<20); err == nil {
+	if err := ExtractBinary(buf.Bytes(), "infrena-plugin-aws", filepath.Join(dir, "infrena-plugin-aws"), 1<<20); err == nil {
 		t.Fatal("a hard link was accepted")
 	}
 }
@@ -227,7 +227,7 @@ func TestExtractionStopsAtTheByteCap(t *testing.T) {
 	})
 	dir := t.TempDir()
 
-	err := ExtractBinary(bytes.NewReader(tarball), "infrena-plugin-aws", filepath.Join(dir, "infrena-plugin-aws"), 1<<20)
+	err := ExtractBinary(tarball, "infrena-plugin-aws", filepath.Join(dir, "infrena-plugin-aws"), 1<<20)
 	if err == nil {
 		t.Fatal("an oversized entry was accepted")
 	}
@@ -243,7 +243,7 @@ func TestABinaryExactlyAtTheCapIsAccepted(t *testing.T) {
 	tarball := buildTar(t, []tarEntry{{name: "infrena-plugin-aws", body: body, mode: 0o755}})
 	dest := filepath.Join(t.TempDir(), "infrena-plugin-aws")
 
-	if err := ExtractBinary(bytes.NewReader(tarball), "infrena-plugin-aws", dest, 1024); err != nil {
+	if err := ExtractBinary(tarball, "infrena-plugin-aws", dest, 1024); err != nil {
 		t.Fatalf("a binary exactly at the cap was refused: %v", err)
 	}
 	if got, _ := os.ReadFile(dest); len(got) != len(body) {
@@ -257,7 +257,7 @@ func TestAnArchiveWithoutTheNamedBinaryIsAnError(t *testing.T) {
 	tarball := buildTar(t, []tarEntry{{name: "something-else", body: "x", mode: 0o755}})
 	dir := t.TempDir()
 
-	err := ExtractBinary(bytes.NewReader(tarball), "infrena-plugin-aws", filepath.Join(dir, "infrena-plugin-aws"), 1<<20)
+	err := ExtractBinary(tarball, "infrena-plugin-aws", filepath.Join(dir, "infrena-plugin-aws"), 1<<20)
 	if err == nil {
 		t.Fatal("an archive missing the binary was accepted")
 	}
@@ -276,7 +276,7 @@ func TestTwoEntriesWithTheBinaryNameAreRefused(t *testing.T) {
 	})
 	dir := t.TempDir()
 
-	err := ExtractBinary(bytes.NewReader(tarball), "infrena-plugin-aws", filepath.Join(dir, "infrena-plugin-aws"), 1<<20)
+	err := ExtractBinary(tarball, "infrena-plugin-aws", filepath.Join(dir, "infrena-plugin-aws"), 1<<20)
 	if err == nil {
 		t.Fatal("an archive carrying the name twice was accepted")
 	}
@@ -289,7 +289,122 @@ func TestTwoEntriesWithTheBinaryNameAreRefused(t *testing.T) {
 func TestSomethingThatIsNotAnArchiveIsRefused(t *testing.T) {
 	dir := t.TempDir()
 
-	if err := ExtractBinary(strings.NewReader("this is not a tarball"), "infrena-plugin-aws", filepath.Join(dir, "infrena-plugin-aws"), 1<<20); err == nil {
+	if err := ExtractBinary([]byte("this is not a tarball"), "infrena-plugin-aws", filepath.Join(dir, "infrena-plugin-aws"), 1<<20); err == nil {
 		t.Fatal("a file that is not an archive was accepted")
+	}
+}
+
+// buildTarWithDirectory builds the archive a release ACTUALLY ships: the
+// versioned directory itself is an entry, because release.yml runs
+// `tar -czf "$dir.tar.gz" -C dist "$(basename "$dir")"` and tar writes an entry
+// for the directory it was handed.
+func buildTarWithDirectory(t *testing.T, dir string, entries []tarEntry) []byte {
+	t.Helper()
+
+	var buf bytes.Buffer
+	zw := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(zw)
+	if err := tw.WriteHeader(&tar.Header{
+		Typeflag: tar.TypeDir,
+		Name:     dir + "/",
+		Mode:     0o755,
+		Format:   tar.FormatPAX,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		mode := e.mode
+		if mode == 0 {
+			mode = 0o644
+		}
+		if err := tw.WriteHeader(&tar.Header{
+			Typeflag: tar.TypeReg,
+			Name:     dir + "/" + e.name,
+			Mode:     mode,
+			Size:     int64(len(e.body)),
+			Format:   tar.FormatPAX,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tw.Write([]byte(e.body)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+// THE ARCHIVE A REAL RELEASE SHIPS. Every test above builds a tarball out of
+// regular files only, which no `tar -czf` of a directory has ever produced: the
+// directory is an entry too. An extractor that refused anything that was not a
+// regular file passed all of them and would have refused every genuine install.
+func TestTheDirectoryEntryEveryRealArchiveCarriesIsSkipped(t *testing.T) {
+	tarball := buildTarWithDirectory(t, "infrena-plugin-aws_0.4.0_linux_amd64", []tarEntry{
+		{name: "README.md", body: "docs"},
+		{name: "infrena-plugin-aws", body: "ELF", mode: 0o755},
+	})
+	dest := filepath.Join(t.TempDir(), "infrena-plugin-aws")
+
+	if err := ExtractBinary(tarball, "infrena-plugin-aws", dest, 1<<20); err != nil {
+		t.Fatalf("the archive a real release ships was refused: %v", err)
+	}
+	if got, err := os.ReadFile(dest); err != nil || string(got) != "ELF" {
+		t.Fatalf("binary not extracted: %q %v", got, err)
+	}
+}
+
+// Skipping directories must not let one stand in for the binary. A directory
+// whose base name is the one being installed is still not a file, and the
+// archive carries no binary at all.
+func TestADirectoryNamedLikeTheBinaryIsNotInstalled(t *testing.T) {
+	var buf bytes.Buffer
+	zw := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(zw)
+	if err := tw.WriteHeader(&tar.Header{
+		Typeflag: tar.TypeDir,
+		Name:     "pkg/infrena-plugin-aws/",
+		Mode:     0o755,
+		Format:   tar.FormatPAX,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	tw.Close()
+	zw.Close()
+	dir := t.TempDir()
+
+	err := ExtractBinary(buf.Bytes(), "infrena-plugin-aws", filepath.Join(dir, "infrena-plugin-aws"), 1<<20)
+	if err == nil {
+		t.Fatal("a directory was installed as the binary")
+	}
+	if entries, _ := os.ReadDir(dir); len(entries) != 0 {
+		t.Errorf("wrote %d files despite refusing", len(entries))
+	}
+}
+
+// A traversing DIRECTORY entry is still the escape. Skipping directories is
+// about not writing them, not about not looking at their names.
+func TestATraversingDirectoryEntryStillFailsTheWholeArchive(t *testing.T) {
+	var buf bytes.Buffer
+	zw := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(zw)
+	if err := tw.WriteHeader(&tar.Header{
+		Typeflag: tar.TypeDir,
+		Name:     "../../../.ssh/",
+		Mode:     0o755,
+		Format:   tar.FormatPAX,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	tw.Close()
+	zw.Close()
+	dir := t.TempDir()
+
+	if err := ExtractBinary(buf.Bytes(), "infrena-plugin-aws", filepath.Join(dir, "infrena-plugin-aws"), 1<<20); err == nil {
+		t.Fatal("an escaping directory entry was accepted")
 	}
 }
