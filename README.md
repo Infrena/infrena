@@ -286,4 +286,11 @@ Design principles the project holds itself to, in rough order of how easy they a
 
 ## Licence
 
-Not yet declared.
+Apache 2.0 — see [LICENSE](LICENSE).
+
+The CLI is free and open source, and stays that way. A commercial platform is planned for
+organisations — collaboration, access control, audit, policy, drift history — but nothing
+that works in the CLI today will move behind it. [docs/open-core.md](docs/open-core.md)
+records where that line sits and why it cannot move.
+
+Contributions are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md).
