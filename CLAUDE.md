@@ -376,10 +376,48 @@ an error naming the file, never a quiet fallback.
 request for plugin discovery, ever — a `plan` that consults the network behaves
 differently on a train, in a locked-down CI runner and during a GitHub outage, which
 invariant 6 forbids. `infrena plugins list` answers "what am I actually running" entirely
-offline. Searching and installing are the only places a request belongs, and Unit 2's HTTP
-client goes ABOVE `internal/plugins`, never inside it: a test in that package fails if
-`net/http` ever appears in its dependency graph, and `internal/cli` separately checks that
-`plugins list` dials nothing.
+offline. Searching and installing are the only places a request belongs, and the HTTP
+client sits ABOVE `internal/plugins`, never inside it: `TestPluginsPackageCannotReachTheNetwork`
+fails if `net/http` ever appears in that package's dependency graph, and `internal/cli`'s
+`TestHotPathCommandsMakeNoNetworkRequest` runs `validate`, `plan`, `graph`, `explain` and
+`state` with every proxy variable pointed at a counting listener and asserts zero attempts.
+The two catch different mistakes — one the import, the other the call — and neither
+subsumes the other. **Do not delete either when wiring anything new into a hot-path
+command.**
+
+**`internal/plugins/remote` is the only package in infrena that talks to a forge**
+(§31.3, built 2026-09-16), on `net/http` and `encoding/json` alone — no GitHub or HTTP
+library, because the third-party budget is Cobra and yaml.v3 and nothing else. Four rules
+in it are easy to break:
+
+- **A manifest is read at the git TAG, never the default branch** (§31.2). The default
+  branch describes unreleased code, so judging compatibility from it reports a plugin as
+  compatible that nobody can install. `FileAtTag` puts the tag in the PATH rather than a
+  query parameter, so a request that lost it cannot fall back to a branch.
+- **A rate limit is NEVER reported as not-found.** GitHub answers an exhausted allowance
+  with 403 and a missing-or-private repository with 404, and an unauthenticated caller gets
+  sixty requests an hour — which one owner search can spend. `RateLimitError` and
+  `NotFoundError` are separate types and must stay so: the two messages send a reader to
+  completely different places, one to wait or set `INFRENA_GITHUB_TOKEN` (falling back to
+  `GITHUB_TOKEN`), the other to check a spelling. `ForbiddenError` is the third case — a
+  403 that is not a rate limit — for the same reason.
+- **Two owners publishing one name are both shown, and infrena never picks.** Not the first
+  alphabetically, not the higher version, not the official one. `plugins.Search` sorts by
+  source then newest version so repeated searches render identically, and that ordering is
+  PRESENTATION ONLY: nothing may take element zero. A source that fails is returned
+  alongside the results and rendered as a warning, never allowed to turn a partial answer
+  into "nothing found".
+- **The cache is an optimisation and behaves like one.** `remote.Cache` stores answers for
+  `DefaultTTL` (an hour, matching the rate-limit window) under `remote.DefaultCacheDir()`;
+  every failure on the read path is a MISS rather than an error, and `--refresh` is spelled
+  as a TTL of zero, which makes everything stale. A cache that can fail a command is worse
+  than no cache at all.
+
+`plugins.Fetcher` is why `plugins.Search` stays in the network-free package: it names the
+SHAPE of the three calls, `remote.Client` satisfies it, and `internal/cli` is the one place
+that knows about both. `INFRENA_GITHUB_API` redirects the client at another host and is a
+TEST SEAM, not a user-facing feature — supporting another forge is a source-syntax
+question, not an environment-variable one.
 
 The CLI surface to implement (§37): `init`, `validate`, `plan <env>`, `apply <env>`,
 `destroy <env>`, `state` / `state show <address>`, `refresh <env>`, `import`, `export`,
@@ -436,7 +474,8 @@ Planned layout (§41):
 cmd/infrena/        CLI entrypoint
 internal/           config, compiler, expressions, environments, modules, variables,
                     state, planner, graph, executor, discovery, importer, generator,
-                    lifecycle, secrets, cli
+                    lifecycle, secrets, cli, plugins (sources, trust, search — no
+                    network), plugins/remote (the only package that talks to a forge)
 pkg/                provider, schema, plan, resource, pluginproto, pluginsdk, plugintest,
                     semver, pluginmanifest   (the stable-ish interfaces; plugin authors
                     compile against these, so §61.1's rules govern changing them)
@@ -554,7 +593,9 @@ production account. Two rules in that design are easy to violate and worth knowi
 touching it: **a project may NAME a plugin source but only a user may TRUST one** (project
 configuration travels with a `git clone`, so it must not be able to grant a download
 source), and **no command on the hot path may touch the network** — searching happens in
-`infrena plugins ...` and in one interactive prompt, never in `plan` or `apply`.
+`infrena plugins ...` and in one interactive prompt, never in `plan` or `apply`. Sources,
+trust, `plugins list` and `plugins search` shipped 2026-09-16; install, the lock file and
+the interactive offer have not.
 
 After that, Phase 4 remote state (§52) and Phase 5 production features (§53).
 

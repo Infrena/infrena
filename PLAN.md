@@ -3449,9 +3449,9 @@ check, and install them without the user hunting for a URL.**
 
 ### What of this exists today
 
-**Implemented 2026-09-16 (Unit 1).** This section is a design written ahead of the code, so
-it says what is built and what is still only designed, rather than leaving a reader to go
-looking for code that is not there.
+**Implemented 2026-09-16 (Units 1 and 2).** This section is a design written ahead of the
+code, so it says what is built and what is still only designed, rather than leaving a reader
+to go looking for code that is not there.
 
 Built:
 
@@ -3464,13 +3464,28 @@ Built:
   (`version` and `source`), decoded and validated at its line in `infra.yml`.
 - **`infrena plugins list`** — what is installed, its version and where it was loaded from,
   with no network request.
+- **The forge client** — `internal/plugins/remote`, on `net/http` and `encoding/json`
+  alone. It lists an owner's repositories, resolves a latest release tag and reads a file
+  at that tag. A rate limit and a missing repository arrive from the same call and are
+  DIFFERENT ERRORS, never collapsed.
+- **A disk cache** — `remote.Cache`, an hour's TTL under the user's cache directory. Every
+  failure on the read path is a miss, so a cache can never fail a command.
+- **Compatibility filtering with a reason** — `plugins.Check`, composing the manifest's own
+  `Supports`, `SpeaksProtocol` and `AllowsInfrena` and adding the sentence they do not have.
+- **`infrena plugins search <name>`** — every match across every trusted or project-named
+  source, each with its version, protocol and either "usable" or why not. It never picks
+  between two sources answering one name, and `--refresh` asks the forge again.
 
-Still designed and not built: `plugins search`, `plugins install`, `plugins verify`, the
-lock file, checksums, and the interactive offer to install a missing plugin. Nothing in
-infrena makes a network request yet.
+Still designed and not built: `plugins install`, `plugins verify`, the lock file, checksums,
+and the interactive offer to install a missing plugin. The only commands that make a network
+request are `plugins search` and, when they land, `plugins install` and the one interactive
+prompt — never `validate`, `plan`, `apply`, `destroy`, `refresh`, `discover`, `import`,
+`graph`, `explain` or `state`.
 
 `internal/plugins` imports no HTTP client, and a test in that package fails if one is ever
-added: Unit 2's client goes ABOVE this package, never inside it.
+added: the client in `internal/plugins/remote` sits ABOVE this package, never inside it.
+`internal/cli` carries the other half — a test running each hot-path command with every
+proxy variable pointed at a counting listener, asserting zero attempts.
 
 ### What the manifest already bought
 
@@ -3705,7 +3720,8 @@ The implemented order is therefore:
 1. Sources and trust, plus `infrena plugins list` — no network at all. **SHIPPED
    2026-09-16.**
 2. Manifest fetch plus `infrena plugins search` — the first network code, read-only, and
-   the place where compatibility filtering and its messages get written.
+   the place where compatibility filtering and its messages get written. **SHIPPED
+   2026-09-16.**
 3. `infrena plugins install`, download, checksum verification, `plugins.lock` and
    `infrena plugins verify` — the lock format and its only writer together.
 4. The interactive offer on a missing plugin, which is everything above plus a prompt.
