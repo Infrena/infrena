@@ -44,9 +44,14 @@ type Environment struct {
 // a reader to completely different places. Dropping the first would render it
 // as the second.
 type Candidate struct {
-	// Source is where this release was found. Two sources may answer one name,
-	// and both are kept.
+	// Source is where this release was found, as the user wrote it: an owner
+	// source stays an owner source. Two sources may answer one name, and both
+	// are kept.
 	Source Source
+	// Repo is the repository the manifest was read from. Kept because an owner
+	// source does not name one and the manifest's name is what identifies a
+	// plugin, so the repository is otherwise unrecoverable.
+	Repo string
 	// Manifest is the plugin.yaml read at Tag.
 	Manifest *pluginmanifest.Manifest
 	// Tag is the git tag the manifest was read at, never a branch (§31.2).
@@ -56,6 +61,11 @@ type Candidate struct {
 	// Reason says why it cannot, in a form a user can act on. Empty when
 	// Usable.
 	Reason string
+	// Warnings is whatever the manifest parser said about the FILE, such as it
+	// being a format version newer than this build describes. Carried rather
+	// than dropped: it is not a reason to reject the plugin, but it is the
+	// explanation for anything surprising about what is shown.
+	Warnings []string
 }
 
 // Check reports whether a plugin release can run in this environment, and when
