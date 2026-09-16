@@ -286,4 +286,4 @@ Design principles the project holds itself to, in rough order of how easy they a
 
 ## Licence
 
-See [LICENSE](LICENSE).
+Not yet declared.
