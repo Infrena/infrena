@@ -12,6 +12,8 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/infrena/infrena/internal/compiler"
+	"github.com/infrena/infrena/internal/config"
 	"github.com/infrena/infrena/internal/state"
 	"github.com/infrena/infrena/pkg/address"
 	"github.com/infrena/infrena/pkg/resource"
@@ -941,4 +943,141 @@ resources:
 	if !strings.Contains(stdin.printed, "Enter a value:") {
 		t.Errorf("stdin was read before the approval prompt reached stdout — a user would face a blank screen.\nprinted before the first read:\n%s", stdin.printed)
 	}
+}
+
+// TestComputePlanNeverFoldsObservationsIntoState guards the one refactor
+// that would turn this milestone's `current`-is-stale bug into an invisible
+// one.
+//
+// The tidy-looking move, once the executor started needing observations, is
+// to write them into state the moment refresh returns — "one current truth,
+// everything downstream reads it." It is wrong, and quietly so. st is two
+// things at once here: the left-hand side of the planner's diff, and the
+// document the executor PERSISTS as it applies. Folding observations in
+// before planner.Compute corrupts both. The planner's Lifecycle and
+// Dependencies diffs read st deliberately — no provider owns those fields,
+// so the record is their only source of truth — and would start comparing
+// configuration against whatever a provider's Read happened to return,
+// proposing spurious changes or, worse, recording an empty prevent_destroy
+// guard. And the executor would then persist drifted attribute values as
+// though they had been applied, with no provider call ever having been made
+// to make them true.
+//
+// So this pins the separation directly: after computePlan, the plan must
+// have been computed against what was OBSERVED, and st must still hold what
+// was last PERSISTED. The merge between the two belongs after planning,
+// inside the executor — see executor.currentFor.
+func TestComputePlanNeverFoldsObservationsIntoState(t *testing.T) {
+	dir := projectDir(t, `
+project: myapp
+resources:
+  net:
+    type: fake.vpc
+    tags:
+      owner: platform
+`)
+	ctx := context.Background()
+	cloudPath := filepath.Join(dir, testprovider.DefaultCloudPath)
+	prov := testprovider.New(cloudPath)
+	rs, err := prov.Create(ctx, &resource.DesiredResource{
+		Address: address.Address{Name: "net"},
+		Type:    "fake.vpc",
+		Attrs: map[string]value.Value{
+			"tags": value.Map(map[string]value.Value{
+				"owner": value.String("platform", value.SourceExplicit),
+			}, value.SourceExplicit),
+		},
+	})
+	if err != nil {
+		t.Fatalf("seeding the fake cloud: %v", err)
+	}
+	st := state.New("myapp", "dev")
+	st.Set(rs)
+	seedState(t, dir, "dev", st)
+
+	// Somebody retags it outside infrena. State still says "platform"; the
+	// provider now says "intruder".
+	cloud, err := testprovider.LoadCloud(cloudPath)
+	if err != nil {
+		t.Fatalf("loading the fake cloud: %v", err)
+	}
+	cloud.Resources[rs.ProviderID].Attributes["tags"] = map[string]any{"owner": "intruder"}
+	if err := cloud.Save(cloudPath); err != nil {
+		t.Fatalf("saving the drifted fake cloud: %v", err)
+	}
+
+	opts := &GlobalOptions{Dir: dir, Parallelism: 4}
+	cmd := newApplyCommand(opts)
+	var stdout, stderr bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stderr)
+
+	copts, cds := compilerOptions(opts, "dev")
+	if cds.HasErrors() {
+		t.Fatalf("compiler options: %+v", cds)
+	}
+	files, err := config.Load(dir)
+	if err != nil {
+		t.Fatalf("loading configuration: %v", err)
+	}
+	reg, closePlugins := buildRegistry(opts)
+	defer closePlugins()
+	cfg, compileDiags := compiler.Compile(files, reg, copts)
+	if compileDiags.HasErrors() {
+		t.Fatalf("compiling: %+v", compileDiags)
+	}
+	ro, closeRun, err := openRun(cmd, opts, "apply", "dev")
+	if err != nil {
+		t.Fatalf("openRun: %v", err)
+	}
+	defer closeRun()
+
+	p, planState, obs, err := computePlan(ctx, cmd, backendFor(dir), reg, cfg, "dev", opts, ro)
+	if err != nil {
+		t.Fatalf("computePlan: %v", err)
+	}
+
+	// The observation reached the planner: the drift is what the plan
+	// proposes to correct. A merge-before-Compute refactor would not
+	// necessarily break this half, which is exactly why the second half
+	// below has to be asserted separately.
+	if !p.HasChanges() {
+		t.Fatal("plan proposes nothing against a drifted resource — the observation never reached the planner")
+	}
+	if got := ownerTag(t, p.Operations[0].Before); got != "intruder" {
+		t.Errorf("plan Before owner = %q, want the observed %q", got, "intruder")
+	}
+	if got := ownerTag(t, p.Operations[0].After); got != "platform" {
+		t.Errorf("plan After owner = %q, want the configured %q", got, "platform")
+	}
+	if seen, ok := obs["net"]; !ok || seen.State == nil {
+		t.Fatalf("computePlan returned no observation for net: %+v", obs)
+	} else if got := ownerTag(t, seen.State.Attributes); got != "intruder" {
+		t.Errorf("observed owner = %q, want %q", got, "intruder")
+	}
+
+	// THE GUARD. st is the last state persisted, and computePlan must hand
+	// it back exactly that way.
+	stored, ok := planState.Get(address.Address{Name: "net"})
+	if !ok {
+		t.Fatal("net is missing from the state computePlan returned")
+	}
+	if got := ownerTag(t, stored.Attributes); got != "platform" {
+		t.Errorf("state owner = %q after computePlan, want the last persisted %q — observations must NEVER be written into state before planner.Compute: st is both the left-hand side of the planner's diff and the document the executor persists, and folding reality into it collapses the first and falsifies the second", got, "platform")
+	}
+}
+
+// ownerTag reads attrs["tags"]["owner"] as a string, failing the test if the
+// shape is not what the fixture above builds.
+func ownerTag(t *testing.T, attrs map[string]value.Value) string {
+	t.Helper()
+	tags, ok := attrs["tags"].Raw.(map[string]value.Value)
+	if !ok {
+		t.Fatalf("tags is not a map: %#v", attrs["tags"])
+	}
+	owner, ok := tags["owner"].AsString()
+	if !ok {
+		t.Fatalf("tags.owner is not a string: %#v", tags["owner"])
+	}
+	return owner
 }
