@@ -110,11 +110,24 @@ func CarrySensitivityAttrs(dst, src map[string]Value) map[string]Value {
 }
 
 // HasSensitive reports whether a value, or any leaf inside a composite, is
-// marked sensitive.
+// marked sensitive. It is the ONE predicate for that question; internal
+// packages call it rather than keeping their own (see expressions.anySensitive).
 //
 // It recurses for the same reason Format does: a composite is not itself
 // marked when only one of its leaves is, so a top-level check alone would
 // report a map containing a password as carrying no sensitivity at all.
+//
+// A COMPOSITE WHOSE Raw DOES NOT HOLD WHAT ITS Kind CLAIMS COUNTS AS
+// SENSITIVE. It cannot be inspected, so its sensitivity is unknown, and a
+// check that cannot establish safety must deny rather than assume: over-
+// redacting a corrupt value is recoverable and leaking a secret is not.
+//
+// That direction is not a free choice here, because CarrySensitivity's early
+// return is this function. Answering false for a value it could not read
+// meant carrying nothing, which returned dst with a propagated secret's flag
+// dropped — the exact "silent decision to print something that may be a
+// secret" that function's own comment says it refuses to make. The two now
+// agree.
 func HasSensitive(v Value) bool {
 	if v.Sensitive {
 		return true
@@ -123,7 +136,7 @@ func HasSensitive(v Value) bool {
 	case KindMap:
 		m, ok := v.Raw.(map[string]Value)
 		if !ok {
-			return false
+			return true
 		}
 		for _, item := range m {
 			if HasSensitive(item) {
@@ -133,7 +146,7 @@ func HasSensitive(v Value) bool {
 	case KindList:
 		items, ok := v.Raw.([]Value)
 		if !ok {
-			return false
+			return true
 		}
 		if slices.ContainsFunc(items, HasSensitive) {
 			return true
