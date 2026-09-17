@@ -4174,6 +4174,22 @@ needs that 0 and 1 cannot carry:
 - **`1` stays "error"**: a backend that would not open, configuration that would not read. A
   question nobody could answer is never reported as "nothing to do".
 
+**141 is not one of these, and SIGPIPE is ignored so that it cannot become one.** Go lets
+SIGPIPE kill a process that writes to a broken fd 1 or 2, which is right for a cat-like
+filter and wrong for a command whose exit code is the product: `infrena plan dev | head -1`
+has to still say 2. `cmd/infrena` therefore ignores the signal, and the failed write returns
+an error that every stdout print site already discards — the reader left on purpose, which is
+its decision and not a failure infrena reports. A failed write to an `--output` FILE stays a
+real error and is still reported; the two cannot be confused, because `--output` routes
+stdout to `io.Discard`.
+
+It matters most for `apply`, which is why the proof is an integration test that runs the
+built binary with fd 1 on a closed pipe rather than a unit test over a fake writer: a signal
+kill walks past the state write the executor makes under `context.WithoutCancel` and past
+`withLockedEnvironment`'s release, so the run that died mid-flight left `.infra/state/<env>.lock`
+behind and blocked the next one. Progress output made it far likelier, because an apply now
+writes continuously instead of twice.
+
 ## 37.2 `--output`
 
 **`--output` silences stdout, for every command.** One rule, no exceptions: with the flag

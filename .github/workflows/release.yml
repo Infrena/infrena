@@ -131,6 +131,11 @@ jobs:
           # step with 141. Nothing is wrong with the binary when that happens: it is a
           # race between head exiting and the writer continuing, which is why three
           # releases passed before v0.6.2's did not.
+          #
+          # The binary no longer dies that way — cmd/infrena ignores SIGPIPE so its
+          # exit code survives a reader that leaves (PLAN.md 37.1). This stays as it
+          # is anyway: capturing whole depends on nothing about the binary, and this
+          # step is the one place that would rather not.
           all="$(/tmp/infrena version)"
           reported="${all%%$'\n'*}"
           echo "$reported"
