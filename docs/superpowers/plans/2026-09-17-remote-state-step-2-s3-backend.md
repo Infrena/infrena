@@ -15,10 +15,33 @@
 | **Backblaze B2** | **NO** |
 | Wasabi | unverified |
 
-**B2 failing is useful rather than inconvenient.** It is a real, popular store that genuinely
-cannot do a compare-and-swap, which makes it a far better test of the refusal path than any fake
-— and it is the reason the probe in Task 3 exists rather than a documentation note. A B2 user
-must be told clearly, by name, at configure time.
+**HOW B2 fails, measured against the real service on 2026-09-17** (endpoint
+`s3.us-west-000.backblazeb2.com`), because this corrects an assumption the first draft of this
+plan was built on:
+
+```
+PUT (If-None-Match: *) -> A header you provided implies functionality that is not implemented
+                          error code: "NotImplemented"
+```
+
+**B2 refuses the FIRST conditional write, loudly and immediately.** It does NOT silently
+overwrite. The first draft assumed the dangerous case — a store that ignores the header and
+reports success — and designed the probe around detecting that. Measuring found the friendlier
+behaviour instead.
+
+**Keep the two-write probe anyway.** It now covers two distinct failure modes rather than one:
+
+| Store behaviour | What the probe sees | Verdict |
+| --- | --- | --- |
+| Refuses write #1 with `NotImplemented` | error on the first write | refuse — this is B2 |
+| Accepts both writes | no error on either | refuse — the header was ignored, a lock here never locks |
+| Accepts #1, refuses #2 with `PreconditionFailed` | the expected refusal | accept |
+
+No store is currently known to do the middle one, but the probe costs one extra round trip at
+configure time and it is the case that fails silently, so it stays.
+
+**The refusal message should quote the store's own error.** B2's is genuinely informative —
+better than any generic "your store does not support locking" this plugin could invent.
 
 **Architecture:** A new repository, `infrena-backend-s3`, built the way `infrena-provider-aws` is built: its own module, its own dependency budget, compiled against a local infrena through a gitignored `go.work`. It implements `backend.Backend` from `pkg/backend` and is served by `pkg/backendsdk`. Locking is a conditional write (`If-None-Match: *`), and support for that is **proven at configure time, never assumed** — a store that ignores the header does not error, it silently overwrites, which is the corrupted-lock case.
 
@@ -233,12 +256,17 @@ is a secret and is refused, because this block is committed to git."
 - [ ] **Step 1: Write the failing test**
 
 ```go
-// THE POINT OF THIS TASK. A store that does not implement conditional writes
-// does NOT return an error for If-None-Match — it ignores the header and
-// overwrites, reporting success. So "does this store support compare and
-// swap" cannot be answered by reading its documentation or trusting a version
-// string. It has to be PROVEN, by writing a probe object twice and requiring
-// the second write to fail.
+// THE POINT OF THIS TASK. Two different stores fail two different ways, and
+// the probe has to catch both.
+//
+// Backblaze B2 refuses the FIRST conditional write with NotImplemented -
+// measured against the real service, not assumed. That is the loud, easy
+// case.
+//
+// The dangerous case is a store that IGNORES the header and overwrites,
+// reporting success, because that is a lock that never locks with no error
+// anywhere. No store is currently known to do it, but it costs one extra
+// round trip to rule out and it is the one that fails silently.
 //
 // If the second write succeeds, two applies can both take the same lock, and
 // invariant 5 is gone with no error anywhere.
@@ -337,7 +365,9 @@ Expected: FAIL — undefined.
 
 - [ ] **Step 3: Write minimal implementation**
 
-`proveConditionalWrites` writes `<path>/.infrena-probe-<random>` with `SetMatchETagExcept("*")`, writes it again the same way, and **requires the second to fail** with `PreconditionFailed`. Then deletes it. Run once, at configure time.
+`proveConditionalWrites` writes `<path>/.infrena-probe-<random>` with `SetMatchETagExcept("*")`, writes it again the same way, and requires **the first to succeed and the second to fail** with `PreconditionFailed`. Then deletes it. Run once, at configure time.
+
+An error on the first write means the store cannot do conditional writes at all — **quote its message**, because B2's `NotImplemented` says more than anything this plugin would write. Both writes succeeding means the header was ignored, which is the silent case, and the message has to explain that itself since the store said nothing.
 
 ```go
 // A store that does not implement conditional writes does not say so. It
