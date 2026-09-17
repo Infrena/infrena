@@ -53,48 +53,25 @@ var builtins = map[string]builtin{
 	"merge":   {arity: -1, fn: mergeFunc},
 }
 
-// sensitiveAnywhere reports whether a value, or any leaf inside it, is
-// sensitive. Sensitivity is a per-leaf property: a list is classified when any
+// anySensitive reports whether any argument contributes sensitivity, at any
+// depth: sensitivity is a per-leaf property, so a list is classified when any
 // element is, even when the list itself carries no flag.
-func sensitiveAnywhere(v value.Value) bool {
-	if v.Sensitive {
-		return true
-	}
-	switch v.Kind {
-	case value.KindList:
-		items, ok := v.Raw.([]value.Value)
-		if !ok {
-			// A value whose Raw does not match its Kind cannot be inspected.
-			// Its sensitivity is unknown, so classify it: over-redacting a
-			// corrupt value is recoverable, leaking a secret is not.
-			return true
-		}
-		if slices.ContainsFunc(items, sensitiveAnywhere) {
-			return true
-		}
-	case value.KindMap:
-		m, ok := v.Raw.(map[string]value.Value)
-		if !ok {
-			return true
-		}
-		for _, item := range m {
-			if sensitiveAnywhere(item) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-// anySensitive reports whether any argument contributes sensitivity.
 //
 // Every built-in whose result derives from all its arguments uses this rather
 // than hand-writing its own union. Hand-written unions are how this shipped
 // wrong twice: join() omitted its separator, and replace() omitted its search
 // string — which let a secret search term reveal its own position through an
 // unclassified result.
+//
+// The recursion itself lives in value.HasSensitive rather than here. This
+// package used to keep its own copy, sensitiveAnywhere, identical except that
+// it treated a composite whose Raw did not match its Kind as sensitive while
+// value.HasSensitive treated it as clean. Two predicates answering one
+// question two ways is a classification that depends on which path reached the
+// value, and the safer of the two answers had been given to the less dangerous
+// caller. There is one now.
 func anySensitive(args ...value.Value) bool {
-	return slices.ContainsFunc(args, sensitiveAnywhere)
+	return slices.ContainsFunc(args, value.HasSensitive)
 }
 
 // stringFunc lifts a string transform into a Func, preserving sensitivity:

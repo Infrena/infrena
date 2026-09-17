@@ -146,6 +146,31 @@ func evaluateConcat(e *value.Expr, scope Scope, ds *diag.Diagnostics) value.Valu
 		WithOrigin(e.Origin)
 }
 
+// SENSITIVITY IN THIS FILE IS A TOP-LEVEL UNION, ON PURPOSE.
+//
+// evaluateConcat and evaluateCall below both accumulate `sensitive` from each
+// argument's own Sensitive flag rather than from value.HasSensitive, and that
+// reads like the bug it is not. The reasoning, so that nobody makes it
+// "consistent" and quietly breaks redaction:
+//
+//   - Concatenation produces a STRING, and a composite argument cannot be
+//     interpolated into one at all — it is refused with a diagnostic. Every
+//     argument that actually contributes is a scalar, where the top-level flag
+//     is the only flag there is.
+//
+//   - A call's result is classified by the function, in funcs.go, using
+//     anySensitive — which IS recursive. What this file adds on top is a
+//     union that cannot be narrower than the function's own, so for every
+//     built-in that returns a string it changes nothing.
+//
+//   - merge() is the exception and the reason this must stay top-level. It
+//     returns a MAP and deliberately classifies per leaf, pushing a sensitive
+//     source map's flag down onto the entries it contributed rather than
+//     marking the result whole. Widening `sensitive` to HasSensitive would
+//     mark the whole merged map sensitive whenever any leaf anywhere in any
+//     argument was, redacting every key to protect one — the over-redaction
+//     funcs.go's TestFunctionsDoNotClassifyValuesThatAreNotSensitive exists
+//     to catch, arrived at from the direction that looks like a fix.
 func evaluateCall(e *value.Expr, scope Scope, ds *diag.Diagnostics) value.Value {
 	fn, _, ok := Lookup(e.Function)
 	if !ok {

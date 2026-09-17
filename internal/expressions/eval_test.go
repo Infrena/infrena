@@ -405,3 +405,45 @@ func TestDefaultsUnknownFallbackDeferralStillCarriesTheWholeCall(t *testing.T) {
 		t.Errorf("arg[0] op = %v, want OpVarRef — the blank primary is not folded here", op)
 	}
 }
+
+// TestMergeThroughTheEvaluatorStaysPerLeaf guards the one place where making
+// this file's sensitivity union recursive would be a regression rather than a
+// fix.
+//
+// merge() returns a map and classifies per leaf on purpose: a map holding one
+// secret and four ordinary keys must redact the one, not all five. The
+// evaluator then ORs its own argument union onto the result. That union is
+// top-level, so a secret sitting INSIDE an argument map does not mark the
+// whole result — it stays on the leaf, where value.Format redacts it.
+//
+// Widen the union to value.HasSensitive and this test fails, which is the
+// point: the change looks like a consistency fix and costs every merged map
+// its readability.
+func TestMergeThroughTheEvaluatorStaysPerLeaf(t *testing.T) {
+	scope := compileScope()
+	scope.vars["creds"] = value.Map(map[string]value.Value{
+		"password": value.String("hunter2", value.SourceVariable).WithSensitive(true),
+	}, value.SourceVariable)
+	scope.vars["labels"] = value.Map(map[string]value.Value{
+		"team": value.String("platform", value.SourceVariable),
+	}, value.SourceVariable)
+
+	got, ds := evalSrc(t, "${merge(var.creds, var.labels)}", scope)
+	if ds.HasErrors() {
+		t.Fatalf("merge did not evaluate: %v", ds)
+	}
+	if got.Sensitive {
+		t.Error("the whole merged map was classified; one secret leaf must not redact every key")
+	}
+
+	entries, ok := got.Raw.(map[string]value.Value)
+	if !ok {
+		t.Fatalf("merge returned %T, want a map", got.Raw)
+	}
+	if !entries["password"].Sensitive {
+		t.Error("the secret leaf lost its flag, which prints it in clear")
+	}
+	if entries["team"].Sensitive {
+		t.Error("an ordinary leaf was classified alongside the secret one")
+	}
+}

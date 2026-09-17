@@ -108,13 +108,20 @@ func TestMalformedCompositeIsTreatedAsSensitive(t *testing.T) {
 	// A value whose Kind claims list but whose Raw is not one cannot be
 	// inspected. A security check that cannot verify safety must deny, not
 	// assume: over-redacting is recoverable, leaking is not.
+	//
+	// Asserted through anySensitive rather than the predicate directly,
+	// because the predicate now lives in pkg/value and has its own test
+	// there. What this pins is that the classification the built-ins get is
+	// still the conservative one after the two predicates were collapsed into
+	// one — the merge went the other way round for a moment and this is the
+	// test that would have caught it.
 	malformed := value.Value{Kind: value.KindList, Known: true, Raw: "not a list", Source: value.SourceExplicit}
-	if !sensitiveAnywhere(malformed) {
+	if !anySensitive(malformed) {
 		t.Error("a malformed composite must be treated as sensitive — the check could not inspect it")
 	}
 
 	malformedMap := value.Value{Kind: value.KindMap, Known: true, Raw: 42, Source: value.SourceExplicit}
-	if !sensitiveAnywhere(malformedMap) {
+	if !anySensitive(malformedMap) {
 		t.Error("a malformed map must be treated as sensitive")
 	}
 }
@@ -162,7 +169,8 @@ func TestNamesIsSortedAndComplete(t *testing.T) {
 // asserts only that secrets are NOT shown. Nothing asserted that non-secrets
 // ARE, so sensitivity was pinned in one direction only.
 //
-// Measured before this test existed: forcing sensitiveAnywhere to return true
+// Measured before this test existed: forcing the sensitivity predicate to
+// return true
 // left the ENTIRE suite green, while the real binary rendered
 // `cidr: ${upper("10.0.0.0/16")}` as `cidr: <sensitive>` instead of
 // `cidr: "10.0.0.0/16"`. Over-classification is not a security bug — it is the

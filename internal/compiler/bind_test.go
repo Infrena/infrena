@@ -25,7 +25,7 @@ func scopeFor(t *testing.T, opts Options) variables.Scope {
 	if ds.HasErrors() {
 		t.Fatalf("fixture chain: %+v", ds)
 	}
-	scope, ds := variables.Resolve(nil, chain, nil, nil, opts.Vars)
+	scope, ds, _ := variables.Resolve(nil, chain, nil, nil, opts.Vars)
 	if ds.HasErrors() {
 		t.Fatalf("fixture scope: %+v", ds)
 	}

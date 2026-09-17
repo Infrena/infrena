@@ -151,7 +151,37 @@ func TestHasSensitiveFindsALeafInsideAComposite(t *testing.T) {
 	if HasSensitive(Map(map[string]Value{"host": String("db", SourceExplicit)}, SourceExplicit)) {
 		t.Error("HasSensitive reported sensitivity in a map that has none")
 	}
-	if HasSensitive(Value{Kind: KindMap, Known: true, Raw: "not a map"}) {
-		t.Error("HasSensitive trusted Kind over Raw")
+	// A composite it cannot inspect counts as sensitive, and this assertion
+	// used to read the other way — it asserted that a Kind/Raw mismatch was
+	// clean, on the reasoning that HasSensitive must not trust Kind over Raw.
+	// It does not trust it; it declines to certify either. The caller that
+	// settles the direction is CarrySensitivity, whose early return is this
+	// function: answering false there dropped a propagated secret's flag and
+	// printed it, which is the failure the conservative answer exists to
+	// avoid. internal/expressions had been answering true for the same input
+	// all along.
+	if !HasSensitive(Value{Kind: KindMap, Known: true, Raw: "not a map"}) {
+		t.Error("a composite whose Raw does not match its Kind cannot be inspected and must count as sensitive")
+	}
+	if !HasSensitive(Value{Kind: KindList, Known: true, Raw: 42}) {
+		t.Error("a malformed list must count as sensitive too")
+	}
+}
+
+// TestCarrySensitivityDoesNotGiveUpOnAValueItCannotRead pins the behaviour
+// CarrySensitivity's doc comment promises and its early return used to break.
+//
+// src's Kind says map and its Raw is not one, so nothing can be matched leaf
+// by leaf. The documented answer is to mark dst sensitive whole; the answer
+// before HasSensitive was made conservative was to return dst untouched,
+// because the early return asked "is src sensitive anywhere?" of a value it
+// could not read and was told no. A propagated secret arriving back from a
+// provider in a shape the engine did not expect was printed in clear.
+func TestCarrySensitivityDoesNotGiveUpOnAValueItCannotRead(t *testing.T) {
+	src := Value{Kind: KindMap, Known: true, Raw: "not a map", Source: SourceProvider}
+	dst := String("hunter2", SourceProvider)
+
+	if got := CarrySensitivity(dst, src); !got.Sensitive {
+		t.Error("a src that could not be inspected left dst unclassified")
 	}
 }
