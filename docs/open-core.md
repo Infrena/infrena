@@ -80,6 +80,21 @@ Two things make that harder to do here, deliberately:
 Infrena also gives away more than Terraform did at the equivalent point: remote state was the
 hook into Terraform Cloud, whereas here S3 state, locking included, is free and always will be.
 
+## The platform is a separate project
+
+**James, 2026-09-17: "The paid feature stuff is another project entirely, and does not apply to
+infrena core except where we draw the line on functionality."**
+
+So this document is the ONLY place the commercial product touches this repository. There is no
+platform code here, no hooks for one, and no feature in the CLI shaped to leave room for one. The
+line above is the whole of the relationship.
+
+That is worth stating because the usual way open core goes wrong is not a dramatic relicensing —
+it is a slow accumulation of seams, stubs and "we'll need this for the hosted version" decisions
+inside the free tool, until the free tool is shaped around a product its users cannot see. A
+reviewer who finds something in this repository that only makes sense if you know about the
+platform should treat it as a defect.
+
 ## Changing this document
 
 Adding to the paid list is allowed when the addition is genuinely new. **Moving something from
