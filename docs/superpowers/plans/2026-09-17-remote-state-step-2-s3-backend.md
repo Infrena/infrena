@@ -62,7 +62,7 @@ better than any generic "your store does not support locking" this plugin could 
 - `gofmt -l .`, `go vet ./...` clean; `go test ./...` green.
 - Commit messages: plain English, no em-dashes, minimal, **never** mention Claude, AI or the model. Each ends with `Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>`.
 
-**THE LESSON THIS PLAN IS BUILT AROUND.** Three times in the last two days, a fully green suite hid a bug that one run against a real service found immediately: five plugin-search bugs against a fake GitHub, an extractor that rejected every real archive, and an RDS engine version that no fake could have produced. **A test against a double proves your code does what you think, not that the store agrees.** Task 5 runs the whole backend against a real MinIO, and Task 7 against at least one non-MinIO store. Neither is optional and no task may be reported complete on unit tests alone.
+**THE LESSON THIS PLAN IS BUILT AROUND.** Three times in the last two days, a fully green suite hid a bug that one run against a real service found immediately: five plugin-search bugs against a fake GitHub, an extractor that rejected every real archive, and an RDS engine version that no fake could have produced. **A test against a double proves your code does what you think, not that the store agrees.** Task 6 runs the whole backend against a real MinIO, and Task 8 against at least one non-MinIO store. Neither is optional and no task may be reported complete on unit tests alone.
 
 ---
 
@@ -504,7 +504,126 @@ lock files beside them do not appear as environments of their own.
 
 ---
 
-## Task 5: Against a real MinIO
+## Task 5: A conformance suite, in the infrena repository
+
+**THIS ONE TASK IS IN `~/projects/infrena`, NOT the backend repo.** It ships in infrena so that every backend author gets it, and the S3 backend is simply its first consumer.
+
+### Why a conformance suite rather than a test harness
+
+A backend author has three things they could test, and only one is worth anyone's time:
+
+1. **Their seven methods behave** — ordinary Go unit tests. No harness needed.
+2. **Their binary speaks the protocol** — this is what a `pkg/plugintest` equivalent would give them. But the transport is entirely `pkg/backendsdk`'s code, so testing it per-backend tests INFRENA's code, once per backend, forever. It catches nothing infrena's own SDK tests do not.
+3. **Their backend satisfies the contract's SEMANTICS** — a second lock is refused, `Put` without a lock is refused, `Get` of a never-written environment is empty rather than an error, `List` excludes lock objects, a conflict names its holder.
+
+**Only 3 is missing, and it is where a wrong backend does real damage**: every item on that list, implemented wrongly, corrupts state silently rather than erroring.
+
+It is also the same idea as the host adapter for providers — which exists because a third-party binary cannot be held to a doc comment (§31.1). "Every backend must lock" is currently enforced only at the type level: you cannot compile without the methods, and nothing checks that they actually EXCLUDE. This checks it.
+
+**Files:**
+- Create: `pkg/backendtest/conformance.go`, `pkg/backendtest/conformance_test.go`
+
+**Interfaces:**
+- Produces: `func Conformance(t *testing.T, newBackend func(t *testing.T) backend.Backend)`
+
+- [ ] **Step 1: Write the failing test — the suite's own proof**
+
+A conformance suite that passes everything is worthless, so the suite is tested against backends that are deliberately wrong. **Every check must be shown to fail against an implementation that violates exactly that check, and nothing else.**
+
+```go
+// A correct backend passes.
+func TestConformancePassesACorrectBackend(t *testing.T) {
+	Conformance(t, func(t *testing.T) backend.Backend { return newMemoryBackend() })
+}
+
+// And every check catches the one thing it is for. Each broken backend
+// violates exactly one rule, so a check that fires on the wrong one is as
+// visible as a check that does not fire at all.
+func TestEveryConformanceCheckCatchesItsOwnViolation(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		broken func() backend.Backend
+		expect string
+	}{
+		{"a lock that does not exclude", func() backend.Backend { return &brokenBackend{lockAlwaysSucceeds: true} }, "second lock"},
+		{"a write with no lock held", func() backend.Backend { return &brokenBackend{putWithoutLock: true} }, "not locked"},
+		{"a missing environment erroring", func() backend.Backend { return &brokenBackend{missingIsError: true} }, "never written"},
+		{"listing that includes lock objects", func() backend.Backend { return &brokenBackend{listIncludesLocks: true} }, "lock"},
+		{"state altered in transit", func() backend.Backend { return &brokenBackend{mangleState: true} }, "byte"},
+		{"a conflict that does not name its holder", func() backend.Backend { return &brokenBackend{anonymousConflict: true} }, "holder"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := &recordingT{}
+			Conformance(fake, func(*testing.T) backend.Backend { return tc.broken() })
+
+			if !fake.failed {
+				t.Fatalf("conformance passed a backend that %s", tc.name)
+			}
+			if !strings.Contains(strings.ToLower(fake.log()), tc.expect) {
+				t.Errorf("failure does not name the violation %q:\n%s", tc.expect, fake.log())
+			}
+		})
+	}
+}
+```
+
+`recordingT` captures failures instead of failing the outer test — check whether the standard library offers a way to do this before writing one; `testing.T` cannot be constructed, so `Conformance` should take a small interface (`Errorf`, `Fatalf`, `Helper`, `Run`) that `*testing.T` satisfies. Say in your reply which shape you used.
+
+`brokenBackend` is a correct in-memory backend with one switch each. Keep them independent — a broken backend that violates two rules cannot prove which check fired.
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `go test ./pkg/backendtest/ -v`
+Expected: FAIL — package does not exist.
+
+- [ ] **Step 3: Write minimal implementation**
+
+```go
+// Package backendtest checks that a state backend obeys the contract, and is
+// the thing a backend author runs against their own implementation.
+//
+// IT TESTS SEMANTICS, NOT TRANSPORT. Whether a plugin speaks the protocol
+// correctly is pkg/backendsdk's business, and testing it once per backend
+// would test infrena's code rather than the author's. What differs between
+// backends, and what silently corrupts state when it is wrong, is whether a
+// second lock is actually refused and whether a write without one is.
+//
+// "Every backend must lock" (spec §5) is enforced at the type level today:
+// a backend without the methods does not compile. Nothing checks the methods
+// EXCLUDE. This does, which is the same reason internal/pluginhost's adapter
+// enforces what the engine will not trust a provider to honour — a
+// third-party binary cannot be held to a doc comment.
+```
+
+Each check is its own function with a name that says what it proves, so a failure names the rule rather than a line number.
+
+- [ ] **Step 4: Run tests to verify they pass**
+
+Run: `INFRENA_REQUIRE_PLUGIN=1 go test -count=1 ./... 2>&1 | tail -5`
+Expected: PASS. Also wire it into `pkg/backendsdk`'s own tests so the reference in-memory backend runs it — **the suite must have a consumer inside infrena, or it is a code path the default does not exercise**, which is how the last four of these rotted.
+
+- [ ] **Step 5: Commit in the INFRENA repo**
+
+```bash
+cd ~/projects/infrena
+gofmt -l . && go vet ./...
+git add pkg/backendtest pkg/backendsdk
+git commit -m "Let a backend check that it obeys the contract
+
+Locking is enforced at the type level today, so a backend without the
+methods does not compile and one whose methods never exclude does. Every
+check is proven against a backend that breaks exactly that rule."
+```
+
+**Versioning note for whoever tags next:** this adds a public package and no format version. By §61's letter that is a patch, since nothing an existing project does changes. Adding public API in a patch is unusual enough to be worth a deliberate decision rather than a default — raise it rather than assuming.
+
+- [ ] **Step 6: Run it from the S3 backend**
+
+Back in `~/projects/infrena-backend-s3`, add a test calling `backendtest.Conformance` against the S3 backend pointed at MinIO. This is Task 6's territory for the live plumbing, but the call belongs here so the suite gains its real consumer immediately.
+
+---
+
+## Task 6: Against a real MinIO
 
 **MANDATORY. A green unit suite is not evidence the store agrees.**
 
@@ -559,7 +678,7 @@ because its map is guarded by a mutex the real store does not have."
 
 ---
 
-## Task 6: End to end, driven by infrena
+## Task 7: End to end, driven by infrena
 
 **Files:**
 - Create: `e2e/` following `infrena-provider-aws`'s e2e arrangement
@@ -591,7 +710,7 @@ exercised both through a command until there was a backend to run.
 
 ---
 
-## Task 7: A second store, then ship
+## Task 8: A second store, then ship
 
 **Files:** `README.md`, `plugin.yaml`, `.github/workflows/`, `docs/`
 
