@@ -319,7 +319,7 @@ func TestInstallRefusesWhenTheReleasePublishesNoArchiveForThisPlatform(t *testin
 	if code == ExitOK {
 		t.Fatal("install succeeded with no archive for this machine")
 	}
-	if !strings.Contains(stderr, remote.AssetName("aws", "0.4.0", currentPlatform())) {
+	if !strings.Contains(stderr, remote.AssetName(providerBinary("aws"), "0.4.0", currentPlatform())) {
 		t.Errorf("refusal does not name the archive that is missing:\n%s", stderr)
 	}
 	if n := installedBinaries(t, dir); n != 0 {
@@ -427,6 +427,223 @@ func TestVerifyFailsWhenALockedBinaryIsMissing(t *testing.T) {
 	}
 }
 
+// THE KIND COMES FROM THE PROJECT, because the project already said.
+//
+// A name declared only as a backend installs the backend, without asking and
+// without a flag. Asking a user to repeat what infra.yml already says is asking
+// them to keep two places in step.
+func TestInstallResolvesTheKindFromTheProject(t *testing.T) {
+	dir := newProjectWithBackend(t, "s3")
+	trustSources(t)
+	srv := fakeGitHubServingBothKinds(t, "s3")
+	t.Setenv("INFRENA_GITHUB_API", srv.URL)
+
+	stdout, stderr, code := runCommandWithStdin(t, dir, "", "plugins", "install", "s3")
+
+	if code != ExitOK {
+		t.Fatalf("exit = %d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	// It must say which it chose, because it chose without being told.
+	if !strings.Contains(stdout, "backend") {
+		t.Errorf("output does not say which kind was installed:\n%s", stdout)
+	}
+	if !installedBinaryExists(t, dir, "infrena-backend-s3") {
+		t.Error("the backend binary was not installed")
+	}
+	if installedBinaryExists(t, dir, "infrena-plugin-s3") {
+		t.Error("a provider was installed and nothing asked for one")
+	}
+}
+
+// The lock entry `plugins list` reads a backend's version from is the
+// repository's name, not the bare one: a provider s3 and a backend s3 are two
+// binaries and cannot share a key.
+func TestInstallingABackendRecordsItUnderItsOwnLockKey(t *testing.T) {
+	dir := newProjectWithBackend(t, "s3")
+	trustSources(t)
+	srv := fakeGitHubServingBothKinds(t, "s3")
+	t.Setenv("INFRENA_GITHUB_API", srv.URL)
+
+	if _, stderr, code := runCommandWithStdin(t, dir, "", "plugins", "install", "s3"); code != ExitOK {
+		t.Fatalf("exit = %d\n%s", code, stderr)
+	}
+
+	l, err := plugins.ReadLockfile(dir)
+	if err != nil || l == nil {
+		t.Fatalf("no lockfile written: %v", err)
+	}
+	e, ok := l.Plugins[backendhost.LockKey("s3")]
+	if !ok || e.Version != "1.0.0" {
+		t.Fatalf("lock entry under %q = %+v", backendhost.LockKey("s3"), e)
+	}
+	if _, ok := l.Plugins["s3"]; ok {
+		t.Error("a backend was recorded under the bare name, where a provider of that name belongs")
+	}
+}
+
+// `verify` has to accept what install just wrote, whichever kind it was. The
+// lock key is the repository's name and the binary on disk is
+// infrena-backend-s3, so a verify that looked up every entry as a provider
+// would report a backend it had just installed as missing.
+func TestVerifyPassesAfterInstallingABackend(t *testing.T) {
+	dir := newProjectWithBackend(t, "s3")
+	trustSources(t)
+	srv := fakeGitHubServingBothKinds(t, "s3")
+	t.Setenv("INFRENA_GITHUB_API", srv.URL)
+
+	if _, stderr, code := runCommandWithStdin(t, dir, "", "plugins", "install", "s3"); code != ExitOK {
+		t.Fatalf("install: exit = %d\n%s", code, stderr)
+	}
+
+	stdout, stderr, code := runCommand(t, dir, "plugins", "verify")
+	if code != ExitOK {
+		t.Fatalf("verify after installing a backend: exit = %d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	if !strings.Contains(stdout, "s3") {
+		t.Errorf("verify does not mention the backend it checked:\n%s", stdout)
+	}
+}
+
+// A project naming both needs both. That is not choosing between them, it is
+// doing what was asked.
+func TestInstallInstallsBothWhenTheProjectNeedsBoth(t *testing.T) {
+	dir := newProjectWithProviderAndBackend(t, "s3")
+	trustSources(t)
+	srv := fakeGitHubServingBothKinds(t, "s3")
+	t.Setenv("INFRENA_GITHUB_API", srv.URL)
+
+	_, stderr, code := runCommandWithStdin(t, dir, "", "plugins", "install", "s3")
+
+	if code != ExitOK {
+		t.Fatalf("exit = %d\n%s", code, stderr)
+	}
+	if !installedBinaryExists(t, dir, "infrena-backend-s3") || !installedBinaryExists(t, dir, "infrena-plugin-s3") {
+		t.Error("a project naming both did not get both")
+	}
+}
+
+// With no project to ask and both kinds published, infrena must NOT pick. It
+// is the same rule as two owners answering one name: choosing silently gives
+// the user a thing they did not name.
+func TestInstallRefusesToGuessWhenThereIsNoProjectToAsk(t *testing.T) {
+	dir := t.TempDir() // deliberately not a project
+	trustSources(t)
+	srv := fakeGitHubServingBothKinds(t, "s3")
+	t.Setenv("INFRENA_GITHUB_API", srv.URL)
+
+	_, stderr, code := runCommandWithStdin(t, dir, "", "plugins", "install", "s3", "--global")
+
+	if code == ExitOK {
+		t.Fatal("install guessed a kind with nothing to go on")
+	}
+	for _, want := range []string{"provider", "backend", "--kind"} {
+		if !strings.Contains(stderr, want) {
+			t.Errorf("refusal does not offer %q:\n%s", want, stderr)
+		}
+	}
+}
+
+// --kind is the fallback for exactly that case.
+func TestKindFlagResolvesTheAmbiguity(t *testing.T) {
+	dir := t.TempDir()
+	trustSources(t)
+	srv := fakeGitHubServingBothKinds(t, "s3")
+	t.Setenv("INFRENA_GITHUB_API", srv.URL)
+
+	_, stderr, code := runCommandWithStdin(t, dir, "", "plugins", "install", "s3", "--global", "--kind", "backend")
+
+	if code != ExitOK {
+		t.Fatalf("exit = %d\n%s", code, stderr)
+	}
+}
+
+// An unambiguous name needs no flag and no project: only one thing is called
+// hetzner, so there is nothing to disambiguate.
+func TestAnUnambiguousNameNeedsNoProjectAndNoFlag(t *testing.T) {
+	dir := t.TempDir()
+	trustSources(t)
+	srv := fakeGitHubServingOneBackend(t, "hetzner")
+	t.Setenv("INFRENA_GITHUB_API", srv.URL)
+
+	_, stderr, code := runCommandWithStdin(t, dir, "", "plugins", "install", "hetzner", "--global")
+
+	if code != ExitOK {
+		t.Fatalf("a name with only one candidate was refused: exit %d\n%s", code, stderr)
+	}
+}
+
+// --kind naming something that does not exist is an error saying so, not a
+// silent fall back to the other kind.
+func TestKindFlagForAKindThatDoesNotExistIsAnError(t *testing.T) {
+	dir := t.TempDir()
+	trustSources(t)
+	srv := fakeGitHubServingOneBackend(t, "hetzner")
+	t.Setenv("INFRENA_GITHUB_API", srv.URL)
+
+	_, stderr, code := runCommandWithStdin(t, dir, "", "plugins", "install", "hetzner", "--global", "--kind", "provider")
+
+	if code == ExitOK {
+		t.Fatal("asking for a provider installed a backend")
+	}
+	if !strings.Contains(stderr, "backend") {
+		t.Errorf("error does not say what DOES exist:\n%s", stderr)
+	}
+}
+
+// A --kind nobody can act on is refused before a single request, naming the two
+// words that are accepted.
+func TestAKindThatIsNeitherWordIsRefused(t *testing.T) {
+	dir := t.TempDir()
+	trustSources(t)
+
+	_, stderr, code := runCommandWithStdin(t, dir, "", "plugins", "install", "s3", "--global", "--kind", "plugin")
+
+	if code == ExitOK {
+		t.Fatal("an unrecognised --kind was accepted")
+	}
+	for _, want := range []string{"provider", "backend"} {
+		if !strings.Contains(stderr, want) {
+			t.Errorf("refusal does not name %q as a choice:\n%s", want, stderr)
+		}
+	}
+}
+
+// newProjectWithBackend is a project whose state lives in a backend of this
+// name and which declares no provider at all, so the only kind it can mean is
+// the backend.
+func newProjectWithBackend(t *testing.T, name string) string {
+	t.Helper()
+	return projectDir(t, fmt.Sprintf(`
+project: myapp
+backend:
+  plugin: %s
+  bucket: acme-state
+`, name))
+}
+
+// newProjectWithProviderAndBackend names one plugin twice, once as each kind,
+// which is a project that needs two binaries rather than a project that is
+// ambiguous.
+func newProjectWithProviderAndBackend(t *testing.T, name string) string {
+	t.Helper()
+	return projectDir(t, fmt.Sprintf(`
+project: myapp
+providers:
+  - plugin: %s
+backend:
+  plugin: %s
+  bucket: acme-state
+`, name, name))
+}
+
+// installedBinaryExists reports whether one named binary reached the project's
+// plugin directory, which is where the loader was already looking.
+func installedBinaryExists(t *testing.T, dir, binary string) bool {
+	t.Helper()
+	info, err := os.Stat(filepath.Join(dir, ".infra", "plugins", binary))
+	return err == nil && !info.IsDir()
+}
+
 // newProjectNamingSource is a project that NAMES a source for a plugin, which
 // is the case the trust rule exists for: the file is committed and travels with
 // a `git clone`.
@@ -488,7 +705,7 @@ func fakeGitHubServingTamperedArchive(t *testing.T, owner, name, version string)
 	t.Helper()
 	f := installableForge(t, owner, name, version, archiveFor(t, name, version), true)
 	release := fmt.Sprintf("%s/%s%s@v%s", owner, plugins.RepoPrefix, name, version)
-	asset := remote.AssetName(name, version, currentPlatform())
+	asset := realAssetName(providerBinary(name), version)
 	// The checksums file already covers the honest archive; only the bytes are
 	// swapped, so the mismatch is discovered by verification and nowhere else.
 	f.releases[release][asset] = tarGz(t, map[string]string{
@@ -503,7 +720,7 @@ func fakeGitHubServingOtherPlatformOnly(t *testing.T, owner, name, version strin
 	t.Helper()
 	f := installableForge(t, owner, name, version, archiveFor(t, name, version), true)
 	release := fmt.Sprintf("%s/%s%s@v%s", owner, plugins.RepoPrefix, name, version)
-	delete(f.releases[release], remote.AssetName(name, version, currentPlatform()))
+	delete(f.releases[release], realAssetName(providerBinary(name), version))
 	f.releases[release][remote.ChecksumsName] = []byte(
 		"0000000000000000000000000000000000000000000000000000000000000000  ./" +
 			name + "_" + version + "_elsewhere_amd64.tar.gz\n")
@@ -525,10 +742,10 @@ func fakeGitHubServingTwoOwners(t *testing.T, name, version string) *httptest.Se
 // only to a user typing a bare name.
 func fakeGitHubServingBothKinds(t *testing.T, name string) *httptest.Server {
 	t.Helper()
-	p := installableRepoForge(t, "infrena", plugins.ProviderRepoPrefix+name, name, "2.0.0",
-		archiveOf(t, pluginhost.BinaryName(name), name, "2.0.0"), true)
-	b := installableRepoForge(t, "infrena", plugins.BackendRepoPrefix+name, name, "1.0.0",
-		archiveOf(t, backendhost.BinaryName(name), name, "1.0.0"), true)
+	p := installableRepoForge(t, "infrena", plugins.ProviderRepoPrefix+name, providerBinary(name), name, "2.0.0",
+		archiveOf(t, providerBinary(name), "2.0.0"), true)
+	b := installableRepoForge(t, "infrena", plugins.BackendRepoPrefix+name, backendBinary(name), name, "1.0.0",
+		archiveOf(t, backendBinary(name), "1.0.0"), true)
 	return fakeForge(t, mergeForges(p, b))
 }
 
@@ -557,18 +774,19 @@ func mergeForges(a, b forge) forge {
 // manifest that says the release can run here.
 func installableForge(t *testing.T, owner, name, version string, archive []byte, isOrg bool) forge {
 	t.Helper()
-	return installableRepoForge(t, owner, plugins.ProviderRepoPrefix+name, name, version, archive, isOrg)
+	return installableRepoForge(t, owner, plugins.ProviderRepoPrefix+name, providerBinary(name), name, version, archive, isOrg)
 }
 
-// installableRepoForge is installableForge with the repository named
-// explicitly, which is what lets a backend repository be published the same
-// way. The REPOSITORY NAME carries the role; everything else here is identical,
-// because a release is a release.
-func installableRepoForge(t *testing.T, owner, repo, name, version string, archive []byte, isOrg bool) forge {
+// installableRepoForge is installableForge with the repository and the binary
+// it ships named explicitly, which is what lets a backend repository be
+// published the same way. The REPOSITORY NAME carries the role and the BINARY
+// NAME follows from it; everything else here is identical, because a release is
+// a release.
+func installableRepoForge(t *testing.T, owner, repo, binary, name, version string, archive []byte, isOrg bool) forge {
 	t.Helper()
 	tag := "v" + version
 	here := fmt.Sprintf("%s/%s", runtime.GOOS, runtime.GOARCH)
-	asset := remote.AssetName(name, version, currentPlatform())
+	asset := realAssetName(binary, version)
 
 	f := forge{
 		orgs:     map[string]bool{},
@@ -599,18 +817,76 @@ func installableRepoForge(t *testing.T, owner, repo, name, version string, archi
 // release could satisfy.
 func archiveFor(t *testing.T, name, version string) []byte {
 	t.Helper()
-	return archiveOf(t, pluginhost.BinaryName(name), name, version)
+	return archiveOf(t, providerBinary(name), version)
 }
 
 // archiveOf is archiveFor for whichever binary the release ships, so a backend
-// release can be built the same way a provider one is.
-func archiveOf(t *testing.T, binary, name, version string) []byte {
+// release can be built the same way a provider one is. The directory inside is
+// named after the BINARY, which is what both release scripts do:
+// infrena-backend-s3_1.0.0_linux_amd64/infrena-backend-s3.
+func archiveOf(t *testing.T, binary, version string) []byte {
 	t.Helper()
 	dir := fmt.Sprintf("%s_%s_%s_%s", binary, version, runtime.GOOS, runtime.GOARCH)
+	file := binary
+	if runtime.GOOS == "windows" {
+		file += ".exe"
+	}
 	return tarGz(t, map[string]string{
 		dir + "/README.md": "docs",
-		dir + "/" + binary: "#!/bin/sh\nexit 0\n",
+		dir + "/" + file:   "#!/bin/sh\nexit 0\n",
 	})
+}
+
+// providerBinary and backendBinary are the executables the two kinds of release
+// ship, and realAssetName is the archive that carries one.
+//
+// WRITTEN OUT HERE RATHER THAN ASKED OF THE CODE UNDER TEST. remote.AssetName
+// is precisely what these tests check, so a fake that named its assets by
+// calling it would serve whatever the code asked for and would pass whatever
+// the code did - which is how a hardcoded infrena-plugin- prefix went on
+// constructing a backend archive no release publishes.
+//
+// Verified against real releases: infrena-plugin-aws_0.4.0_linux_amd64.tar.gz
+// from .github/workflows/release.yml, and infrena-backend-s3's own
+// scripts/build-release, which names its archives
+// infrena-backend-s3_<version>_<goos>_<goarch> and puts
+// infrena-backend-s3 inside a directory of that same name. Windows is a .zip in
+// both.
+func providerBinary(name string) string { return "infrena-plugin-" + name }
+
+func backendBinary(name string) string { return "infrena-backend-" + name }
+
+func realAssetName(binary, version string) string {
+	ext := ".tar.gz"
+	if runtime.GOOS == "windows" {
+		ext = ".zip"
+	}
+	return fmt.Sprintf("%s_%s_%s_%s%s", binary, version, runtime.GOOS, runtime.GOARCH, ext)
+}
+
+// backendForge is one owner publishing one backend repository, released the
+// same way a provider is.
+func backendForge(t *testing.T, owner, name, version string) forge {
+	t.Helper()
+	return installableRepoForge(t, owner, plugins.BackendRepoPrefix+name, backendBinary(name), name, version,
+		archiveOf(t, backendBinary(name), version), true)
+}
+
+// fakeGitHubServingOneBackend is a name only ONE thing answers to, and that one
+// thing is a backend. There is nothing to disambiguate, so nothing may be asked.
+func fakeGitHubServingOneBackend(t *testing.T, name string) *httptest.Server {
+	t.Helper()
+	return fakeForge(t, backendForge(t, "infrena", name, "1.0.0"))
+}
+
+// fakeGitHubServingAll is the official owner publishing everything the bare
+// install fixtures name: two providers and one backend.
+func fakeGitHubServingAll(t *testing.T) *httptest.Server {
+	t.Helper()
+	f := installableForge(t, "infrena", "aws", "0.4.0", archiveFor(t, "aws", "0.4.0"), true)
+	f = mergeForges(f, installableForge(t, "infrena", "fake", "0.4.0", archiveFor(t, "fake", "0.4.0"), true))
+	f = mergeForges(f, backendForge(t, "infrena", "s3", "1.0.0"))
+	return fakeForge(t, f)
 }
 
 // tarGz builds a gzipped tarball, writing an entry for every directory the

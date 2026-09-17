@@ -15,6 +15,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/infrena/infrena/internal/backendhost"
 	"github.com/infrena/infrena/internal/config"
 	"github.com/infrena/infrena/internal/pluginhost"
 	"github.com/infrena/infrena/internal/plugins"
@@ -53,10 +54,11 @@ const maxBinary = 256 << 20
 // place code comes from is the part that matters.
 func newPluginsInstallCommand(opts *GlobalOptions) *cobra.Command {
 	var global bool
+	var kind string
 
 	cmd := &cobra.Command{
 		Use:           "install <name>[@version]",
-		Short:         "Download and install a provider plugin",
+		Short:         "Download and install a plugin",
 		Args:          cobra.ExactArgs(1),
 		SilenceUsage:  true,
 		SilenceErrors: true,
@@ -67,20 +69,37 @@ func newPluginsInstallCommand(opts *GlobalOptions) *cobra.Command {
 			}
 			defer closeRun()
 
-			return runInstall(cmd, opts, ro.Out(), args[0], global)
+			return runInstall(cmd, opts, ro.Out(), args[0], global, kind)
 		},
 	}
 
 	cmd.Flags().BoolVar(&global, "global", false,
 		"install for this user rather than into this project")
+	// `--kind` rather than `--role`, because kind is the word a person types.
+	// The type behind it is plugins.Role: plugins.Kind is taken, and means
+	// whether a source names an owner or one repository.
+	cmd.Flags().StringVar(&kind, "kind", "",
+		"which kind of plugin to install: provider or backend")
 	return cmd
 }
 
 // runInstall is the whole sequence, in the order its doc comment sets out.
-func runInstall(cmd *cobra.Command, opts *GlobalOptions, out io.Writer, arg string, global bool) error {
+func runInstall(cmd *cobra.Command, opts *GlobalOptions, out io.Writer, arg string, global bool, kind string) error {
 	name, wantVersion, err := parsePluginArg(arg)
 	if err != nil {
 		return err
+	}
+
+	// THE FLAG IS READ BEFORE A SINGLE REQUEST. A --kind nobody can act on is
+	// a mistake in the command line, and answering it after a search would
+	// spend a rate limit to reach an error that was already true.
+	var only []plugins.Role
+	if kind != "" {
+		role, err := parseRole(kind)
+		if err != nil {
+			return err
+		}
+		only = []plugins.Role{role}
 	}
 
 	// WHERE IT WILL GO IS DECIDED FIRST, before a single request. A download
@@ -94,46 +113,188 @@ func runInstall(cmd *cobra.Command, opts *GlobalOptions, out io.Writer, arg stri
 	// 1. SEARCH, across the sources the user trusts plus the one this project
 	// names. Naming one is what gets it searched; it is not what gets it
 	// installed.
-	sources, untrusted, err := searchSources(opts.Dir, name)
+	in, err := newInstallation(cmd, opts, out, name, wantVersion, dest)
 	if err != nil {
 		return err
+	}
+
+	roles, err := in.roles(opts.Dir, only)
+	if err != nil {
+		return err
+	}
+	for _, role := range roles {
+		if err := in.install(cmd, role); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// installation is one `plugins install` of one name: everything resolved before
+// any kind of it is installed.
+//
+// ONE SEARCH, HOWEVER MANY KINDS COME BACK. A project naming s3 as a provider
+// and as a backend installs two binaries out of one set of answers, because
+// searching twice would spend two requests learning the same thing and could
+// return two different worlds.
+type installation struct {
+	opts    *GlobalOptions
+	out     io.Writer
+	name    string
+	version string // the version asked for, empty for whatever is latest
+	dest    string
+
+	found     []plugins.Candidate
+	untrusted map[string]bool
+	// partial and authenticated are what an EMPTY answer means: a source that
+	// refused, and a search that could not see a private repository, are both
+	// reported as what they are rather than as a missing plugin.
+	partial       bool
+	authenticated bool
+}
+
+// newInstallation searches, and reports what could not be searched.
+func newInstallation(cmd *cobra.Command, opts *GlobalOptions, out io.Writer, name, version, dest string) (*installation, error) {
+	sources, untrusted, err := searchSources(opts.Dir, name)
+	if err != nil {
+		return nil, err
 	}
 	fetcher := searchFetcher(false)
 	found, problems := plugins.Search(cmd.Context(), fetcher, sources, name, searchEnvironment(opts.Dir, name))
 	renderSearchWarnings(cmd.ErrOrStderr(), problems, found)
 
+	return &installation{
+		opts: opts, out: out, name: name, version: version, dest: dest,
+		found: found, untrusted: untrusted,
+		partial: len(problems) > 0, authenticated: fetcher.authenticated(),
+	}, nil
+}
+
+// roles decides WHICH KINDS of this name to install, in the order the answer is
+// cheapest and most certain. Each rung earns its place:
+//
+//  1. --kind, if given. The user said so; nothing outranks that.
+//  2. What the project declares. It already knows, and asking a user to
+//     repeat something written in infra.yml is asking them to keep two
+//     places in step.
+//  3. The search result, if only ONE kind answers the name. Nothing to
+//     disambiguate.
+//  4. Otherwise refuse, showing both, naming --kind. §31.3: never auto-pick
+//     between two candidates answering one name, and a kind is a candidate.
+//
+// Nothing found at all short-circuits the lot, because there is no choice to
+// make between answers that did not arrive - and that refusal must say whether
+// infrena could not SEE rather than reporting it as not there.
+func (in *installation) roles(dir string, only []plugins.Role) ([]plugins.Role, error) {
+	if len(in.found) == 0 {
+		return nil, noSuchPlugin(in.name, in.partial, in.authenticated)
+	}
+	if len(only) > 0 {
+		return only, nil
+	}
+
+	declared, err := declaredRoles(dir, in.name)
+	if err != nil {
+		return nil, err
+	}
+	if len(declared) > 0 {
+		return declared, nil
+	}
+
+	published := rolesAmong(in.found)
+	if len(published) == 1 {
+		return published, nil
+	}
+	return nil, fmt.Errorf("both a provider and a backend are published under the name %q, and infrena does not choose between them.\n\n%s\nA provider serves resources; a backend stores state. There is no project here that names %s, so nothing says which you meant.\n\nSuggested action:\n  Pass --kind provider or --kind backend, or run this inside the project that needs it, where the `providers:` and `backend:` blocks already say.",
+		in.name, describeCandidates(in.found), in.name)
+}
+
+// install is steps two to ten for ONE kind.
+func (in *installation) install(cmd *cobra.Command, role plugins.Role) error {
 	// 2. FILTER, and 3. REFUSE if that leaves anything other than exactly one.
-	chosen, err := soleCandidate(name, wantVersion, found, len(problems) > 0, fetcher.authenticated())
+	// The kind filters first: a provider release is no answer at all to someone
+	// installing a backend, and counting it would make two publishers out of
+	// one.
+	byRole := candidatesWithRole(in.found, role)
+	if len(byRole) == 0 {
+		if len(in.found) == 0 {
+			return noSuchPlugin(in.name, in.partial, in.authenticated)
+		}
+		return fmt.Errorf("no %s named %q is published by any source that answered, so there is nothing of that kind to install.\n\nWhat is published under that name:\n%s\nSuggested action:\n  Install what exists, or check the spelling. A --kind is never silently swapped for the other one: they are different binaries doing different jobs.",
+			role, in.name, describeCandidates(in.found))
+	}
+	chosen, err := soleCandidate(in.name, in.version, byRole, in.partial, in.authenticated)
 	if err != nil {
 		return err
 	}
 
 	// 4 and 5. TRUST, and the prompt that is the only way to grant it.
-	if err := ensureTrusted(cmd, opts, out, *chosen, untrusted); err != nil {
+	if err := ensureTrusted(cmd, in.opts, in.out, *chosen, in.untrusted); err != nil {
 		return err
 	}
 
 	// 6 to 9. Checksums, the archive, the proof, and the one file taken out.
 	client := installClient()
-	binary := pluginhost.BinaryName(name)
-	if err := fetchAndInstall(cmd.Context(), client, *chosen, name, binary, dest); err != nil {
+	stem, binary := releaseNames(role, in.name)
+	if err := fetchAndInstall(cmd.Context(), client, *chosen, in.name, stem, binary, in.dest); err != nil {
 		return err
 	}
 
 	// 10. THE LOCK, written from what is now on disk rather than from what was
 	// downloaded, so it records the file a later run will actually hash.
-	path := filepath.Join(dest, binary)
+	path := filepath.Join(in.dest, binary)
 	sum, err := plugins.FileChecksum(path)
 	if err != nil {
 		return err
 	}
-	if err := recordInstall(opts.Dir, cmd.ErrOrStderr(), name, *chosen, sum); err != nil {
+	if err := recordInstall(in.opts.Dir, cmd.ErrOrStderr(), lockKey(role, in.name), in.name, *chosen, sum); err != nil {
 		return err
 	}
 
-	fmt.Fprintf(out, "Installed %s %s from %s\n  %s\n",
-		name, chosen.Manifest.Version, chosen.Source, path)
+	// THE KIND IS ALWAYS PRINTED, because it is not always chosen by the person
+	// reading this line: when the project resolved it, a choice was made on
+	// their behalf and has to be visible.
+	fmt.Fprintf(in.out, "Installed %s %s (%s) from %s\n  %s\n",
+		in.name, chosen.Manifest.Version, role, chosen.Source, path)
 	return nil
+}
+
+// candidatesWithRole keeps the releases of one kind.
+func candidatesWithRole(found []plugins.Candidate, role plugins.Role) []plugins.Candidate {
+	var out []plugins.Candidate
+	for _, c := range found {
+		if c.Role == role {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// releaseNames are the two names a release of one plugin has, and they differ
+// by role: a provider ships infrena-plugin-<name>, a backend
+// infrena-backend-<name>.
+//
+// THE STEM CARRIES NO EXTENSION and the binary does. A Windows release is
+// infrena-backend-s3_1.0.0_windows_amd64.zip holding infrena-backend-s3.exe, so
+// asking for the archive by the executable's name would ask for an asset that
+// does not exist - and a 404 there reads as "no build for your machine".
+func releaseNames(role plugins.Role, name string) (stem, binary string) {
+	binary = pluginhost.BinaryName(name)
+	if role == plugins.RoleBackend {
+		binary = backendhost.BinaryName(name)
+	}
+	return strings.TrimSuffix(binary, ".exe"), binary
+}
+
+// lockKey is how this install is spelled in plugins.lock: a provider under its
+// bare name, a backend under backendhost.LockKey, which is what `plugins list`
+// reads a backend's version back from. One key for both would make a provider
+// s3 and a backend s3 overwrite each other.
+func lockKey(role plugins.Role, name string) string {
+	if role == plugins.RoleBackend {
+		return backendhost.LockKey(name)
+	}
+	return name
 }
 
 // parsePluginArg splits `name` or `name@version`.
@@ -251,13 +412,18 @@ func noSuchPlugin(name string, partial, authenticated bool) error {
 	}
 }
 
-// describeCandidates lists what was found, one per line, with the reason a
-// release cannot run here. It is what turns every refusal above into something
-// a reader can act on rather than a statement that they are out of luck.
+// describeCandidates lists what was found, one per line, with the KIND of each
+// and the reason a release cannot run here. It is what turns every refusal
+// above into something a reader can act on rather than a statement that they
+// are out of luck.
+//
+// THE KIND IS PART OF THE IDENTITY NOW, not decoration: two rows for one name
+// from one owner are a provider and a backend, and without the word they read
+// as the same thing published twice.
 func describeCandidates(found []plugins.Candidate) string {
 	var b strings.Builder
 	for _, c := range found {
-		fmt.Fprintf(&b, "  %s  %s", c.Source, c.Manifest.Version)
+		fmt.Fprintf(&b, "  %s  %s  %s", c.Source, c.Role, c.Manifest.Version)
 		if !c.Usable {
 			fmt.Fprintf(&b, "  (%s)", c.Reason)
 		}
@@ -338,7 +504,7 @@ func installClient() *remote.Client {
 // VERIFY BEFORE EXTRACT, which is why these are one function rather than a
 // download helper and an extract helper a future caller could put in the other
 // order. A tampered archive is refused without being opened.
-func fetchAndInstall(ctx context.Context, client *remote.Client, c plugins.Candidate, name, binary, dest string) error {
+func fetchAndInstall(ctx context.Context, client *remote.Client, c plugins.Candidate, name, stem, binary, dest string) error {
 	owner, repo, tag := c.Source.Owner, c.Repo, c.Tag
 
 	// 6. THE CHECKSUMS COME FROM THE RELEASE, NEVER THE MANIFEST (section
@@ -354,7 +520,12 @@ func fetchAndInstall(ctx context.Context, client *remote.Client, c plugins.Candi
 	// infrena-plugin-aws_0.4.0_linux_amd64.tar.gz. Using the tag here asks for
 	// an asset that does not exist, and a 404 on this path would read as "this
 	// plugin publishes no build for your machine".
-	asset := remote.AssetName(name, c.Manifest.Version.String(), currentPlatform())
+	//
+	// AND THE BINARY NAMES IT TOO, which is why the stem is passed in rather
+	// than built from the plugin's name: a backend's archive is
+	// infrena-backend-s3_1.0.0_linux_amd64.tar.gz, and pasting infrena-plugin-
+	// in front of every name asked for an asset no backend release publishes.
+	asset := remote.AssetName(stem, c.Manifest.Version.String(), currentPlatform())
 	want, ok := sums[asset]
 	if !ok {
 		return fmt.Errorf("the release %s of %s/%s publishes no checksum for %s.\n\nIts %s lists %s.\n\nAn archive nothing can vouch for is not installed.\n\nSuggested action:\n  Ask the publisher to include every archive in %s.",
@@ -401,7 +572,11 @@ func currentPlatform() pluginmanifest.Platform {
 // A GLOBAL INSTALL OUTSIDE A PROJECT RECORDS NOTHING, and says so rather than
 // writing a plugins.lock into whatever directory the user was standing in. The
 // lock is a project file; there is no project here to own it.
-func recordInstall(dir string, warn io.Writer, name string, c plugins.Candidate, sum string) error {
+//
+// THE KEY IS NOT ALWAYS THE NAME. A backend is recorded under
+// backendhost.LockKey, which is the repository's name, so a provider s3 and a
+// backend s3 do not overwrite each other in a file keyed by one string.
+func recordInstall(dir string, warn io.Writer, key, name string, c plugins.Candidate, sum string) error {
 	if !hasProject(dir) {
 		fmt.Fprintf(warn, "note: no project here, so %s records nothing for %s.\n", plugins.LockfileName, name)
 		return nil
@@ -418,7 +593,7 @@ func recordInstall(dir string, warn io.Writer, name string, c plugins.Candidate,
 		lock.Plugins = map[string]plugins.LockEntry{}
 	}
 
-	entry := lock.Plugins[name]
+	entry := lock.Plugins[key]
 	if entry.Version != c.Manifest.Version.String() {
 		// A DIFFERENT VERSION INVALIDATES THE OTHER PLATFORMS' CHECKSUMS. They
 		// were recorded for the version being replaced, and keeping them would
@@ -431,13 +606,36 @@ func recordInstall(dir string, warn io.Writer, name string, c plugins.Candidate,
 	entry.Version = c.Manifest.Version.String()
 	entry.Source = c.Source.String()
 	entry.Checksums[plugins.PlatformKey()] = sum
-	lock.Plugins[name] = entry
+	lock.Plugins[key] = entry
 
 	if err := lock.Write(dir); err != nil {
 		return fmt.Errorf("%w\n\nThe binary is installed and verified, but %s does not record it, so it cannot be checked on a later run.\n\nSuggested action:\n  Fix whatever stopped the write and run `infrena plugins install %s` again.",
 			err, plugins.LockfileName, name)
 	}
 	return nil
+}
+
+// findInstalled locates the binary one lock entry stands for, reading the kind
+// off the key exactly as `plugins list` reads it off a filename.
+func findInstalled(key string, search pluginhost.SearchOptions) (string, []string, error) {
+	name, ok := strings.CutPrefix(key, plugins.BackendRepoPrefix)
+	if !ok {
+		return pluginhost.Find(key, search)
+	}
+
+	binary := backendhost.BinaryName(name)
+	var searched []string
+	for _, dir := range search.Dirs() {
+		if dir == "" {
+			continue
+		}
+		path := filepath.Join(dir, binary)
+		searched = append(searched, path)
+		if info, err := os.Stat(path); err == nil && !info.IsDir() {
+			return path, searched, nil
+		}
+	}
+	return "", searched, &backendhost.NotFoundError{Backend: name, Binary: binary, Searched: searched}
 }
 
 // sortedAssetNames names what a checksums file does hold, so "no checksum for
@@ -523,8 +721,14 @@ func runVerify(opts *GlobalOptions, ro *runOutput) error {
 // skip. The lock says this project installed it; something removed it, and a
 // verify that passed silently would report a project as verified when a plugin
 // it needs is gone.
+//
+// THE KEY SAYS WHICH KIND IT IS. A backend is recorded under
+// backendhost.LockKey, so an entry carrying that prefix is looked up as
+// infrena-backend-<name> rather than as a provider of that whole string - which
+// would go looking for infrena-plugin-infrena-backend-s3 and report a backend
+// install had just written as missing.
 func verifyOne(ro *runOutput, lock *plugins.Lockfile, search pluginhost.SearchOptions, name string) error {
-	path, searched, err := pluginhost.Find(name, search)
+	path, searched, err := findInstalled(name, search)
 	if err != nil {
 		return fmt.Errorf("plugin %s is recorded in %s but no binary was found.\n\nLooked in:\n  %s\n\nSuggested action:\n  Run `infrena plugins install %s` to fetch it again.",
 			name, plugins.LockfileName, strings.Join(searched, "\n  "), name)

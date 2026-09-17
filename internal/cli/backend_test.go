@@ -32,7 +32,7 @@ func TestAProjectWithNoBackendBlockUsesLocalAndStartsNothing(t *testing.T) {
 // get it, not a silent fallback to local. Falling back would write state
 // somewhere the user did not ask for, which is the worst available outcome.
 func TestAMissingBackendPluginIsAnErrorAndNeverFallsBackToLocal(t *testing.T) {
-	dir := newProjectWithBackend(t, "backend:\n  plugin: s3\n  bucket: acme-state\n")
+	dir := newProjectWithBackendBlock(t, "backend:\n  plugin: s3\n  bucket: acme-state\n")
 
 	_, _, err := backendFor(context.Background(), &GlobalOptions{Dir: dir})
 	if err == nil {
@@ -50,7 +50,7 @@ func TestAMissingBackendPluginIsAnErrorAndNeverFallsBackToLocal(t *testing.T) {
 // consequence: one means local, the other means state belongs somewhere else
 // and infrena could not work out where.
 func TestABackendBlockThatDidNotDecodeDoesNotFallBackToLocal(t *testing.T) {
-	dir := newProjectWithBackend(t, "backend:\n  bucket: acme-state\n")
+	dir := newProjectWithBackendBlock(t, "backend:\n  bucket: acme-state\n")
 
 	_, _, err := backendFor(context.Background(), &GlobalOptions{Dir: dir})
 	if err == nil {
@@ -79,9 +79,14 @@ func TestTheCloserIsAlwaysSafeToCall(t *testing.T) {
 	}
 }
 
-// newProjectWithBackend writes the one-resource fixture with a `backend:`
+// newProjectWithBackendBlock writes the one-resource fixture with a `backend:`
 // block appended.
-func newProjectWithBackend(t *testing.T, block string) string {
+//
+// The parameter is the BLOCK, YAML and all, which the old name did not say:
+// plugins_install_test.go's newProjectWithBackend takes a backend's NAME, and
+// two helpers a keystroke apart taking different things is how a caller passes
+// "s3" to the one that wanted four lines of YAML.
+func newProjectWithBackendBlock(t *testing.T, block string) string {
 	t.Helper()
 	return projectDir(t, `
 project: myapp

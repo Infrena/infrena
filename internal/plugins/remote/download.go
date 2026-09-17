@@ -23,10 +23,6 @@ const (
 	// the whole dist directory.
 	ChecksumsName = "SHA256SUMS"
 
-	// binaryPrefix is the prefix on a plugin's executable, and therefore on the
-	// archive that ships it.
-	binaryPrefix = "infrena-plugin-"
-
 	// maxAsset bounds a release archive.
 	//
 	// The real ones are around nine megabytes: infrena-plugin-aws 0.4.0 ships
@@ -39,12 +35,21 @@ const (
 
 // AssetName is the release asset a plugin publishes for one platform.
 //
+// IT TAKES THE BINARY, NOT THE PLUGIN NAME, and that is the whole point. This
+// function used to paste `infrena-plugin-` in front of the name it was given,
+// which is right for a provider and wrong for a state backend: a backend ships
+// `infrena-backend-<name>`, so the constructed archive was
+// infrena-plugin-s3_1.0.0_linux_amd64.tar.gz, an asset no release publishes.
+// The caller knows which role it is installing; this only knows how a release
+// is named, and the archive is named after the binary inside it.
+//
 // VERIFIED AGAINST REAL RELEASES, not inferred: infrena's own
 // infrena_0.7.1_linux_amd64.tar.gz and the plugin's
 // infrena-plugin-aws_0.4.0_linux_amd64.tar.gz, both produced by
-// .github/workflows/release.yml, which names each archive
-// <binary>_<version>_<goos>_<goarch>. The version carries NO leading v even
-// though the tag does, because the workflow strips it.
+// .github/workflows/release.yml, and infrena-backend-s3's own
+// scripts/build-release with its infrena-backend-s3_<version>_<goos>_<goarch>.
+// Every one of them is <binary>_<version>_<goos>_<goarch>. The version carries
+// NO leading v even though the tag does, because both strip it.
 //
 // WINDOWS ARCHIVES ARE ZIPS. The same workflow zips the windows builds and
 // tars everything else, so asking for a .tar.gz on windows would be a request
@@ -52,12 +57,14 @@ const (
 // plugin publishes no build for your machine", which is section 31.3's
 // forbidden "could not see it" rendered as "it is not there". The extractor
 // unpacks both shapes and decides which from the bytes, not from this name.
-func AssetName(plugin, version string, p pluginmanifest.Platform) string {
+// The binary is spelled WITHOUT the .exe a Windows build carries: the archive
+// is named for the stem, and the extension belongs to the file inside it.
+func AssetName(binary, version string, p pluginmanifest.Platform) string {
 	ext := ".tar.gz"
 	if p.OS == "windows" {
 		ext = ".zip"
 	}
-	return fmt.Sprintf("%s%s_%s_%s_%s%s", binaryPrefix, plugin, version, p.OS, p.Arch, ext)
+	return fmt.Sprintf("%s_%s_%s_%s%s", binary, version, p.OS, p.Arch, ext)
 }
 
 // Checksums reads a release's SHA256SUMS, keyed by asset name.

@@ -98,8 +98,20 @@ func releaseServer(t *testing.T, owner, repo, tag string, assets map[string][]by
 // infrena_0.7.1_linux_amd64.tar.gz and
 // infrena-plugin-aws_0.4.0_linux_amd64.tar.gz.
 func TestAssetNameFollowsTheReleaseConvention(t *testing.T) {
-	got := AssetName("aws", "0.4.0", pluginmanifest.Platform{OS: "linux", Arch: "amd64"})
+	got := AssetName("infrena-plugin-aws", "0.4.0", pluginmanifest.Platform{OS: "linux", Arch: "amd64"})
 	if got != "infrena-plugin-aws_0.4.0_linux_amd64.tar.gz" {
+		t.Errorf("AssetName = %q", got)
+	}
+}
+
+// A BACKEND IS NOT NAMED LIKE A PROVIDER, and this function used to assume it
+// was: it pasted infrena-plugin- in front of whatever it was given, so a
+// backend install asked for infrena-plugin-s3_1.0.0_linux_amd64.tar.gz and no
+// release has ever published that. Verified against infrena-backend-s3's own
+// scripts/build-release.
+func TestAssetNameOfABackendIsNamedAfterTheBackendBinary(t *testing.T) {
+	got := AssetName("infrena-backend-s3", "1.0.0", pluginmanifest.Platform{OS: "linux", Arch: "amd64"})
+	if got != "infrena-backend-s3_1.0.0_linux_amd64.tar.gz" {
 		t.Errorf("AssetName = %q", got)
 	}
 }
@@ -109,7 +121,7 @@ func TestAssetNameFollowsTheReleaseConvention(t *testing.T) {
 // reads as "there is no build for your machine" - a plugin reported absent when
 // it is merely named wrongly, which is the mistake section 31.3 forbids.
 func TestAssetNameUsesZipOnWindows(t *testing.T) {
-	got := AssetName("aws", "0.4.0", pluginmanifest.Platform{OS: "windows", Arch: "amd64"})
+	got := AssetName("infrena-plugin-aws", "0.4.0", pluginmanifest.Platform{OS: "windows", Arch: "amd64"})
 	if got != "infrena-plugin-aws_0.4.0_windows_amd64.zip" {
 		t.Errorf("AssetName = %q", got)
 	}

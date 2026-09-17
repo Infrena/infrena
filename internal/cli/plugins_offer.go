@@ -164,7 +164,13 @@ func offerToInstall(cmd *cobra.Command, opts *GlobalOptions, out io.Writer, name
 	renderSearchWarnings(cmd.ErrOrStderr(), problems, found)
 	renderSearch(out, name, found, untrusted, len(problems) > 0, fetcher.authenticated())
 
-	if _, err := soleCandidate(name, "", found, len(problems) > 0, fetcher.authenticated()); err != nil {
+	// A PROVIDER, ALWAYS. This offer is made when a resource type names a
+	// plugin that is not on the search path, which is a provider by
+	// construction; a missing backend is backendhost's error and a different
+	// conversation. Saying so keeps a backend of the same name out of the
+	// count, where it would look like a second publisher.
+	providers := candidatesWithRole(found, plugins.RoleProvider)
+	if _, err := soleCandidate(name, "", providers, len(problems) > 0, fetcher.authenticated()); err != nil {
 		// The table above has already said which candidates there are and why
 		// each unusable one is unusable, so asking a question install would
 		// only refuse would be asking it twice.
@@ -180,7 +186,7 @@ func offerToInstall(cmd *cobra.Command, opts *GlobalOptions, out io.Writer, name
 	// The install itself, which is the same code path `infrena plugins install`
 	// takes - trust prompt included. A second way to install a plugin is a
 	// second set of rules about what may be installed.
-	if err := runInstall(cmd, opts, out, name, false); err != nil {
+	if err := runInstall(cmd, opts, out, name, false, plugins.RoleProvider.String()); err != nil {
 		return false, err
 	}
 	return true, nil
