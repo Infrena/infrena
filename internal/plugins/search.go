@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"sort"
-	"strings"
 
 	"github.com/infrena/infrena/pkg/pluginmanifest"
 	"github.com/infrena/infrena/pkg/semver"
@@ -94,12 +93,14 @@ func Search(ctx context.Context, f Fetcher, sources []Source, name string, env E
 // rediscover it costs a request and can fail for reasons that have nothing to
 // do with the repository they named.
 //
-// An owner source is listed and filtered to RepoPrefix, which is the whole
-// registry (source.go): no index, no server, no publishing step. Everything
-// with the prefix is then read, rather than only `infrena-provider-<name>`,
-// because the MANIFEST decides what a repository publishes and the repository
-// name is only a hint. That costs a request per plugin repository the owner
-// has, which is what the disk cache above this package is for.
+// An owner source is listed and filtered to EITHER prefix, which is the whole
+// registry (source.go): no index, no server, no publishing step. Both are kept
+// because an owner publishes providers and backends alike, and filtering to one
+// would make the other invisible to everyone who trusts the owner. Everything
+// with a prefix is then read, rather than only `<prefix><name>`, because the
+// MANIFEST decides what a repository publishes and the repository name is only
+// a hint. That costs a request per plugin repository the owner has, which is
+// what the disk cache above this package is for.
 func reposOf(ctx context.Context, f Fetcher, src Source) ([]string, error) {
 	if src.Kind == KindRepository {
 		return []string{src.Repo}, nil
@@ -112,7 +113,7 @@ func reposOf(ctx context.Context, f Fetcher, src Source) ([]string, error) {
 
 	var repos []string
 	for _, repo := range all {
-		if strings.HasPrefix(repo, RepoPrefix) {
+		if _, _, ok := RoleOf(repo); ok {
 			repos = append(repos, repo)
 		}
 	}
@@ -124,6 +125,13 @@ func reposOf(ctx context.Context, f Fetcher, src Source) ([]string, error) {
 // A nil candidate with a nil error means "this repository publishes something
 // else": a match, not a failure, that simply is not the thing asked for.
 func candidate(ctx context.Context, f Fetcher, src Source, repo, name string, env Environment) (*Candidate, error) {
+	// THE PREFIX DECIDES THE ROLE. reposOf only ever yields a repository
+	// carrying one, so a failure here is a caller bug rather than a user one.
+	role, _, ok := RoleOf(repo)
+	if !ok {
+		return nil, fmt.Errorf("repository %q carries neither %s nor %s", repo, ProviderRepoPrefix, BackendRepoPrefix)
+	}
+
 	tag, err := f.LatestTag(ctx, src.Owner, repo)
 	if err != nil {
 		return nil, err
@@ -154,6 +162,7 @@ func candidate(ctx context.Context, f Fetcher, src Source, repo, name string, en
 	return &Candidate{
 		Source:   src,
 		Repo:     repo,
+		Role:     role,
 		Manifest: m,
 		Tag:      tag,
 		Usable:   usable,

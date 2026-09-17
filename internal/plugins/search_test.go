@@ -320,3 +320,63 @@ func TestARepositoryWithoutAReleaseDoesNotFailTheWholeOwner(t *testing.T) {
 		t.Fatalf("got %d candidates, want the released one: %+v", len(got), got)
 	}
 }
+
+// An owner search must list BOTH prefixes, or a backend published by a
+// trusted owner is invisible.
+func TestSearchFindsABackendPublishedByAnOwner(t *testing.T) {
+	f := &fakeFetcher{
+		repos: map[string][]string{"mycorp": {"infrena-backend-s3", "infrena-provider-aws", "website"}},
+		// The provider is released too, because a repository in an owner
+		// listing with no release is a reported error here by design, and this
+		// test is about what the listing KEEPS: both prefixes, and not
+		// "website".
+		tags: map[string]string{
+			"mycorp/infrena-backend-s3":   "v1.0.0",
+			"mycorp/infrena-provider-aws": "v1.0.0",
+		},
+		files: map[string][]byte{
+			"mycorp/infrena-backend-s3@v1.0.0":   manifestBytes(t, "s3", "1.0.0"),
+			"mycorp/infrena-provider-aws@v1.0.0": manifestBytes(t, "aws", "1.0.0"),
+		},
+	}
+
+	got, errs := Search(context.Background(), f, []Source{mustSource(t, "github.com/mycorp")}, "s3", hereEnv())
+	if len(errs) != 0 {
+		t.Fatalf("errors: %v", errs)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d candidates, want 1: %+v", len(got), got)
+	}
+	if got[0].Role != RoleBackend {
+		t.Errorf("Role = %v, want RoleBackend", got[0].Role)
+	}
+}
+
+// A provider and a backend of one name both survive. This is the collision
+// the whole plan is about, and neither may be dropped.
+func TestAProviderAndABackendOfOneNameBothSurvive(t *testing.T) {
+	f := &fakeFetcher{
+		repos: map[string][]string{"mycorp": {"infrena-provider-s3", "infrena-backend-s3"}},
+		tags: map[string]string{
+			"mycorp/infrena-provider-s3": "v2.0.0",
+			"mycorp/infrena-backend-s3":  "v1.0.0",
+		},
+		files: map[string][]byte{
+			"mycorp/infrena-provider-s3@v2.0.0": manifestBytes(t, "s3", "2.0.0"),
+			"mycorp/infrena-backend-s3@v1.0.0":  manifestBytes(t, "s3", "1.0.0"),
+		},
+	}
+
+	got, _ := Search(context.Background(), f, []Source{mustSource(t, "github.com/mycorp")}, "s3", hereEnv())
+
+	if len(got) != 2 {
+		t.Fatalf("got %d candidates, want both: %+v", len(got), got)
+	}
+	roles := map[Role]bool{}
+	for _, c := range got {
+		roles[c.Role] = true
+	}
+	if !roles[RoleProvider] || !roles[RoleBackend] {
+		t.Errorf("roles found = %v, want both", roles)
+	}
+}

@@ -82,3 +82,72 @@ func TestAnUnsupportedHostSaysSoRatherThanCallingItMalformed(t *testing.T) {
 		t.Errorf("error should name the host given and the one supported: %v", err)
 	}
 }
+
+// A backend repository is currently REFUSED at parse time, not merely
+// filtered out of search: ParseSource requires the provider prefix. So
+// nobody can even name one as a source.
+func TestABackendRepositoryParses(t *testing.T) {
+	got, err := ParseSource("github.com/infrena/infrena-backend-s3")
+	if err != nil {
+		t.Fatalf("ParseSource refused a backend repository: %v", err)
+	}
+	if got.Kind != KindRepository {
+		t.Errorf("Kind = %v, want KindRepository", got.Kind)
+	}
+	if got.Role != RoleBackend {
+		t.Errorf("Role = %v, want RoleBackend", got.Role)
+	}
+	name, ok := got.PluginName()
+	if !ok || name != "s3" {
+		t.Errorf("PluginName = %q, %v; want s3", name, ok)
+	}
+	if got.String() != "github.com/infrena/infrena-backend-s3" {
+		t.Errorf("String = %q", got.String())
+	}
+}
+
+func TestAProviderRepositoryStillParsesAndIsAProvider(t *testing.T) {
+	got, err := ParseSource("github.com/infrena/infrena-provider-aws")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Role != RoleProvider {
+		t.Errorf("Role = %v, want RoleProvider", got.Role)
+	}
+	name, _ := got.PluginName()
+	if name != "aws" {
+		t.Errorf("PluginName = %q, want aws", name)
+	}
+}
+
+// The convention is still load-bearing: a repository matching NEITHER prefix
+// can never be found by an owner search, so it is refused when written. The
+// message must now offer both shapes rather than only the provider one.
+func TestARepositoryMatchingNeitherPrefixIsStillRefused(t *testing.T) {
+	_, err := ParseSource("github.com/someone/hetzner")
+	if err == nil {
+		t.Fatal("a repository matching neither prefix was accepted")
+	}
+	for _, want := range []string{"infrena-provider-", "infrena-backend-"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error does not offer %q: %v", want, err)
+		}
+	}
+}
+
+// An owner publishes both kinds, so an owner source cannot carry a role and
+// must not pretend to.
+func TestAnOwnerSourceCarriesNoRole(t *testing.T) {
+	got, err := ParseSource("github.com/mycorp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Kind != KindOwner {
+		t.Fatalf("Kind = %v", got.Kind)
+	}
+	// Documented as meaningless for an owner; the test pins that reading it
+	// is not mistaken for a claim.
+	if _, ok := got.PluginName(); ok {
+		t.Error("an owner source named a plugin")
+	}
+}

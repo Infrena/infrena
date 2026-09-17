@@ -52,6 +52,11 @@ type Candidate struct {
 	// source does not name one and the manifest's name is what identifies a
 	// plugin, so the repository is otherwise unrecoverable.
 	Repo string
+	// Role is what the repository name says this plugin does, provider or
+	// backend. The MANIFEST still decides the name: a repository called
+	// `infrena-backend-s3` whose manifest says something else is a backend
+	// that is not called s3.
+	Role Role
 	// Manifest is the plugin.yaml read at Tag.
 	Manifest *pluginmanifest.Manifest
 	// Tag is the git tag the manifest was read at, never a branch (§31.2).
