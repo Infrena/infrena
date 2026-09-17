@@ -13,7 +13,8 @@ import (
 // newStateCommand builds the `infra state` command group.
 func newStateCommand(opts *GlobalOptions) *cobra.Command {
 	cmd := &cobra.Command{Use: "state", Short: "Inspect and manage recorded state"}
-	cmd.AddCommand(newStateListCommand(opts), newStateShowCommand(opts), newStateUnlockCommand(opts))
+	cmd.AddCommand(newStateListCommand(opts), newStateShowCommand(opts), newStateUnlockCommand(opts),
+		newStateMigrateCommand(opts))
 	return cmd
 }
 

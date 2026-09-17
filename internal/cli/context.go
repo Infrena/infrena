@@ -373,14 +373,32 @@ const localBackendName = "local"
 // backendFor, which has the origin to tell it apart from a project that
 // declared nothing.
 func backendDecl(dir string) config.BackendDecl {
+	backend, _ := backendDecls(dir)
+	return backend
+}
+
+// backendDecls reads BOTH backend blocks out of a project's configuration in
+// one decode: `backend:`, where state lives, and `migrate_from:`, where
+// `state migrate` reads from.
+//
+// One decode rather than two because the two blocks are read together by every
+// caller that wants the second one, and decoding twice is two chances to read
+// two different versions of a file somebody is editing.
+//
+// An ABSENT `migrate_from:` is the zero value, and that is what nearly every
+// project returns. A block that was present and did not decode records an
+// origin and no plugin, the same distinction backendFor already relies on for
+// `backend:` — so a caller must test the origin rather than assuming an empty
+// Plugin means the block was never written.
+func backendDecls(dir string) (backend, migrateFrom config.BackendDecl) {
 	files, err := config.Load(dir)
 	if err != nil {
 		// No project here at all, which is local: `infra state list` outside
 		// a project has nothing to read a backend out of.
-		return config.BackendDecl{}
+		return config.BackendDecl{}, config.BackendDecl{}
 	}
 	decl, _ := config.Decode(files)
-	return decl.Backend
+	return decl.Backend, decl.MigrateFrom
 }
 
 // sortedAttributeKeys lists an attribute map's keys in sorted order, so
