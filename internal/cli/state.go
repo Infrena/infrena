@@ -26,7 +26,13 @@ func newStateListCommand(opts *GlobalOptions) *cobra.Command {
 		Short:         "List managed resources",
 		Args:          cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			s, err := backendFor(opts.Dir).Get(cmd.Context(), args[0])
+			b, closeBackend, err := backendFor(cmd.Context(), opts)
+			if err != nil {
+				return err
+			}
+			defer closeBackend()
+
+			s, err := b.Get(cmd.Context(), args[0])
 			if err != nil {
 				return err
 			}
@@ -53,7 +59,13 @@ func newStateShowCommand(opts *GlobalOptions) *cobra.Command {
 		Short:         "Show one managed resource",
 		Args:          cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			s, err := backendFor(opts.Dir).Get(cmd.Context(), args[0])
+			b, closeBackend, err := backendFor(cmd.Context(), opts)
+			if err != nil {
+				return err
+			}
+			defer closeBackend()
+
+			s, err := b.Get(cmd.Context(), args[0])
 			if err != nil {
 				return err
 			}
@@ -92,7 +104,12 @@ func newStateUnlockCommand(opts *GlobalOptions) *cobra.Command {
 		Short:         "Release a lock left behind by an interrupted run",
 		Args:          cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			b := backendFor(opts.Dir)
+			b, closeBackend, err := backendFor(cmd.Context(), opts)
+			if err != nil {
+				return err
+			}
+			defer closeBackend()
+
 			lock, held, err := b.Inspect(cmd.Context(), args[0])
 			if err != nil {
 				return err

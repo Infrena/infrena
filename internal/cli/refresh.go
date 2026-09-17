@@ -66,7 +66,11 @@ func newRefreshCommand(opts *GlobalOptions) *cobra.Command {
 				regDiags.Render(cmd.ErrOrStderr())
 				return errProviderInstances
 			}
-			backend := backendFor(opts.Dir)
+			backend, closeBackend, err := backendFor(cmd.Context(), opts)
+			if err != nil {
+				return err
+			}
+			defer closeBackend()
 
 			return withLockedEnvironment(environment, "refresh", backend, cmd.ErrOrStderr(), func(ctx context.Context) error {
 				st, err := backend.Get(ctx, environment)

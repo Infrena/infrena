@@ -53,9 +53,15 @@ func newDiscoverCommand(opts *GlobalOptions) *cobra.Command {
 				return errProviderInstances
 			}
 
+			backend, closeBackend, err := backendFor(cmd.Context(), opts)
+			if err != nil {
+				return err
+			}
+			defer closeBackend()
+
 			// Read before the walk, so a state directory this command cannot
 			// read fails before a user has read a table that would be wrong.
-			managed, err := managedProviderIDs(cmd.Context(), backendFor(opts.Dir))
+			managed, err := managedProviderIDs(cmd.Context(), backend)
 			if err != nil {
 				return err
 			}

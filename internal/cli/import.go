@@ -70,7 +70,11 @@ func newImportCommand(opts *GlobalOptions) *cobra.Command {
 				regDiags.Render(cmd.ErrOrStderr())
 				return errProviderInstances
 			}
-			backend := backendFor(opts.Dir)
+			backend, closeBackend, err := backendFor(cmd.Context(), opts)
+			if err != nil {
+				return err
+			}
+			defer closeBackend()
 
 			return withLockedEnvironment(environment, "import", backend, cmd.ErrOrStderr(),
 				func(ctx context.Context) error {
@@ -95,7 +99,7 @@ func newImportCommand(opts *GlobalOptions) *cobra.Command {
 
 func runImport(
 	ctx context.Context, cmd *cobra.Command, opts *GlobalOptions,
-	reg *registry.Registry, table providers.Table, backend *state.Local,
+	reg *registry.Registry, table providers.Table, backend state.Backend,
 	environment string, selectors []string, generate bool, instance string,
 	filter discovery.Filter,
 ) error {

@@ -61,7 +61,11 @@ func newDestroyCommand(opts *GlobalOptions) *cobra.Command {
 				regDiags.Render(cmd.ErrOrStderr())
 				return errProviderInstances
 			}
-			backend := backendFor(opts.Dir)
+			backend, closeBackend, err := backendFor(cmd.Context(), opts)
+			if err != nil {
+				return finishApply(cmd.ErrOrStderr(), rw, report.ApplyResult{}, err)
+			}
+			defer closeBackend()
 
 			st0, err := backend.Get(cmd.Context(), environment)
 			if err != nil {

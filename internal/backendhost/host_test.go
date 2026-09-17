@@ -20,7 +20,7 @@ import (
 func TestOpenPresentsAPluginAsAnOrdinaryBackend(t *testing.T) {
 	dir := buildFakeBackend(t)
 
-	b, closeFn, err := Open(context.Background(), "memory", []string{dir}, nil)
+	b, closeFn, err := Open(context.Background(), "memory", "", []string{dir}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,7 +47,7 @@ func TestOpenPresentsAPluginAsAnOrdinaryBackend(t *testing.T) {
 // tests for it silently stops working when state goes remote.
 func TestALockConflictArrivesAsErrLocked(t *testing.T) {
 	dir := buildFakeBackend(t)
-	b, closeFn, err := Open(context.Background(), "memory", []string{dir}, nil)
+	b, closeFn, err := Open(context.Background(), "memory", "", []string{dir}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,7 +73,7 @@ func TestALockConflictArrivesAsErrLocked(t *testing.T) {
 // the failure mode that matters most.
 func TestABackendThatDiesMidRunErrorsClearly(t *testing.T) {
 	dir := buildFakeBackend(t)
-	b, closeFn, err := Open(context.Background(), "crash-on-put", []string{dir}, nil)
+	b, closeFn, err := Open(context.Background(), "crash-on-put", "", []string{dir}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,7 +104,7 @@ func TestABackendThatDiesMidRunErrorsClearly(t *testing.T) {
 // The operation is not knowable inside the plugin at all.
 func TestTheHostStampsTheLockWithItsOwnIdentity(t *testing.T) {
 	dir := buildFakeBackend(t)
-	b, closeFn, err := Open(context.Background(), "memory", []string{dir}, nil)
+	b, closeFn, err := Open(context.Background(), "memory", "", []string{dir}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -140,7 +140,7 @@ func TestTheHostStampsTheLockWithItsOwnIdentity(t *testing.T) {
 // rather than a silent success.
 func TestListAndForceUnlockCrossTheWire(t *testing.T) {
 	dir := buildFakeBackend(t)
-	b, closeFn, err := Open(context.Background(), "memory", []string{dir}, nil)
+	b, closeFn, err := Open(context.Background(), "memory", "", []string{dir}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -179,7 +179,7 @@ func TestListAndForceUnlockCrossTheWire(t *testing.T) {
 // backend already answers.
 func TestAnEmptyGetBecomesAnEmptyState(t *testing.T) {
 	dir := buildFakeBackend(t)
-	b, closeFn, err := Open(context.Background(), "memory", []string{dir}, nil)
+	b, closeFn, err := Open(context.Background(), "memory", "", []string{dir}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -204,7 +204,7 @@ func TestAnEmptyGetBecomesAnEmptyState(t *testing.T) {
 // and says how to get it. Never a fallback to local: that would write state
 // somewhere the user did not ask for.
 func TestAMissingBackendSaysWhereItLookedAndHowToInstallIt(t *testing.T) {
-	_, _, err := Open(context.Background(), "s3", []string{t.TempDir()}, nil)
+	_, _, err := Open(context.Background(), "s3", "", []string{t.TempDir()}, nil)
 	if err == nil {
 		t.Fatal("a backend that is not installed opened")
 	}

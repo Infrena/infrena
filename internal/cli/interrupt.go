@@ -152,7 +152,7 @@ func runInterruptible(environment string, fn func(ctx context.Context) error) er
 // run's error names who holds it and what they are doing), so it is
 // required rather than derived — a command whose lock says "apply" while it
 // destroys is worse than one that says nothing.
-func withLockedEnvironment(environment, operation string, backend *state.Local, errOut io.Writer, fn func(ctx context.Context) error) error {
+func withLockedEnvironment(environment, operation string, backend state.Backend, errOut io.Writer, fn func(ctx context.Context) error) error {
 	return runInterruptible(environment, func(ctx context.Context) error {
 		ctx = state.WithOperation(ctx, operation)
 		if _, err := backend.Lock(ctx, environment); err != nil {

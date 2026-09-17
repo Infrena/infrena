@@ -65,9 +65,15 @@ func newPlanCommand(opts *GlobalOptions) *cobra.Command {
 			reg, loader := buildRegistryWithLoader(opts)
 			defer loader.Close()
 
+			backend, closeBackend, err := backendFor(cmd.Context(), opts)
+			if err != nil {
+				return err
+			}
+			defer closeBackend()
+
 			// State is read BEFORE compiling, because §6.1's rule needs it: an
 			// environment is reachable if it is declared OR it has state.
-			st, err := backendFor(opts.Dir).Get(cmd.Context(), environment)
+			st, err := backend.Get(cmd.Context(), environment)
 			if err != nil {
 				return err
 			}

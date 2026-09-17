@@ -89,7 +89,11 @@ func applySavedPlan(
 		return finishApply(cmd.ErrOrStderr(), rw, report.ApplyResult{}, err)
 	}
 
-	backend := backendFor(opts.Dir)
+	backend, closeBackend, err := backendFor(cmd.Context(), opts)
+	if err != nil {
+		return finishApply(cmd.ErrOrStderr(), rw, report.ApplyResult{}, err)
+	}
+	defer closeBackend()
 
 	// Shown before the confirmation, and rendered from the artifact rather than
 	// recomputed: what the user is asked to approve has to be what will run.

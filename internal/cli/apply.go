@@ -124,10 +124,20 @@ func newApplyCommand(opts *GlobalOptions) *cobra.Command {
 			// where a pin first gets recorded. validate and plan only compare.
 			copts.RecordLocks = true
 
+			// ONE BACKEND FOR THE WHOLE RUN, opened before the first read and
+			// closed when the command ends. Opening a second one would start a
+			// second process — and, for a backend that holds a connection open,
+			// leave one of them behind holding it.
+			backend, closeBackend, err := backendFor(cmd.Context(), opts)
+			if err != nil {
+				return finishApply(cmd.ErrOrStderr(), rw, report.ApplyResult{}, err)
+			}
+			defer closeBackend()
+
 			// §6.1: reachable if declared OR stateful. State is read here rather
 			// than inside computePlan because the rule decides whether to
 			// compile at all.
-			st0, stErr := backendFor(opts.Dir).Get(cmd.Context(), environment)
+			st0, stErr := backend.Get(cmd.Context(), environment)
 			if stErr != nil {
 				return finishApply(cmd.ErrOrStderr(), rw, report.ApplyResult{}, stErr)
 			}
@@ -180,8 +190,6 @@ func newApplyCommand(opts *GlobalOptions) *cobra.Command {
 				return finishApply(cmd.ErrOrStderr(), rw, report.ApplyResult{},
 					configurationIsNotValid(cmd, opts, ro.Out(), loader))
 			}
-
-			backend := backendFor(opts.Dir)
 
 			// Unlocked preview — identical in spirit to `infra plan`: safe
 			// to run against a locked environment, in CI, or repeatedly.
@@ -318,7 +326,7 @@ func newApplyCommand(opts *GlobalOptions) *cobra.Command {
 // what turns "everything currently in state" into a full teardown plan
 // through the planner's own decision table rather than a second, bespoke
 // "destroy everything" code path.
-func computePlan(ctx context.Context, cmd *cobra.Command, backend *state.Local, reg *registry.Registry, cfg compiler.ResolvedConfig, environment string, opts *GlobalOptions, ro *runOutput) (*planner.Plan, *state.State, refresh.Observations, error) {
+func computePlan(ctx context.Context, cmd *cobra.Command, backend state.Backend, reg *registry.Registry, cfg compiler.ResolvedConfig, environment string, opts *GlobalOptions, ro *runOutput) (*planner.Plan, *state.State, refresh.Observations, error) {
 	rw := ro.Report()
 	st, err := backend.Get(ctx, environment)
 	if err != nil {
@@ -464,7 +472,7 @@ func defaultRetryPolicy() executor.RetryPolicy {
 // already decided, and demoting a working apply to "error" because the
 // lock file could not be removed would hide a fine outcome behind a worse
 // one.
-func releaseLock(backend *state.Local, environment string, stderr io.Writer) {
+func releaseLock(backend state.Backend, environment string, stderr io.Writer) {
 	if err := backend.Unlock(context.Background(), environment); err != nil {
 		fmt.Fprintf(stderr, "warning: failed to release the lock on %q: %v\n", environment, err)
 	}
@@ -509,7 +517,7 @@ const perProviderParallelism = 8
 // drifted in a comment and not in behaviour, and the next drift is the one
 // where destroy silently gets different concurrency or a different retry
 // policy from apply for no stated reason.
-func executorOptions(opts *GlobalOptions, reg *registry.Registry, backend *state.Local, environment string) executor.Options {
+func executorOptions(opts *GlobalOptions, reg *registry.Registry, backend state.Backend, environment string) executor.Options {
 	return executor.Options{
 		Parallelism: opts.Parallelism,
 		PerProvider: perProviderParallelism,

@@ -259,7 +259,10 @@ type ModuleLoadDecl struct {
 // that could express one would be a shape someone later tries to resolve.
 //
 // An empty Plugin means the project declared no backend, which is local — the
-// bootstrap that works before anything is installed.
+// bootstrap that works before anything is installed. UNLESS Origin is set: a
+// block that was present and did not decode records its origin and no plugin,
+// so a caller can tell "no backend was asked for" from "a backend was asked for
+// and infrena could not work out which". Only the first of those is local.
 type BackendDecl struct {
 	Plugin string
 	Config map[string]any

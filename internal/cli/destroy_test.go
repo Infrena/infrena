@@ -53,7 +53,7 @@ func TestDestroyRequiresTheEnvironmentNameNotABareYes(t *testing.T) {
 	if err == nil || errors.Is(err, errChanges) {
 		t.Fatalf("Execute() = %v, want a plain error — \"yes\" must not satisfy destroy's confirmation", err)
 	}
-	st, gerr := backendFor(dir).Get(context.Background(), "dev")
+	st, gerr := localBackend(dir).Get(context.Background(), "dev")
 	if gerr != nil {
 		t.Fatalf("reading state: %v", gerr)
 	}
@@ -112,7 +112,7 @@ func TestDestroyWithCorrectConfirmationRemovesEverything(t *testing.T) {
 		t.Errorf("stdout marks a DESTROYED resource as created:\n%s", stdout.String())
 	}
 
-	st, gerr := backendFor(dir).Get(context.Background(), "dev")
+	st, gerr := localBackend(dir).Get(context.Background(), "dev")
 	if gerr != nil {
 		t.Fatalf("reading state: %v", gerr)
 	}
@@ -187,7 +187,7 @@ resources: {}
 		t.Errorf("the apply summary marked a RETAINED resource as deleted — the one claim retain exists to make false:\n%s", stdout.String())
 	}
 
-	afterSt, gerr := backendFor(dir).Get(ctx, "dev")
+	afterSt, gerr := localBackend(dir).Get(ctx, "dev")
 	if gerr != nil {
 		t.Fatalf("reading state: %v", gerr)
 	}
@@ -294,7 +294,7 @@ resources: {}
 		t.Error("a plan-time refusal must never reach backend.Lock")
 	}
 
-	afterSt, gerr := backendFor(dir).Get(ctx, "dev")
+	afterSt, gerr := localBackend(dir).Get(ctx, "dev")
 	if gerr != nil {
 		t.Fatalf("reading state: %v", gerr)
 	}
@@ -380,7 +380,7 @@ resources: {}
 		t.Fatalf("Execute() = %v, want errChanges", err)
 	}
 
-	afterSt, gerr := backendFor(dir).Get(ctx, "dev")
+	afterSt, gerr := localBackend(dir).Get(ctx, "dev")
 	if gerr != nil {
 		t.Fatalf("reading state: %v", gerr)
 	}
@@ -414,7 +414,7 @@ resources: {}
 // crash) instead of failing on the contending holder.
 func TestDestroyLockConflictNamesTheHolder(t *testing.T) {
 	dir := seedOneNetwork(t, "dev")
-	backend := backendFor(dir)
+	backend := localBackend(dir)
 	lockCtx := state.WithOperation(context.Background(), "some-other-run")
 	if _, err := backend.Lock(lockCtx, "dev"); err != nil {
 		t.Fatalf("pre-locking dev: %v", err)
@@ -489,7 +489,7 @@ func TestDestroyLockRecordsItsOwnOperationName(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- cmd.Execute() }()
 
-	backend := backendFor(dir)
+	backend := localBackend(dir)
 	deadline := time.Now().Add(5 * time.Second)
 	var held bool
 	var op string
@@ -560,7 +560,7 @@ func TestDestroyReportsFailureAndReturnsPlainError(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, ".infra", "state", "dev.lock")); !os.IsNotExist(err) {
 		t.Error("destroy must release the lock even when an operation fails")
 	}
-	st, gerr := backendFor(dir).Get(context.Background(), "dev")
+	st, gerr := localBackend(dir).Get(context.Background(), "dev")
 	if gerr != nil {
 		t.Fatalf("reading state: %v", gerr)
 	}
@@ -767,7 +767,7 @@ resources:
 		t.Fatalf("apply = %v, want errChanges:\n%s%s", err, applyOut.String(), applyErr.String())
 	}
 
-	st, err := backendFor(dir).Get(context.Background(), "dev")
+	st, err := localBackend(dir).Get(context.Background(), "dev")
 	if err != nil {
 		t.Fatalf("reading state: %v", err)
 	}

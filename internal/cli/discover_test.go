@@ -207,7 +207,7 @@ func TestTheManagedIndexIsKeyedOnTheProviderIDAcrossEnvironments(t *testing.T) {
 	importOne(t, dir, "dev", "vpc-1")
 	importOne(t, dir, "production", "vpc-2")
 
-	managed, err := managedProviderIDs(context.Background(), backendFor(dir))
+	managed, err := managedProviderIDs(context.Background(), localBackend(dir))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -221,7 +221,7 @@ func TestTheManagedIndexIsKeyedOnTheProviderIDAcrossEnvironments(t *testing.T) {
 func TestTheManagedIndexIsEmptyForAProjectWithNoState(t *testing.T) {
 	dir := newProjectWithDiscoverableResources(t, "vpc-1")
 
-	managed, err := managedProviderIDs(context.Background(), backendFor(dir))
+	managed, err := managedProviderIDs(context.Background(), localBackend(dir))
 	if err != nil {
 		t.Fatalf("managedProviderIDs on a project with no state: %v", err)
 	}

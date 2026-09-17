@@ -37,6 +37,13 @@ func decodeBackend(path string, key, node *yaml.Node, out *ProjectDecl, ds *diag
 			Action: "Write it as:\n" + backendBlockHint,
 			Origin: originOf(path, node),
 		})
+		// THE BLOCK IS RECORDED EVEN THOUGH IT DID NOT DECODE, carrying its
+		// origin and no plugin. A caller that saw the zero value here could
+		// not tell "this project declared no backend", which means local,
+		// from "this project declared one and it could not be read", which
+		// must never mean local: falling back would write state somewhere
+		// other than where the block asked for.
+		out.Backend = BackendDecl{Origin: originOf(path, node)}
 		return
 	}
 
@@ -89,6 +96,9 @@ func decodeBackend(path string, key, node *yaml.Node, out *ProjectDecl, ds *diag
 			Action: "Add `plugin: <name>`, or remove the `backend:` block to keep state local.",
 			Origin: origin,
 		})
+		// Recorded without a plugin, for the reason above: a block that is
+		// present and unreadable is not a project that declared no backend.
+		out.Backend = BackendDecl{Origin: origin}
 		return
 	}
 

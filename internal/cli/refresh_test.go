@@ -66,7 +66,7 @@ resources: {}
 		t.Errorf("stdout does not report the removal:\n%s", stdout.String())
 	}
 
-	after, gerr := backendFor(dir).Get(ctx, "dev")
+	after, gerr := localBackend(dir).Get(ctx, "dev")
 	if gerr != nil {
 		t.Fatalf("reading state: %v", gerr)
 	}
@@ -195,7 +195,7 @@ resources: {}
 		t.Errorf("stderr does not name the resource that failed to read: %s", stderr.String())
 	}
 
-	after, gerr := backendFor(dir).Get(ctx, "dev")
+	after, gerr := localBackend(dir).Get(ctx, "dev")
 	if gerr != nil {
 		t.Fatalf("reading state: %v", gerr)
 	}
@@ -213,7 +213,7 @@ func TestRefreshLockConflictNamesTheHolder(t *testing.T) {
 project: myapp
 resources: {}
 `)
-	backend := backendFor(dir)
+	backend := localBackend(dir)
 	lockCtx := state.WithOperation(context.Background(), "some-other-run")
 	if _, err := backend.Lock(lockCtx, "dev"); err != nil {
 		t.Fatalf("pre-locking dev: %v", err)
@@ -332,7 +332,7 @@ resources: {}
 	// TestRefreshLockConflictNamesTheHolder does) is not needed here — the
 	// lock under test IS the one refresh itself took; this call either
 	// finds it already released, or fails exactly as a stale lock would.
-	backend := backendFor(dir)
+	backend := localBackend(dir)
 	lockCtx := state.WithOperation(context.Background(), "post-interrupt-check")
 	if _, lerr := backend.Lock(lockCtx, "dev"); lerr != nil {
 		t.Fatalf("lock was not released after SIGINT: %v", lerr)
@@ -458,7 +458,7 @@ resources: {}
 		time.Sleep(5 * time.Millisecond)
 	}
 
-	backend := backendFor(dir)
+	backend := localBackend(dir)
 	contendCtx := state.WithOperation(context.Background(), "contender")
 	_, lockErr := backend.Lock(contendCtx, "dev")
 	if lockErr == nil {
@@ -509,7 +509,7 @@ resources: {}
 	st.Set(rs)
 	seedState(t, dir, "dev", st)
 
-	before, gerr := backendFor(dir).Get(ctx, "dev")
+	before, gerr := localBackend(dir).Get(ctx, "dev")
 	if gerr != nil {
 		t.Fatalf("reading state before refresh: %v", gerr)
 	}
@@ -528,7 +528,7 @@ resources: {}
 		t.Fatalf("Execute() = %v, want nil", err)
 	}
 
-	after, gerr := backendFor(dir).Get(ctx, "dev")
+	after, gerr := localBackend(dir).Get(ctx, "dev")
 	if gerr != nil {
 		t.Fatalf("reading state after refresh: %v", gerr)
 	}

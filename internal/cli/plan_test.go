@@ -218,7 +218,7 @@ resources: {}
 	rs.Lifecycle = resource.Lifecycle{PreventDestroy: true}
 	st := state.New("myapp", "dev")
 	st.Set(rs)
-	b := backendFor(dir)
+	b := localBackend(dir)
 	if _, err := b.Lock(ctx, "dev"); err != nil {
 		t.Fatalf("Lock: %v", err)
 	}

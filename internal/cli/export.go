@@ -40,7 +40,11 @@ func newExportCommand(opts *GlobalOptions) *cobra.Command {
 			environment := args[0]
 			reg, closePlugins := buildRegistry(opts)
 			defer closePlugins()
-			backend := backendFor(opts.Dir)
+			backend, closeBackend, err := backendFor(cmd.Context(), opts)
+			if err != nil {
+				return err
+			}
+			defer closeBackend()
 
 			// No lock. Export only reads, and taking one would make an audit
 			// wait behind — or block — an apply.

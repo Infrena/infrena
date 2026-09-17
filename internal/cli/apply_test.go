@@ -27,7 +27,7 @@ import (
 // reaching around it.
 func seedState(t *testing.T, dir, environment string, st *state.State) {
 	t.Helper()
-	backend := backendFor(dir)
+	backend := localBackend(dir)
 	ctx := state.WithOperation(context.Background(), "test-seed")
 	if _, err := backend.Lock(ctx, environment); err != nil {
 		t.Fatalf("locking to seed state: %v", err)
@@ -78,7 +78,7 @@ resources:
 	// named for: if apply's no-changes path ever called backend.Lock, that
 	// call would fail immediately against this existing holder (Lock's
 	// O_EXCL create), and Execute would return a non-nil error.
-	backend := backendFor(dir)
+	backend := localBackend(dir)
 	lockCtx := state.WithOperation(context.Background(), "some-other-run")
 	if _, err := backend.Lock(lockCtx, "dev"); err != nil {
 		t.Fatalf("pre-locking dev: %v", err)
@@ -138,7 +138,7 @@ resources:
 		t.Errorf("stdout does not report completion of the one create:\n%s", stdout.String())
 	}
 
-	st, err := backendFor(dir).Get(context.Background(), "dev")
+	st, err := localBackend(dir).Get(context.Background(), "dev")
 	if err != nil {
 		t.Fatalf("reading state after apply: %v", err)
 	}
@@ -250,7 +250,7 @@ resources:
 		t.Errorf("stdout does not report both creates:\n%s", stdout.String())
 	}
 
-	st, err := backendFor(dir).Get(context.Background(), "dev")
+	st, err := localBackend(dir).Get(context.Background(), "dev")
 	if err != nil {
 		t.Fatalf("reading state after apply: %v", err)
 	}
@@ -510,7 +510,7 @@ resources:
     type: fake.network
     cidr: 10.20.0.0/16
 `)
-	backend := backendFor(dir)
+	backend := localBackend(dir)
 	lockCtx := state.WithOperation(context.Background(), "some-other-run")
 	if _, err := backend.Lock(lockCtx, "dev"); err != nil {
 		t.Fatalf("pre-locking dev: %v", err)
@@ -612,7 +612,7 @@ resources:
 		t.Fatalf("the replace did not complete cleanly:\n%s", out)
 	}
 
-	st, err := backendFor(dir).Get(context.Background(), "dev")
+	st, err := localBackend(dir).Get(context.Background(), "dev")
 	if err != nil {
 		t.Fatalf("reading state after apply: %v", err)
 	}
@@ -723,7 +723,7 @@ resources:
 	if out, err := apply(t); !errors.Is(err, errChanges) {
 		t.Fatalf("first apply = %v, want errChanges:\n%s", err, out)
 	}
-	st, err := backendFor(dir).Get(context.Background(), "dev")
+	st, err := localBackend(dir).Get(context.Background(), "dev")
 	if err != nil {
 		t.Fatalf("reading state: %v", err)
 	}
@@ -761,7 +761,7 @@ resources:
 		t.Errorf("the plan does not show the dependency change it is asking approval for:\n%s", out)
 	}
 
-	st, err = backendFor(dir).Get(context.Background(), "dev")
+	st, err = localBackend(dir).Get(context.Background(), "dev")
 	if err != nil {
 		t.Fatalf("reading state after the second apply: %v", err)
 	}
@@ -1032,7 +1032,7 @@ resources:
 	}
 	defer closeRun()
 
-	p, planState, obs, err := computePlan(ctx, cmd, backendFor(dir), reg, cfg, "dev", opts, ro)
+	p, planState, obs, err := computePlan(ctx, cmd, localBackend(dir), reg, cfg, "dev", opts, ro)
 	if err != nil {
 		t.Fatalf("computePlan: %v", err)
 	}

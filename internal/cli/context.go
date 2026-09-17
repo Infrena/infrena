@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/infrena/infrena/internal/backendhost"
 	"github.com/infrena/infrena/internal/compiler"
 	"github.com/infrena/infrena/internal/config"
 	"github.com/infrena/infrena/internal/diag"
@@ -290,9 +292,63 @@ func refuseUnresolvedInstances(table providers.Table, environment string) diag.D
 	return ds
 }
 
-// backendFor constructs the state backend for a project directory.
-func backendFor(dir string) *state.Local {
-	return state.NewLocal(filepath.Join(dir, StateDirName))
+// backendFor opens the state backend a project asks for, and the closer that
+// releases it.
+//
+// THE CLOSER IS NEVER NIL, so every call site can defer it without first asking
+// which backend it got. For local it does nothing; for a plugin it shuts a
+// child process down, and a process left behind after a failed apply is a
+// process holding a lock.
+//
+// DECODED, NEVER COMPILED. State is read before anything is compiled — and
+// `destroy`, `refresh`, `discover` and `import` never compile at all — so
+// working out where state lives can only ever be a read of the file. That is
+// also why `backend:` may not interpolate: there is no point at which a value
+// there could be filled in.
+func backendFor(ctx context.Context, opts *GlobalOptions) (state.Backend, func() error, error) {
+	decl := backendDecl(opts.Dir)
+
+	if decl.Plugin == "" {
+		// A BLOCK THAT DID NOT DECODE IS NOT AN ABSENT BLOCK. Config records
+		// the origin of one it could not read, and treating that as "no
+		// backend declared" would write state to `.infra/` for a project
+		// that asked for it to live somewhere else entirely.
+		if decl.Origin.File != "" {
+			return nil, nil, fmt.Errorf(
+				"this project's `backend:` block could not be read, so infrena cannot tell where its state lives\n"+
+					"  declared in: %s\n"+
+					"Running anyway would write state to %s, which is not what the block asks for.\n"+
+					"Run `infrena validate` to see what is wrong with it.",
+				decl.Origin.File, filepath.Join(opts.Dir, StateDirName))
+		}
+		// The bootstrap: no block, no plugin, no process. It works before
+		// anything is installed, which is what makes it the one backend
+		// infrena can carry.
+		return state.NewLocal(filepath.Join(opts.Dir, StateDirName)), func() error { return nil }, nil
+	}
+
+	return backendhost.Open(ctx, decl.Plugin, opts.Dir,
+		backendhost.Search(opts.Dir, opts.PluginDirs), decl.Config)
+}
+
+// backendDecl reads `backend:` out of a project's configuration.
+//
+// Decoding errors are IGNORED here, the same concession pluginConstraints and
+// registerStateInstances make: this runs before any diagnostic can be rendered
+// properly, and reporting a malformed file twice gives a reader two problems to
+// reconcile instead of one. What is NOT ignored is the backend block's own
+// failure to decode, because that one changes where state is written — see
+// backendFor, which has the origin to tell it apart from a project that
+// declared nothing.
+func backendDecl(dir string) config.BackendDecl {
+	files, err := config.Load(dir)
+	if err != nil {
+		// No project here at all, which is local: `infra state list` outside
+		// a project has nothing to read a backend out of.
+		return config.BackendDecl{}
+	}
+	decl, _ := config.Decode(files)
+	return decl.Backend
 }
 
 // sortedAttributeKeys lists an attribute map's keys in sorted order, so

@@ -33,6 +33,7 @@ import (
 	"time"
 
 	"github.com/infrena/infrena/internal/pluginhost"
+	"github.com/infrena/infrena/internal/plugins"
 	"github.com/infrena/infrena/internal/state"
 	"github.com/infrena/infrena/pkg/backend"
 	"github.com/infrena/infrena/pkg/backendproto"
@@ -45,14 +46,28 @@ import (
 // caller owns the lifetime: a command holds one backend for its whole run, and
 // a process left behind after a failed apply is a process holding a lock.
 //
+// projectDir is where plugins.lock is read from, and it is a parameter rather
+// than something this package works out because a backend binary has to be
+// verified against that lock before it runs. A backend reads and writes the
+// whole of a project's state, every secret recorded in it included, so an
+// unverified backend is if anything worse than an unverified provider. §31.3
+// has the host verify on every launch once a lock exists; this is that same
+// check for the other kind of plugin.
+//
 // config is the project's `backend:` block minus `plugin:`, passed through
 // untouched. Configure is sent even when it is empty, so a backend that wants
 // to open a connection on startup has one place to do it, and so a backend
 // handed keys it cannot read can refuse them then rather than at the first
 // write.
-func Open(ctx context.Context, name string, dirs []string, config map[string]any) (state.Backend, func() error, error) {
+func Open(ctx context.Context, name, projectDir string, dirs []string, config map[string]any) (state.Backend, func() error, error) {
 	path, err := find(name, dirs)
 	if err != nil {
+		return nil, nil, err
+	}
+
+	// BEFORE THE PROCESS STARTS, because after it has started is after its
+	// code has run.
+	if err := checkLock(name, projectDir, path); err != nil {
 		return nil, nil, err
 	}
 
@@ -85,6 +100,93 @@ func BinaryName(name string) string {
 	}
 	return "infrena-backend-" + name
 }
+
+// LockKey is how a backend is spelled in plugins.lock.
+//
+// NOT THE BARE NAME, which is what a provider is recorded under, and the
+// difference is forced rather than chosen. plugins.lock is one file keyed by
+// one string, and a provider `s3` and a backend `s3` are different artifacts
+// from different repositories — the spec calls that collision out as the thing
+// the naming convention resolves and a `kind:` field could not. Two different
+// binaries under one key can only end one of two ways: the lock records one of
+// them and refuses the other on every command, or it records whichever was
+// installed last and verifies neither.
+//
+// The repository name is what already tells them apart, so the key is that:
+// `infrena-backend-<name>`. Deliberately WITHOUT the platform's executable
+// extension, unlike BinaryName — plugins.lock is committed and read on other
+// machines, and a key that said `.exe` on Windows alone would be a lock that
+// checks nothing for half a team.
+func LockKey(name string) string { return "infrena-backend-" + name }
+
+// checkLock refuses a backend binary that is not the one plugins.lock recorded.
+//
+// NO NETWORK AND ALMOST NO COST. One file read and one hash of a binary that is
+// about to be executed anyway, and only when the lock has something to say
+// about this backend.
+//
+// This is internal/pluginhost's Loader.checkLock, and the two agree deliberately
+// on every answer: an unreadable lock refuses, a lock that does not mention this
+// backend passes, and a mismatch is a typed error so the caller can tell
+// "installed and wrong" from "not installed". What it cannot share is the code —
+// that one hangs off a Loader holding a cached lockfile and a map of running
+// provider plugins, and a backend is opened once per command with neither.
+func checkLock(name, projectDir, path string) error {
+	if projectDir == "" {
+		return nil
+	}
+
+	lock, err := plugins.ReadLockfile(projectDir)
+	if err != nil {
+		// A LOCK NOBODY CAN READ REFUSES, rather than being treated as
+		// absent. This file is what says which executables are trustworthy,
+		// and reading it wrong in the permissive direction turns a corrupt
+		// file into a silent loss of the only check there is.
+		return err
+	}
+	if lock == nil {
+		return nil
+	}
+
+	// Lockfile.Check is the authority on what an absent entry means, and it
+	// says an entry the lock does not carry passes — a hand-placed backend
+	// keeps working, exactly as a hand-placed provider does. Asking first is
+	// only so a project that locked nothing does not hash a binary for no
+	// reason.
+	key := LockKey(name)
+	if _, recorded := lock.Plugins[key]; !recorded {
+		return nil
+	}
+
+	sum, err := plugins.FileChecksum(path)
+	if err != nil {
+		return err
+	}
+	if err := lock.Check(key, plugins.PlatformKey(), sum); err != nil {
+		return &LockError{Backend: name, Path: path, Err: err}
+	}
+	return nil
+}
+
+// LockError is a backend binary that is not the one plugins.lock recorded.
+//
+// A TYPE RATHER THAN A WRAPPED STRING, for the reason pluginhost.LockError is
+// one: the caller reporting this to a user has to tell it apart from a backend
+// that is not installed at all, and the two have opposite advice. Telling
+// someone to install a backend already sitting on their disk is what §44 calls
+// the worst kind of suggested action.
+type LockError struct {
+	Backend, Path string
+	// Err is the lockfile's own explanation, which already names the entry,
+	// the platform, both checksums and what to do.
+	Err error
+}
+
+func (e *LockError) Error() string {
+	return fmt.Sprintf("%v\n\nThe binary checked was %s, the state backend %q.", e.Err, e.Path, e.Backend)
+}
+
+func (e *LockError) Unwrap() error { return e.Err }
 
 // find locates a backend binary, first match wins, and reports every place it
 // looked so a missing backend says where to put it.
