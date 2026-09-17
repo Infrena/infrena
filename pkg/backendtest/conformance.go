@@ -51,6 +51,7 @@ type TB[Self any] interface {
 const (
 	checkSecondLock          = "a second lock on a held environment is refused"
 	checkWriteNeedsLock      = "a write without a lock is refused"
+	checkWriteAfterLockLoss  = "a write after the lock was taken away is refused"
 	checkMissingIsEmpty      = "an environment that was never written is empty rather than an error"
 	checkListExcludesLocks   = "list names environments with state and not lock objects"
 	checkRoundTrip           = "state survives a round trip byte for byte"
@@ -79,6 +80,7 @@ func Conformance[Self TB[Self]](t Self, newBackend func(Self) backend.Backend) {
 	}{
 		{checkSecondLock, aSecondLockIsRefused[Self]},
 		{checkWriteNeedsLock, aWriteWithoutALockIsRefused[Self]},
+		{checkWriteAfterLockLoss, aWriteAfterTheLockIsTakenAwayIsRefused[Self]},
 		{checkMissingIsEmpty, aMissingEnvironmentIsEmpty[Self]},
 		{checkListExcludesLocks, listExcludesLockObjects[Self]},
 		{checkRoundTrip, stateSurvivesARoundTrip[Self]},
@@ -139,6 +141,59 @@ func aWriteWithoutALockIsRefused[Self TB[Self]](t Self, b backend.Backend) {
 	}
 	if !errors.Is(err, backend.ErrNotLocked) {
 		t.Errorf("Put refused a write to %q, which is not locked, with %v; the refusal must wrap backend.ErrNotLocked so the host can tell it from a storage failure", env, err)
+	}
+}
+
+// aWriteAfterTheLockIsTakenAwayIsRefused is that same refusal asked of a
+// backend that HAS locked: ownership has to be re-derived from STORAGE at the
+// moment of the write, not from a field that remembers Lock having succeeded.
+//
+// The sequence is the one `infra state unlock` creates. A holds the lock; an
+// operator judges A stale and forces the lock off; B takes it and starts
+// applying. A is still running, and its next Put lands on an environment B
+// now owns — two applies mutating one environment, which is invariant 5
+// (spec §47.5). A backend that asks its own memory whether it holds the lock
+// answers yes and writes, silently, over B.
+//
+// state.Local is exactly the shape this asks for: requireOwnLock re-reads the
+// lock file before every Put rather than trusting what Lock handed back, and
+// a store-shaped backend gets there by comparing the stored lock object with
+// the one it wrote.
+//
+// It asks for no more than that, which is why B does not re-lock before the
+// write. Put carries no holder, and a backend object IS one run — that is
+// what Unlock's "a lock this run holds" means, and why newBackend hands each
+// check a store of its own. Once B had acquired through this same object,
+// nothing in the interface could tell A's write from B's, so no correct
+// backend could pass. Losing the lock is the observable half, and it is the
+// half the bug gets wrong.
+//
+// A backend that writes with no lock at all fails aWriteWithoutALockIsRefused,
+// and this returns silently rather than reporting it a second time — the same
+// reason aConflictNamesItsHolder stands down when a second lock succeeds.
+func aWriteAfterTheLockIsTakenAwayIsRefused[Self TB[Self]](t Self, b backend.Backend) {
+	t.Helper()
+	ctx := context.Background()
+	const env = "conformance-lock-taken-away"
+	state := []byte(`{"version":1}`)
+
+	if err := b.Put(ctx, env, state); err == nil {
+		return
+	}
+
+	if _, err := b.Lock(backend.WithHolder(ctx, holder("apply")), env); err != nil {
+		t.Fatalf("Lock of %q failed: %v", env, err)
+	}
+	if err := b.ForceUnlock(ctx, env); err != nil {
+		t.Fatalf("ForceUnlock of the locked %q failed: %v", env, err)
+	}
+
+	err := b.Put(ctx, env, state)
+	if err == nil {
+		t.Fatalf("Put wrote state for %q after that lock had been force-unlocked; a backend must decide a write from the lock its storage holds at that moment, or a run whose lock was taken away writes over whoever holds it now", env)
+	}
+	if !errors.Is(err, backend.ErrNotLocked) {
+		t.Errorf("Put refused a write to %q, whose lock had been force-unlocked, with %v; the refusal must wrap backend.ErrNotLocked so the host can tell it from a storage failure", env, err)
 	}
 }
 

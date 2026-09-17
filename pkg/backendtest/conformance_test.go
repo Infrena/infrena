@@ -41,6 +41,12 @@ func TestEveryConformanceCheckCatchesItsOwnViolation(t *testing.T) {
 			expect: "not locked",
 		},
 		{
+			name:   "ownership of the lock remembered in a field",
+			broken: func() backend.Backend { return &brokenBackend{cachedLockOwnership: true} },
+			check:  checkWriteAfterLockLoss,
+			expect: "force-unlocked",
+		},
+		{
 			name:   "a missing environment erroring",
 			broken: func() backend.Backend { return &brokenBackend{missingIsError: true} },
 			check:  checkMissingIsEmpty,
@@ -172,12 +178,20 @@ type brokenBackend struct {
 	states map[string][]byte
 	locks  map[string]backend.Lock
 
-	lockAlwaysSucceeds bool // a lock that never excludes
-	putWithoutLock     bool // a write accepted with no lock held
-	missingIsError     bool // a never-written environment reported as an error
-	listIncludesLocks  bool // lock objects listed as if they were environments
-	mangleState        bool // state altered between Put and Get
-	anonymousConflict  bool // a conflict that refuses without naming the holder
+	lockAlwaysSucceeds  bool // a lock that never excludes
+	putWithoutLock      bool // a write accepted with no lock held
+	cachedLockOwnership bool // ownership remembered from Lock instead of read back at the write
+	missingIsError      bool // a never-written environment reported as an error
+	listIncludesLocks   bool // lock objects listed as if they were environments
+	mangleState         bool // state altered between Put and Get
+	anonymousConflict   bool // a conflict that refuses without naming the holder
+
+	// owned is cachedLockOwnership's memory: the field a real backend of
+	// that shape sets when Lock returns. It stands in for a whole process,
+	// which is why ForceUnlock leaves it alone — the force-unlock that
+	// strands a holder is run by somebody else, and nothing reaches into
+	// the stranded run to correct what it believes.
+	owned map[string]bool
 }
 
 func (b *brokenBackend) Get(ctx context.Context, environment string) ([]byte, error) {
@@ -193,7 +207,7 @@ func (b *brokenBackend) Get(ctx context.Context, environment string) ([]byte, er
 func (b *brokenBackend) Put(ctx context.Context, environment string, state []byte) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if _, held := b.locks[environment]; !held && !b.putWithoutLock {
+	if !b.holdsLock(environment) && !b.putWithoutLock {
 		return fmt.Errorf("refusing to write state for %q: no lock is held: %w", environment, backend.ErrNotLocked)
 	}
 	if b.states == nil {
@@ -205,6 +219,19 @@ func (b *brokenBackend) Put(ctx context.Context, environment string, state []byt
 	}
 	b.states[environment] = stored
 	return nil
+}
+
+// holdsLock is the question Put has to answer before writing. Correctly it is
+// a question about storage — is this environment locked right now — and
+// cachedLockOwnership answers it from what Lock left behind instead, which is
+// the whole bug: the lock can be force-unlocked and taken by somebody else
+// without this backend's field ever hearing about it.
+func (b *brokenBackend) holdsLock(environment string) bool {
+	if b.cachedLockOwnership {
+		return b.owned[environment]
+	}
+	_, held := b.locks[environment]
+	return held
 }
 
 func (b *brokenBackend) List(ctx context.Context) ([]string, error) {
@@ -256,6 +283,12 @@ func (b *brokenBackend) Lock(ctx context.Context, environment string) (backend.L
 		b.locks = map[string]backend.Lock{}
 	}
 	b.locks[environment] = lock
+	if b.cachedLockOwnership {
+		if b.owned == nil {
+			b.owned = map[string]bool{}
+		}
+		b.owned[environment] = true
+	}
 	return lock, nil
 }
 
@@ -266,5 +299,10 @@ func (b *brokenBackend) Unlock(ctx context.Context, environment string) error {
 		return fmt.Errorf("environment %q is not locked", environment)
 	}
 	delete(b.locks, environment)
+	// Releasing its own lock is the one way this backend's memory is ever
+	// corrected, so cachedLockOwnership breaks the write rule and nothing
+	// else: a run that unlocks normally stops writing, and only the lock
+	// taken away behind its back leaves the field lying.
+	delete(b.owned, environment)
 	return nil
 }
