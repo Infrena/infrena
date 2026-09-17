@@ -3532,6 +3532,23 @@ the manifest's `name` and the binary's `infrena-plugin-<name>`. This is the whol
 in a differently-named repository is only findable by naming the repository exactly, which
 is the second form above and is why that form exists.
 
+**It extends to state backends unchanged** (§52, 2026-09-16): a backend lives in
+`infrena-backend-<name>` and ships a binary of that name. Nothing else about this section
+changes — the same search directories, the same install path, the same one `plugins.lock`
+— because the only thing that differs between the two kinds of plugin is a name pattern.
+That is also why there is no `kind:` field in `plugin.yaml`: an owner listing can filter
+`infrena-backend-*` locally from the one call that lists repositories, where a manifest
+field would cost a request per candidate to answer a question the repository name already
+answers for free, against a budget of sixty an hour. And it resolves a collision the field
+could not — a provider `s3` and a backend `s3` are different repositories under the
+convention and indistinguishable under a field.
+
+In `plugins.lock` a backend is therefore keyed as `infrena-backend-<name>`, not as the
+bare name a provider uses (`backendhost.LockKey`). One file, one key each: the two
+binaries differ, so one key holding both could only either refuse a correctly installed
+pair on every command or verify neither. The key deliberately omits the `.exe` a Windows
+binary carries, because the lock is committed and read on other machines.
+
 ### A project may NAME a source; only the user may TRUST one
 
 This is the security decision, and it is the one place the design refuses the obvious
@@ -4608,14 +4625,55 @@ Prioritize complete lifecycle support over a huge number of partially implemente
 
 # 52. Phase 4 — Remote State
 
-Implement:
+**Designed 2026-09-16** (`docs/superpowers/specs/2026-09-16-remote-state-design.md`). The
+six bullets this section used to carry named the deliverables and not the shape, and the
+shape is the part that constrains everything else. Four rules:
 
-1. S3 backend.
-2. Locking.
-3. State versioning.
-4. State migration.
-5. State encryption/documentation.
-6. Concurrent environment testing.
+**A backend is a plugin.** Not an `if` in the engine. It lives in
+`infrena-backend-<name>`, ships a binary of that name, is found by the same search
+`plugins install` populates, and is verified against the same `plugins.lock` — §31.3's
+convention extended, not a second mechanism. `pkg/backend` is the contract an author
+imports, `pkg/backendproto` the wire, `pkg/backendsdk` the whole of their `main()`.
+
+**Local is the bootstrap and is BUILT IN.** It is the backend that works before anything
+is installed, which is why it cannot be a plugin: something has to hold state for the
+project that has not installed one yet. **A shipped infrena carries no REMOTE backend**,
+exactly as it carries no provider. A project with no `backend:` block gets local and
+starts no process.
+
+**Every backend must lock.** A backend that does not implement locking is refused **when
+it loads**, never at apply time — locking is part of the interface rather than an option,
+so one that cannot lock does not compile. Invariant 5 is absolute: two applies cannot
+mutate one environment concurrently.
+
+**`backend:` never interpolates.** `plugin:` is the only key infrena reads; every other
+key crosses to the backend untouched, so an unrecognised key here is not an error (the
+engine cannot know what an s3 backend accepts) while a missing `plugin:` is. A `${...}`
+anywhere in the block is a diagnostic explaining the ORDERING CYCLE: state is read before
+anything is compiled, and compiling is what resolves variables — `destroy`, `refresh`,
+`discover` and `import` never compile at all — so there is no point in any run at which a
+value there could be filled in. It is not a feature that has not been got round to, and a
+later request to "just support variables in `backend:`" is a request to break the
+ordering.
+
+Build order, each step useful alone:
+
+1. **The backend boundary. SHIPPED 2026-09-16.** `state.Backend` widened to the seven
+   methods the CLI calls, the public types moved to `pkg/backend`, the protocol and host
+   built, `backend:` decoded, and `backendFor` routing to a plugin or to local. Nothing
+   user-visible changed, and the whole existing suite passing untouched is the proof the
+   extraction was faithful.
+2. **The S3-compatible backend plugin.** DESIGN. Its own repository, locking via
+   conditional PUT with a clear refusal where the store cannot.
+3. **State versioning and migration.** DESIGN. `state migrate`, and the local → S3 →
+   local round trip.
+4. **Concurrency tests.** DESIGN. Two environments applying concurrently succeed; two
+   applies to one environment cannot.
+
+State encryption is documented rather than implemented: `docs/state-backends.md` states
+the trust boundary — **state reaches a backend in cleartext, exactly as values already
+reach a provider** — and client-side encryption is deferred because it needs a key story
+before it needs code.
 
 ---
 
@@ -4894,8 +4952,16 @@ was written:
 | `report.Version` | `pkg/report` | `--output` reports | additive. **At 2 since 2026-09-15**: the format gained the `plan` line (§37.2), so a consumer that only understands 1 can tell |
 | lockfile `Version` | `internal/modules/source` | `modules.lock` | internal |
 | `plugins.lock` `version` | Phase B (§31.3) | the resolved plugins and their checksums | internal |
+| `backendproto.Version`, `Supported` | `pkg/backendproto` | the state-backend wire | negotiated per backend; `Supported` is a SET. **At 1 since 2026-09-16** (§52) |
 | `pluginmanifest.Version`, `Supported` | `pkg/pluginmanifest` | `plugin.yaml` | **At 2 since the 2026-09-14 rename** — `infrata:` became `infrena:`, a renamed key rather than an added one. 1 stays readable, so a pre-rename release keeps meaning what it meant |
 | cache `Version` | `internal/modules/source` | module cache metadata | internal |
+
+**The backend wire is the seventh of these and is INDEPENDENT of `pluginproto`** (added
+2026-09-16, §52). The two evolve for unrelated reasons: a change to how state is stored
+must not force every provider to cut a release, and a change to how resources are
+described must not force every backend to. They share a transport — newline-delimited
+JSON over stdio, the same handshake and the same cookie — because that part has no reason
+to differ and a second transport would be a second thing to get wrong.
 
 **They stay independent, and that is the decision.** Each guards a different boundary
 with a different lifetime, and one shared number would mean a state migration every

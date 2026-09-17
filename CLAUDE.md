@@ -154,7 +154,40 @@ the lifecycle options, sitting between what the resource writes and what the plu
 key no resource type of that plugin declares is an ERROR: it would otherwise apply to nothing,
 in every environment, forever, with no output in which its absence is visible.
 
-**Absent until Phase 3+:** remote state and AWS. Nothing half-implements either.
+**Absent until Phase 3+:** AWS. Nothing half-implements it.
+
+**NEW 2026-09-16 — the state backend boundary** (`PLAN.md` §52, step 1 of four;
+`docs/state-backends.md`). Remote state is no longer absent, but nothing remote ships yet
+and that is the point of the split:
+
+- **A backend is a plugin, and local is the BOOTSTRAP.** Local writes to `.infra/` and
+  works before anything is installed, which is exactly why it cannot itself be a plugin —
+  something has to hold state for a project that has installed none. **A shipped infrena
+  carries no REMOTE backend**, the same way it carries no provider. A project with no
+  `backend:` block gets local, starts no process and touches no network; `backendFor` is
+  where that routing lives, and every one of its call sites defers the closer it returns.
+- **`backend:` never interpolates, and the reason is an ordering CYCLE.** State is read
+  before anything is compiled, and compiling is what resolves variables — `destroy`,
+  `refresh`, `discover` and `import` never compile at all. So a `${...}` there could never
+  be filled in at any point in any run. It is not a feature nobody got round to; do not
+  add it. `plugin:` is the only key infrena reads and an unrecognised key is NOT an error,
+  alone among the blocks in this language, because the engine cannot know which keys an s3
+  backend accepts.
+- **A backend stores BYTES and does not interpret them.** `state.State` stays in
+  `internal/state` and out of `pkg/backend`; one that parsed state would be a second
+  reader free to disagree with the first. `Backend.Put` is called once per operation and
+  writes the whole state, carried as raw bytes rather than JSON inside JSON — a second
+  full encode on every write buys nothing.
+- **Every backend must lock**, refused when it LOADS rather than at apply time, so
+  invariant 5 holds for a backend the engine cannot audit.
+- `pkg/backend` is the contract an author imports, `pkg/backendproto` the wire (its own
+  format version, §61's seventh — a storage change must not force a provider release),
+  `pkg/backendsdk` the whole of their `main()`, `internal/backendhost` the host.
+- **State reaches a backend in CLEARTEXT**, exactly as values already reach a provider. It
+  is the same trust level, not a new exposure; the mitigation is choosing which plugins to
+  trust, and `plugins.lock` records the choice. Client-side encryption is deferred because
+  it needs a key story before it needs code. `docs/state-backends.md` says all of this to
+  users.
 
 **Reading a saved plan back SHIPPED** (`apply --plan <file>`, 2026-09-13), which closed §37's
 last unimplemented surface. It compiles nothing, refreshes nothing and re-plans nothing, and is
@@ -454,7 +487,13 @@ is there.
 
 `pluginhost.Loader` hashes a locked binary BEFORE launching it — after the process starts is
 after its code has run — and a lock that cannot be read refuses every launch rather than
-being treated as absent. A binary that fails its checksum is a `pluginhost.LockError` with
+being treated as absent. **`backendhost.Open` does the identical thing for a state backend**
+(2026-09-16), which is why it takes the project directory: a backend reads and writes the
+whole of your state, every secret in it included, so an unverified backend binary is if
+anything worse than an unverified provider. It is keyed in the lock as
+`infrena-backend-<name>` (`backendhost.LockKey`) rather than the bare name, because one key
+cannot hold two different binaries — a provider `s3` and a backend `s3` are separate
+repositories under §31.3's convention. A binary that fails its checksum is a `pluginhost.LockError` with
 its OWN diagnostic: reporting it as "the plugin is not available" and advising an install
 tells a user to install something already on their disk, which is exactly the §44 failure
 the version-constraint branch beside it already exists to avoid.
@@ -653,11 +692,13 @@ production account. Two rules in that design are easy to violate and worth knowi
 touching it: **a project may NAME a plugin source but only a user may TRUST one** (project
 configuration travels with a `git clone`, so it must not be able to grant a download
 source), and **no command on the hot path may touch the network** — searching happens in
-`infrena plugins ...` and in one interactive prompt, never in `plan` or `apply`. Sources,
-trust, `plugins list` and `plugins search` shipped 2026-09-16; install, the lock file and
-the interactive offer have not.
+`infrena plugins ...` and in one interactive prompt, never in `plan` or `apply`. All three
+units shipped 2026-09-16: sources, trust and `plugins list`/`plugins search`, then
+`plugins install`, the lock file and verification on launch, then the interactive offer.
 
-After that, Phase 4 remote state (§52) and Phase 5 production features (§53).
+After that, Phase 4 remote state (§52) — whose step 1, the backend boundary, shipped
+2026-09-16 and whose remaining three steps are design — and Phase 5 production features
+(§53).
 
 §54 lists what **not** to build yet: the full AWS surface, a general-purpose language,
 web UI, SaaS control plane, distributed execution, Kubernetes/GCP/Azure providers, a
