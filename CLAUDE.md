@@ -189,6 +189,66 @@ and that is the point of the split:
   it needs a key story before it needs code. `docs/state-backends.md` says all of this to
   users.
 
+**NEW 2026-09-17 — `infrena state migrate`** (`PLAN.md` §52 step 3, §37.1;
+`internal/cli/state_migrate.go`, `docs/state-backends.md`). A temporary `migrate_from:`
+block sits beside `backend:`, taking the same shape and decoded by the same code. Five
+things about it are easy to undo by accident:
+
+- **MIGRATION COPIES. It never empties the source.** James's reason: a bug in the migration
+  has to be survivable, so the old backend stays a fallback you can point `backend:` back
+  at. The consequence has to be said out loud wherever this is documented — **the old state
+  lingers, every secret in it included, until the user deletes it.** Nothing tidies it up,
+  and nobody should assume it did; the command says so on the run that copies.
+- **`migrate_from:` is INERT for every command except `state migrate`.** A migration through
+  CI is necessarily two commits — one adding the block, one removing it — and between them
+  it sits in committed configuration. If `plan` or `apply` acted on it, a SUCCESSFUL
+  migration would break the pipeline until somebody pushed the removal.
+- **The one exception is a GUARD, and it is what stops the design destroying somebody's
+  infrastructure.** While the destination is empty and the source holds state, ordinary
+  commands REFUSE:
+
+  | `migrate_from:` | Destination | Source | Ordinary commands |
+  | --- | --- | --- | --- |
+  | absent | — | — | proceed — every project |
+  | present | holds state | not opened | proceed: migrated, block inert |
+  | present | empty | holds state | **REFUSE**, naming the fix |
+  | present | empty | empty | proceed: a new project with both blocks is not a pending migration |
+
+  Without it, the window between the configuration landing and the migration being run is a
+  window in which a command reading only `backend:` sees every resource as unmanaged and an
+  apply RECREATES ALL OF IT. In the CI flow this exists for, that ordering is the likely
+  one. **A command never performs the migration** — moving state as a side effect of a
+  `plan` would be a worse surprise than the one being prevented; the only outcomes are
+  "carry on" and "stop, and here is what to run". **The destination is checked first**,
+  which it has been opened for anyway: state there means the migration is done and the
+  source is never opened, and that matters because opening it may start a plugin process
+  and reach a network.
+- **Three cases, not two**, compared under both locks before the first write: destination
+  empty → copy and read back to verify; destination identical → **no-op and SUCCEED**;
+  destination different → refuse. The middle case is the one the design turns on. A
+  migration run through CI gets re-run, and failing there invites somebody to put `--force`
+  in a workflow file where it then sits forever — the same hazard as a `lock: false` escape
+  hatch arriving by the same route, which is why the refusal mentions the flag last rather
+  than first. `--check` and the migration share ONE comparison function; two would be how a
+  check comes to report one thing and the migration then does another.
+- **`comparableBytes` zeroes `Serial` and `UpdatedAt` before comparing**, and only those.
+  Every `Put` stamps both, so without it every COMPLETED migration would read as a conflict
+  and the no-op case could never fire. Nothing else is zeroed, so a genuine difference in
+  what is managed still refuses.
+
+`--check` writes nothing and takes no lock, and **its exit code is the report**: 0 none
+needed, 2 pending (deliberately `plan`'s code — both mean "something is pending, run the
+matching command"), 3 already complete, 4 the ends differ, 1 error. 3 and 4 are new rows on
+§37.1's table and therefore a documented product-API change. `report.Version` is now 3,
+because the `result` line carries a `status` WORD a version-2 consumer has never seen.
+
+**The round trip test is honest about what it can prove.** A literally byte-identical
+local → S3 → local round trip is IMPOSSIBLE: `internal/state/local.go` increments `Serial`
+and restamps `UpdatedAt` on every `Put`. `tests/integration/state_migrate_roundtrip_test.go`
+asserts the encoded state matches with those two cleared AND that they are the only
+top-level keys that changed — which is stronger than a normalised comparison alone, because
+normalisation can hide a change in a field it also touches.
+
 **Reading a saved plan back SHIPPED** (`apply --plan <file>`, 2026-09-13), which closed §37's
 last unimplemented surface. It compiles nothing, refreshes nothing and re-plans nothing, and is
 refused outright — no override — when the project, environment or state it was made against has
@@ -758,9 +818,9 @@ source), and **no command on the hot path may touch the network** — searching 
 units shipped 2026-09-16: sources, trust and `plugins list`/`plugins search`, then
 `plugins install`, the lock file and verification on launch, then the interactive offer.
 
-After that, Phase 4 remote state (§52) — whose step 1, the backend boundary, shipped
-2026-09-16 and whose remaining three steps are design — and Phase 5 production features
-(§53).
+After that, Phase 4 remote state (§52) — all four steps shipped: the backend boundary
+2026-09-16, then `infrena-backend-s3`, the concurrency tests and `state migrate`
+2026-09-17 — and Phase 5 production features (§53).
 
 §54 lists what **not** to build yet: the full AWS surface, a general-purpose language,
 web UI, SaaS control plane, distributed execution, Kubernetes/GCP/Azure providers, a

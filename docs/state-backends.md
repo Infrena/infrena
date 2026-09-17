@@ -72,6 +72,171 @@ the backend read the value from its surroundings the way a provider reads creden
 
 ---
 
+## Moving state between backends
+
+`infrena state migrate` copies state from one backend into another. Both ends are named in
+configuration, because a migration with one end implicit is a migration that can go somewhere
+nobody asked for:
+
+```yaml
+backend:                  # where state is going
+  plugin: s3
+  bucket: acme-state
+  region: eu-west-1
+
+migrate_from:             # where state is today
+  plugin: local
+```
+
+`migrate_from:` takes **the same shape and the same rules as `backend:`** — the same decoder,
+the same literal-only rule, the same "`plugin:` is the only key infrena reads". Two blocks that
+mean the same thing must not be able to disagree about what a key means.
+
+**`plugin: local` names the built-in backend.** It has to be namable, because otherwise
+"migrate back to local" could only be said by leaving the block out, and leaving it out already
+means "there is no migration".
+
+### It COPIES. It never empties the source
+
+`state migrate` writes to the destination and removes **nothing** from the source. That is
+deliberate: if a bug in the migration puts something wrong in the new backend, the old one is
+still the record and you can point `backend:` back at it.
+
+**The consequence is yours to clean up.** The old state stays where it is — every resource,
+every attribute, and every secret recorded in it — until you delete it. Nothing about a
+successful migration tidies the old store up, and you should not assume it did. When you are
+satisfied the new backend is right, empty the old one yourself.
+
+### Three cases, decided before anything is written
+
+Both ends are locked for the whole operation, and both are compared before the first write,
+because the interesting question is which of three situations this is and finding out halfway
+through a copy is too late:
+
+| Source | Destination | Outcome |
+| --- | --- | --- |
+| holds state | empty | **copy**, then read each environment back to verify it |
+| holds state | holds the same state | **no-op, and SUCCEED**: "already migrated" |
+| holds state | holds different state | **refuse**, naming the environments that differ |
+
+**The middle case succeeding is not a nicety.** A migration performed through CI gets re-run —
+a retried job, a re-pushed branch, a workflow that runs on every commit. If a second run failed,
+the natural response to the red pipeline is to add `--force` to the workflow file, where it then
+sits on every future run and silently overwrites the next real conflict. That is the same hazard
+as a `lock: false` escape hatch, arriving by the same route. So a re-run of a completed
+migration exits 0.
+
+`--force` exists for the third case, and the refusal mentions it **last**, after telling you how
+to find out which end is actually right. The first thing offered is the thing that ends up in a
+workflow file.
+
+Comparison is over the encoded state with the two fields a *write* stamps — `serial` and
+`updated_at` — set aside, because a faithful copy necessarily advances both. Nothing else is set
+aside, so a genuine difference in what is managed is still a conflict.
+
+**Any failure leaves the source authoritative.** Nothing is removed from it, so a migration that
+dies halfway has cost you nothing but a partially filled destination.
+
+### `migrate_from:` is inert everywhere else, so leaving it is harmless
+
+No command but `state migrate` acts on the block. That matters because a migration performed
+through CI is necessarily **two commits** — one adding `migrate_from:`, one removing it — and
+between them the block sits in committed configuration:
+
+1. Commit the `backend:` block for the new backend and the `migrate_from:` block for the old
+   one. Every ordinary command still refuses to run (see below), because the migration has not
+   happened yet.
+2. Run `infrena state migrate`, from CI or from a laptop.
+3. Commit the removal of `migrate_from:` whenever it suits you. Everything works in the
+   meantime; the block is inert once the destination holds state.
+
+If step 3 lagged and an ordinary command acted on the block, a *successful* migration would
+break every `plan` until somebody pushed the removal. That is why it is inert.
+
+### The one thing ordinary commands do consult it for
+
+There is exactly one exception, and it is a **guard, not an action**: while the destination is
+empty and the source holds state, `plan`, `apply`, `refresh` and the rest **refuse to run**.
+
+| `migrate_from:` | Destination | Source | What ordinary commands do |
+| --- | --- | --- | --- |
+| absent | — | — | **proceed** — this is every project |
+| present | holds state | not opened | **proceed**: the migration is done, the block is inert |
+| present | empty | holds state | **REFUSE**, naming the environments and telling you to run `infrena state migrate` |
+| present | empty | empty | **proceed**: a new project carrying both blocks is not a pending migration, and refusing would block a legitimate first apply |
+
+Without that guard, the window between the configuration landing and the migration being run is
+a window in which a command reading only `backend:` finds an empty backend, sees **every
+resource as unmanaged**, and an apply **creates all of it a second time** alongside what already
+exists — duplicate infrastructure, and two backends each claiming to record the same resources.
+In a pipeline that ordering is the likely one: the configuration lands first and the job runs
+before a human triggers anything.
+
+**A command never performs the migration.** Moving state as a side effect of a `plan` would be a
+worse surprise than the one being prevented. The only two outcomes are "carry on" and "stop, and
+here is what to run".
+
+**The destination is checked first**, and it is the backend the command has opened anyway. State
+there means the migration is done and the source is **never opened at all** — which matters,
+because opening it may start a plugin process and reach a network. Only an empty destination
+pays for a second open, and an empty destination is already the unusual case.
+
+### `--check`, for pipelines
+
+`infrena state migrate --check` runs the same three-way comparison — the same function, not a
+read-only re-implementation of it — and **writes nothing and takes no lock**. A check that
+migrated would be the worst surprise a pipeline can hold: the thing you ran to find out whether
+to act would have acted. A check that took a lock would block the migration it just recommended.
+
+**The exit code is the answer**, so a script branches without parsing anything:
+
+| Code | Meaning |
+| --- | --- |
+| `0` | no migration needed — there is no `migrate_from:` block |
+| `2` | **pending** — the source holds state the destination does not |
+| `3` | already complete — both ends agree, and the block is stale |
+| `4` | the two ends **differ** — a person has to decide |
+| `1` | error — a backend unreachable, configuration unreadable |
+
+**2 is deliberately `plan`'s code**, not a collision: both mean the same thing to a pipeline —
+something is pending, run the matching command. 4 is distinct from 1 for the same reason 77 is
+distinct from 1: a pipeline that cannot tell "this failed" from "this needs a person" treats
+both the same, and they want opposite responses.
+
+```bash
+infrena state migrate --check
+case $? in
+  0|3) ;;                        # nothing to do
+  2)   infrena state migrate ;;  # pending, and safe to run
+  4)   exit 1 ;;                 # stop: both ends hold different state
+esac
+```
+
+With `--output`, stdout stays empty and the `result` line carries the status **as a string** —
+`"none"`, `"pending"`, `"complete"`, `"conflict"` or `"error"` — so a consumer never maps a
+number back to a meaning.
+
+### What a round trip proves
+
+The migration is tested local → S3 → local, in `tests/integration`, because either direction
+alone only proves a backend can read its own writing. The state that comes home is compared
+against the state that left.
+
+**A literally byte-identical round trip is impossible**, and the test says so rather than
+pretending otherwise: `internal/state/local.go` increments `serial` and restamps `updated_at` on
+every `Put`, so state that has been written three times cannot carry the numbers it started
+with. The test therefore asserts two things, and the second is what makes the first mean
+something:
+
+1. the encoded state matches with `serial` and `updated_at` cleared, and
+2. those two are the **only** top-level keys that changed.
+
+That is stronger than a normalised comparison on its own, because normalisation can hide a
+change in a field it also touches. Every resource, every attribute and every key ordering has to
+cross unchanged.
+
+---
+
 ## The trust boundary, stated plainly
 
 **State reaches a backend in cleartext.** Every attribute recorded in it, sensitive ones

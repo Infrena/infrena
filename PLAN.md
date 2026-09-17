@@ -4094,6 +4094,7 @@ infra destroy <environment>
 
 infra state
 infra state show <address>
+infra state migrate [--check] [--force]
 
 infra refresh <environment>
 
@@ -4124,7 +4125,9 @@ Useful options:
 | --- | --- |
 | `0` | success, no changes |
 | `1` | error |
-| `2` | success, changes present |
+| `2` | success, changes present — and `state migrate --check`: a migration is pending |
+| `3` | `state migrate --check`: the migration is already complete, so `migrate_from:` is stale |
+| `4` | `state migrate`: the two backends hold different state, and a person has to decide |
 | `77` | changes require approval that this run cannot obtain |
 
 The first three are what the source calls spec §16. `2` is what makes CI gating possible at
@@ -4150,6 +4153,26 @@ It replaces a genuinely misleading outcome. A piped `apply` used to reach `confi
 end of input, and exit 1 saying you must type `yes` to approve: advice nobody in that
 pipeline could have taken, which is precisely what §44 says a suggested action must never
 be. It now names an escape that works — `--auto-approve`, or a saved plan with `--plan`.
+
+**3 and 4 arrived with `state migrate --check` on 2026-09-17**, and being new rows they are a
+documented change to a product API in the same way 77 was. They are the answers a pipeline
+needs that 0 and 1 cannot carry:
+
+- **`2` is shared with `plan` deliberately, and is not a collision.** Both codes mean one thing
+  to a script — something is pending, run the corresponding command — so a `plan` that exits 2
+  and a `--check` that exits 2 want the same shape of response. A migration is pending when the
+  source holds state the destination does not.
+- **`3` is "already complete", distinct from 0** so a pipeline can tell "no migration was ever
+  configured" from "the migration is done and the `migrate_from:` block is now stale", and
+  remind somebody to remove it. A script treats both the same and carries on.
+- **`4` is a conflict, distinct from 1** for exactly the reason 77 is: a pipeline that cannot
+  tell "this failed" from "this needs a person" will treat both the same, and the two want
+  opposite responses. Retrying a conflict achieves nothing; it needs a human to decide which
+  end is the real record. Both `--check` and the migration itself report a conflict with 4, so
+  a pipeline that ran the migration directly does not have to learn a second spelling of the
+  answer the check would have given it.
+- **`1` stays "error"**: a backend that would not open, configuration that would not read. A
+  question nobody could answer is never reported as "nothing to do".
 
 ## 37.2 `--output`
 
@@ -4754,8 +4777,31 @@ Build order, each step useful alone:
    that ignores it and overwrites, which is the silent case. Verified against real AWS S3
    and MinIO — full live suite, infrena's conformance suite, and ten goroutines racing one
    lock leaving exactly one winner — and against B2, where the refusal is the pass.
-3. **State versioning and migration.** DESIGN. `state migrate`, and the local → S3 →
-   local round trip.
+3. **State migration. SHIPPED 2026-09-17.** `infrena state migrate` copies state from the
+   backend a temporary `migrate_from:` block names into the one `backend:` names, with
+   `--check` for pipelines and the local → S3 → local round trip proving the two backends
+   agree about what state is. Four rules decided it:
+   - **It COPIES and never empties the source.** A bug in the migration has to be
+     survivable, so the old backend stays a fallback you can point `backend:` back at.
+     The cost is that the old state lingers, every secret in it included, until the user
+     deletes it, and every message the command prints says so.
+   - **Three cases, not two**, compared under both locks before anything is written:
+     destination empty → copy; destination identical → no-op and SUCCEED; destination
+     different → refuse. The middle case is what makes a CI re-run safe, and failing there
+     is what would put `--force` in a workflow file forever — the same hazard as a
+     `lock: false` escape hatch arriving by the same route, which is why the refusal
+     mentions the flag last rather than first.
+   - **`migrate_from:` is inert for every command except `state migrate`**, with one
+     exception that is a GUARD and not an action: while the destination is empty and the
+     source holds state, ordinary commands refuse. Without it, the window between the
+     configuration landing and the migration being run is a window in which a command
+     reading only `backend:` sees every resource as unmanaged and an apply recreates all
+     of it. The destination is checked first, so a completed migration never opens the
+     source at all.
+   - **Comparison is over encoded bytes with `Serial` and `UpdatedAt` zeroed**, because
+     every `Put` stamps both; without that, every completed migration would read as a
+     conflict and the no-op case could never fire. Nothing else is zeroed, so a genuine
+     difference in what is managed still refuses.
 4. **Concurrency tests. SHIPPED 2026-09-17.** Both halves now exist in
    `tests/integration/m3_test.go`, each driving two genuinely overlapping OS processes.
    The one-environment half (`TestConcurrentApplyToOneEnvironmentSerializes`) was already
