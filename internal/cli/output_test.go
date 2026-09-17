@@ -157,9 +157,16 @@ func executeRoot(t *testing.T, root *cobra.Command) (string, string, int) {
 		switch {
 		case errors.Is(err, errChanges):
 			code = ExitChanges
+		case errors.Is(err, errMigrationPending):
+			code = ExitMigrationPending
+		case errors.Is(err, errMigrationComplete):
+			code = ExitMigrationComplete
 		case errors.Is(err, errNoApproval):
 			fmt.Fprintf(&stderr, "Error: %v\n", err)
 			code = ExitNoApproval
+		case errors.Is(err, errMigrationConflict):
+			fmt.Fprintf(&stderr, "Error: %v\n", err)
+			code = ExitMigrationConflict
 		default:
 			fmt.Fprintf(&stderr, "Error: %v\n", err)
 			code = ExitError

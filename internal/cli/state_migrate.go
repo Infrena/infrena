@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"sort"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/infrena/infrena/internal/config"
 	"github.com/infrena/infrena/internal/state"
+	"github.com/infrena/infrena/pkg/report"
 )
 
 // migrationStatus is what the comparison of two backends came to, in words.
@@ -32,6 +34,11 @@ const (
 	// migrationConflict: both ends hold state for the same environment and it
 	// is not the same state. Somebody has been applying to one of them.
 	migrationConflict migrationStatus = "conflict"
+	// migrationFailed: the question could not be answered at all -- a backend
+	// that would not open, configuration that would not read. DISTINCT from
+	// every answer above, because a consumer that read "nothing to do" from a
+	// question nobody answered would carry on past a pending migration.
+	migrationFailed migrationStatus = "error"
 )
 
 // migrationComparison is the three-case decision, made once.
@@ -193,7 +200,7 @@ func comparableBytes(s *state.State) ([]byte, error) {
 // command's to make, and until they do the old state lingers with every secret
 // recorded in it.
 func newStateMigrateCommand(opts *GlobalOptions) *cobra.Command {
-	var force bool
+	var force, check bool
 	cmd := &cobra.Command{
 		Use:           "migrate",
 		SilenceUsage:  true,
@@ -201,12 +208,134 @@ func newStateMigrateCommand(opts *GlobalOptions) *cobra.Command {
 		Short:         "Copy state from the backend `migrate_from:` names into the one `backend:` names",
 		Args:          cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if check {
+				return runStateMigrateCheck(cmd, opts)
+			}
 			return runStateMigrate(cmd, opts, force)
 		},
 	}
 	cmd.Flags().BoolVar(&force, "force", false,
 		"overwrite state the destination already holds, when the two ends differ")
+	cmd.Flags().BoolVar(&check, "check", false,
+		"report whether a migration is needed and change nothing; the exit code is the answer")
 	return cmd
+}
+
+// The three outcomes `--check` reports that are not failures, plus the one
+// that is not a failure either but has to be said out loud.
+//
+// Sentinels rather than exit codes returned up the stack, because that is how
+// this package already carries `plan`'s "there are changes" (errChanges) and
+// apply's "nobody could approve" (errNoApproval): RunE returns an error, and
+// root.go's Execute is the ONE place that turns an outcome into a number.
+var (
+	// errMigrationPending: the source holds state the destination does not.
+	// Exit 2, the same code `plan` uses, because it means the same thing --
+	// something is pending, run the corresponding command.
+	errMigrationPending = errors.New("a migration is pending")
+	// errMigrationComplete: both ends agree and the block is stale. Exit 3.
+	errMigrationComplete = errors.New("the migration is already complete")
+	// errMigrationConflict: both ends hold different state. Exit 4, and this
+	// one IS printed, because the code sends for a person and a person needs
+	// to know what for.
+	errMigrationConflict = errors.New("the two backends hold different state")
+)
+
+// runStateMigrateCheck answers the question the migration acts on, WITHOUT
+// acting on it.
+//
+// IT WRITES NOTHING AND TAKES NO LOCK. A check that migrated would be the
+// worst possible surprise in a pipeline: the thing you ran to find out whether
+// to act would have acted. A check that took a lock would be nearly as bad,
+// because the lock it left behind would block the migration it just
+// recommended.
+//
+// It calls compareEnds, THE SAME FUNCTION the migration decides on. Not a
+// read-only re-implementation of it: two implementations of "are these two
+// ends the same" is how a check comes to report one thing and the migration
+// then does another, and the pipeline that trusted the check is what discovers
+// it.
+func runStateMigrateCheck(cmd *cobra.Command, opts *GlobalOptions) error {
+	ro, closeRun, err := openRun(cmd, opts, "state migrate", "")
+	if err != nil {
+		return err
+	}
+	defer closeRun()
+
+	destinationDecl, sourceDecl := backendDecls(opts.Dir)
+	comparison, err := checkMigration(cmd.Context(), opts, destinationDecl, sourceDecl)
+	if err != nil {
+		writeMigrateResult(ro, migrationFailed, nil, err)
+		return err
+	}
+	writeMigrateResult(ro, comparison.Status, comparison.Environments(), nil)
+
+	out := ro.Out()
+	switch comparison.Status {
+	case migrationNotConfigured:
+		fmt.Fprint(out, "This project has no `migrate_from:` block, so no migration is pending.\n")
+		return nil
+	case migrationPending:
+		fmt.Fprintf(out, "A migration is pending: state for %s is at %s and not at %s.\n"+
+			"Run `infrena state migrate` to copy it.\n",
+			joinEnvironments(comparison.Pending),
+			backendName(sourceDecl), backendName(destinationDecl))
+		return errMigrationPending
+	case migrationComplete:
+		reportAlreadyMigrated(out, comparison)
+		return errMigrationComplete
+	default:
+		return conflictError(comparison, backendName(sourceDecl), backendName(destinationDecl))
+	}
+}
+
+// checkMigration opens both ends read-only and compares them.
+//
+// An absent `migrate_from:` is not an error here, the way it is for the
+// migration itself: "is a migration needed" has an answer for every project,
+// and for almost every project the answer is no.
+func checkMigration(
+	ctx context.Context, opts *GlobalOptions, destinationDecl, sourceDecl config.BackendDecl,
+) (migrationComparison, error) {
+	if sourceDecl.Plugin == "" {
+		if sourceDecl.Origin.File != "" {
+			// A block that was written and could not be read is not an
+			// absent block, and answering "nothing is pending" for one would
+			// send a pipeline past a migration nobody can see.
+			return migrationComparison{}, checkMigrateFrom(sourceDecl)
+		}
+		return migrationComparison{Status: migrationNotConfigured}, nil
+	}
+
+	source, closeSource, err := openBackend(ctx, opts, sourceDecl)
+	if err != nil {
+		return migrationComparison{}, fmt.Errorf("opening the backend `migrate_from:` names: %w", err)
+	}
+	defer closeSource()
+	destination, closeDestination, err := openBackend(ctx, opts, destinationDecl)
+	if err != nil {
+		return migrationComparison{}, fmt.Errorf("opening the backend `backend:` names: %w", err)
+	}
+	defer closeDestination()
+
+	return compareEnds(ctx, source, destination)
+}
+
+// writeMigrateResult writes the check's one machine-readable line, carrying
+// the status AS A WORD so a consumer never maps a number back to a meaning.
+//
+// Best effort in the same sense every other result line in this package is:
+// with no --output there is no report at all.
+func writeMigrateResult(ro *runOutput, status migrationStatus, environments []string, err error) {
+	rw := ro.Report()
+	if rw == nil {
+		return
+	}
+	result := report.MigrateResult{Status: string(status), Environments: environments}
+	if err != nil {
+		result.Error = err.Error()
+	}
+	_ = rw.WriteMigrateResult(result)
 }
 
 func runStateMigrate(cmd *cobra.Command, opts *GlobalOptions, force bool) error {
@@ -384,7 +513,7 @@ func copyEnvironment(ctx context.Context, destination state.Backend, environment
 // future run and silently overwrites the next real conflict.
 func conflictError(c migrationComparison, source, destination string) error {
 	return fmt.Errorf(
-		"%s and %s both hold state for %s, and it is not the same state\n"+
+		"%w: %s and %s both hold state for %s\n"+
 			"  source:      %s\n"+
 			"  destination: %s\n"+
 			"Somebody has applied to one of these since the migration was configured, so one\n"+
@@ -393,7 +522,8 @@ func conflictError(c migrationComparison, source, destination string) error {
 			"once with the current configuration and once with `backend:` set to %s.\n"+
 			"When you know the destination's copy is the one to discard, re-run this command\n"+
 			"with --force.",
-		source, destination, joinEnvironments(c.Conflict), source, destination, source)
+		errMigrationConflict, source, destination, joinEnvironments(c.Conflict),
+		source, destination, source)
 }
 
 // reportAlreadyMigrated is the no-op success.

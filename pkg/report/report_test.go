@@ -143,11 +143,40 @@ func TestWritePlanEmitsATypedLineCarryingTheArtifact(t *testing.T) {
 	}
 }
 
-func TestVersionIsTwo(t *testing.T) {
-	// The format gained a line kind, so a consumer that only understands
-	// version 1 must be able to tell. PLAN.md section 61 keeps this
+func TestVersionIsThree(t *testing.T) {
+	// The format gained a line kind, so a consumer that only understands an
+	// older version must be able to tell. PLAN.md section 61 keeps this
 	// independent of every other format version.
-	if Version != 2 {
-		t.Errorf("Version = %d, want 2", Version)
+	//
+	// 2 was the "plan" line; 3 is MigrateResult, the result line
+	// `state migrate --check` writes.
+	if Version != 3 {
+		t.Errorf("Version = %d, want 3", Version)
+	}
+}
+
+// The status crosses as a WORD. A consumer that had to map an exit code back
+// to a meaning would be keeping a copy of a table that lives in the CLI.
+func TestMigrateResultCarriesTheStatusAsAString(t *testing.T) {
+	var buf bytes.Buffer
+	if err := NewWriter(&buf).WriteMigrateResult(MigrateResult{
+		Status:       "pending",
+		Environments: []string{"dev", "production"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var got MigrateResult
+	if err := json.Unmarshal(buf.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Type != "result" {
+		t.Errorf("type = %q, want result", got.Type)
+	}
+	if got.Status != "pending" {
+		t.Errorf("status = %q, want pending", got.Status)
+	}
+	if len(got.Environments) != 2 || got.Environments[0] != "dev" {
+		t.Errorf("environments = %v", got.Environments)
 	}
 }

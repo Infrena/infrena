@@ -12,6 +12,7 @@ import (
 
 	"github.com/infrena/infrena/internal/state"
 	"github.com/infrena/infrena/pkg/address"
+	"github.com/infrena/infrena/pkg/report"
 	"github.com/infrena/infrena/pkg/resource"
 	"github.com/infrena/infrena/pkg/value"
 	testprovider "github.com/infrena/infrena/providers/test"
@@ -91,8 +92,11 @@ resources:
 	if meta["type"] != "meta" {
 		t.Fatalf("first line type = %v, want \"meta\"", meta["type"])
 	}
-	if meta["version"] != float64(2) {
-		t.Errorf("meta.version = %v, want 2", meta["version"])
+	// report.Version rather than a literal: the version's VALUE is pinned
+	// once, in pkg/report's own test, and a second literal here only means
+	// two tests to edit when the format gains a line kind.
+	if meta["version"] != float64(report.Version) {
+		t.Errorf("meta.version = %v, want %d", meta["version"], report.Version)
 	}
 	if meta["command"] != "validate" {
 		t.Errorf("meta.command = %v, want \"validate\"", meta["command"])

@@ -432,3 +432,123 @@ func lockHeld(t *testing.T, dir, environment string) bool {
 	_, err := os.Stat(filepath.Join(remoteDir(dir), environment+".lock"))
 	return err == nil
 }
+
+// ---------------------------------------------------------------------------
+// --check, for pipelines
+// ---------------------------------------------------------------------------
+
+// The exit code IS the report. A pipeline branches on it without parsing
+// anything, which is the whole point of the flag.
+func TestCheckReportsEachSituationByExitCode(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		setup func(t *testing.T) string
+		want  int
+	}{
+		{"no migrate_from block", func(t *testing.T) string { return newProjectFixture(t) }, ExitOK},
+		{"migration pending", func(t *testing.T) string {
+			dir := newProjectMigratingLocalToFake(t)
+			seedLocalState(t, dir, "dev")
+			return dir
+		}, ExitMigrationPending},
+		{"already complete", func(t *testing.T) string {
+			dir := newProjectMigratingLocalToFake(t)
+			seedLocalState(t, dir, "dev")
+			runCommand(t, dir, "state", "migrate")
+			return dir
+		}, ExitMigrationComplete},
+		{"ends differ", func(t *testing.T) string {
+			dir := newProjectMigratingLocalToFake(t)
+			seedLocalState(t, dir, "dev")
+			seedDestinationState(t, dir, "dev", "something else entirely")
+			return dir
+		}, ExitMigrationConflict},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := tc.setup(t)
+			_, _, code := runCommand(t, dir, "state", "migrate", "--check")
+			if code != tc.want {
+				t.Errorf("exit = %d, want %d", code, tc.want)
+			}
+		})
+	}
+}
+
+// --check must be genuinely read-only. A check that migrated would be the
+// worst possible surprise in a pipeline: the thing you ran to find out
+// whether to act would have acted.
+func TestCheckWritesNothingAndTakesNoLock(t *testing.T) {
+	dir := newProjectMigratingLocalToFake(t)
+	seedLocalState(t, dir, "dev")
+
+	if _, _, code := runCommand(t, dir, "state", "migrate", "--check"); code != ExitMigrationPending {
+		t.Fatalf("exit = %d", code)
+	}
+
+	if destinationHasState(t, dir, "dev") {
+		t.Error("--check wrote to the destination")
+	}
+	// A lock left behind would block the migration the check just recommended.
+	if lockHeld(t, dir, "dev") {
+		t.Error("--check left a lock behind")
+	}
+}
+
+// The status crosses as a STRING, so a consumer never maps an exit code back
+// to a meaning.
+func TestCheckWritesTheStatusAsAStringInTheReport(t *testing.T) {
+	dir := newProjectMigratingLocalToFake(t)
+	seedLocalState(t, dir, "dev")
+	out := filepath.Join(t.TempDir(), "check.ndjson")
+
+	stdout, _, _ := runCommand(t, dir, "state", "migrate", "--check", "--output", out)
+
+	if stdout != "" {
+		t.Errorf("stdout = %q, want nothing", stdout)
+	}
+	body, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), `"status":"pending"`) {
+		t.Errorf("report does not carry the status as a string:\n%s", body)
+	}
+	if !strings.Contains(string(body), "dev") {
+		t.Errorf("report does not name the environments:\n%s", body)
+	}
+}
+
+// --check reads the SAME comparison the migration acts on. Two implementations
+// of "are these two ends the same" is how a check comes to report one thing and
+// the migration then does another.
+func TestCheckAgreesWithWhatMigrateThenDoes(t *testing.T) {
+	dir := newProjectMigratingLocalToFake(t)
+	seedLocalState(t, dir, "dev", "production")
+
+	if _, _, code := runCommand(t, dir, "state", "migrate", "--check"); code != ExitMigrationPending {
+		t.Fatalf("check before migrating = %d, want pending", code)
+	}
+	if _, stderr, code := runCommand(t, dir, "state", "migrate"); code != ExitOK {
+		t.Fatalf("the migration the check recommended failed: exit %d\n%s", code, stderr)
+	}
+	if _, _, code := runCommand(t, dir, "state", "migrate", "--check"); code != ExitMigrationComplete {
+		t.Errorf("check after migrating = %d, want complete", code)
+	}
+}
+
+// A check that cannot reach a backend is an ERROR, not one of the three
+// situations: a pipeline that read 0 from an unreachable backend would take
+// "nothing to do" from a question that was never answered.
+func TestCheckReportsAnUnreadableBackendAsAnError(t *testing.T) {
+	dir := newProjectMigratingLocalTo(t, "nosuchbackend")
+	seedLocalState(t, dir, "dev")
+
+	_, stderr, code := runCommand(t, dir, "state", "migrate", "--check")
+
+	if code != ExitError {
+		t.Errorf("exit = %d, want %d", code, ExitError)
+	}
+	if !strings.Contains(stderr, "nosuchbackend") {
+		t.Errorf("the error does not name the backend:\n%s", stderr)
+	}
+}

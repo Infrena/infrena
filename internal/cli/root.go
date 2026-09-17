@@ -28,6 +28,28 @@ const (
 	// type yes to approve" — advice nobody in that pipeline could have taken,
 	// which is exactly what section 44 says a suggested action must never be.
 	ExitNoApproval = 77
+
+	// ExitMigrationPending is 2 DELIBERATELY, the same code `plan` uses for
+	// "changes present". Not a collision: both mean the same thing to a
+	// pipeline -- something is pending, run the corresponding command. A
+	// script reads it and runs `infrena state migrate`.
+	ExitMigrationPending = 2
+	// ExitMigrationComplete: both ends agree, so there is nothing to do and
+	// the `migrate_from:` block is stale. Distinct from 0 so a pipeline can
+	// remind somebody to remove it. A script treats it exactly as it treats 0
+	// and carries on.
+	ExitMigrationComplete = 3
+	// ExitMigrationConflict: both ends hold DIFFERENT state, so somebody has
+	// been applying to one of them. Distinct from 1 for the reason 77 is: a
+	// pipeline that cannot tell "this failed" from "this needs a person" will
+	// treat both the same, and they want opposite responses. A script stops
+	// and fetches a human; retrying achieves nothing.
+	//
+	// Both `--check` and the migration itself report a conflict with this
+	// code. One condition, one number: a pipeline that ran the migration
+	// directly must not have to learn a second spelling of the answer the
+	// check would have given it.
+	ExitMigrationConflict = 4
 )
 
 // GlobalOptions holds flags shared by every subcommand.
@@ -104,16 +126,31 @@ func Execute() int {
 	root.SetErr(os.Stderr)
 
 	if err := root.Execute(); err != nil {
-		if errors.Is(err, errChanges) {
+		// OUTCOMES RATHER THAN FAILURES, and so not printed as errors:
+		// nothing is wrong, something is pending or already done, and the
+		// exit code is the whole report. Printing "Error:" over one of these
+		// would make a successful check read as a broken run in a log
+		// somebody finds weeks later.
+		switch {
+		case errors.Is(err, errChanges):
 			return ExitChanges
+		case errors.Is(err, errMigrationPending):
+			return ExitMigrationPending
+		case errors.Is(err, errMigrationComplete):
+			return ExitMigrationComplete
 		}
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		// Reported on stderr like any other failure, and only then given its
 		// own code: a run that refuses for want of approval HAS failed, and
 		// the operator reading the terminal needs the reason as much as the
-		// pipeline reading $? needs the number.
-		if errors.Is(err, errNoApproval) {
+		// pipeline reading $? needs the number. A migration conflict is the
+		// same shape: the person the code sends for needs to be told what
+		// they are being sent for.
+		switch {
+		case errors.Is(err, errNoApproval):
 			return ExitNoApproval
+		case errors.Is(err, errMigrationConflict):
+			return ExitMigrationConflict
 		}
 		return ExitError
 	}

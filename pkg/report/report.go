@@ -35,7 +35,12 @@ import (
 // `infrena plan --output` writes this format rather than a second one. A
 // consumer written against version 1 can tell from the meta line that a
 // line kind it does not know may appear.
-const Version = 2
+//
+// Version 3 added MigrateResult, the result line `infrena state migrate
+// --check` writes. A consumer written against version 2 has never seen a
+// result line carrying a "status", and the meta line is how it finds out one
+// may appear.
+const Version = 3
 
 // Format renders one attribute value the way every line in this package
 // must: through pkg/value.Format, the engine's one redaction path, so a
@@ -304,6 +309,41 @@ type ValidateResult struct {
 
 // WriteValidateResult writes validate's final line.
 func (w *Writer) WriteValidateResult(r ValidateResult) error {
+	r.Type = "result"
+	return w.writeLine(r)
+}
+
+// MigrateResult is `state migrate --check`'s final line: which of the three
+// situations the two backends are in, and which environments the answer is
+// about.
+//
+// STATUS IS A WORD, NOT THE EXIT CODE. The command's exit code is what a
+// shell script branches on, because a shell has nothing better; a consumer
+// reading this file has, and asking it to map 3 back to "already complete"
+// is asking it to keep a copy of a table that lives somewhere else. The two
+// are derived from one decision inside the CLI, so they cannot disagree, and
+// only one of them is self-describing.
+//
+// The words are "none" (no `migrate_from:` block, so nothing is pending),
+// "pending", "complete", "conflict" and "error".
+//
+// Environments names the environments the status is ABOUT: the ones to be
+// copied when pending, the ones that differ when conflicting. Not every
+// environment involved — naming the ones that agree alongside the ones that
+// do not is how the ones a person has to look at get buried.
+type MigrateResult struct {
+	Type   string `json:"type"`
+	Status string `json:"status"`
+	// Environments the status is about, omitted when there are none.
+	Environments []string `json:"environments,omitempty"`
+	// Error is set only when the check could not be made at all — a backend
+	// that would not open, configuration that would not read. It is NEVER
+	// set for a conflict, which is an answer rather than a failure.
+	Error string `json:"error,omitempty"`
+}
+
+// WriteMigrateResult writes the migration check's final line.
+func (w *Writer) WriteMigrateResult(r MigrateResult) error {
 	r.Type = "result"
 	return w.writeLine(r)
 }
