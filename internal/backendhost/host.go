@@ -82,6 +82,33 @@ func Open(ctx context.Context, name, projectDir string, dirs []string, config ma
 	return &hosted{client: c}, c.close, nil
 }
 
+// Verify resolves a backend's binary and checks it against plugins.lock, and
+// stops there. It starts no process and contacts nothing.
+//
+// IT IS OPEN WITHOUT THE LAST TWO STEPS, deliberately written as a prefix of it
+// rather than as a second lookup, so the two cannot drift about where a backend
+// lives or how a lockfile entry is read.
+//
+// It exists for `validate`, which already refuses a missing PROVIDER plugin and
+// used to pass a project whose `backend:` named one that was not installed —
+// the cheap CI gate approving a project that cannot run. Resolving a binary is
+// a filesystem lookup, so it sits inside validate's promise not to contact
+// providers.
+//
+// WHAT IT CANNOT CHECK IS THE BLOCK'S CONTENTS. A backend's own configuration
+// is validated by Configure, which for the S3 backend also proves the store
+// honours conditional writes — a network round trip, and not something
+// `validate` may do. So a credential wrongly written into `backend:` is still
+// only caught once the plugin runs. Closing that would need a protocol method
+// that parses without connecting, which backendproto v1 does not have.
+func Verify(name, projectDir string, dirs []string) error {
+	path, err := find(name, dirs)
+	if err != nil {
+		return err
+	}
+	return checkLock(name, projectDir, path)
+}
+
 // Search names the directories a backend binary is looked for in.
 //
 // EXACTLY THE DIRECTORIES A PROVIDER PLUGIN IS LOOKED FOR IN, which is why this
