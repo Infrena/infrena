@@ -3455,8 +3455,9 @@ to go looking for code that is not there.
 
 Built:
 
-- **Source parsing** — both forms, in `internal/plugins`. A repository that breaks the
-  `infrena-provider-<name>` convention is refused when it is written.
+- **Source parsing** — both forms, in `internal/plugins`. A repository matching neither
+  `infrena-provider-<name>` nor `infrena-backend-<name>` is refused when it is written, and
+  one that matches carries the role its prefix implies.
 - **Trusted sources** — `~/.config/infrena/plugins.yml`, read by `plugins.LoadTrusted`.
   `github.com/infrena` is always first and cannot be removed; a malformed file is an error
   naming the file, never a silent fallback.
@@ -3480,6 +3481,14 @@ Built:
 **Implemented 2026-09-16 (Unit 3), which completes this section:** `plugins install`,
 `plugins verify`, `plugins.lock`, checksum verification on every launch, and the interactive
 offer to install a missing plugin. Nothing in this section is now unbuilt.
+
+**Amended 2026-09-17:** backends are installable through the same commands. Sources and
+searches know both prefixes, `list` and `search` show which kind each thing is, and
+`plugins install` resolves the kind from the project before it asks — including the bare
+form that installs everything a project declares. `plugins verify` was silently broken by
+the backend lock key and is fixed: it reads the kind off the key, so an entry spelled
+`infrena-backend-s3` is looked for as that binary rather than as a provider of that whole
+string.
 
 The only commands that make a network request are `plugins search`, `plugins install`, and
 the one interactive prompt — never `validate`, `plan`, `apply`, `destroy`, `refresh`,
@@ -3513,8 +3522,11 @@ sources:
 Two forms, and the distinction is whether a repository is named:
 
 - **An owner** (`github.com/<owner>`, user or organisation) means *search this owner for
-  repositories named `infrena-provider-*`*.
-- **A repository** (`github.com/<owner>/infrena-provider-<name>`) means *this one, exactly*.
+  repositories named `infrena-provider-*` or `infrena-backend-*`*. Both, from the one
+  listing: an owner publishes what it publishes, and filtering to a single prefix would make
+  a backend from a trusted owner invisible.
+- **A repository** (`github.com/<owner>/infrena-provider-<name>`, or
+  `github.com/<owner>/infrena-backend-<name>`) means *this one, exactly*.
 
 **`github.com/infrena` is always searched and cannot be removed**, and that includes a
 machine with no config directory at all: `os.UserConfigDir` fails with neither HOME nor
@@ -3548,6 +3560,70 @@ bare name a provider uses (`backendhost.LockKey`). One file, one key each: the t
 binaries differ, so one key holding both could only either refuse a correctly installed
 pair on every command or verify neither. The key deliberately omits the `.exe` a Windows
 binary carries, because the lock is committed and read on other machines.
+
+**The convention therefore covers two shapes, and an owner search lists both** (built
+2026-09-17):
+
+| | Provider | Backend |
+| --- | --- | --- |
+| Repository | `infrena-provider-<name>` | `infrena-backend-<name>` |
+| Binary it ships | `infrena-plugin-<name>` | `infrena-backend-<name>` |
+
+A provider's repository and binary differ by one word; a backend's are the same string.
+That is not tidy, and it is also not negotiable: both names are already published.
+
+**A release asset is named from the BINARY, not from the plugin name.** Every release
+verified by hand is `<binary>_<version>_<goos>_<goarch>`, a `.tar.gz` or a `.zip` on
+Windows, so a backend publishes `infrena-backend-s3_1.0.0_linux_amd64.tar.gz` where a
+provider of the same name publishes `infrena-plugin-s3_1.0.0_linux_amd64.tar.gz`.
+`remote.AssetName` takes the BINARY for exactly this reason: given a plugin name it would
+have to guess a prefix, and the prefix it used to guess was the provider's, which
+constructed an asset no backend release publishes.
+
+### The ambiguity is one missing qualifier, not a flaw in the convention
+
+Worth saying plainly, because the obvious reaction to "a provider and a backend can both be
+called `s3`" is that the convention is broken. It is not. Everywhere the two kinds actually
+coexist, they already coexist correctly:
+
+| | Provider | Backend |
+| --- | --- | --- |
+| Configuration | `providers: - plugin: s3` | `backend: plugin: s3` |
+| Binary on disk | `infrena-plugin-s3` | `infrena-backend-s3` |
+| `plugins.lock` key | `s3` | `infrena-backend-s3` (`backendhost.LockKey`) |
+| Not-found error | `pluginhost.NotFoundError` | `backendhost.NotFoundError` |
+
+Different configuration keys, different filenames, already-distinct lock entries, and two
+typed errors that each know what they were looking for. **The ambiguity exists in exactly
+one place: the bare `<name>` argument to `plugins search` and `plugins install`**, the one
+context carrying no other qualifier. The fix is to supply that missing qualifier there, not
+to change a naming scheme that is doing its job everywhere else.
+
+`plugins search` supplies it by SHOWING it: a `KIND` column, and both rows when both exist,
+because a search is exploratory and both is the honest answer. `plugins list` shows the same
+column, inferred from the binary's prefix, which is already unambiguous on disk and needs no
+new state.
+
+**`plugins install` resolves it in four rungs, cheapest and most certain first:**
+
+1. **`--kind provider|backend`, if given.** The user said so; nothing outranks that. A
+   `--kind` naming a kind nobody publishes is an error saying what DOES exist, never a
+   silent fall back to the other one: they are different binaries doing different jobs.
+2. **What the project declares.** `providers:` and the resource types that imply them say
+   provider, `backend: plugin:` says backend, and a project naming both gets both, which is
+   doing what was asked rather than choosing between them. **This outranks asking**, because
+   making someone repeat on the command line what `infra.yml` already says is asking them to
+   keep two places in step. The configuration is DECODED, never compiled, the same rule
+   `backendFor` follows: a project with a broken resource must still be able to install the
+   plugin that would fix it.
+3. **The search result, if only ONE kind answers the name.** Nothing to disambiguate, so
+   neither a project nor a flag is needed.
+4. **Otherwise refuse**, showing both and naming `--kind`. The rule about two owners
+   answering one name applies unchanged to two kinds answering it: choosing silently hands
+   the user a thing they did not name.
+
+When rung 2 decided, install SAYS which kind it installed. A choice made on the user's
+behalf has to be visible.
 
 ### A project may NAME a source; only the user may TRUST one
 
@@ -3703,7 +3779,7 @@ owners with several repositories each can exhaust that in a single invocation.
 
 ### The commands
 
-Deliberately four:
+Deliberately four, one of which takes two shapes:
 
 - `infrena plugins list` — what is installed, its version, and where it was loaded from.
   Answers "what am I actually running" with no network.
@@ -3711,7 +3787,15 @@ Deliberately four:
   rejected.
 - `infrena plugins install <name>[@version]` — resolve, check, download, verify, write the
   lock. Writes to `<project>/.infra/plugins/`, or `~/.local/share/infrena/plugins/` with
-  `--global`.
+  `--global`. `--kind provider|backend` settles which kind was meant when there is no
+  project to say, and is what the fourth rung above tells the user to reach for.
+- `infrena plugins install` with **no name** — install every plugin this project declares,
+  the providers and the backend alike, which is what a fresh clone needs. It cannot be
+  ambiguous by construction: the project states both the name AND the kind of each one, so
+  none of the resolution above runs. What is already installed is skipped rather than
+  reinstalled or reported as an error, and one failure does not hide the others — every
+  plugin is reported and the command fails at the end. `--kind` with no name is refused for
+  the same reason resolution is unnecessary: there is nothing for it to apply to.
 - `infrena plugins verify` — re-check installed binaries against `plugins.lock`. What CI
   runs.
 

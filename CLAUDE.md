@@ -387,11 +387,24 @@ satisfies nothing and says so in its own words; that is deliberately the opposit
 §61.2's `infrena:` floor, which exempts a 0.0.0 build because it is the user's own.
 
 **Where a plugin may come from** (§31.3, built 2026-09-16). A source has two forms:
-`github.com/<owner>` means search that owner for repositories named `infrena-provider-*`,
-and `github.com/<owner>/infrena-provider-<name>` means that one repository exactly. The
-naming convention is load-bearing — an owner search works by repository name — so
-`internal/plugins.ParseSource` refuses a repository that breaks it at the moment it is
-written, rather than letting it silently never match.
+`github.com/<owner>` means search that owner for repositories named `infrena-provider-*` or
+`infrena-backend-*`, and `github.com/<owner>/infrena-provider-<name>` (or
+`infrena-backend-<name>`) means that one repository exactly. The naming convention is
+load-bearing — an owner search works by repository name — so `internal/plugins.ParseSource`
+refuses a repository matching neither prefix at the moment it is written, rather than
+letting it silently never match. An owner search lists BOTH prefixes from the one call,
+because an owner publishes both and filtering to one would make a trusted owner's backend
+invisible.
+
+**`plugins.Kind` AND `plugins.Role` ARE DIFFERENT QUESTIONS, and the names invite
+conflation.** `Kind` (`KindOwner`, `KindRepository`) is owner-versus-repository: which of
+the two shapes above a SOURCE is. `Role` (`RoleProvider`, `RoleBackend`) is
+provider-versus-backend: what the plugin DOES. `Kind` was there first and means the former;
+renaming it to `SourceKind` was considered and rejected as churn. **The user-facing flag is
+`--kind` while the type it parses into is `Role`**, deliberately, because kind is the word a
+person types — `parseRole` in `internal/cli/plugins_project.go` is the one place the two
+spellings meet. A repository source carries a `Role` from its prefix; an OWNER source
+carries none and must not pretend to, since an owner publishes both.
 
 **A project may NAME a source; only a user may TRUST one.** `infra.yml`'s `plugins:` key
 takes an additive mapping form (`version:` and `source:`) beside the scalar form, and a
@@ -497,6 +510,55 @@ repositories under §31.3's convention. A binary that fails its checksum is a `p
 its OWN diagnostic: reporting it as "the plugin is not available" and advising an install
 tells a user to install something already on their disk, which is exactly the §44 failure
 the version-constraint branch beside it already exists to avoid.
+
+**Installing a backend, and which kind `install` thinks you meant** (§31.3, built
+2026-09-17). A provider and a backend can both be called `s3`, and the honest reading is
+that this is ONE MISSING QUALIFIER rather than a broken convention: configuration
+(`providers: - plugin: s3` against `backend: plugin: s3`), the binaries on disk
+(`infrena-plugin-s3` against `infrena-backend-s3`), the lock keys (`s3` against
+`backendhost.LockKey`'s `infrena-backend-s3`) and the two typed not-found errors
+(`pluginhost.NotFoundError`, `backendhost.NotFoundError`) already tell the two apart. The
+ONLY ambiguous context is the CLI's bare `<name>` argument. Do not "fix" the convention;
+supply the qualifier where it is missing. `list` and `search` do it by showing a `KIND`
+column — `list` infers it from the binary's prefix, which needs no new state —
+and `runInstall` resolves it in four rungs:
+
+1. `--kind`, if given. The user said so. A `--kind` for a kind nobody publishes is an error
+   naming what DOES exist, never a silent swap to the other one.
+2. What the project declares — `NeededPlugins()` for providers, `Backend.Plugin` for the
+   backend, both when both. **This outranks asking**, and that ordering is the point of the
+   feature: making someone repeat on the command line what `infra.yml` already says is
+   asking them to keep two places in step. `declaredRoles` DECODES and never compiles, the
+   same rule `backendFor` follows, because a project with a broken resource must still be
+   able to install the plugin that would fix it. When this rung decides, install SAYS which
+   kind it chose — a choice made on the user's behalf has to be visible.
+3. The search result, when only one kind answers the name. Nothing to disambiguate.
+4. Otherwise refuse, showing both and naming `--kind`. Same rule as two owners answering one
+   name: never auto-pick.
+
+**`infrena plugins install` with no name installs everything the project declares**, which
+is what a fresh clone needs and which cannot be ambiguous by construction — the project
+states both the names and the kinds, so no rung above runs. Already-installed is a skip, and
+one failure does not hide the others: every plugin is reported and the command fails at the
+end, as `discovery.Walk` does with partial answers. `--kind` with NO name is refused for the
+same reason.
+
+**A release asset is named from the BINARY, not from the plugin name.** `remote.AssetName`
+takes the binary because a backend publishes `infrena-backend-s3_<version>_<os>_<arch>.tar.gz`
+while a provider publishes `infrena-plugin-<name>_...`; it used to paste the provider prefix
+in front of whatever name it was given, so a backend install asked for an asset no release
+publishes. **The test fixture had guessed provider naming too**, and fixing it to serve the
+real names immediately failed the old code with "publishes no checksum for
+infrena-plugin-hetzner_...". That is the lesson, not the bug: a fake that answers whatever
+the code asks for validates any implementation, right or wrong, which is how five bugs
+shipped through a fake GitHub. Serve the names a real release serves.
+
+**`plugins verify` was silently broken by the backend lock key, and is fixed.** A lock entry
+spelled `infrena-backend-s3` was looked up as a provider of that whole string, so verify went
+hunting for `infrena-plugin-infrena-backend-s3` and reported a backend install had just
+written as missing. `verifyOne` now reads the kind off the key. Worth knowing because a green
+suite hid it until a test went looking: the key had changed for one command and nobody asked
+what else read the file.
 
 **The interactive offer** (`internal/cli/plugins_offer.go`) fires only when stdin is a
 terminal, `--output` is unset and `INFRENA_NO_PLUGIN_SEARCH` is unset; it searches, shows
