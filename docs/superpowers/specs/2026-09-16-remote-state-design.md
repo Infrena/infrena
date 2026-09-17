@@ -2,7 +2,7 @@
 
 **Date:** 2026-09-16
 **Status:** draft, awaiting review
-**Amends:** `PLAN.md` §52 (which is six bullets and no design), §31.2 (`plugin.yaml` gains `kind`), §61 (a seventh format version)
+**Amends:** `PLAN.md` §52 (which is six bullets and no design), §31.3 (the naming convention extends to backends), §61 (a seventh format version)
 **Raises:** a new backend protocol, versioned independently
 **Depends on:** §31.3, shipped 2026-09-16 — `plugins install` is how a backend gets onto a machine
 
@@ -108,18 +108,26 @@ incapable of rotting.
 ## 3. Configuration, and one constraint that falls out of the architecture
 
 ```yaml
-state:
-  backend: s3
-  config:
-    bucket: acme-infra
-    prefix: projects/platform
-    endpoint: https://nyc3.digitaloceanspaces.com
-    region: us-east-1
+backend:
+  plugin: s3
+  bucket: acme-infra
+  profile: platform-infra
+  path: /infrena/
+  endpoint: https://nyc3.digitaloceanspaces.com
 ```
 
 Absent, state is local, exactly as today.
 
-### `state:` may not interpolate variables. At all.
+**The shape mirrors `providers:`**, which already names a plugin with `plugin:` and carries its
+configuration in sibling keys. One shape to learn rather than two. **`plugin:` is the only
+reserved key; every other key is passed to the backend untouched**, so the engine never needs to
+know what a bucket is.
+
+A `profile:` is a POINTER to a credential, not a credential. Naming which profile to use is
+configuration and belongs here; an access key is a secret and does not. The plugin resolves the
+pointer however it likes — a credentials file, an instance profile, the environment.
+
+### `backend:` may not interpolate variables. At all.
 
 `providers:` may interpolate because compiler stage 4.5 constructs provider instances after
 variables resolve. **State cannot, because you need state before you can compile, and compiling
@@ -131,7 +139,7 @@ not a feature request that gets accepted.
 
 Note the existing precedent this mirrors: `destroy`, `refresh`, `discover` and `import` already
 read `providers:` for LITERAL values only, and refuse an instance whose configuration
-interpolates, because those commands never compile. `state:` is that rule taken to its
+interpolates, because those commands never compile. `backend:` is that rule taken to its
 conclusion — it is read by *every* command, including the ones that compile, so it is literal
 always.
 
@@ -143,13 +151,25 @@ configuration; a secret key is not.
 
 ## 4. A backend is found exactly the way a provider is
 
-`plugin.yaml` gains **`kind: provider | backend`**, defaulting to `provider` so every existing
-manifest stays valid.
+**A backend lives in `infrena-backend-<name>` and ships `infrena-backend-<name>`**, the same way
+a provider lives in `infrena-provider-<name>` and ships `infrena-plugin-<name>`. The naming
+convention already IS the registry (§31.3); this extends it rather than adding anything.
 
-Considered and rejected: a second naming convention (`infrena-backend-<name>` repositories and
-binaries). It would mean two search paths, two install paths and two lock files for one concept.
-The manifest already exists to describe what a thing is, so it describes this too. `plugins
-list` and `plugins search` gain a kind column rather than a parallel mechanism.
+**No `kind:` field in `plugin.yaml`.** An earlier draft proposed one, arguing a naming convention
+would mean "two search paths, two install paths and two lock files". **That was wrong**, checked
+against what §31.3 actually shipped: `pluginhost.DefaultSearch` returns the same directories for
+both, `plugins install` writes to the same place, and `plugins.lock` is one file. The only thing
+that differs is a name pattern.
+
+The convention is also STRICTLY BETTER than a manifest field for search. An owner listing can
+filter `infrena-backend-*` locally, from the one call that lists repositories, without fetching a
+manifest per candidate to discover what each one is. Unauthenticated GitHub allows sixty requests
+an hour and §31.3 spends real design effort on not wasting them; a `kind` field would spend one
+per candidate to answer a question the repository name already answers for free.
+
+It also resolves a collision the field could not: a provider named `s3` and a backend named `s3`
+are different repositories under this convention, and indistinguishable search results under a
+manifest field.
 
 **There is no bootstrap cycle**, and the reason is worth stating: decoding `infra.yml` requires
 no state. So the sequence is read the file, learn the backend name, load the plugin, get state.
@@ -267,7 +287,7 @@ with none.
 
 - **Client-side encryption.** §8, deferred with a reason.
 - **A backend built into the engine other than local.** The whole argument of §1.
-- **Variable interpolation in `state:`.** §3 — a cycle, not a feature.
+- **Variable interpolation in `backend:`.** §3 — a cycle, not a feature.
 - **Azure.** It is not S3-compatible and needs its own plugin, which is someone's project and
   not this design's.
 - **State history or time travel.** A store with object versioning gives it for free; the engine
