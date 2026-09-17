@@ -133,7 +133,7 @@ func (s *Scope) Override(name string, v value.Value) {
 // shape rather than a hole, and the diagnostics are what make the compile fail.
 func Resolve(decls []config.VariableDecl, chain environments.Chain,
 	files map[string]value.Value, scoped map[string]value.Value, cliVars map[string]string,
-) (Scope, diag.Diagnostics) {
+) (Scope, diag.Diagnostics, bool) {
 	var ds diag.Diagnostics
 
 	schemas, schemaDiags := Schemas(decls, "variable")
@@ -255,8 +255,33 @@ func Resolve(decls []config.VariableDecl, chain environments.Chain,
 			WithScope(value.ScopeCLIOverride).WithOrigin(origin).WithSuppliedBy(origin.File)
 	}
 
-	ds.Extend(checkAgainstSchemas(schemas, &out, chain))
-	return out, ds
+	checkDiags, unset := checkAgainstSchemas(schemas, &out, chain)
+	ds.Extend(checkDiags)
+
+	// The scope is usable when every error reported is one of the unset
+	// variables checkAgainstSchemas just bound to an unknown. Anything else —
+	// a malformed declaration, an unparseable --var, a value that failed its
+	// own type — leaves a hole the later stages would compile around rather
+	// than over, so the caller must stop at the stage boundary instead.
+	//
+	// Counted rather than flagged per diagnostic because "recoverable" is a
+	// property of the whole run: one malformed declaration alongside three
+	// unset variables is not recoverable, and a flag ORed together would have
+	// to be cleared from every site that can add an error, including the ones
+	// added next year.
+	return out, ds, unset == errorCount(ds)
+}
+
+// errorCount is the number of diagnostics at error severity. Warnings do not
+// count: they never stop a compile, so they cannot make a scope unusable.
+func errorCount(ds diag.Diagnostics) int {
+	n := 0
+	for _, d := range ds {
+		if d.Severity == diag.SeverityError {
+			n++
+		}
+	}
+	return n
 }
 
 func sortedSchemaNames(m map[string]Schema) []string {
@@ -333,8 +358,13 @@ func sortedTextNames(m map[string]string) []string {
 // run stage 4 before that boundary check, and this builds
 // value.Unknown(KindInvalid, ...) and hands an indeterminate value to the rest
 // of the pipeline.
-func checkAgainstSchemas(schemas map[string]Schema, out *Scope, chain environments.Chain) diag.Diagnostics {
+// It also reports how many of its errors are the RECOVERABLE kind — a
+// variable that is properly declared but has no value — because those are the
+// only ones after which the scope it leaves behind is still complete enough
+// for the later stages to run against. See Resolve's third return.
+func checkAgainstSchemas(schemas map[string]Schema, out *Scope, chain environments.Chain) (diag.Diagnostics, int) {
 	var ds diag.Diagnostics
+	unset := 0
 
 	for _, name := range sortedSchemaNames(schemas) {
 		s := schemas[name]
@@ -394,6 +424,7 @@ func checkAgainstSchemas(schemas map[string]Schema, out *Scope, chain environmen
 			continue
 		}
 
+		unset++
 		ds.Add(diag.Diagnostic{
 			Severity: diag.SeverityError,
 			Summary:  "variable " + strconv.Quote(name) + " is not set",
@@ -411,12 +442,28 @@ func checkAgainstSchemas(schemas map[string]Schema, out *Scope, chain environmen
 				".yml or vars/" + chain.Name + ".yml, or pass --var " + name + "=<value>.",
 			Origin: s.Origin,
 		})
-		// Left absent rather than filled with a poison value: stage 6 will
-		// report `undefined variable` at each USE SITE, which tells the user
-		// where the missing value is needed. Both diagnostics are useful and
-		// spec §7.4 collects rather than choosing between them.
+		// Bound to an UNKNOWN, not left absent, and the difference decides
+		// what the user is told.
+		//
+		// Leaving it absent used to be deliberate: stage 6 would then report
+		// `undefined variable` at each use site, which says where the missing
+		// value is needed. But compiler.Compile halts at the end of stage 4
+		// rather than letting that happen, precisely because that second
+		// telling is the same problem told worse — so the absence bought
+		// nothing and cost the whole rest of the compile. A project with an
+		// unset variable AND an unrelated mistake in a resource reported only
+		// the variable, and `validate`, the command whose job is to find every
+		// problem in one pass (§7.4), found one.
+		//
+		// An unknown is the shape the unselected-chain branch above already
+		// produces, so every later stage is used to it: the variable IS
+		// declared and IS in scope, just without a value, which is exactly
+		// true. Stage 6 resolves its use sites to unknowns and adds nothing,
+		// and the diagnostic just recorded is still an error, so nothing
+		// proceeds to a plan on the strength of it.
+		out.vars[name] = value.Unknown(s.Kind, value.SourceVariable).WithOrigin(s.Origin)
 	}
-	return ds
+	return ds, unset
 }
 
 // processReservedNames are the four variable names the process invocation

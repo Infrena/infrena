@@ -78,15 +78,26 @@ import (
 // own chain is broken) risks reading as caused by the very failure that
 // already explains itself.
 //
-// Stage 4 failing outright means one or more declared variables could not be
-// resolved to a value; stage 6 would otherwise report `undefined variable`
-// again at every use site, the same problem told worse.
+// Stage 4 failing does NOT halt the compile by itself any more. It halts when
+// the scope it built is unusable — a malformed declaration, an unparseable
+// --var, a value that failed its own type — because those leave a name with no
+// schema and stage 6 would report the consequence at every use site rather
+// than the cause.
+//
+// A variable that is merely NOT SET is recoverable: stage 4 binds it to an
+// unknown, exactly as it already does for every environment-scoped variable
+// when no environment is selected, and the compile continues. That is the fix
+// for a real complaint — `validate` is the command run to check a file, and a
+// project with an unset variable and an unrelated mistake in a resource
+// reported only the variable, so the mistake surfaced one run later. The
+// errors are independent and §7.4 says collect them. The run still fails; what
+// changed is how much of the file the user gets told about per run.
 func Compile(files []config.File, reg *registry.Registry, opts Options) (ResolvedConfig, diag.Diagnostics) {
 	var ds diag.Diagnostics
 
 	stage, stageDS := VariableScope(files, opts)
 	ds.Extend(stageDS)
-	if stageDS.HasErrors() {
+	if stageDS.HasErrors() && !stage.Usable {
 		return ResolvedConfig{}, ds
 	}
 	project, chain, scope := stage.Project, stage.Chain, stage.Scope
@@ -147,18 +158,27 @@ func Compile(files []config.File, reg *registry.Registry, opts Options) (Resolve
 	// Wired here rather than inside stage 5 because internal/modules must not
 	// read the project directory for anything but modules, and because a
 	// comparison that ran during the walk could not see the complete set.
+	//
+	// The halt below is on THIS check's own diagnostics, not on everything
+	// accumulated so far. It read ds.HasErrors() until an unset variable —
+	// which stage 4 now records and carries on from — reached here and was
+	// re-caught, silently suppressing stage 6 for a reason that had nothing
+	// to do with lockfiles. Every other halt in this function is local to the
+	// stage that produced it, and this one is now too.
+	var lockDS diag.Diagnostics
 	if lf, lockDiags := source.LoadLockfile(opts.Dir); !lockDiags.HasErrors() {
 		for _, r := range expansion.Resolutions {
 			rec, ok := source.Pin(r.Source, r.Resolution)
 			if !ok {
 				continue // a path source has no revision to pin
 			}
-			ds.Extend(lf.Check(rec, r.Source.Origin))
+			lockDS.Extend(lf.Check(rec, r.Source.Origin))
 		}
 	} else {
-		ds.Extend(lockDiags)
+		lockDS.Extend(lockDiags)
 	}
-	if ds.HasErrors() {
+	ds.Extend(lockDS)
+	if lockDS.HasErrors() {
 		return ResolvedConfig{}, ds
 	}
 
@@ -174,8 +194,9 @@ func Compile(files []config.File, reg *registry.Registry, opts Options) (Resolve
 				recs = append(recs, rec)
 			}
 		}
-		ds.Extend(source.WriteLockfile(opts.Dir, recs))
-		if ds.HasErrors() {
+		writeDS := source.WriteLockfile(opts.Dir, recs)
+		ds.Extend(writeDS)
+		if writeDS.HasErrors() {
 			return ResolvedConfig{}, ds
 		}
 	}
@@ -291,6 +312,23 @@ type VariableStage struct {
 	// identical between them, so without this a single project-wide mistake is
 	// reported once per directory. See directoryScopes.
 	VarDiags diag.Diagnostics
+
+	// Usable reports that Scope is complete enough for the later stages to run
+	// against, even when this stage reported errors.
+	//
+	// It is true when every error was a variable that is properly declared and
+	// simply has no value: stage 4 binds those to unknowns, which is what the
+	// rest of the pipeline already handles for an unselected environment
+	// chain. It is false for anything that leaves a name without a usable
+	// schema — a malformed declaration, an unparseable --var, a value that
+	// failed its own type — and false for every early return here, where no
+	// scope was built at all.
+	//
+	// A caller that honours it reports the variable's own diagnostic AND
+	// everything independently wrong further down the file in one run, which
+	// is what §7.4 asks for and what the stage boundary was quietly
+	// overriding.
+	Usable bool
 }
 
 // VariableScope runs stages 1 to 4 and stops there: decode, the `infrena:` floor,
@@ -343,19 +381,34 @@ func VariableScope(files []config.File, opts Options) (VariableStage, diag.Diagn
 	}
 
 	fileValues := fileVars(project, opts)
-	scope, varDiags := variables.Resolve(project.Variables, chain, fileValues, nil, opts.Vars)
+	scope, varDiags, usable := variables.Resolve(project.Variables, chain, fileValues, nil, opts.Vars)
 	ds.Extend(varDiags)
 	seedProcessVariables(&scope, project.Project, opts)
-	if varDiags.HasErrors() {
-		// Stage 6 would report `undefined variable` for each of the same
-		// names at each use site — the same problem told twice, with the
-		// second telling less informative than the first.
+	if varDiags.HasErrors() && !usable {
+		// A malformed declaration or an unparseable --var leaves a name with
+		// no usable schema at all, and every use site would report the
+		// consequence rather than the cause.
+		//
+		// A variable that is simply NOT SET is different, and used to be
+		// treated the same: variables.Resolve binds it to an unknown, which is
+		// a complete and honest answer for the later stages to compile
+		// against, so the run continues and every independent problem in the
+		// project is reported alongside it. Before that, an unset variable
+		// hid every diagnostic from stages 4.5 onwards — a bare ${resource}
+		// left over from the pre-0.5 grammar stayed invisible until the
+		// unrelated variable was supplied, which made `validate` report one
+		// problem per run of a file with two. §7.4 collects diagnostics; this
+		// is the stage boundary that was quietly choosing between them.
+		//
+		// The run still fails: the diagnostic is an error and ds carries it
+		// out, so no caller reaches a plan on the strength of an unknown.
 		return VariableStage{Project: project, Chain: chain}, ds
 	}
 
 	return VariableStage{
 		Project: project, Chain: chain, Scope: scope,
 		FileValues: fileValues, VarDiags: varDiags,
+		Usable: usable,
 	}, ds
 }
 
@@ -408,7 +461,7 @@ func directoryScopes(
 	// iteration is randomised. Two runs of one configuration must report the
 	// same problems in the same order (invariant 6).
 	for _, dir := range sortedDirs(project.ScopedValues) {
-		scope, dirDiags := variables.Resolve(project.Variables, chain, files, project.ScopedValues[dir], opts.Vars)
+		scope, dirDiags, _ := variables.Resolve(project.Variables, chain, files, project.ScopedValues[dir], opts.Vars)
 		for _, d := range dirDiags {
 			if !reported[diagKey(d)] {
 				reported[diagKey(d)] = true

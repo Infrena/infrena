@@ -519,3 +519,51 @@ resources:
 	// internal/config's other diagnostic strings, exactly one produces it.
 	requireContains(t, r.Stderr, `"resources" in warn.yml is a variable, not a configuration block`)
 }
+
+// TestAnUnsetVariableDoesNotHideTheRestOfTheFile.
+//
+// `validate` is the command run to find out what is wrong with a file, and it
+// used to answer one problem at a time whenever one of them was an unset
+// variable. Stage 4 halted the compile, so stages 4.5 through 6 never ran and
+// a completely independent mistake in a resource stayed invisible until the
+// variable was supplied and the command run again. A user migrating a project
+// hits both at once and fixes them one round trip each.
+//
+// The two errors here are independent by construction: `size` is declared with
+// no default and nothing sets it, and `engine: ${net}` names a resource where
+// the schema declares no reference. Neither causes the other, and PLAN.md §7.4
+// says diagnostics collect rather than choosing between themselves.
+//
+// The run still FAILS — an unset variable is an error, not a warning. What is
+// asserted is how much of the file one run reports.
+func TestAnUnsetVariableDoesNotHideTheRestOfTheFile(t *testing.T) {
+	dir := project(t, `
+project: myapp
+environments:
+  production: {}
+variables:
+  size:
+    type: string
+resources:
+  net:
+    type: fake.network
+    cidr: 10.0.0.0/16
+  db:
+    type: fake.database
+    engine: ${net}
+    size: ${var.size}
+`)
+
+	r := run(t, dir, "validate", "production")
+	if r.ExitCode != 1 {
+		t.Fatalf("validate exit = %d, want 1 — an unset variable is still an error\n%s",
+			r.ExitCode, r.combined())
+	}
+	out := r.combined()
+	if !strings.Contains(out, `variable "size" is not set`) {
+		t.Errorf("the unset variable was not reported:\n%s", out)
+	}
+	if !strings.Contains(out, "declares no reference") {
+		t.Errorf("the unset variable suppressed an independent error further down the file:\n%s", out)
+	}
+}
