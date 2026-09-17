@@ -15,6 +15,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/infrena/infrena/internal/backendhost"
 	"github.com/infrena/infrena/internal/pluginhost"
 	"github.com/infrena/infrena/internal/plugins"
 	"github.com/infrena/infrena/internal/plugins/remote"
@@ -515,9 +516,30 @@ func fakeGitHubServingTwoOwners(t *testing.T, name, version string) *httptest.Se
 	t.Helper()
 	a := installableForge(t, "infrena", name, version, archiveFor(t, name, version), true)
 	b := installableForge(t, "mycorp", name, version, archiveFor(t, name, version), false)
+	return fakeForge(t, mergeForges(a, b))
+}
 
+// fakeGitHubServingBothKinds is the collision this unit exists for: ONE owner
+// publishing a provider and a backend of one name, both released. The two live
+// in different repositories, so nothing about it is ambiguous to the forge -
+// only to a user typing a bare name.
+func fakeGitHubServingBothKinds(t *testing.T, name string) *httptest.Server {
+	t.Helper()
+	p := installableRepoForge(t, "infrena", plugins.ProviderRepoPrefix+name, name, "2.0.0",
+		archiveOf(t, pluginhost.BinaryName(name), name, "2.0.0"), true)
+	b := installableRepoForge(t, "infrena", plugins.BackendRepoPrefix+name, name, "1.0.0",
+		archiveOf(t, backendhost.BinaryName(name), name, "1.0.0"), true)
+	return fakeForge(t, mergeForges(p, b))
+}
+
+// mergeForges folds one fake forge into another, so a test can publish more
+// than one owner or more than one repository without the handler knowing.
+func mergeForges(a, b forge) forge {
 	for owner, repos := range b.repos {
-		a.repos[owner] = repos
+		a.repos[owner] = append(a.repos[owner], repos...)
+	}
+	for owner, isOrg := range b.orgs {
+		a.orgs[owner] = isOrg
 	}
 	for k, v := range b.tags {
 		a.tags[k] = v
@@ -528,14 +550,22 @@ func fakeGitHubServingTwoOwners(t *testing.T, name, version string) *httptest.Se
 	for k, v := range b.releases {
 		a.releases[k] = v
 	}
-	return fakeForge(t, a)
+	return a
 }
 
-// installableForge is one owner, one plugin repository, one release, and the
+// installableForge is one owner, one provider repository, one release, and the
 // manifest that says the release can run here.
 func installableForge(t *testing.T, owner, name, version string, archive []byte, isOrg bool) forge {
 	t.Helper()
-	repo := plugins.RepoPrefix + name
+	return installableRepoForge(t, owner, plugins.ProviderRepoPrefix+name, name, version, archive, isOrg)
+}
+
+// installableRepoForge is installableForge with the repository named
+// explicitly, which is what lets a backend repository be published the same
+// way. The REPOSITORY NAME carries the role; everything else here is identical,
+// because a release is a release.
+func installableRepoForge(t *testing.T, owner, repo, name, version string, archive []byte, isOrg bool) forge {
+	t.Helper()
 	tag := "v" + version
 	here := fmt.Sprintf("%s/%s", runtime.GOOS, runtime.GOARCH)
 	asset := remote.AssetName(name, version, currentPlatform())
@@ -569,10 +599,17 @@ func installableForge(t *testing.T, owner, name, version string, archive []byte,
 // release could satisfy.
 func archiveFor(t *testing.T, name, version string) []byte {
 	t.Helper()
-	dir := fmt.Sprintf("%s%s_%s_%s_%s", "infrena-plugin-", name, version, runtime.GOOS, runtime.GOARCH)
+	return archiveOf(t, pluginhost.BinaryName(name), name, version)
+}
+
+// archiveOf is archiveFor for whichever binary the release ships, so a backend
+// release can be built the same way a provider one is.
+func archiveOf(t *testing.T, binary, name, version string) []byte {
+	t.Helper()
+	dir := fmt.Sprintf("%s_%s_%s_%s", binary, version, runtime.GOOS, runtime.GOARCH)
 	return tarGz(t, map[string]string{
-		dir + "/README.md":                      "docs",
-		dir + "/" + pluginhost.BinaryName(name): "#!/bin/sh\nexit 0\n",
+		dir + "/README.md": "docs",
+		dir + "/" + binary: "#!/bin/sh\nexit 0\n",
 	})
 }
 

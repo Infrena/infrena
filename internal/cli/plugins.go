@@ -8,11 +8,15 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"runtime"
+	"sort"
+	"strings"
 	"text/tabwriter"
 
 	"github.com/spf13/cobra"
 
+	"github.com/infrena/infrena/internal/backendhost"
 	"github.com/infrena/infrena/internal/config"
 	"github.com/infrena/infrena/internal/pluginhost"
 	"github.com/infrena/infrena/internal/plugins"
@@ -35,7 +39,7 @@ import (
 func newPluginsCommand(opts *GlobalOptions) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "plugins",
-		Short: "Inspect the provider plugins on this machine",
+		Short: "Inspect the plugins on this machine",
 	}
 	cmd.AddCommand(
 		newPluginsListCommand(opts),
@@ -51,7 +55,7 @@ func newPluginsCommand(opts *GlobalOptions) *cobra.Command {
 func newPluginsListCommand(opts *GlobalOptions) *cobra.Command {
 	return &cobra.Command{
 		Use:           "list",
-		Short:         "List the installed provider plugins",
+		Short:         "List the installed plugins",
 		Args:          cobra.NoArgs,
 		SilenceUsage:  true,
 		SilenceErrors: true,
@@ -65,7 +69,8 @@ func newPluginsListCommand(opts *GlobalOptions) *cobra.Command {
 			loader := listLoader(opts)
 			defer loader.Close()
 
-			renderPluginList(cmd.Context(), ro, loader)
+			renderPluginList(cmd.Context(), ro, loader,
+				opts.Dir, backendhost.Search(opts.Dir, opts.PluginDirs))
 			return nil
 		},
 	}
@@ -88,9 +93,15 @@ func listLoader(opts *GlobalOptions) *pluginhost.Loader {
 }
 
 // renderPluginList prints the table, or the sentence that stands in for it.
-func renderPluginList(ctx context.Context, ro *runOutput, loader *pluginhost.Loader) {
+//
+// BOTH KINDS, because both are installable and both answer "what am I actually
+// running". Which is which is read off the binary's name — `infrena-plugin-` is
+// a provider, `infrena-backend-` is a backend — so no new state records it and
+// nothing has to be started to find out.
+func renderPluginList(ctx context.Context, ro *runOutput, loader *pluginhost.Loader, dir string, backendDirs []string) {
 	names := loader.Available()
-	if len(names) == 0 {
+	backends := installedBackends(dir, backendDirs)
+	if len(names) == 0 && len(backends) == 0 {
 		// AN ANSWER, NOT A FAILURE, and exit 0 says so. A fresh machine has no
 		// plugins, and telling someone in that position that something went
 		// wrong is both untrue and unactionable.
@@ -100,12 +111,73 @@ func renderPluginList(ctx context.Context, ro *runOutput, loader *pluginhost.Loa
 	}
 
 	w := tabwriter.NewWriter(ro.Out(), 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "NAME\tVERSION\tPATH")
+	fmt.Fprintln(w, "NAME\tKIND\tVERSION\tPATH")
 	for _, name := range names {
 		version, path := pluginRow(ctx, loader, name)
-		fmt.Fprintf(w, "%s\t%s\t%s\n", name, version, path)
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", name, plugins.RoleProvider, version, path)
+	}
+	for _, b := range backends {
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", b.name, plugins.RoleBackend, b.version, b.path)
 	}
 	_ = w.Flush()
+}
+
+// backendRow is one installed state backend, as list reports it.
+type backendRow struct{ name, version, path string }
+
+// installedBackends finds the backend binaries on the same search path a
+// provider is looked for on, first directory wins, exactly as backendhost.find
+// resolves one.
+//
+// THE VERSION COMES FROM plugins.lock, NOT FROM A HANDSHAKE, which is the one
+// place this row differs from a provider's. A backend's handshake is behind a
+// Configure call carrying the project's `backend:` block, so starting one to
+// read a version would start it WITHOUT its configuration and report a working
+// backend as broken. The lock records what install put there, which is the
+// honest offline answer; a backend put there by hand has no entry and says so.
+func installedBackends(dir string, dirs []string) []backendRow {
+	versions := map[string]string{}
+	if lf, err := plugins.ReadLockfile(dir); err == nil && lf != nil {
+		for name, entry := range lf.Plugins {
+			versions[name] = entry.Version
+		}
+	}
+
+	seen := map[string]bool{}
+	var out []backendRow
+	for _, d := range dirs {
+		entries, err := os.ReadDir(d)
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			if e.IsDir() {
+				continue
+			}
+			name, ok := backendNameOf(e.Name())
+			if !ok || seen[name] {
+				continue
+			}
+			seen[name] = true
+			version, ok := versions[backendhost.LockKey(name)]
+			if !ok {
+				// Installed by hand, or by a build that did not write a lock.
+				// Saying so beats printing a version nothing vouches for.
+				version = "unknown"
+			}
+			out = append(out, backendRow{name: name, version: version, path: filepath.Join(d, e.Name())})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].name < out[j].name })
+	return out
+}
+
+// backendNameOf recovers a backend's name from its binary's filename, the
+// mirror of pluginhost's pluginNameOf.
+func backendNameOf(filename string) (string, bool) {
+	name := strings.TrimSuffix(filename, ".exe")
+	name, ok := strings.CutPrefix(name, "infrena-backend-")
+	return name, ok && name != ""
 }
 
 // pluginRow loads a plugin and reads back what it turned out to be.
@@ -498,7 +570,7 @@ func renderSearch(w io.Writer, name string, found []plugins.Candidate, untrusted
 	}
 
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "SOURCE\tVERSION\tPROTOCOL\tSTATUS")
+	fmt.Fprintln(tw, "SOURCE\tKIND\tVERSION\tPROTOCOL\tSTATUS")
 	for _, c := range found {
 		source := c.Source.String()
 		if untrusted[c.Source.String()] {
@@ -510,7 +582,7 @@ func renderSearch(w io.Writer, name string, found []plugins.Candidate, untrusted
 		if !c.Usable {
 			status = c.Reason
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", source, c.Manifest.Version, joinInts(c.Manifest.Protocol), status)
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", source, c.Role, c.Manifest.Version, joinInts(c.Manifest.Protocol), status)
 	}
 	_ = tw.Flush()
 

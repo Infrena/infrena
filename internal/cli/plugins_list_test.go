@@ -2,11 +2,13 @@ package cli
 
 import (
 	"net"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
 
+	"github.com/infrena/infrena/internal/backendhost"
 	"github.com/infrena/infrena/pkg/provider"
 )
 
@@ -128,4 +130,47 @@ func blockNetwork(t *testing.T) *networkBlocker {
 		t.Setenv(name, "")
 	}
 	return b
+}
+
+// list answers "what am I actually running", and with backends installable
+// that answer now has two kinds in it. Inferred from the binary name, which
+// is already distinct: infrena-plugin-<name> against infrena-backend-<name>.
+func TestListShowsTheKindOfEachInstalledPlugin(t *testing.T) {
+	dir := newProjectWithInstalledPluginAndBackend(t)
+
+	stdout, _, code := runCommand(t, dir, "plugins", "list")
+
+	if code != ExitOK {
+		t.Fatalf("exit = %d", code)
+	}
+	if !strings.Contains(stdout, "KIND") {
+		t.Errorf("no kind column:\n%s", stdout)
+	}
+	// A column that only ever says one word would be a column for nothing:
+	// the backend on disk has to appear, and has to say which it is.
+	for _, want := range []string{"provider", "backend", "s3"} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("output does not show %q:\n%s", want, stdout)
+		}
+	}
+}
+
+// newProjectWithInstalledPluginAndBackend puts both kinds on one search path:
+// the fake provider this package's TestMain injects, and a backend binary in
+// the project's own plugin directory, where install would have put it.
+func newProjectWithInstalledPluginAndBackend(t *testing.T) string {
+	t.Helper()
+	dir := newProjectFixture(t)
+	pluginDir := filepath.Join(dir, ".infra", "plugins")
+	if err := os.MkdirAll(pluginDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// NEVER STARTED BY list, so it need not be a working backend: the name on
+	// disk is what says it is a backend, which is the point of the
+	// convention.
+	path := filepath.Join(pluginDir, backendhost.BinaryName("s3"))
+	if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return dir
 }

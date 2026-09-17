@@ -653,3 +653,27 @@ func sortedAssetKeys(m map[string][]byte) []string {
 	sort.Strings(out)
 	return out
 }
+
+// Search is exploratory. If you ask what is called s3 and there is a
+// provider and a backend, both is the honest answer, and the column is what
+// makes it readable rather than confusing.
+func TestSearchShowsTheKindOfEachCandidate(t *testing.T) {
+	dir := newProjectFixture(t)
+	trustSources(t)
+	srv := fakeGitHubServingBothKinds(t, "s3")
+	t.Setenv("INFRENA_GITHUB_API", srv.URL)
+
+	stdout, _, code := runCommand(t, dir, "plugins", "search", "s3")
+
+	if code != ExitOK {
+		t.Fatalf("exit = %d", code)
+	}
+	if !strings.Contains(stdout, "KIND") {
+		t.Errorf("no kind column:\n%s", stdout)
+	}
+	for _, want := range []string{"provider", "backend"} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("output does not show %q:\n%s", want, stdout)
+		}
+	}
+}
