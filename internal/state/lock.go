@@ -198,6 +198,15 @@ func WithOperation(ctx context.Context, op string) context.Context {
 	return context.WithValue(ctx, operationKey, op)
 }
 
+// OperationFrom reports the operation a context was labelled with, or
+// "unknown".
+//
+// Exported for internal/backendhost, which has to put the operation into the
+// lock it sends a backend plugin. The plugin cannot read this process's
+// context, and a lock recording no operation cannot say what its holder is
+// doing — which is half of what a stale-lock message is for.
+func OperationFrom(ctx context.Context) string { return operationFromContext(ctx) }
+
 func operationFromContext(ctx context.Context) string {
 	if op, ok := ctx.Value(operationKey).(string); ok && op != "" {
 		return op

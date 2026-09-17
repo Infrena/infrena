@@ -190,6 +190,15 @@ type SearchOptions struct {
 	HomeDir string
 }
 
+// Dirs is where to look, in order.
+//
+// Exported because a STATE BACKEND lives in the same directories: §31.3 has
+// install populate the directories that exist rather than adding a second
+// mechanism, so internal/backendhost searches exactly these for a binary whose
+// only difference is its name. A second list arrived at by copying this one is
+// how a backend ends up findable somewhere a provider is not.
+func (o SearchOptions) Dirs() []string { return o.dirs() }
+
 func (o SearchOptions) dirs() []string {
 	out := append([]string{}, o.Explicit...)
 	if o.ProjectDir != "" {
