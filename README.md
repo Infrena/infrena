@@ -219,6 +219,40 @@ The engine has **two third-party dependencies**: Cobra and a YAML parser. The AW
 
 ---
 
+## State, and where it lives
+
+State records what Infrena manages. By default it is a file per environment under `.infra/`, locked while a run holds it, and that is the whole setup — a project that never says otherwise never has to think about this.
+
+To share it, name a backend:
+
+```yaml
+backend:
+  plugin: s3
+  bucket: my-infrena-state
+```
+
+**Backends are plugins, exactly as providers are** — including S3. Nothing about object storage is built into the engine, so a store Infrena has never heard of needs a backend, not a patch.
+
+Two rules that are not configurable, because the failures they prevent are silent ones:
+
+**Every backend must lock, and there is no unsafe fallback.** The S3 backend locks with a conditional write, and proves the store honours it before serving anything: it writes a throwaway object twice and requires the second write to be refused. A store that ignores the header reports success for both, which looks exactly like a lock that never locks — so the bucket is refused when the project loads, rather than during an apply that is already under way. AWS S3 and MinIO have been run against the full live suite and pass. Backblaze B2 fails and is refused, which is the one result you would rather learn before writing a configuration than after. Cloudflare R2 and DigitalOcean Spaces are expected to work but have not been tested here — and because the check runs at load time, an untested store costs you a clear message rather than a lock that silently does nothing.
+
+**Credentials are never configuration.** `infra.yml` is committed, so there is deliberately nowhere in the `backend:` block to put a secret — writing one there is an error that points at `profile:` instead. Accepting it would have worked perfectly and put a long-lived key in a repository.
+
+Moving between backends is a command, not a manual copy:
+
+```yaml
+backend:                    # where state should live
+  plugin: s3
+  bucket: new-bucket
+migrate_from:               # where it lives today
+  plugin: local
+```
+
+`infrena state migrate` **copies, and never empties the source**, so a migration that goes wrong leaves the old backend still holding the record. Until it runs, ordinary commands refuse rather than treating an empty destination as an empty world. `state migrate --check` answers the same question for CI without touching anything.
+
+---
+
 ## Machine-readable output
 
 `--output` writes newline-delimited JSON for a frontend or a pipeline to consume, and **stdout stays empty** so nothing has to be parsed out of human text:
@@ -271,7 +305,7 @@ Each release includes `SHA256SUMS`.
 
 Infrena is pre-1.0 and under active development. The engine is complete and tested — the full lifecycle of create, plan, apply, drift detection, refresh, import and destroy runs end to end, with six correctness invariants asserted explicitly rather than assumed.
 
-Being straight about the rest: there is one production provider (AWS, via Cloud Control, covering 1,584 resource types), remote state has not been built yet, and nothing has yet run at scale against a large production account. Configuration syntax may still change, and releases say plainly when they break something.
+Being straight about the rest: there is one production provider (AWS, via Cloud Control, covering 1,584 resource types), and nothing has yet run at scale against a large production account. Remote state works — an S3-compatible bucket, with locking, and migration between backends — but it is new, and the backends are plugins so a store nobody has tried is a store nobody has tried. Configuration syntax may still change, and releases say plainly when they break something.
 
 Design principles the project holds itself to, in rough order of how easy they are to violate:
 

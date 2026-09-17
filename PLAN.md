@@ -3082,37 +3082,86 @@ schemas, not pipes.
 
 ### The repository stays PRIVATE until feature complete
 
-**Ruled 2026-09-13.** `github.com/infrena/infrena` is not a fetchable module and will not
-be until the product is feature complete. Requested by the fake-provider port, decided
-against for now; do not re-raise it as a blocker.
+**Ruled 2026-09-13. Re-examined 2026-09-17 and UPHELD**, with the costs re-measured — see
+below, two of the three were out of date. `github.com/infrena/infrena` is not a fetchable
+module and will not be until the product is feature complete. Requested by the
+fake-provider port, decided against for now; do not re-raise it as a blocker.
 
-What that costs, so nobody re-derives it:
+This section is written so that the day the switch is flipped is a checklist rather than a
+rediscovery. The point of re-examining a standing decision is that several others rest on
+it, and a premise that quietly becomes false takes its dependants with it.
+
+What it costs, so nobody re-derives it:
 
 - **There are no third-party plugin authors yet**, and cannot be. A plugin needs either a
   checkout of a private repository or `GOPRIVATE=github.com/infrena/*` plus credentials to
   the org. `AGENT.md`, §31.2 and the reference plugin all exist to invite outside plugins,
-  and that invitation is on hold rather than withdrawn.
-- **The one consumer uses `replace`.** `infrena-provider-fake` carries
-  `replace github.com/infrena/infrena => ../infrena`, so every contributor needs a sibling
-  checkout named `infrena` — the directory a clone produces — and its release workflow needs
-  a token to fetch this repository beside it. It has been renamed twice: it said `../ilan`
-  until 2026-09-13, a local folder name no clone creates, which broke CI the first time it
-  needed the plugin; and `../infrata` until the 2026-09-14 rename above.
+  and that invitation is on hold rather than withdrawn. **Still true.**
+
+- **~~The one consumer uses `replace`.~~ There are THREE consumers now, and two of them
+  have already taken the exit.** Corrected 2026-09-17:
+
+  | Repository | Requires | Local work | CI |
+  | --- | --- | --- | --- |
+  | `infrena-provider-fake` | v0.7.0 | committed `replace => ../infrena` | `scripts/ci-use-infrena-tag` strips the replace |
+  | `infrena-provider-aws` | v0.7.1 | gitignored `go.work` | `GOWORK=off` against the required version |
+  | `infrena-backend-s3` | v0.9.0 | gitignored `go.work` | `GOWORK=off` against the required version |
+
+  **The `go.work` arrangement is the better one and fake should move to it.** A committed
+  `replace` is a statement in the module graph that has to be removed to be correct, so
+  correctness depends on a script running; a gitignored `go.work` is invisible to the module
+  graph and absent by default, so the *default* is the correct build and local work is the
+  deliberate exception. That is the right way round.
+
+  The sibling-checkout requirement it records is real but belongs to fake alone now. It has
+  been renamed twice — `../ilan` until 2026-09-13, a local folder name no clone creates,
+  which broke CI the first time it needed the plugin; and `../infrata` until the 2026-09-14
+  rename.
+
 - **A `replace` means that repository builds against a WORKING TREE, not a version.** Its
   tests run against whatever is uncommitted here, which is how it saw a stale
-  `internal/semver` that had been moved. That is a fast loop while both repositories change
-  together daily, and a correctness hazard once they do not.
+  `internal/semver` that had been moved. A fast loop while both repositories change together
+  daily, and a correctness hazard once they do not. **v0.1.0 (2026-09-13) was the exit**, and
+  aws and s3 took it. Until a release existed it was not available at any price: every build
+  reported `0.0.0-dev`.
 
-  **v0.1.0 (2026-09-13) is the exit.** There is now a tag to require, so a plugin repository
-  can drop the `replace` in CI — `GOPRIVATE=github.com/infrena/*` plus a token, requiring the
-  released version — and keep it only for local work. Until a release existed this was not
-  available at any price: every build reported `0.0.0-dev`.
+- **A separate problem that visibility does not cause and will not fix: every consumer is
+  behind.** infrena is at **v0.11.1**; the three require v0.7.0, v0.7.1 and v0.9.0. Nothing
+  is broken by that — the protocol is versioned and old plugins are supported deliberately
+  (§61) — but a consumer pinned four minors back is not exercising what ships, and the
+  reference plugin in particular is meant to demonstrate the current SDK. Track it as its own
+  concern, not as a cost of privacy.
 
 **A semver tag is worth cutting anyway**, and is independent of visibility: with
 `GOPRIVATE` set, a tagged version lets the plugin `require github.com/infrena/infrena
 vX.Y.Z` and drop the `replace`, which removes the sibling-checkout requirement and pins
 the build to something reproducible. It also makes `infrena version` report a real version
 instead of `0.0.0-dev` (§61.1).
+
+#### What flips on the day
+
+- **§31.2 and `AGENT.md`'s invitation stops being on hold.** It is the one thing here that
+  is a decision rather than a mechanic: the moment outside plugins can be built, the
+  protocol and the SDK's surface become things other people depend on, and §61's version
+  discipline starts being load-bearing rather than tidy.
+- **`GOPRIVATE` and the `go.work`/`replace` arrangements become unnecessary**, in all three
+  repos. They should be removed rather than left working, because each is a piece of
+  scaffolding whose reason will no longer be true and which the next reader would otherwise
+  have to reconstruct.
+- **CI's `PLUGIN_REPO_TOKEN` secret stops being needed** (§31.2's testing section names it
+  explicitly, "because the plugin repository is private").
+- **The README's Releases link resolves for a reader for the first time.** It has never been
+  followed by anybody who is not signed in to the org, so it has never actually been tested.
+
+#### What does NOT flip, checked 2026-09-17
+
+- **`plugins search`'s unauthenticated wording is already correct and needs no change.**
+  It was written about private repositories IN GENERAL, not about infrena's own, so a third
+  party with a private plugin repo still gets the right answer and the reasoning in §31.3
+  stands unaltered. What changes is only how often the unauthenticated path returns
+  something — it stops being the edge case and becomes the common one, which the message
+  already handles ("If it should be public, check the spelling...").
+
 
 **Revisit when:** the product is feature complete. That is the stated gate, and going
 public is the only thing that makes an outside plugin author possible.
