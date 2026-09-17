@@ -407,10 +407,13 @@ go test ./... && gofmt -l . && go vet ./...
 git add internal/s3backend
 git commit -m "Lock with a conditional write, and prove the store can do one
 
-A store that does not implement conditional writes does not return an
-error, it overwrites and reports success, which is a lock that never
-locks. Support is proven by writing a probe twice and requiring the
-second to be refused."
+A store that cannot do a conditional write fails one of two ways. It may
+refuse the header outright, which is what Backblaze B2 does, reporting
+NotImplemented. Or it may ignore the header and report success, which is
+a lock that never locks and says nothing.
+
+The probe writes a throwaway object twice and requires the first to
+succeed and the second to be refused, which catches both."
 ```
 
 ---
