@@ -270,6 +270,24 @@ is a secret and is refused, because this block is committed to git."
 //
 // If the second write succeeds, two applies can both take the same lock, and
 // invariant 5 is gone with no error anywhere.
+// B2's ACTUAL behaviour, measured against the real service: NotImplemented on
+// the first write. The loud case.
+func TestProveConditionalWritesRejectsAStoreThatRefusesTheHeader(t *testing.T) {
+	store := &fakeStore{conditionalWritesNotImplemented: true}
+	b := newTestBackend(t, store)
+
+	err := b.proveConditionalWrites(context.Background())
+	if err == nil {
+		t.Fatal("a store that cannot do conditional writes was accepted")
+	}
+	// The store's own message is more use than anything invented here.
+	if !strings.Contains(err.Error(), "NotImplemented") {
+		t.Errorf("refusal does not quote the store: %v", err)
+	}
+}
+
+// The SILENT case: no store is known to do this, but it is the one that
+// produces a lock which never locks with no error anywhere.
 func TestProveConditionalWritesRejectsAStoreThatIgnoresTheHeader(t *testing.T) {
 	store := &fakeStore{ignoresIfNoneMatch: true}
 	b := newTestBackend(t, store)
