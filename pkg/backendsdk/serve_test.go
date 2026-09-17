@@ -13,6 +13,7 @@ import (
 
 	"github.com/infrena/infrena/pkg/backend"
 	"github.com/infrena/infrena/pkg/backendproto"
+	"github.com/infrena/infrena/pkg/backendtest"
 )
 
 // pkg/pluginsdk is "the whole of a plugin's main()". This is the same promise
@@ -92,6 +93,15 @@ func TestConfigurationAnUnconfigurableBackendCannotUseIsRefused(t *testing.T) {
 	if !strings.Contains(resp.Error.Message, "bucket") {
 		t.Errorf("error does not name the key: %s", resp.Error.Message)
 	}
+}
+
+// The reference backend is held to the same contract a third-party one is,
+// because a suite nothing in-tree runs is a code path the default never
+// exercises — which is how the refresh hook and the per-provider concurrency
+// bound quietly rotted. It also means the example an author copies is the
+// example the suite passes.
+func TestTheReferenceBackendPassesTheConformanceSuite(t *testing.T) {
+	backendtest.Conformance(t, func(*testing.T) backend.Backend { return &memoryBackend{} })
 }
 
 // memoryBackend is the reference implementation an author reads: a map, a
