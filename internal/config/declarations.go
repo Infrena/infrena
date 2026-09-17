@@ -325,7 +325,25 @@ type ProjectDecl struct {
 	// §52). The zero value means local, which is what every project written
 	// before the block existed says.
 	Backend BackendDecl
-	Origin  value.Origin
+	// MigrateFrom is where `state migrate` reads from. Same shape and same
+	// rules as Backend, decoded by the same code, because two blocks that
+	// mean the same thing must not be able to disagree about what a key means.
+	//
+	// NO COMMAND BUT `state migrate` ACTS ON IT (spec §7). A migration run
+	// through CI is necessarily two commits — one adding this block, one
+	// removing it — and between them it sits in committed configuration. If
+	// `plan` or `apply` acted on it, a SUCCESSFUL migration would break the
+	// pipeline until somebody tidied up.
+	//
+	// Ordinary commands DO consult it for one GUARD, added after the first
+	// draft: while the destination is empty and the source holds state, the
+	// migration has not happened, and a command reading only `backend:` would
+	// see every resource as unmanaged and RECREATE ALL OF IT.
+	//
+	// The zero value means absent, which is every project: no migration is
+	// pending and nothing changes.
+	MigrateFrom BackendDecl
+	Origin      value.Origin
 }
 
 // NeededPlugins names every provider plugin a project's declarations imply.

@@ -9,33 +9,93 @@ import (
 	"github.com/infrena/infrena/internal/diag"
 )
 
-// backendBlockHint shows the shape `backend:` takes, for every diagnostic that
-// has to correct it. One copy, because a reader given two spellings of the same
-// example has to work out which is current.
-const backendBlockHint = "backend:\n  plugin: s3        # the only key infrena reads\n  bucket: my-state  # everything else is the backend's own configuration"
+// backendBlockHint shows the shape a backend-shaped block takes, for every
+// diagnostic that has to correct one. One copy serving both blocks, because a
+// reader given two spellings of the same example has to work out which is
+// current.
+func backendBlockHint(block string) string {
+	return block + ":\n  plugin: s3        # the only key infrena reads\n  bucket: my-state  # everything else is the backend's own configuration"
+}
 
-// decodeBackend decodes `backend:` (PLAN.md §52).
+// backendBlockTexts carries the only sentences that differ between the two
+// blocks: what leaving the block out means. Everything else about them is
+// identical, which is why this is all that is parameterised — a block that
+// could differ in more than this is a block that could disagree with the other
+// about what a key means.
+type backendBlockTexts struct {
+	absentMeans  string
+	absentAction string
+}
+
+func backendTextsFor(block string) backendBlockTexts {
+	if block == "migrate_from" {
+		return backendBlockTexts{
+			absentMeans: "Leaving the block out entirely is how a project says there is no " +
+				"migration to perform.",
+			absentAction: "Add `plugin: <name>`, or remove the `migrate_from:` block if there is " +
+				"nothing to migrate.",
+		}
+	}
+	return backendBlockTexts{
+		absentMeans:  "Removing the block entirely is how a project asks for the local backend.",
+		absentAction: "Add `plugin: <name>`, or remove the `backend:` block to keep state local.",
+	}
+}
+
+// decodeBackend decodes `backend:` (PLAN.md §52), where this project's state
+// lives.
+func decodeBackend(path string, key, node *yaml.Node, out *ProjectDecl, ds *diag.Diagnostics) {
+	decodeBackendBlock(path, "backend", key, node, &out.Backend, ds)
+}
+
+// decodeMigrateFrom decodes `migrate_from:` (spec §7), the other end of a
+// migration.
+//
+// THE SAME CODE AS `backend:`, not a copy of it. Two blocks that mean the same
+// thing must not be able to disagree about what a key means, and a copy is
+// exactly how one of them comes to accept what the other refuses. A migration
+// that read its source by different rules from the ones the destination is read
+// by could move state somewhere nobody configured.
+func decodeMigrateFrom(path string, key, node *yaml.Node, out *ProjectDecl, ds *diag.Diagnostics) {
+	decodeBackendBlock(path, "migrate_from", key, node, &out.MigrateFrom, ds)
+}
+
+// decodeBackendBlock decodes one backend-shaped block into out.
 //
 // IT RESERVES ONE KEY. `plugin:` names the implementation and is the engine's;
 // every other key belongs to the backend and crosses to it untouched. So this
-// is the one block in the language where an unrecognised key is NOT an error:
+// is the one shape in the language where an unrecognised key is NOT an error:
 // infrena cannot know whether an s3 backend accepts `profile`, and refusing
 // what it does not recognise would make every backend option a change to the
 // core. A missing `plugin:` IS an error, because that is the key infrena owns
 // and without it there is no backend to hand the rest of the block to.
-func decodeBackend(path string, key, node *yaml.Node, out *ProjectDecl, ds *diag.Diagnostics) {
+//
+// `plugin: local` decodes here like any other name. Naming the built-in backend
+// is how a migration says "local" without relying on a block being absent, and
+// resolving a name to an implementation is not this package's business.
+func decodeBackendBlock(
+	path, block string, key, node *yaml.Node, out *BackendDecl, ds *diag.Diagnostics,
+) {
 	origin := originOf(path, key)
+	texts := backendTextsFor(block)
 
 	if node.Kind != yaml.MappingNode {
+		detail := "It names one backend and configures it. Read as anything else it would " +
+			"carry no plugin name, which is indistinguishable from declaring no `" + block +
+			":` at all. "
+		if block == "backend" {
+			detail += "That silently means local, so state would be written somewhere other " +
+				"than where this block asked for."
+		} else {
+			detail += "That means no migration, so `infrena state migrate` would report " +
+				"nothing to do rather than reading the state this block points at."
+		}
 		ds.Add(diag.Diagnostic{
 			Severity: diag.SeverityError,
-			Summary:  "`backend` must be a mapping",
-			Detail: "It names one backend and configures it. Read as anything else it would " +
-				"carry no plugin name, which is indistinguishable from declaring no backend " +
-				"at all — and that silently means local, so state would be written somewhere " +
-				"other than where this block asked for.",
-			Action: "Write it as:\n" + backendBlockHint,
-			Origin: originOf(path, node),
+			Summary:  "`" + block + "` must be a mapping",
+			Detail:   detail,
+			Action:   "Write it as:\n" + backendBlockHint(block),
+			Origin:   originOf(path, node),
 		})
 		// THE BLOCK IS RECORDED EVEN THOUGH IT DID NOT DECODE, carrying its
 		// origin and no plugin. A caller that saw the zero value here could
@@ -43,7 +103,7 @@ func decodeBackend(path string, key, node *yaml.Node, out *ProjectDecl, ds *diag
 		// from "this project declared one and it could not be read", which
 		// must never mean local: falling back would write state somewhere
 		// other than where the block asked for.
-		out.Backend = BackendDecl{Origin: originOf(path, node)}
+		*out = BackendDecl{Origin: originOf(path, node)}
 		return
 	}
 
@@ -52,18 +112,18 @@ func decodeBackend(path string, key, node *yaml.Node, out *ProjectDecl, ds *diag
 		k, val := node.Content[i], node.Content[i+1]
 
 		if k.Value == "plugin" {
-			text, ok := requireScalar(path, "`backend`'s `plugin`", val, ds)
+			text, ok := requireScalar(path, "`"+block+"`'s `plugin`", val, ds)
 			if !ok {
 				continue
 			}
-			if !backendValueIsLiteral(path, "plugin", val, ds) {
+			if !backendValueIsLiteral(path, block, "plugin", val, ds) {
 				continue
 			}
 			d.Plugin = text
 			continue
 		}
 
-		if !backendValueIsLiteral(path, k.Value, val, ds) {
+		if !backendValueIsLiteral(path, block, k.Value, val, ds) {
 			continue
 		}
 
@@ -76,9 +136,9 @@ func decodeBackend(path string, key, node *yaml.Node, out *ProjectDecl, ds *diag
 		if err := val.Decode(&v); err != nil {
 			ds.Add(diag.Diagnostic{
 				Severity: diag.SeverityError,
-				Summary:  "`backend." + k.Value + "` could not be read",
+				Summary:  "`" + block + "." + k.Value + "` could not be read",
 				Detail:   err.Error(),
-				Action:   "Check the YAML under `backend:`.",
+				Action:   "Check the YAML under `" + block + ":`.",
 				Origin:   originOf(path, val),
 			})
 			continue
@@ -89,24 +149,24 @@ func decodeBackend(path string, key, node *yaml.Node, out *ProjectDecl, ds *diag
 	if d.Plugin == "" {
 		ds.Add(diag.Diagnostic{
 			Severity: diag.SeverityError,
-			Summary:  "`backend` has no `plugin`",
+			Summary:  "`" + block + "` has no `plugin`",
 			Detail: "Every other key in this block is the backend's own configuration, so " +
-				"without `plugin:` there is nothing to hand it to. Removing the block " +
-				"entirely is how a project asks for the local backend.",
-			Action: "Add `plugin: <name>`, or remove the `backend:` block to keep state local.",
+				"without `plugin:` there is nothing to hand it to. " + texts.absentMeans,
+			Action: texts.absentAction,
 			Origin: origin,
 		})
 		// Recorded without a plugin, for the reason above: a block that is
 		// present and unreadable is not a project that declared no backend.
-		out.Backend = BackendDecl{Origin: origin}
+		*out = BackendDecl{Origin: origin}
 		return
 	}
 
-	out.Backend = d
+	*out = d
 }
 
-// backendValueIsLiteral reports whether a value under `backend:` is free of
-// interpolation, adding a diagnostic naming the key if it is not.
+// backendValueIsLiteral reports whether a value under `backend:` or
+// `migrate_from:` is free of interpolation, adding a diagnostic naming the key
+// if it is not.
 //
 // A VARIABLE HERE CAN NEVER BE RESOLVED, and the diagnostic has to say why or
 // the reader goes and declares one.
@@ -116,16 +176,18 @@ func decodeBackend(path string, key, node *yaml.Node, out *ProjectDecl, ds *diag
 // compile — `destroy`, `refresh`, `discover` and `import` never compile at all
 // — so there is no point at which a value here could be filled in. It is a
 // cycle, not a missing feature, and a future request to "just support variables
-// in backend:" is a request to break that ordering.
+// in backend:" is a request to break that ordering. `migrate_from:` is refused
+// for the identical reason and with the identical words, so a reader who has
+// met the rule in one block does not have to discover it again in the other.
 //
 // It walks the whole value rather than its top level, because a `${...}` nested
 // three maps down reaches the backend by exactly the same route.
-func backendValueIsLiteral(path, keyPath string, node *yaml.Node, ds *diag.Diagnostics) bool {
+func backendValueIsLiteral(path, block, keyPath string, node *yaml.Node, ds *diag.Diagnostics) bool {
 	switch node.Kind {
 	case yaml.SequenceNode:
 		ok := true
 		for i, item := range node.Content {
-			if !backendValueIsLiteral(path, keyPath+"["+strconv.Itoa(i)+"]", item, ds) {
+			if !backendValueIsLiteral(path, block, keyPath+"["+strconv.Itoa(i)+"]", item, ds) {
 				ok = false
 			}
 		}
@@ -134,7 +196,7 @@ func backendValueIsLiteral(path, keyPath string, node *yaml.Node, ds *diag.Diagn
 	case yaml.MappingNode:
 		ok := true
 		for i := 0; i+1 < len(node.Content); i += 2 {
-			if !backendValueIsLiteral(path, keyPath+"."+node.Content[i].Value, node.Content[i+1], ds) {
+			if !backendValueIsLiteral(path, block, keyPath+"."+node.Content[i].Value, node.Content[i+1], ds) {
 				ok = false
 			}
 		}
@@ -147,7 +209,7 @@ func backendValueIsLiteral(path, keyPath string, node *yaml.Node, ds *diag.Diagn
 		if node.Alias == nil {
 			return true
 		}
-		return backendValueIsLiteral(path, keyPath, node.Alias, ds)
+		return backendValueIsLiteral(path, block, keyPath, node.Alias, ds)
 
 	default:
 		if !strings.Contains(node.Value, "${") {
@@ -155,7 +217,8 @@ func backendValueIsLiteral(path, keyPath string, node *yaml.Node, ds *diag.Diagn
 		}
 		ds.Add(diag.Diagnostic{
 			Severity: diag.SeverityError,
-			Summary:  "`backend." + keyPath + "` uses a variable, and a variable here can never be resolved",
+			Summary: "`" + block + "." + keyPath +
+				"` uses a variable, and a variable here can never be resolved",
 			Detail: "State is read before anything is compiled, and compiling is what resolves " +
 				"`${...}`. `destroy`, `refresh`, `discover` and `import` never compile at all, " +
 				"and every other command has to open the backend to find out what already " +

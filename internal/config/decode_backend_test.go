@@ -156,3 +156,76 @@ func TestABackendBlockThatIsNotAMappingIsRefused(t *testing.T) {
 		}
 	}
 }
+
+func TestMigrateFromDecodesLikeABackendBlock(t *testing.T) {
+	p, ds := decodeTree(t, map[string]string{
+		ProjectFileName: projectWithNoResources + `
+backend:
+  plugin: s3
+  bucket: new-bucket
+migrate_from:
+  plugin: s3
+  bucket: old-bucket
+  region: eu-west-1
+`,
+	})
+	if ds.HasErrors() {
+		t.Fatalf("unexpected errors: %v", ds)
+	}
+	if p.Backend.Plugin != "s3" || p.Backend.Config["bucket"] != "new-bucket" {
+		t.Errorf("Backend = %+v", p.Backend)
+	}
+	if p.MigrateFrom.Plugin != "s3" || p.MigrateFrom.Config["bucket"] != "old-bucket" {
+		t.Errorf("MigrateFrom = %+v", p.MigrateFrom)
+	}
+}
+
+// Both ends are namable, so nothing is implicit. `plugin: local` is how a
+// migration says "the built-in local backend" rather than relying on the
+// block being absent.
+func TestLocalIsNamableInBothBlocks(t *testing.T) {
+	p, ds := decodeTree(t, map[string]string{
+		ProjectFileName: projectWithNoResources + "backend:\n  plugin: s3\n  bucket: b\nmigrate_from:\n  plugin: local\n",
+	})
+	if ds.HasErrors() {
+		t.Fatal(ds)
+	}
+	if p.MigrateFrom.Plugin != "local" {
+		t.Errorf("MigrateFrom.Plugin = %q, want local", p.MigrateFrom.Plugin)
+	}
+}
+
+// The same ordering cycle as `backend:`, so the same refusal with the same
+// explanation. A reader who meets it in one block must not have to discover
+// it separately in the other.
+func TestAVariableInMigrateFromIsRefusedWithTheSameReason(t *testing.T) {
+	_, ds := decodeTree(t, map[string]string{
+		ProjectFileName: projectWithNoResources + "backend:\n  plugin: s3\n  bucket: b\nmigrate_from:\n  plugin: s3\n  bucket: ${var.old}\n",
+	})
+	if !ds.HasErrors() {
+		t.Fatal("a variable in migrate_from was accepted")
+	}
+	if !strings.Contains(renderBackendDiags(ds), "before") {
+		t.Errorf("diagnostic does not explain the ordering: %s", renderBackendDiags(ds))
+	}
+}
+
+func TestAMigrateFromWithNoPluginIsAnError(t *testing.T) {
+	_, ds := decodeTree(t, map[string]string{
+		ProjectFileName: projectWithNoResources + "backend:\n  plugin: s3\n  bucket: b\nmigrate_from:\n  bucket: old\n",
+	})
+	if !ds.HasErrors() {
+		t.Fatal("a migrate_from with no plugin was accepted")
+	}
+}
+
+// A project with no migrate_from is every project, and must be untouched.
+func TestNoMigrateFromBlockIsTheOrdinaryCase(t *testing.T) {
+	p, ds := decodeTree(t, map[string]string{ProjectFileName: projectWithNoResources})
+	if ds.HasErrors() {
+		t.Fatal(ds)
+	}
+	if p.MigrateFrom.Plugin != "" {
+		t.Errorf("MigrateFrom.Plugin = %q, want empty", p.MigrateFrom.Plugin)
+	}
+}
