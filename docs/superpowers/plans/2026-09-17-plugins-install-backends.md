@@ -320,6 +320,28 @@ without saying which is which."
 
 ## Task 3: Install asks the project, not the user
 
+**FOUR THINGS ESTABLISHED AFTER THIS PLAN WAS WRITTEN — read before starting.**
+
+**1. A backend release is NOT named like a provider release, and the fixture in the tree guesses that it is.** Verified against `infrena-backend-s3`'s own `scripts/build-release`:
+
+```
+infrena-backend-s3_<version>_<goos>_<goarch>.tar.gz     (.zip on windows)
+   └── infrena-backend-s3_<version>_<goos>_<goarch>/
+         └── infrena-backend-s3
+```
+
+`remote.AssetName` hardcodes an `infrena-plugin-` prefix, so for a backend it constructs `infrena-plugin-s3_<version>_...` — **an asset no release publishes.** `AssetName` must become role-aware, and so must the binary name (`pluginhost.BinaryName` against `backendhost.BinaryName`) and the install destination. `plugins_install.go:118` is the call site.
+
+**Fix `fakeGitHubServingBothKinds` in `plugins_install_test.go` to serve the real backend archive name**, not the guessed one. A fake that answers whatever the code asks for validates any implementation, right or wrong — that is exactly how five bugs shipped through a fake GitHub two days ago.
+
+**2. A helper name already collides.** `newProjectWithBackend(t, block string)` exists in `backend_test.go` and takes a YAML block, not a name. This task's tests call it as `newProjectWithBackend(t, "s3")`. Rename one of them; say which and why.
+
+**3. Install must keep writing the lock entry `list` reads.** `plugins list` reads a backend's version from `plugins.lock` under `backendhost.LockKey(name)` — that is `"infrena-backend-" + name`, not the bare name, so a provider `s3` and a backend `s3` cannot collide on one entry.
+
+**4. `RepoPrefix` survives** as a deprecated alias of `ProviderRepoPrefix`, because `plugins_install_test.go` still used it. New code uses `ProviderRepoPrefix` / `BackendRepoPrefix`.
+
+
+
 **Files:**
 - Create: `internal/cli/plugins_project.go`
 - Modify: `internal/cli/plugins_install.go`
