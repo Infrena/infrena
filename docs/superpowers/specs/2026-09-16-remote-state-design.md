@@ -234,14 +234,81 @@ a lock implementation that is subtly wrong, in a third-party plugin the engine c
 
 ## 7. Migration
 
-```bash
-infrena state migrate --to s3
+**Redesigned 2026-09-17.** The original `infrena state migrate --to s3` named a PLUGIN, not a
+configuration — and you cannot migrate to an S3 backend without knowing its bucket, region and
+path. A migration needs both ends fully configured; `backend:` holds one.
+
+A second attempt made the other end always local, migrating remote-to-remote by pivoting through
+local. **James rejected it, correctly**: moving from an S3 bucket to the hosted platform's own
+backend is a path that should be one command, and that design made it a three-step detour. It also
+assumes a viable local disk, which CI may not have and large state may not fit.
+
+### A temporary second block
+
+```yaml
+backend:
+  plugin: s3
+  bucket: new-bucket
+  region: us-east-1
+
+migrate_from:
+  plugin: s3
+  bucket: old-bucket
+  region: eu-west-1
 ```
 
-Lock both sides, copy every environment, verify each by reading it back, then release both. A
-failure at any point leaves the source authoritative and the destination incomplete rather than
-the reverse — the same "leave the harmless half done" rule that orders configuration before state
-in `import`.
+`migrate_from:` takes the same shape as `backend:` and the same rules: `plugin:` is the only
+reserved key, every other key crosses to the backend untouched, and **no interpolation**, for the
+identical ordering reason (§3).
+
+**`plugin: local` is valid in both blocks**, so every migration names both ends and nothing is
+implicit. Uniform across every pair — local to remote, remote to local, S3 to S3, S3 to whatever
+backend exists in two years. No pivot and no special case.
+
+Rejected: a pointer recording where state last lived. It solves remote-to-remote, but it lives in
+a gitignored directory, so a colleague's checkout disagrees about where state was and a stale
+pointer produces a confident migration from somewhere holding nothing. Also rejected: `state pull`
+and `state push`, which need less machinery but write **state to a file in cleartext** — and state
+is the one place secrets are not redacted, so that is a file someone forgets to delete.
+
+### `migrate_from:` IS INERT FOR EVERY COMMAND EXCEPT `state migrate`
+
+This is the rule the CI case forces, and it is not an optimisation.
+
+Where a user cannot reach the cloud directly, a migration is necessarily TWO commits: push the
+config carrying `migrate_from:`, let the pipeline migrate, then push again to remove it. Between
+those commits — possibly hours — the block sits in committed configuration. If it affected
+ordinary commands, every `plan` and `apply` in that window would find state in the new backend and
+fail. **A successful migration would break the pipeline until somebody tidied up.**
+
+So `plan`, `apply`, `refresh`, `destroy` and the rest ignore it entirely. Leaving it behind is
+harmless, which also makes the second commit hygiene rather than a fix.
+
+### What `infrena state migrate` does
+
+Lock both ends, then decide on THREE cases rather than two:
+
+| Source | Destination | Result |
+| --- | --- | --- |
+| has state | empty | migrate |
+| has state | **identical state** | **succeed as a no-op** — "already migrated" |
+| has state | **different state** | **refuse**, `--force` to overwrite |
+
+**The middle row exists because CI re-runs happen** — a flaky job, a retry, a pipeline that runs
+twice. Failing there would be safe but noisy, and the natural response to a red pipeline is to add
+`--force` to the workflow, where it then sits on every future run. That is the same hazard as a
+`lock: false` escape hatch, arriving by the same route, so the refusal message must NOT lead with
+`--force`.
+
+The last row genuinely deserves refusal: differing state at both ends means somebody has been
+applying to one of them, and silently choosing a winner destroys real work.
+
+Then copy every environment, verify each by reading it back, and release both. **A failure at any
+point leaves the source authoritative** and the destination incomplete rather than the reverse —
+the same "leave the harmless half done" rule that orders configuration before state in `import`.
+
+Report the outcome and suggest removing `migrate_from:` — adding that leaving it is harmless, since
+in CI that message goes to a log nobody reads.
 
 **This lands last in the build order, necessarily**: there is nothing to migrate to until the S3
 plugin exists. The test is a local → S3 → local round trip, which is a better test than either
