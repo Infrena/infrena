@@ -12,7 +12,14 @@
 // every case. infrena-backend-store keeps state under the directory its
 // `backend:` block names; infrena-backend-brokenstore reads exactly the same
 // way and refuses every write, which is how a test stages a destination that
-// cannot accept state without also staging one that cannot be read.
+// cannot accept state without also staging one that cannot be read;
+// infrena-backend-countingstore stores state identically and appends a byte to
+// a tally file every time it is CONFIGURED, so a test can prove the migration
+// guard did not open it.
+//
+// A THIRD NAME RATHER THAN A SECOND MECHANISM. An in-process double counting
+// opens would count calls into itself, and the property under test is that no
+// process was started at all.
 package main
 
 import (
@@ -32,7 +39,11 @@ import (
 
 func main() {
 	name := strings.TrimPrefix(filepath.Base(os.Args[0]), "infrena-backend-")
-	backendsdk.Main(&store{name: name, refuseWrites: name == "brokenstore"})
+	backendsdk.Main(&store{
+		name:         name,
+		refuseWrites: name == "brokenstore",
+		countOpens:   name == "countingstore",
+	})
 }
 
 // store is a backend whose whole storage is a directory: one file per
@@ -41,8 +52,13 @@ func main() {
 type store struct {
 	name         string
 	refuseWrites bool
+	countOpens   bool
 	dir          string
 }
+
+// openTallyName is the file a counting store appends to. It deliberately does
+// not end in `.json`, because List treats every such file as an environment.
+const openTallyName = "opens"
 
 func (s *store) Name() string { return s.name }
 
@@ -55,7 +71,26 @@ func (s *store) Configure(ctx context.Context, config map[string]any) error {
 		return fmt.Errorf("backend %q needs a `dir:` in its `backend:` block saying where to store state", s.name)
 	}
 	s.dir = dir
-	return os.MkdirAll(dir, 0o755)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	return s.recordOpen()
+}
+
+// recordOpen appends one byte to the tally, which is the whole of the
+// counting. A byte rather than a number so two opens racing cannot lose one
+// to a read-modify-write, and O_APPEND so the file itself does the ordering.
+func (s *store) recordOpen() error {
+	if !s.countOpens {
+		return nil
+	}
+	f, err := os.OpenFile(filepath.Join(s.dir, openTallyName), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	_, err = f.Write([]byte{'.'})
+	return err
 }
 
 func (s *store) statePath(environment string) string {

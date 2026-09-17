@@ -305,8 +305,146 @@ func refuseUnresolvedInstances(table providers.Table, environment string) diag.D
 // working out where state lives can only ever be a read of the file. That is
 // also why `backend:` may not interpolate: there is no point at which a value
 // there could be filled in.
+// A MIGRATION THAT HAS NOT HAPPENED YET STOPS THE COMMAND HERE. See
+// refuseWhileMigrationPending: between the configuration landing and somebody
+// running `state migrate`, the backend this returns is EMPTY while the old one
+// holds everything, and a command that proceeded would see every resource as
+// unmanaged.
 func backendFor(ctx context.Context, opts *GlobalOptions) (state.Backend, func() error, error) {
-	return openBackend(ctx, opts, backendDecl(opts.Dir))
+	destinationDecl, sourceDecl := backendDecls(opts.Dir)
+	destination, closeDestination, err := openBackend(ctx, opts, destinationDecl)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := refuseWhileMigrationPending(ctx, opts, destination, destinationDecl, sourceDecl); err != nil {
+		// Closed here rather than left to the caller, which never got the
+		// backend and so has nothing to defer. A plugin process left running
+		// behind a refusal is a process holding whatever it locked.
+		_ = closeDestination()
+		return nil, nil, err
+	}
+	return destination, closeDestination, nil
+}
+
+// refuseWhileMigrationPending stops an ordinary command running against a
+// backend that is still waiting for its state.
+//
+// THIS IS THE DANGEROUS HALF OF THE MIGRATION DESIGN (spec §7). A migration
+// run from CI is necessarily two commits — one adding `migrate_from:`, one
+// removing it — and between them the configuration names a NEW, EMPTY backend
+// beside the old one that holds everything. Reading `backend:` alone, every
+// resource looks unmanaged, and an apply CREATES ALL OF IT AGAIN: duplicate
+// infrastructure, and two backends each claiming to record the same resources.
+// In the flow this design exists for, that ordering is the likely one —
+// configuration lands first and the pipeline runs before a human triggers
+// anything.
+//
+// IT IS A GUARD AND NOT AN ACTION. A command never performs the migration:
+// moving state as a side effect of a `plan` would be a worse surprise than the
+// one being prevented. The only outcomes are "carry on" and "stop, and here is
+// what to run".
+//
+// The DESTINATION IS CHECKED FIRST, which the command has opened anyway. State
+// there means the migration is done, the block is inert, and the source is
+// never touched — which matters, because opening it may start a plugin process
+// and reach a network. Only an empty destination pays for a second open, and an
+// empty destination is already the unusual case.
+//
+// An empty `Plugin` means NO BLOCK and no guard, which is every project. A
+// block that was present and would not decode also lands here with an empty
+// plugin; it is left alone deliberately, because `state migrate` reports that
+// one properly and a second telling in a different shape gives the reader two
+// problems to reconcile.
+func refuseWhileMigrationPending(
+	ctx context.Context,
+	opts *GlobalOptions,
+	destination state.Backend,
+	destinationDecl, sourceDecl config.BackendDecl,
+) error {
+	if sourceDecl.Plugin == "" {
+		return nil
+	}
+
+	held, err := environmentsHoldingState(ctx, destination)
+	if err != nil {
+		// Not this guard's error to report. The command is about to use this
+		// backend for its real work and will fail there with a message about
+		// what it was actually doing, which is the one a reader can act on.
+		return nil
+	}
+	if len(held) > 0 {
+		return nil
+	}
+
+	source, closeSource, err := openBackend(ctx, opts, sourceDecl)
+	if err != nil {
+		return fmt.Errorf(
+			"this project's `backend:` block names %s, which holds no state, and the backend "+
+				"`migrate_from:` names could not be opened to find out whether a migration is pending\n"+
+				"  %v\n"+
+				"Running anyway could treat every resource as unmanaged and create it all a second time.\n"+
+				"Make %s reachable and run `infrena state migrate`, or remove the `migrate_from:` block\n"+
+				"if the migration is already done.",
+			backendName(destinationDecl), err, backendName(sourceDecl))
+	}
+	defer closeSource()
+
+	pending, err := environmentsHoldingState(ctx, source)
+	if err != nil {
+		return fmt.Errorf(
+			"the backend `migrate_from:` names could not be read, so infrena cannot tell whether a "+
+				"migration is pending\n"+
+				"  %v\n"+
+				"`backend:` names %s, which holds no state, so running anyway could treat every\n"+
+				"resource as unmanaged and create it all a second time.\n"+
+				"Run `infrena state migrate` once %s can be read, or remove the `migrate_from:` block\n"+
+				"if the migration is already done.",
+			err, backendName(destinationDecl), backendName(sourceDecl))
+	}
+	if len(pending) == 0 {
+		// Both ends empty. A new project that happens to carry both blocks is
+		// not a pending migration, and refusing here would block a legitimate
+		// first apply.
+		return nil
+	}
+
+	return fmt.Errorf(
+		"this project is waiting for a state migration that has not been run\n"+
+			"  `backend:` names %s, which holds no state\n"+
+			"  `migrate_from:` names %s, which holds state for %s\n"+
+			"Running now would find every resource unmanaged, and an apply would create all of it a\n"+
+			"second time alongside what already exists.\n"+
+			"Run `infrena state migrate` to copy the state across, or remove the `migrate_from:` block\n"+
+			"if this project is not migrating after all.",
+		backendName(destinationDecl), backendName(sourceDecl), joinEnvironments(pending))
+}
+
+// environmentsHoldingState names the environments a backend holds real state
+// for, in sorted order.
+//
+// An environment whose state records NO RESOURCES does not count. A backend
+// keeps a file or an object per environment and one may be left behind by a
+// `destroy`; treating that as "the migration is done" would wave through
+// exactly the run this guard exists to stop, and it is the same emptiness test
+// compareEnds makes when it decides the destination is waiting.
+func environmentsHoldingState(ctx context.Context, b state.Backend) ([]string, error) {
+	environments, err := b.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	sort.Strings(environments)
+
+	var held []string
+	for _, environment := range environments {
+		st, err := b.Get(ctx, environment)
+		if err != nil {
+			return nil, err
+		}
+		if st != nil && len(st.Resources) > 0 {
+			held = append(held, environment)
+		}
+	}
+	return held, nil
 }
 
 // openBackend opens the backend a decoded block asks for, and the closer that
@@ -363,23 +501,16 @@ func openBackend(
 // backend infrena can carry.
 const localBackendName = "local"
 
-// backendDecl reads `backend:` out of a project's configuration.
+// backendDecls reads BOTH backend blocks out of a project's configuration in
+// one decode: `backend:`, where state lives, and `migrate_from:`, where
+// `state migrate` reads from.
 //
 // Decoding errors are IGNORED here, the same concession pluginConstraints and
 // registerStateInstances make: this runs before any diagnostic can be rendered
 // properly, and reporting a malformed file twice gives a reader two problems to
-// reconcile instead of one. What is NOT ignored is the backend block's own
-// failure to decode, because that one changes where state is written — see
-// backendFor, which has the origin to tell it apart from a project that
-// declared nothing.
-func backendDecl(dir string) config.BackendDecl {
-	backend, _ := backendDecls(dir)
-	return backend
-}
-
-// backendDecls reads BOTH backend blocks out of a project's configuration in
-// one decode: `backend:`, where state lives, and `migrate_from:`, where
-// `state migrate` reads from.
+// reconcile instead of one. What is NOT ignored is either block's own failure
+// to decode, because that one changes where state is written — see backendFor,
+// which has the origin to tell it apart from a project that declared nothing.
 //
 // One decode rather than two because the two blocks are read together by every
 // caller that wants the second one, and decoding twice is two chances to read

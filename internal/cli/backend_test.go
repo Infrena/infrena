@@ -153,3 +153,138 @@ func TestAMissingBackendPluginInAMigrationIsAnError(t *testing.T) {
 		t.Errorf("error does not name the backend: %v", err)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// The guard: a backend that is waiting for a migration
+// ---------------------------------------------------------------------------
+
+// THE HAZARD. Configuration lands with a new empty backend and a
+// migrate_from: naming the old one that holds everything. Nobody has run the
+// migration yet. Reading only `backend:`, every resource looks unmanaged and
+// apply would CREATE ALL OF IT AGAIN.
+//
+// In the CI flow this design exists for, that ordering is the LIKELY one:
+// config lands first, the pipeline runs before a human triggers anything.
+func TestCommandsRefuseWhileAMigrationIsPending(t *testing.T) {
+	dir := newProjectMigratingLocalToFake(t)
+	seedLocalState(t, dir, "dev") // the SOURCE holds state; the destination is empty
+
+	for _, args := range [][]string{{"plan", "dev"}, {"apply", "dev", "--auto-approve"}, {"refresh", "dev"}} {
+		_, stderr, code := runCommand(t, dir, args...)
+
+		if code == ExitOK || code == ExitChanges {
+			t.Errorf("%v proceeded into a backend awaiting migration", args)
+		}
+		if !strings.Contains(stderr, "state migrate") {
+			t.Errorf("%v: refusal does not name the fix:\n%s", args, stderr)
+		}
+	}
+}
+
+// The refusal names the environments at risk, because the reader's next
+// question is what is in the balance and a message that made them go and find
+// out would be answered by running the very command being refused.
+func TestTheRefusalNamesTheEnvironmentsAtRisk(t *testing.T) {
+	dir := newProjectMigratingLocalToFake(t)
+	seedLocalState(t, dir, "dev", "production")
+
+	_, stderr, _ := runCommand(t, dir, "plan", "dev")
+
+	for _, want := range []string{"dev", "production"} {
+		if !strings.Contains(stderr, want) {
+			t.Errorf("refusal does not name %q:\n%s", want, stderr)
+		}
+	}
+}
+
+// A COMMAND NEVER MIGRATES. The guard stops a run; it does not quietly do the
+// thing it is guarding against being skipped. A plan that migrated would move
+// state as a side effect of a read-only command, which is a worse surprise
+// than the one this guard exists to prevent.
+func TestTheGuardRefusesRatherThanMigrating(t *testing.T) {
+	dir := newProjectMigratingLocalToFake(t)
+	seedLocalState(t, dir, "dev")
+
+	runCommand(t, dir, "plan", "dev")
+
+	if destinationHasState(t, dir, "dev") {
+		t.Error("an ordinary command performed the migration")
+	}
+}
+
+// Once migrated, the block is harmless and everything proceeds. This is the
+// property the whole inertness rule exists to protect: a SUCCESSFUL migration
+// must not break the pipeline while the removal commit is pending.
+func TestCommandsProceedOnceTheMigrationIsDone(t *testing.T) {
+	dir := newProjectMigratingLocalToFake(t)
+	seedLocalState(t, dir, "dev")
+	if _, _, code := runCommand(t, dir, "state", "migrate"); code != ExitOK {
+		t.Fatal("setup migration failed")
+	}
+
+	// migrate_from: is STILL present and must now be inert.
+	if _, stderr, code := runCommand(t, dir, "plan", "dev"); code == ExitError {
+		t.Errorf("plan refused after a completed migration:\n%s", stderr)
+	}
+}
+
+// A new project that has both blocks but nothing anywhere is not a pending
+// migration. Refusing here would block a legitimate first apply.
+func TestAnEmptySourceIsNotAPendingMigration(t *testing.T) {
+	dir := newProjectMigratingLocalToFake(t) // nothing seeded anywhere
+
+	if _, stderr, code := runCommand(t, dir, "plan", "dev"); code == ExitError {
+		t.Errorf("plan refused with nothing to migrate:\n%s", stderr)
+	}
+}
+
+// A project with no `migrate_from:` block is every project, and the guard must
+// be invisible to it -- including on a machine where nothing is installed and
+// no process may be started.
+func TestTheGuardIsInvisibleWithoutAMigrateFromBlock(t *testing.T) {
+	dir := newProjectFixture(t)
+	blocked := blockNetwork(t)
+
+	if _, stderr, code := runCommand(t, dir, "plan", "dev"); code == ExitError {
+		t.Errorf("plan refused with no migrate_from block at all:\n%s", stderr)
+	}
+	if blocked.Attempts() != 0 {
+		t.Error("the guard reached the network for a project with no migrate_from block")
+	}
+}
+
+// The guard must not cost anything in the ordinary case. With state at the
+// destination the source is never opened, which matters when opening it means
+// starting a plugin process and talking to a network.
+func TestTheSourceIsNotOpenedWhenTheDestinationHasState(t *testing.T) {
+	dir := newProjectMigratingCountedSourceToFake(t) // counts opens of the SOURCE
+	seedSourceState(t, dir, "dev")
+	if _, stderr, code := runCommand(t, dir, "state", "migrate"); code != ExitOK {
+		t.Fatalf("setup migration failed: exit %d\n%s", code, stderr)
+	}
+
+	resetSourceOpenCount(t, dir)
+	runCommand(t, dir, "plan", "dev")
+
+	if n := sourceOpenCount(t, dir); n != 0 {
+		t.Errorf("the source backend was opened %d times when the destination already had state", n)
+	}
+}
+
+// The other half of the same fixture, so the count above is known to be able
+// to move. A guard that never opened the source at all would pass the test
+// above while failing to protect anything.
+func TestTheSourceIsOpenedWhenTheDestinationIsEmpty(t *testing.T) {
+	dir := newProjectMigratingCountedSourceToFake(t)
+	seedSourceState(t, dir, "dev")
+
+	resetSourceOpenCount(t, dir)
+	_, stderr, code := runCommand(t, dir, "plan", "dev")
+
+	if code != ExitError {
+		t.Errorf("plan proceeded into an empty backend while the source held state:\n%s", stderr)
+	}
+	if n := sourceOpenCount(t, dir); n == 0 {
+		t.Error("the source backend was never opened, so nothing checked whether a migration was pending")
+	}
+}

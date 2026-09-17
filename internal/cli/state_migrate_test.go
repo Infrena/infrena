@@ -262,10 +262,73 @@ migrate_from:
 	return dir
 }
 
+// newProjectMigratingCountedSourceToFake is a project whose SOURCE is a
+// backend that records every time it is opened.
+//
+// Both ends are plugins here, unlike every other fixture in this file, and
+// that is the whole point: the guard's cheapness is a claim about the source
+// never being STARTED, and local starts nothing to begin with, so a local
+// source could not tell a guard that opens it from one that does not.
+func newProjectMigratingCountedSourceToFake(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	body := fmt.Sprintf(`project: myapp
+resources:
+  network:
+    type: fake.network
+    cidr: 10.20.0.0/16
+backend:
+  plugin: store
+  dir: %s
+migrate_from:
+  plugin: countingstore
+  dir: %s
+`, remoteDir(dir), sourceDir(dir))
+	if err := os.WriteFile(filepath.Join(dir, "infra.yml"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	installTestBackend(t, dir)
+	return dir
+}
+
 // remoteDir is where the fake remote backend keeps its state, read directly by
 // the assertions so they observe the destination rather than asking infrena
 // what it thinks is there.
 func remoteDir(projectDir string) string { return filepath.Join(projectDir, "remote") }
+
+// sourceDir is where the counted source backend keeps its state, and its
+// tally of opens alongside.
+func sourceDir(projectDir string) string { return filepath.Join(projectDir, "source") }
+
+// sourceOpenCount is how many times the source backend has been opened since
+// the count was last reset.
+//
+// The tally is a byte per open appended by the plugin itself, so it counts
+// PROCESSES STARTED rather than calls made -- which is the cost the guard
+// claims not to pay.
+func sourceOpenCount(t *testing.T, dir string) int {
+	t.Helper()
+	info, err := os.Stat(filepath.Join(sourceDir(dir), openTallyName))
+	if errors.Is(err, os.ErrNotExist) {
+		return 0
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	return int(info.Size())
+}
+
+func resetSourceOpenCount(t *testing.T, dir string) {
+	t.Helper()
+	if err := os.Remove(filepath.Join(sourceDir(dir), openTallyName)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		t.Fatal(err)
+	}
+}
+
+// openTallyName is the file the counting backend appends to. It shares the
+// directory with the state files and must never look like one: List reads
+// `*.json`, so an environment called "opens" is not in reach.
+const openTallyName = "opens"
 
 // installTestBackend puts the built backend on the project's plugin search
 // path under both names the tests launch it by.
@@ -276,7 +339,7 @@ func installTestBackend(t *testing.T, dir string) {
 	if err := os.MkdirAll(plugins, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"store", "brokenstore"} {
+	for _, name := range []string{"store", "brokenstore", "countingstore"} {
 		if err := os.Symlink(built, filepath.Join(plugins, backendhost.BinaryName(name))); err != nil {
 			t.Fatal(err)
 		}
@@ -323,23 +386,53 @@ func buildTestBackendOnce() {
 // migrated state is clean rather than full of drift.
 func seedLocalState(t *testing.T, dir string, environments ...string) {
 	t.Helper()
-	ctx := context.Background()
-	prov := testprovider.New(filepath.Join(dir, testprovider.DefaultCloudPath))
 	for _, env := range environments {
-		rs, err := prov.Create(ctx, &resource.DesiredResource{
-			Address: address.Address{Name: "network"},
-			Type:    "fake.network",
-			Attrs: map[string]value.Value{
-				"cidr": value.String("10.20.0.0/16", value.SourceExplicit),
-			},
-		})
-		if err != nil {
-			t.Fatalf("seeding the fake cloud: %v", err)
-		}
-		st := state.New("myapp", env)
-		st.Set(rs)
-		seedState(t, dir, env, st)
+		seedState(t, dir, env, stateWithOneRealResource(t, dir, env))
 	}
+}
+
+// seedSourceState is seedLocalState for a project whose source backend is a
+// plugin storing state in a directory, written to that directory DIRECTLY
+// rather than through the plugin, for the reason destinationHasState reads it
+// directly: a fixture that went through infrena would be asserting on
+// infrena's own belief about what it had stored.
+func seedSourceState(t *testing.T, dir string, environments ...string) {
+	t.Helper()
+	for _, env := range environments {
+		st := stateWithOneRealResource(t, dir, env)
+		st.Serial = 1
+		data, err := st.Encode()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(sourceDir(dir), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(sourceDir(dir), env+".json"), data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// stateWithOneRealResource creates a resource in the fake cloud and returns
+// the state recording it, so a `plan` over state seeded anywhere is clean
+// rather than full of drift.
+func stateWithOneRealResource(t *testing.T, dir, environment string) *state.State {
+	t.Helper()
+	prov := testprovider.New(filepath.Join(dir, testprovider.DefaultCloudPath))
+	rs, err := prov.Create(context.Background(), &resource.DesiredResource{
+		Address: address.Address{Name: "network"},
+		Type:    "fake.network",
+		Attrs: map[string]value.Value{
+			"cidr": value.String("10.20.0.0/16", value.SourceExplicit),
+		},
+	})
+	if err != nil {
+		t.Fatalf("seeding the fake cloud: %v", err)
+	}
+	st := state.New("myapp", environment)
+	st.Set(rs)
+	return st
 }
 
 // seedDestinationState writes state to the destination directly, standing in
