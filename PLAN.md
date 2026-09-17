@@ -4756,8 +4756,18 @@ Build order, each step useful alone:
    lock leaving exactly one winner — and against B2, where the refusal is the pass.
 3. **State versioning and migration.** DESIGN. `state migrate`, and the local → S3 →
    local round trip.
-4. **Concurrency tests.** DESIGN. Two environments applying concurrently succeed; two
-   applies to one environment cannot.
+4. **Concurrency tests. SHIPPED 2026-09-17.** Both halves now exist in
+   `tests/integration/m3_test.go`, each driving two genuinely overlapping OS processes.
+   The one-environment half (`TestConcurrentApplyToOneEnvironmentSerializes`) was already
+   there: the second apply is refused with "is locked" and the fake cloud ends up holding
+   exactly one resource. The new half
+   (`TestConcurrentApplyToTwoEnvironmentsOverlaps`) covers the other direction, and its
+   point is that "both succeeded" is a test that cannot fail — a global lock would
+   serialise the two applies and both would still exit 2. So it asserts ELAPSED TIME:
+   with `latency_ms` at 500, overlapping finishes in ~540-600ms and serialised takes
+   ~1.1s, and the bound is 800ms. Watched fail: running the same two applies one after
+   the other reports 1.087s against the 800ms bound. Ten consecutive runs stayed inside
+   537-602ms.
 
 State encryption is documented rather than implemented: `docs/state-backends.md` states
 the trust boundary — **state reaches a backend in cleartext, exactly as values already

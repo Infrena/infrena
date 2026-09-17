@@ -3,6 +3,7 @@ package integration
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -779,5 +780,113 @@ resources:
 	next := run(t, dir, "destroy", "dev", "--auto-approve")
 	if strings.Contains(next.Stderr, "is locked") {
 		t.Fatalf("subsequent destroy refused as locked — the interrupted run left the lock held:\n%s", next.combined())
+	}
+}
+
+// waitAsync blocks until a startAsync'd invocation finishes and returns what it
+// produced, so a test starting two processes reads their results the same way
+// run() reads one. Only the exit status is special-cased: a non-zero exit is an
+// ExitError, which is a result here and not a harness failure.
+func waitAsync(t *testing.T, label string, cmd *exec.Cmd, stdout, stderr *bytes.Buffer) result {
+	t.Helper()
+	if err := cmd.Wait(); err != nil {
+		var exitErr *exec.ExitError
+		if !errors.As(err, &exitErr) {
+			t.Fatalf("waiting for the %s apply: %v", label, err)
+		}
+	}
+	return result{Stdout: stdout.String(), Stderr: stderr.String(), ExitCode: cmd.ProcessState.ExitCode()}
+}
+
+// TestConcurrentApplyToTwoEnvironmentsOverlaps is the other half of the
+// concurrency pair: TestConcurrentApplyToOneEnvironmentSerializes proves two
+// applies to ONE environment cannot overlap, and this proves two applies to
+// DIFFERENT environments do — the lock is per environment, not global.
+//
+// Asserting only that both succeeded would be a test that cannot fail. Put a
+// single global lock in front of the state backend and the two applies would
+// serialise, both would still exit 2 with "Apply complete:", both state files
+// would still be written, and this test would go on passing while the property
+// it is named for had been destroyed. So the real assertion is on ELAPSED TIME,
+// which is the only observable that distinguishes overlapping from serialised.
+//
+// The arithmetic, with latency_ms at 500 so each apply spends half a second
+// inside its provider's Create:
+//
+//   - SERIALISED is at least ~1000ms: one apply's Create finishes before the
+//     other's begins, so the two half-seconds add, and process startup and the
+//     plugin handshake land on top of that.
+//   - OVERLAPPING is ~500-600ms: the two Creates sleep through the same half
+//     second, and everything else is startup.
+//
+// 800ms is placed deliberately between those two. Measured on this suite, ten
+// consecutive concurrent runs land between 537ms and 602ms, and the serialised
+// version of this same test (the two applies run one after the other) takes
+// 1.087s — so the bound sits roughly 200ms above the worst concurrent run and
+// roughly 280ms below the serialised one. Widening it past 1000ms would put the
+// serialised case inside the bound, and the test would stop catching the very
+// regression it exists for — at which point it should be deleted rather than
+// kept as decoration. If it ever goes flaky the fix is a larger latency_ms,
+// which moves both bounds apart proportionally, never a larger margin.
+func TestConcurrentApplyToTwoEnvironmentsOverlaps(t *testing.T) {
+	dir := project(t, `
+project: myapp
+resources:
+  network:
+    type: fake.network
+    cidr: 10.20.0.0/16
+`)
+	seedCloudLatency(t, dir, 500)
+
+	// Build the CLI and the fake plugin BEFORE the clock starts. Both are
+	// sync.Once'd, but if this test happens to run first the compile would be
+	// charged to the elapsed time and the bound below would be measuring go
+	// build.
+	binary(t)
+	fakePluginDir(t)
+
+	start := time.Now()
+	devCmd, devOut, devErr := startAsync(t, dir, "apply", "dev", "--auto-approve")
+	prodCmd, prodOut, prodErr := startAsync(t, dir, "apply", "production", "--auto-approve")
+
+	dev := waitAsync(t, "dev", devCmd, devOut, devErr)
+	production := waitAsync(t, "production", prodCmd, prodOut, prodErr)
+	elapsed := time.Since(start)
+
+	for _, c := range []struct {
+		environment string
+		res         result
+	}{{"dev", dev}, {"production", production}} {
+		if c.res.ExitCode != 2 {
+			t.Fatalf("%s apply exit code %d, want 2 (changes applied)\n%s", c.environment, c.res.ExitCode, c.res.combined())
+		}
+		requireContains(t, c.res.Stdout, "Apply complete:")
+	}
+
+	if elapsed >= 800*time.Millisecond {
+		t.Errorf("two applies to different environments took %v, want under 800ms — "+
+			"at latency_ms 500 that is long enough for them to have run one after the "+
+			"other, so something is serialising environments that should be independent", elapsed)
+	}
+	t.Logf("two concurrent applies to different environments finished in %v", elapsed)
+
+	// Both environments have their own state, each holding its own copy of the
+	// resource: neither apply wrote over the other's file, and neither saw the
+	// other's resource. (The fake cloud file is one file shared by every
+	// environment in a project, so it is a harness artifact under concurrent
+	// writes and is deliberately not asserted on here — the per-environment
+	// state files are what this property is about.)
+	for _, environment := range []string{"dev", "production"} {
+		st := readStateFile(t, dir, environment)
+		if got, _ := st["environment"].(string); got != environment {
+			t.Errorf("%s.json records environment %q", environment, got)
+		}
+		resources, ok := st["resources"].(map[string]any)
+		if !ok {
+			t.Fatalf("%s.json has no resources object: %#v", environment, st["resources"])
+		}
+		if _, ok := resources["network"]; !ok {
+			t.Errorf("%s.json does not record the network it applied: %#v", environment, resources)
+		}
 	}
 }
