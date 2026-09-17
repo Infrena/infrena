@@ -268,8 +268,15 @@ func alreadyManaged(st *state.State, selected []discovery.Result) []string {
 //
 // A selector names a TYPE and an ID because an ID alone is not unique across
 // types in every provider, and because the type is what the provider needs to
-// read the resource. `fake.database.db-9` splits at the LAST dot: a type
-// already contains one.
+// read the resource.
+//
+// NOTHING IS SPLIT. `fake.database.db-9` is matched whole against a key built
+// as type + "." + provider_id, so the type keeps the dot it already contains
+// and the ID keeps any it contains. An earlier version of this comment said
+// the selector splits at the LAST dot, which is not what narrowToSelectors
+// does and would have been worse: an ID that itself holds a dot — a hostname,
+// an ARN, a resource path — would have had its own last segment read as the
+// ID and everything before it as the type, and matched nothing.
 // It also reports what it LEFT OUT, which the caller prints. A selection that
 // silently shrank is the failure this whole area exists to avoid.
 func selectForImport(
