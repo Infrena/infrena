@@ -40,8 +40,22 @@ of a designed-for failure, not a new class.
 
 ## 2. The boundary
 
-`state.Local` becomes one implementation of an interface carrying exactly what the code already
-calls:
+**Correction to an earlier draft of this spec, which described the interface as new.**
+`state.Backend` ALREADY EXISTS in `internal/state/backend.go`, carrying `Get`, `Put`, `Lock` and
+`Unlock` — and its doc comment already anticipates this phase, saying the lock contract binds
+"any future implementation — an S3 backend in Phase 4, for instance". `internal/executor` already
+depends on the interface rather than the concrete type.
+
+So the work is narrower than "extract an interface". It is:
+
+- **Widen** `Backend` by the three methods the CLI calls on the concrete type and the interface
+  does not carry: `List`, `Inspect`, `ForceUnlock`.
+- **Re-point** `backendFor`, which returns `*state.Local` today (`internal/cli/context.go:294`)
+  and must return `state.Backend`.
+- **Move** the public types out to `pkg/backend`, since a third-party author must be able to
+  import them.
+
+The resulting interface, every method of which exists on `*state.Local` today:
 
 ```go
 type Backend interface {
@@ -55,8 +69,8 @@ type Backend interface {
 }
 ```
 
-Nothing is invented: every method exists on `*state.Local` today, and `List` was added
-2026-09-15 for discovery. `backendFor(dir)` — called from eight places in `internal/cli` —
+`List` was added 2026-09-15 for discovery and never reached the interface, which is why
+`backendFor` still hands back a concrete type. `backendFor(dir)` — called from eight places in `internal/cli` —
 becomes the single place that decides local or plugin.
 
 Two signatures normalise on the way: `Inspect` and `ForceUnlock` are synchronous on `*Local` and
@@ -75,7 +89,7 @@ the existing split exactly, rather than inventing a second shape:
 | `pkg/provider` | `pkg/backend` | the interface and its types |
 | `internal/pluginhost` | `internal/backendhost` | the host side |
 
-**`state.Lock` must move to `pkg/backend`.** It is currently in `internal/state`, and a backend
+**`state.Lock`, `state.ErrLocked` and `state.ErrNotLocked` must move to `pkg/backend`.** It is currently in `internal/state`, and a backend
 author cannot implement locking against a type they cannot import. Its fields — user, host, PID,
 operation, timestamp — become part of the public contract, which is the right outcome: they are
 what the stale-lock diagnostic prints, so they were already a user-facing shape.
