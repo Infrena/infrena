@@ -306,14 +306,41 @@ func refuseUnresolvedInstances(table providers.Table, environment string) diag.D
 // also why `backend:` may not interpolate: there is no point at which a value
 // there could be filled in.
 func backendFor(ctx context.Context, opts *GlobalOptions) (state.Backend, func() error, error) {
-	decl := backendDecl(opts.Dir)
+	return openBackend(ctx, opts, backendDecl(opts.Dir))
+}
 
-	if decl.Plugin == "" {
+// openBackend opens the backend a decoded block asks for, and the closer that
+// releases it.
+//
+// SEPARATE FROM backendFor because a migration holds BOTH ENDS OPEN AT ONCE
+// (spec §7): `backend:` and `migrate_from:` are the same shape, decoded by the
+// same code, and they have to be opened by the same code too. A second way to
+// turn a block into a backend is a second set of rules about what `plugin:`
+// means, and a migration that read its source by different rules from its
+// destination could move state somewhere nobody configured.
+//
+// `plugin: local` RESOLVES HERE, to the same in-process backend an absent block
+// gets. Naming local has to be possible, because otherwise "migrate back to
+// local" could only be said by leaving a block out, and leaving it out already
+// means "no migration".
+//
+// An empty Plugin still means local, which is what backendFor's callers have
+// always got from a project with no `backend:` block. The one exception is a
+// block that was PRESENT and did not decode: it records an origin and no
+// plugin, and treating that as local would write state to `.infra/` for a
+// project that asked for it to live somewhere else. That refusal names
+// `backend:` because that is the block whose failure moves state; a caller
+// opening `migrate_from:` only does so once it has a plugin name to open.
+func openBackend(
+	ctx context.Context, opts *GlobalOptions, decl config.BackendDecl,
+) (state.Backend, func() error, error) {
+	if decl.Plugin == "" || decl.Plugin == localBackendName {
 		// A BLOCK THAT DID NOT DECODE IS NOT AN ABSENT BLOCK. Config records
 		// the origin of one it could not read, and treating that as "no
 		// backend declared" would write state to `.infra/` for a project
-		// that asked for it to live somewhere else entirely.
-		if decl.Origin.File != "" {
+		// that asked for it to live somewhere else entirely. A block that
+		// named `local` decoded fine, so it never reaches this.
+		if decl.Plugin == "" && decl.Origin.File != "" {
 			return nil, nil, fmt.Errorf(
 				"this project's `backend:` block could not be read, so infrena cannot tell where its state lives\n"+
 					"  declared in: %s\n"+
@@ -330,6 +357,11 @@ func backendFor(ctx context.Context, opts *GlobalOptions) (state.Backend, func()
 	return backendhost.Open(ctx, decl.Plugin, opts.Dir,
 		backendhost.Search(opts.Dir, opts.PluginDirs), decl.Config)
 }
+
+// localBackendName is the plugin name the built-in backend answers to. It
+// starts no process and needs nothing installed, which is what makes it the one
+// backend infrena can carry.
+const localBackendName = "local"
 
 // backendDecl reads `backend:` out of a project's configuration.
 //

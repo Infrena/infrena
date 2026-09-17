@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/infrena/infrena/internal/config"
 	"github.com/infrena/infrena/internal/state"
 )
 
@@ -95,4 +96,60 @@ resources:
     type: fake.network
     cidr: 10.20.0.0/16
 `+block)
+}
+
+// `plugin: local` is how a migration names the built-in backend. Without it,
+// "migrate to local" could only be expressed by ABSENCE, and absence already
+// means "no migration".
+func TestOpenBackendResolvesLocalByName(t *testing.T) {
+	dir := newProjectFixture(t)
+
+	b, closeFn, err := openBackend(context.Background(), &GlobalOptions{Dir: dir},
+		config.BackendDecl{Plugin: "local"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeFn()
+
+	if _, ok := b.(*state.Local); !ok {
+		t.Errorf("openBackend returned %T, want *state.Local", b)
+	}
+}
+
+// Two ends open independently, so a migration holds both at once.
+func TestBothEndsCanBeOpenAtTheSameTime(t *testing.T) {
+	dir := newProjectFixture(t)
+	opts := &GlobalOptions{Dir: dir}
+
+	a, closeA, err := openBackend(context.Background(), opts, config.BackendDecl{Plugin: "local"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeA()
+	b, closeB, err := openBackend(context.Background(), opts, config.BackendDecl{Plugin: "local"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeB()
+
+	if a == nil || b == nil {
+		t.Fatal("one end failed to open")
+	}
+}
+
+// A backend named but not installed is an error naming it and how to get it,
+// exactly as backendFor already refuses. Never a silent fall back to local:
+// migrating INTO local when the user asked for a bucket would put state
+// somewhere they did not ask for, which is the worst available outcome.
+func TestAMissingBackendPluginInAMigrationIsAnError(t *testing.T) {
+	dir := newProjectFixture(t)
+
+	_, _, err := openBackend(context.Background(), &GlobalOptions{Dir: dir},
+		config.BackendDecl{Plugin: "nosuch"})
+	if err == nil {
+		t.Fatal("a missing backend opened silently")
+	}
+	if !strings.Contains(err.Error(), "nosuch") {
+		t.Errorf("error does not name the backend: %v", err)
+	}
 }
