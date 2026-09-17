@@ -281,8 +281,41 @@ those commits — possibly hours — the block sits in committed configuration. 
 ordinary commands, every `plan` and `apply` in that window would find state in the new backend and
 fail. **A successful migration would break the pipeline until somebody tidied up.**
 
-So `plan`, `apply`, `refresh`, `destroy` and the rest ignore it entirely. Leaving it behind is
+So `plan`, `apply`, `refresh`, `destroy` and the rest do not ACT on it. Leaving it behind is
 harmless, which also makes the second commit hygiene rather than a fix.
+
+### But ignoring it entirely recreates your infrastructure
+
+**Found by James, 2026-09-17, and it is the dangerous half of this design.**
+
+An earlier draft said ordinary commands ignore `migrate_from:` completely. Consider what that
+means in the window this design creates:
+
+Configuration lands carrying `backend:` (the new backend, **empty**) and `migrate_from:` (the old
+one, holding all your state). Nobody has triggered the migration yet. CI runs `plan` on the pull
+request, or `apply` on merge.
+
+Reading `backend:` alone, the new backend is empty. **Every resource looks unmanaged, and apply
+creates all of it again** — duplicate infrastructure, and two backends each claiming to record the
+same resources. In the CI flow this design exists to support, that ordering is the LIKELY one:
+configuration lands first and the pipeline runs before a human triggers anything.
+
+So ordinary commands consult `migrate_from:` for exactly one thing, and it is a GUARD rather than
+an action:
+
+| `migrate_from:` | Destination | Source | Ordinary commands |
+| --- | --- | --- | --- |
+| absent | — | — | proceed |
+| present | has state | — | proceed — migration done, the block is inert |
+| present | empty | empty | proceed — nothing to migrate |
+| present | **empty** | **has state** | **REFUSE**: migrate first, or remove the block |
+
+**A command never performs the migration.** Migration is always deliberate, always
+`state migrate`. This only stops a run that would otherwise recreate everything.
+
+The check is cheap where it matters: look at the DESTINATION first, which the command opens
+anyway. State there means the migration is done and the source is never touched. Only an empty
+destination costs a second open, and an empty destination is already the unusual case.
 
 ### What `infrena state migrate` does
 
@@ -306,6 +339,12 @@ applying to one of them, and silently choosing a winner destroys real work.
 Then copy every environment, verify each by reading it back, and release both. **A failure at any
 point leaves the source authoritative** and the destination incomplete rather than the reverse —
 the same "leave the harmless half done" rule that orders configuration before state in `import`.
+
+**MIGRATION COPIES. It never empties the source** (James, 2026-09-17: "If user encounters a bug in
+the migration process they can revert back to the old state"). A failed migration therefore cannot
+lose anything, and a successful one leaves a fallback while the new backend is verified in anger.
+Emptying the old store is a deliberate act the user performs later, not this command's to make —
+and the documentation must say that the old state lingers, secrets included, until they do.
 
 Report the outcome and suggest removing `migrate_from:` — adding that leaving it is harmless, since
 in CI that message goes to a log nobody reads.
