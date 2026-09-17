@@ -629,12 +629,156 @@ proves it can read its own writing."
 
 ---
 
-## Task 6: Documentation
+## Task 6: `--check`, for pipelines
+
+**Files:**
+- Modify: `internal/cli/state_migrate.go`, `internal/cli/root.go`, `pkg/report/report.go`
+- Test: `internal/cli/state_migrate_test.go`
+
+**Interfaces:**
+- Consumes: Task 3's three-way comparison.
+- Produces: `--check` on `state migrate`; `ExitMigrationPending = 2`, `ExitMigrationComplete = 3`, `ExitMigrationConflict = 4`; `report.MigrateResult{Type, Status string, Environments []string, Error string}` and `(*report.Writer).WriteMigrateResult`.
+
+- [ ] **Step 1: Write the failing test**
+
+```go
+// The exit code IS the report. A pipeline branches on it without parsing
+// anything, which is the whole point of the flag.
+func TestCheckReportsEachSituationByExitCode(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		setup func(t *testing.T) string
+		want  int
+	}{
+		{"no migrate_from block", func(t *testing.T) string { return newProjectFixture(t) }, ExitOK},
+		{"migration pending", func(t *testing.T) string {
+			dir := newProjectMigratingLocalToFake(t)
+			seedLocalState(t, dir, "dev")
+			return dir
+		}, ExitMigrationPending},
+		{"already complete", func(t *testing.T) string {
+			dir := newProjectMigratingLocalToFake(t)
+			seedLocalState(t, dir, "dev")
+			runCommand(t, dir, "state", "migrate")
+			return dir
+		}, ExitMigrationComplete},
+		{"ends differ", func(t *testing.T) string {
+			dir := newProjectMigratingLocalToFake(t)
+			seedLocalState(t, dir, "dev")
+			seedDestinationState(t, dir, "dev", "something else entirely")
+			return dir
+		}, ExitMigrationConflict},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := tc.setup(t)
+			_, _, code := runCommand(t, dir, "state", "migrate", "--check")
+			if code != tc.want {
+				t.Errorf("exit = %d, want %d", code, tc.want)
+			}
+		})
+	}
+}
+
+// --check must be genuinely read-only. A check that migrated would be the
+// worst possible surprise in a pipeline: the thing you ran to find out
+// whether to act would have acted.
+func TestCheckWritesNothingAndTakesNoLock(t *testing.T) {
+	dir := newProjectMigratingLocalToFake(t)
+	seedLocalState(t, dir, "dev")
+
+	if _, _, code := runCommand(t, dir, "state", "migrate", "--check"); code != ExitMigrationPending {
+		t.Fatalf("exit = %d", code)
+	}
+
+	if destinationHasState(t, dir, "dev") {
+		t.Error("--check wrote to the destination")
+	}
+	// A lock left behind would block the migration the check just recommended.
+	if lockHeld(t, dir, "dev") {
+		t.Error("--check left a lock behind")
+	}
+}
+
+// The status crosses as a STRING, so a consumer never maps an exit code back
+// to a meaning.
+func TestCheckWritesTheStatusAsAStringInTheReport(t *testing.T) {
+	dir := newProjectMigratingLocalToFake(t)
+	seedLocalState(t, dir, "dev")
+	out := filepath.Join(t.TempDir(), "check.ndjson")
+
+	stdout, _, _ := runCommand(t, dir, "state", "migrate", "--check", "--output", out)
+
+	if stdout != "" {
+		t.Errorf("stdout = %q, want nothing", stdout)
+	}
+	body, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), `"status":"pending"`) {
+		t.Errorf("report does not carry the status as a string:\n%s", body)
+	}
+	if !strings.Contains(string(body), "dev") {
+		t.Errorf("report does not name the environments:\n%s", body)
+	}
+}
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `go test -run 'TestCheck' ./internal/cli/ -v`
+Expected: FAIL — no `--check` flag, exit codes undefined.
+
+- [ ] **Step 3: Write minimal implementation**
+
+Add the three codes to `root.go` beside the existing ones, each with a comment saying what a pipeline does with it. `report.Version` bumps for the new result line.
+
+```go
+	// ExitMigrationPending is 2 DELIBERATELY, the same code `plan` uses for
+	// "changes present". Not a collision: both mean the same thing to a
+	// pipeline -- something is pending, run the corresponding command.
+	ExitMigrationPending = 2
+	// ExitMigrationComplete: both ends agree, so there is nothing to do and
+	// the `migrate_from:` block is stale. Distinct from 0 so a pipeline can
+	// remind somebody to remove it.
+	ExitMigrationComplete = 3
+	// ExitMigrationConflict: both ends hold DIFFERENT state, so somebody has
+	// been applying to one of them. Distinct from 1 for the reason 77 is: a
+	// pipeline that cannot tell "this failed" from "this needs a person" will
+	// treat both the same, and they want opposite responses.
+	ExitMigrationConflict = 4
+```
+
+`--check` shares Task 3's comparison — **the same function, not a second copy.** Two implementations of "are these the same" is how `--check` comes to disagree with what `migrate` then does.
+
+- [ ] **Step 4: Run tests to verify they pass**
+
+Run: `INFRENA_REQUIRE_PLUGIN=1 go test -count=1 ./... 2>&1 | tail -5`
+Expected: PASS.
+
+- [ ] **Step 5: Commit**
+
+```bash
+gofmt -l . && go vet ./...
+git add internal/cli pkg/report
+git commit -m "Let a pipeline ask whether a migration is needed
+
+The exit code is the answer, so a script branches without parsing
+anything, and the machine readable output carries the status as a word
+rather than a number. It writes nothing and takes no lock, because a
+check that acted would be the worst surprise in a pipeline."
+```
+
+---
+
+## Task 7: Documentation
 
 **Files:**
 - Modify: `PLAN.md` (§52 build order, §37 command list), `CLAUDE.md`, `docs/state-backends.md`
 
-- [ ] **Step 1: Mark step 3 shipped in `PLAN.md` §52** and add `state migrate` to §37's command list.
+- [ ] **Step 1: Mark step 3 shipped in `PLAN.md` §52** and add `state migrate` to §37's command list, with `--check`.
+
+- [ ] **Step 1b: Add exit codes 3 and 4 to §16's table**, alongside 0, 1, 2 and 77, noting that 2 is shared with `plan` deliberately.
 
 - [ ] **Step 2: `docs/state-backends.md`** gains how to migrate: both blocks, the two-commit CI shape, that `migrate_from:` is inert elsewhere so leaving it is harmless, and the three cases.
 

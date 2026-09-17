@@ -340,6 +340,40 @@ Then copy every environment, verify each by reading it back, and release both. *
 point leaves the source authoritative** and the destination incomplete rather than the reverse —
 the same "leave the harmless half done" rule that orders configuration before state in `import`.
 
+### `--check` makes migration automatable
+
+**Requested by James, 2026-09-17**, so a pipeline can decide what to do rather than guess.
+
+`infrena state migrate --check` runs the same three-way comparison and **writes nothing, takes no
+locks, and changes nothing**. It reports, and its exit code is the report:
+
+| Code | Meaning |
+| --- | --- |
+| 0 | no migration needed — no `migrate_from:` block |
+| 2 | **migration needed** — the source holds state and the destination is empty |
+| 3 | already complete — both ends are identical, and the block is stale |
+| 4 | source and destination **differ** — a person has to decide |
+| 1 | error — a backend unreachable, configuration invalid |
+
+**2 is deliberately `plan`'s code**, not a collision. Both mean the same thing to a pipeline:
+something is pending, run the corresponding command. **3 and 4 are new**, joining §16's table, so
+this is a documented product-API change.
+
+4 is distinct from 1 for the reason 77 is: a pipeline that cannot tell "this failed" from "this
+needs a human" will treat both the same, and these want opposite responses.
+
+With `--output`, stdout stays empty and the `result` line carries the status **as a string**, so a
+consumer never maps a number back to a meaning. A CI script reads:
+
+```bash
+infrena state migrate --check
+case $? in
+  0|3) ;;                        # nothing to do
+  2)   infrena state migrate ;;  # pending, and safe to run
+  4)   exit 1 ;;                 # stop: both ends hold different state
+esac
+```
+
 **MIGRATION COPIES. It never empties the source** (James, 2026-09-17: "If user encounters a bug in
 the migration process they can revert back to the old state"). A failed migration therefore cannot
 lose anything, and a successful one leaves a fallback while the new backend is verified in anger.
