@@ -785,6 +785,58 @@ These are features, not polish, and are easy to under-deliver on:
   not-safe-to-retry; never blindly retry destructive operations (§35).
 - **Concurrency** is bounded per provider/account to avoid API throttling (§34).
 
+## A green suite is not evidence
+
+Over 2026-09-15 to 17, **every serious bug was found by running something against a real service,
+and none by the suite going green.** The suite was passing in every one of these cases:
+
+- Five bugs in plugin search, against a fake GitHub. The wrong API endpoint entirely, private
+  repositories reported as "no such plugin", a refusal to run with no `HOME`, and a cached
+  anonymous negative served to an authenticated search for an hour — which defeated the very
+  remedy the previous fix suggested.
+- An archive extractor that rejected **every real release on every platform**, because "refuse
+  anything that is not a regular file" also refused the directory entry `tar -czf` puts in front
+  of it.
+- An install asking for `infrena-plugin-s3_…`, an asset no release publishes, because the test
+  fixture had guessed provider naming.
+- `plugins verify` silently broken for hours by a lock-key change made the same day.
+- The reference in-memory backend shipped with the SDK violating its own contract: a run whose
+  lock had been force-unlocked and taken over could still write over the new holder.
+- `scripts/build-release` broken by `CDPATH` being set, so `cd` echoed its target into a path.
+
+The pattern is one thing. **A test proves the code does what you think. It does not prove the
+world agrees.** A fixture answers whatever it is asked, so it validates any implementation,
+right or wrong — including one asking a service for something that does not exist.
+
+### What actually catches these
+
+- **Run the binary against the real service before calling anything done.** Once. Every item
+  above took one real run to find and none were found by more testing.
+- **Key a fixture on strings captured from the real service**, never on what you assume it says.
+  The S3 backend's fake carries MinIO's actual `PreconditionFailed` and `NoSuchKey` text; the AWS
+  provider's reconciliation is keyed on what Cloud Control really returns.
+- **Make a skipped suite a failure.** `INFRENA_REQUIRE_PLUGIN=1` for the integration suite,
+  `REQUIRE_LIVE_STORE=1` for the S3 backend's. A suite that silently skips has already reported
+  green on tests that never ran, here, more than once.
+- **Sabotage every guard.** Break it deliberately and confirm a test fails, and that the RIGHT
+  test fails. `pkg/backendtest` goes further and keeps a broken backend per rule, asserting each
+  check catches its own violation and no other — a check that fires on the wrong rule is as
+  useless as one that never fires.
+- **Prove a floor rather than reasoning about it.** `infrena-backend-s3` builds a host from the
+  oldest release its `plugin.yaml` admits and runs the suite against it, in CI.
+- **Verify a new public API from outside its module.** A generic signature that only compiles in
+  its own package is a package nobody can use.
+
+### Two related rules already stated elsewhere, for the same reason
+
+**Never claim something does not exist when you merely could not see it** (§31.3). A rate limit,
+an unauthenticated listing of private repositories, and a cached negative from another credential
+are three doors into one mistake.
+
+**A value the provider rewrites converges only if the plugin reconciles it** — see
+`docs/provider-hazards.md`. Neither that hazard nor silent cross-resource coupling can be
+reproduced against the fake provider at all, which is why both were found against real AWS.
+
 ## Decision defaults
 
 When `PLAN.md` does not cover something (§58): prefer simple designs and standard Go
