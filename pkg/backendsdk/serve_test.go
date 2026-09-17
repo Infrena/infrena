@@ -3,6 +3,8 @@ package backendsdk
 import (
 	"bufio"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -20,7 +22,7 @@ import (
 // for a backend: an author writes seven methods and one call.
 func TestServeAnswersEveryOperationOverThePipe(t *testing.T) {
 	in, out := pipePair(t)
-	go Serve(&memoryBackend{}, in.reader, out.writer)
+	go Serve(newMemoryBackend(newMemoryStore()), in.reader, out.writer)
 
 	handshake(t, in, out)
 
@@ -59,7 +61,7 @@ func TestABackendThatCannotLockCannotBeServed(t *testing.T) {
 // is the backend author's to write.
 func TestALockConflictIsClassifiedOnTheWire(t *testing.T) {
 	in, out := pipePair(t)
-	go Serve(&memoryBackend{}, in.reader, out.writer)
+	go Serve(newMemoryBackend(newMemoryStore()), in.reader, out.writer)
 	handshake(t, in, out)
 
 	call(t, in, out, "lock", `{"environment":"dev"}`)
@@ -78,7 +80,7 @@ func TestALockConflictIsClassifiedOnTheWire(t *testing.T) {
 // silence there means state lands somewhere they did not ask for.
 func TestConfigurationAnUnconfigurableBackendCannotUseIsRefused(t *testing.T) {
 	in, out := pipePair(t)
-	go Serve(&memoryBackend{}, in.reader, out.writer)
+	go Serve(newMemoryBackend(newMemoryStore()), in.reader, out.writer)
 
 	line := readLine(t, out)
 	var hs backendproto.Handshake
@@ -101,46 +103,85 @@ func TestConfigurationAnUnconfigurableBackendCannotUseIsRefused(t *testing.T) {
 // bound quietly rotted. It also means the example an author copies is the
 // example the suite passes.
 func TestTheReferenceBackendPassesTheConformanceSuite(t *testing.T) {
-	backendtest.Conformance(t, func(*testing.T) backend.Backend { return &memoryBackend{} })
+	backendtest.Conformance(t, func(*testing.T) func() backend.Backend {
+		store := newMemoryStore()
+		return func() backend.Backend { return newMemoryBackend(store) }
+	})
 }
 
-// memoryBackend is the reference implementation an author reads: a map, a
-// mutex, and the seven methods. It stores bytes it never parses, and it
-// refuses a write for an environment nothing holds a lock on, because that
-// refusal is a contract on every backend rather than a detail of the built-in
-// local one.
-type memoryBackend struct {
+// memoryStore is the STORAGE, and it is deliberately not the backend. Real
+// storage outlives the process writing to it, and two infrena runs on two
+// machines are two backend values over one store — which is the case that
+// makes remote state worth having, and the case a backend gets wrong by
+// keeping its bucket inside itself.
+type memoryStore struct {
 	mu     sync.Mutex
 	states map[string][]byte
-	locks  map[string]backend.Lock
+	locks  map[string]storedLock
+}
+
+// storedLock is the lock object as it sits in the store: the holder a conflict
+// reports, plus a token identifying THIS ACQUISITION. The token is what lets a
+// run tell "the environment is locked" from "I am the one holding it". A real
+// backend gets the same thing from an id it writes into the lock object or
+// from the ETag of the object it put; what it must not do is answer from
+// something only this process remembers, because a force unlock happens
+// somewhere else and never tells the run it strands.
+type storedLock struct {
+	holder backend.Lock
+	token  string
+}
+
+func newMemoryStore() *memoryStore {
+	return &memoryStore{states: map[string][]byte{}, locks: map[string]storedLock{}}
+}
+
+// memoryBackend is the reference implementation an author reads: a store, and
+// the seven methods. It stores bytes it never parses, and it refuses a write
+// unless the store says THIS run still holds the lock, because that refusal is
+// a contract on every backend rather than a detail of the built-in local one.
+type memoryBackend struct {
+	store *memoryStore
+	// acquired is the token of each lock this run took, and the only thing
+	// the run is allowed to remember. It is never the answer on its own:
+	// Put compares it with what the store holds now.
+	acquired map[string]string
+}
+
+// newMemoryBackend opens a run's view of a store. Two of them over one store
+// are two machines.
+func newMemoryBackend(store *memoryStore) *memoryBackend {
+	return &memoryBackend{store: store, acquired: map[string]string{}}
 }
 
 func (m *memoryBackend) Get(ctx context.Context, environment string) ([]byte, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	m.store.mu.Lock()
+	defer m.store.mu.Unlock()
 	// A missing environment is nothing stored, not an error: a project that
 	// has never applied anything is the ordinary case.
-	return m.states[environment], nil
+	return m.store.states[environment], nil
 }
 
 func (m *memoryBackend) Put(ctx context.Context, environment string, state []byte) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if _, held := m.locks[environment]; !held {
-		return fmt.Errorf("refusing to write state for %q: no lock is held; call Lock first: %w", environment, backend.ErrNotLocked)
+	m.store.mu.Lock()
+	defer m.store.mu.Unlock()
+	// Read ownership back out of the store at the moment of the write. Not
+	// "is it locked" — an environment somebody else locked after this run
+	// was force-unlocked is locked, and writing to it overwrites their
+	// apply with no error anywhere.
+	stored, held := m.store.locks[environment]
+	if !held || stored.token != m.acquired[environment] {
+		return fmt.Errorf("refusing to write state for %q: this run does not hold its lock; call Lock first: %w", environment, backend.ErrNotLocked)
 	}
-	if m.states == nil {
-		m.states = map[string][]byte{}
-	}
-	m.states[environment] = state
+	m.store.states[environment] = slices.Clone(state)
 	return nil
 }
 
 func (m *memoryBackend) List(ctx context.Context) ([]string, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	envs := make([]string, 0, len(m.states))
-	for env := range m.states {
+	m.store.mu.Lock()
+	defer m.store.mu.Unlock()
+	envs := make([]string, 0, len(m.store.states))
+	for env := range m.store.states {
 		envs = append(envs, env)
 	}
 	slices.Sort(envs)
@@ -148,26 +189,30 @@ func (m *memoryBackend) List(ctx context.Context) ([]string, error) {
 }
 
 func (m *memoryBackend) Inspect(ctx context.Context, environment string) (backend.Lock, bool, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	held, ok := m.locks[environment]
-	return held, ok, nil
+	m.store.mu.Lock()
+	defer m.store.mu.Unlock()
+	stored, ok := m.store.locks[environment]
+	return stored.holder, ok, nil
 }
 
 func (m *memoryBackend) ForceUnlock(ctx context.Context, environment string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if _, ok := m.locks[environment]; !ok {
+	m.store.mu.Lock()
+	defer m.store.mu.Unlock()
+	if _, ok := m.store.locks[environment]; !ok {
 		return fmt.Errorf("environment %q is not locked", environment)
 	}
-	delete(m.locks, environment)
+	// Only the store changes. Whatever the stranded run remembers stays
+	// wrong, which is the point: nothing here can reach into it, and Put is
+	// where that gets caught.
+	delete(m.store.locks, environment)
 	return nil
 }
 
 func (m *memoryBackend) Lock(ctx context.Context, environment string) (backend.Lock, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if held, ok := m.locks[environment]; ok {
+	m.store.mu.Lock()
+	defer m.store.mu.Unlock()
+	if stored, ok := m.store.locks[environment]; ok {
+		held := stored.holder
 		return backend.Lock{}, fmt.Errorf("environment %q is locked: held by %s on %s (pid %d), running %q: %w",
 			environment, held.User, held.Host, held.PID, held.Operation, backend.ErrLocked)
 	}
@@ -175,21 +220,40 @@ func (m *memoryBackend) Lock(ctx context.Context, environment string) (backend.L
 	// not send filled in from this process.
 	lock := backend.HolderFrom(ctx)
 	lock.Environment = environment
-	if m.locks == nil {
-		m.locks = map[string]backend.Lock{}
-	}
-	m.locks[environment] = lock
+	token := newLockToken()
+	m.store.locks[environment] = storedLock{holder: lock, token: token}
+	m.acquired[environment] = token
 	return lock, nil
 }
 
 func (m *memoryBackend) Unlock(ctx context.Context, environment string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if _, ok := m.locks[environment]; !ok {
+	m.store.mu.Lock()
+	defer m.store.mu.Unlock()
+	stored, ok := m.store.locks[environment]
+	if !ok {
 		return fmt.Errorf("environment %q is not locked", environment)
 	}
-	delete(m.locks, environment)
+	// Releasing somebody else's lock is ForceUnlock's job and nobody
+	// else's, or a stray Unlock frees an environment another apply is
+	// actively mutating.
+	if stored.token != m.acquired[environment] {
+		held := stored.holder
+		return fmt.Errorf("refusing to unlock %q: it is held by %s on %s (pid %d), not by this run", environment, held.User, held.Host, held.PID)
+	}
+	delete(m.store.locks, environment)
+	delete(m.acquired, environment)
 	return nil
+}
+
+// newLockToken names one acquisition. It is random rather than a counter
+// because the runs that have to tell their locks apart are separate processes
+// on separate machines, with nothing between them but the store.
+func newLockToken() string {
+	var id [16]byte
+	if _, err := rand.Read(id[:]); err != nil {
+		panic("backendsdk: reading randomness for a lock token: " + err.Error())
+	}
+	return hex.EncodeToString(id[:])
 }
 
 // pipe is one direction of the stdio pair the host would own.

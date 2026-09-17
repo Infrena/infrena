@@ -527,7 +527,9 @@ It is also the same idea as the host adapter for providers — which exists beca
 - Create: `pkg/backendtest/conformance.go`, `pkg/backendtest/conformance_test.go`
 
 **Interfaces:**
-- Produces: `func Conformance(t *testing.T, newBackend func(t *testing.T) backend.Backend)`
+- Produces: `func Conformance(t *testing.T, newBackend func(t *testing.T) func() backend.Backend)`
+
+The factory returns a FUNCTION that opens a backend rather than a backend, because the rule that matters most cannot be posed with one instance: A locks, an operator forces the lock off, **B — a different infrena process over the same bucket — takes it**, and A's next write must be refused. Two instances over one store is two machines against one bucket. The outer call makes the disposable storage, once per check; the inner one opens a run's view of it, which is the constructor the author already has. Most checks open one instance and are handed it.
 
 - [ ] **Step 1: Write the failing test — the suite's own proof**
 
@@ -536,7 +538,10 @@ A conformance suite that passes everything is worthless, so the suite is tested 
 ```go
 // A correct backend passes.
 func TestConformancePassesACorrectBackend(t *testing.T) {
-	Conformance(t, func(t *testing.T) backend.Backend { return newMemoryBackend() })
+	Conformance(t, func(t *testing.T) func() backend.Backend {
+		store := newMemoryStore()
+		return func() backend.Backend { return newMemoryBackend(store) }
+	})
 }
 
 // And every check catches the one thing it is for. Each broken backend
@@ -557,7 +562,10 @@ func TestEveryConformanceCheckCatchesItsOwnViolation(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fake := &recordingT{}
-			Conformance(fake, func(*testing.T) backend.Backend { return tc.broken() })
+			Conformance(fake, func(*testing.T) func() backend.Backend {
+				store := newMemoryStore()
+				return func() backend.Backend { return tc.broken(store) }
+			})
 
 			if !fake.failed {
 				t.Fatalf("conformance passed a backend that %s", tc.name)
@@ -572,7 +580,7 @@ func TestEveryConformanceCheckCatchesItsOwnViolation(t *testing.T) {
 
 `recordingT` captures failures instead of failing the outer test — check whether the standard library offers a way to do this before writing one; `testing.T` cannot be constructed, so `Conformance` should take a small interface (`Errorf`, `Fatalf`, `Helper`, `Run`) that `*testing.T` satisfies. Say in your reply which shape you used.
 
-`brokenBackend` is a correct in-memory backend with one switch each. Keep them independent — a broken backend that violates two rules cannot prove which check fired.
+`brokenBackend` is a correct in-memory backend with one switch each. Keep them independent — a broken backend that violates two rules cannot prove which check fired. Its storage lives in a `memoryStore` OUTSIDE the backend object, so two instances can share one; real storage outlives the process writing to it, and a backend that keeps its bucket inside itself cannot express two runs at all.
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -622,7 +630,18 @@ check is proven against a backend that breaks exactly that rule."
 
 - [ ] **Step 6: Run it from the S3 backend**
 
-Back in `~/projects/infrena-backend-s3`, add a test calling `backendtest.Conformance` against the S3 backend pointed at MinIO. This is Task 6's territory for the live plumbing, but the call belongs here so the suite gains its real consumer immediately.
+Back in `~/projects/infrena-backend-s3`, add a test calling `backendtest.Conformance` against the S3 backend pointed at MinIO. This is Task 6's territory for the live plumbing, but the call belongs here so the suite gains its real consumer immediately. The call an author writes:
+
+```go
+func TestConformance(t *testing.T) {
+	backendtest.Conformance(t, func(t *testing.T) func() backend.Backend {
+		bucket := disposableBucket(t)
+		return func() backend.Backend { return s3backend.New(bucket) }
+	})
+}
+```
+
+The bucket is made once per check and every backend opened over it sees what the others wrote, which is the point: the suite opens two of them to check that a run whose lock was force-unlocked and taken by somebody else is refused its next write.
 
 ---
 

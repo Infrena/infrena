@@ -52,6 +52,7 @@ const (
 	checkSecondLock          = "a second lock on a held environment is refused"
 	checkWriteNeedsLock      = "a write without a lock is refused"
 	checkWriteAfterLockLoss  = "a write after the lock was taken away is refused"
+	checkWriteAfterTakeover  = "a write after another run took the lock is refused"
 	checkMissingIsEmpty      = "an environment that was never written is empty rather than an error"
 	checkListExcludesLocks   = "list names environments with state and not lock objects"
 	checkRoundTrip           = "state survives a round trip byte for byte"
@@ -61,35 +62,61 @@ const (
 // Conformance runs every check against a backend, failing t for each rule the
 // backend breaks.
 //
-// newBackend is called once per check and must return a backend with no state
-// and no locks, so that a rule broken by one check cannot be blamed on
-// another. A backend author's whole test is:
+// newBackend is called once per check and returns an OPEN function: a fresh
+// store with no state and no locks, and a way to open as many backend values
+// over that one store as the check needs. The store being fresh per check is
+// what keeps a rule broken by one check from being blamed on another; the
+// store being shared between the values one check opens is what makes two
+// infrena runs on two machines expressible at all, and remote state exists
+// for no other reason.
+//
+// Most checks open one backend and are handed it. The one that cannot —
+// a second run taking over a lock the first still believes it holds — opens
+// two, and that is the only reason the factory has this shape rather than
+// simply returning a backend.
+//
+// A backend author's whole test is:
 //
 //	func TestConformance(t *testing.T) {
-//		backendtest.Conformance(t, func(t *testing.T) backend.Backend {
-//			return newBackendPointedAtSomethingDisposable(t)
+//		backendtest.Conformance(t, func(t *testing.T) func() backend.Backend {
+//			bucket := somethingDisposable(t)
+//			return func() backend.Backend { return newBackendPointedAt(bucket) }
 //		})
 //	}
-func Conformance[Self TB[Self]](t Self, newBackend func(Self) backend.Backend) {
+//
+// The outer function makes the disposable storage, once per check; the inner
+// one opens a backend over it, which for most backends is the constructor the
+// author already has.
+func Conformance[Self TB[Self]](t Self, newBackend func(Self) func() backend.Backend) {
 	t.Helper()
 	// Each check is its own function, named for what it proves, so a
-	// failure names the rule rather than a line number.
+	// failure names the rule rather than a line number. A check states
+	// which it needs: one instance, or the factory it can open several
+	// from. Taking the instance where one will do keeps the checks honest
+	// about which rules actually need a second run to show.
 	checks := []struct {
-		name string
-		run  func(Self, backend.Backend)
+		name   string
+		run    func(Self, backend.Backend)
+		shared func(Self, func() backend.Backend)
 	}{
-		{checkSecondLock, aSecondLockIsRefused[Self]},
-		{checkWriteNeedsLock, aWriteWithoutALockIsRefused[Self]},
-		{checkWriteAfterLockLoss, aWriteAfterTheLockIsTakenAwayIsRefused[Self]},
-		{checkMissingIsEmpty, aMissingEnvironmentIsEmpty[Self]},
-		{checkListExcludesLocks, listExcludesLockObjects[Self]},
-		{checkRoundTrip, stateSurvivesARoundTrip[Self]},
-		{checkConflictNamesHolder, aConflictNamesItsHolder[Self]},
+		{name: checkSecondLock, run: aSecondLockIsRefused[Self]},
+		{name: checkWriteNeedsLock, run: aWriteWithoutALockIsRefused[Self]},
+		{name: checkWriteAfterLockLoss, run: aWriteAfterTheLockIsTakenAwayIsRefused[Self]},
+		{name: checkWriteAfterTakeover, shared: aWriteAfterAnotherRunTookTheLockIsRefused[Self]},
+		{name: checkMissingIsEmpty, run: aMissingEnvironmentIsEmpty[Self]},
+		{name: checkListExcludesLocks, run: listExcludesLockObjects[Self]},
+		{name: checkRoundTrip, run: stateSurvivesARoundTrip[Self]},
+		{name: checkConflictNamesHolder, run: aConflictNamesItsHolder[Self]},
 	}
 	for _, check := range checks {
 		t.Run(check.name, func(sub Self) {
 			sub.Helper()
-			check.run(sub, newBackend(sub))
+			open := newBackend(sub)
+			if check.shared != nil {
+				check.shared(sub, open)
+				return
+			}
+			check.run(sub, open())
 		})
 	}
 }
@@ -160,13 +187,10 @@ func aWriteWithoutALockIsRefused[Self TB[Self]](t Self, b backend.Backend) {
 // a store-shaped backend gets there by comparing the stored lock object with
 // the one it wrote.
 //
-// It asks for no more than that, which is why B does not re-lock before the
-// write. Put carries no holder, and a backend object IS one run — that is
-// what Unlock's "a lock this run holds" means, and why newBackend hands each
-// check a store of its own. Once B had acquired through this same object,
-// nothing in the interface could tell A's write from B's, so no correct
-// backend could pass. Losing the lock is the observable half, and it is the
-// half the bug gets wrong.
+// It asks for no more than that: the lock is gone and nobody has taken it, so
+// one backend value is enough to pose the question. What happens once SOMEBODY
+// ELSE holds it is the other half of the same rule, and needs a second run to
+// ask at all — aWriteAfterAnotherRunTookTheLockIsRefused.
 //
 // A backend that writes with no lock at all fails aWriteWithoutALockIsRefused,
 // and this returns silently rather than reporting it a second time — the same
@@ -194,6 +218,75 @@ func aWriteAfterTheLockIsTakenAwayIsRefused[Self TB[Self]](t Self, b backend.Bac
 	}
 	if !errors.Is(err, backend.ErrNotLocked) {
 		t.Errorf("Put refused a write to %q, whose lock had been force-unlocked, with %v; the refusal must wrap backend.ErrNotLocked so the host can tell it from a storage failure", env, err)
+	}
+}
+
+// aWriteAfterAnotherRunTookTheLockIsRefused is the case the whole package
+// exists for, and the only one a single backend value cannot pose.
+//
+// A locks. An operator judges A stale and forces the lock off. B — a DIFFERENT
+// infrena process, on a different machine, over the same bucket — takes the
+// lock and starts applying. A is still running, and its next Put lands on an
+// environment B owns. Two applies mutating one environment is invariant 5
+// (spec §47.5), and the run that loses leaves resources nothing records.
+//
+// aWriteAfterTheLockIsTakenAwayIsRefused asks the weaker half of this: it
+// catches a backend that remembers ownership in a field, because after a force
+// unlock there is no lock in storage at all. It cannot catch a backend that
+// asks storage the WRONG QUESTION — "is this environment locked?" rather than
+// "do I hold this environment's lock?" — since after B locks, the answer to
+// the wrong question is yes. That backend writes straight over B's apply with
+// no error anywhere, and only a second instance over the same storage shows it.
+//
+// A correct backend answers by comparing what storage holds with what it
+// acquired: the lock object it wrote, an id it generated into it, the ETag of
+// the object it put. Anything that survives only inside this process is the
+// bug.
+//
+// It stands down twice, so that a backend already caught by a weaker rule
+// fails one check rather than two: once if A can write with no lock at all
+// (aWriteWithoutALockIsRefused), and once if A can write with its lock merely
+// gone (aWriteAfterTheLockIsTakenAwayIsRefused).
+func aWriteAfterAnotherRunTookTheLockIsRefused[Self TB[Self]](t Self, open func() backend.Backend) {
+	t.Helper()
+	ctx := context.Background()
+	const env = "conformance-lock-taken-over"
+	state := []byte(`{"version":1}`)
+
+	// Two runs over one store. They are opened before anything happens so
+	// that B is not a thing that only exists after A has finished with the
+	// lock: B is a whole other machine, and it was there all along.
+	a, b := open(), open()
+
+	if err := a.Put(ctx, env, state); err == nil {
+		return
+	}
+
+	if _, err := a.Lock(backend.WithHolder(ctx, holder("apply")), env); err != nil {
+		t.Fatalf("A's Lock of %q failed: %v", env, err)
+	}
+	// B does the forcing, because B is who runs `infra state unlock`, and
+	// because a B that cannot see the lock A took is a newBackend that
+	// handed out two separate stores — in which case nothing below would
+	// mean anything, so it is worth failing loudly here.
+	if err := b.ForceUnlock(ctx, env); err != nil {
+		t.Fatalf("a second backend's ForceUnlock of %q, which the first had locked, failed: %v; the backends newBackend opens must share one store, or no check here can tell one run from two", env, err)
+	}
+
+	if err := a.Put(ctx, env, state); err == nil {
+		return
+	}
+
+	if _, err := b.Lock(backend.WithHolder(ctx, holder("apply")), env); err != nil {
+		t.Fatalf("a second backend's Lock of %q, force-unlocked a moment ago, failed: %v", env, err)
+	}
+
+	err := a.Put(ctx, env, state)
+	if err == nil {
+		t.Fatalf("Put wrote state for %q from the run whose lock was force-unlocked, while a different run holds that lock now; a write is decided by WHO holds the stored lock and not by whether one exists, or the stranded run overwrites the apply that replaced it", env)
+	}
+	if !errors.Is(err, backend.ErrNotLocked) {
+		t.Errorf("Put refused a write to %q, whose lock a different run now holds, with %v; the refusal must wrap backend.ErrNotLocked so the host can tell it from a storage failure", env, err)
 	}
 }
 
