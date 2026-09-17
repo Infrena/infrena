@@ -4,6 +4,22 @@
 
 **Goal:** A state backend that works against any S3-compatible object store, locks safely, and refuses rather than pretending when a store cannot lock.
 
+**Store compatibility, established by James on 2026-09-17** — this is data, not something to rediscover:
+
+| Store | Conditional writes |
+| --- | --- |
+| AWS S3 | yes |
+| Cloudflare R2 | yes |
+| DigitalOcean Spaces | yes |
+| MinIO | yes |
+| **Backblaze B2** | **NO** |
+| Wasabi | unverified |
+
+**B2 failing is useful rather than inconvenient.** It is a real, popular store that genuinely
+cannot do a compare-and-swap, which makes it a far better test of the refusal path than any fake
+— and it is the reason the probe in Task 3 exists rather than a documentation note. A B2 user
+must be told clearly, by name, at configure time.
+
 **Architecture:** A new repository, `infrena-backend-s3`, built the way `infrena-provider-aws` is built: its own module, its own dependency budget, compiled against a local infrena through a gitignored `go.work`. It implements `backend.Backend` from `pkg/backend` and is served by `pkg/backendsdk`. Locking is a conditional write (`If-None-Match: *`), and support for that is **proven at configure time, never assumed** — a store that ignores the header does not error, it silently overwrites, which is the corrupted-lock case.
 
 **Tech Stack:** Go 1.27, `github.com/minio/minio-go/v7`, `github.com/infrena/infrena` (for `pkg/backend`, `pkg/backendsdk`, `pkg/pluginmanifest`). Tests use MinIO in a container.
@@ -533,9 +549,19 @@ exercised both through a command until there was a backend to run.
 
 - [ ] **Step 1: Prove "S3-compatible" against something that is not MinIO**
 
-The whole premise of this backend is that it works against any S3-compatible API, and MinIO alone does not demonstrate that — it is the most standards-conformant implementation there is, which makes it the easiest case. Run the live suite against at least one of Cloudflare R2, Backblaze B2, DigitalOcean Spaces or Wasabi, and **report exactly what differed**. Expect something to: path-style addressing, region naming, or conditional-write support are the likely candidates.
+MinIO alone demonstrates very little — it is the most standards-conformant implementation there
+is, which makes it the easiest possible case. **This step needs credentials James may or may not
+have; ask before assuming, and never sign up for anything.** If no third-party account is
+available, say so plainly and stop at MinIO rather than claiming coverage that was not tested.
 
-If a store fails the conditional-write proof, that is a SUCCESS for the design — record which store and what it did.
+Where an account exists, run the live suite against one of Cloudflare R2, DigitalOcean Spaces or
+Wasabi and report exactly what differed. Path-style addressing and region naming are the likely
+candidates.
+
+**And if B2 credentials exist, run it against B2 and assert the probe REFUSES.** That is the
+single most valuable live test available: a real store that genuinely cannot lock, proving the
+refusal path works against reality rather than against a fake with a boolean switch. A passing
+B2 run would mean the probe is broken, not that B2 improved.
 
 - [ ] **Step 2: `plugin.yaml`**
 
@@ -547,7 +573,7 @@ Copy `infrena-provider-aws`'s, adjusted. CI must run the live suite against MinI
 
 - [ ] **Step 4: README**
 
-What it is, the `backend:` block with every key, how credentials resolve, which stores are known to work and which are known not to, and the conditional-write requirement stated plainly — including that a store failing the proof is refused rather than run unsafely.
+What it is, the `backend:` block with every key, how credentials resolve, and the conditional-write requirement stated plainly — including that a store failing the proof is refused rather than run unsafely. Carry the compatibility table verbatim, **naming Backblaze B2 as not supported and why**, so a B2 user learns it from the README rather than from a refusal after they have written their configuration.
 
 - [ ] **Step 5: Commit**
 
