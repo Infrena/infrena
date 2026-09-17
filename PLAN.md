@@ -4818,6 +4818,25 @@ it loads**, never at apply time — locking is part of the interface rather than
 so one that cannot lock does not compile. Invariant 5 is absolute: two applies cannot
 mutate one environment concurrently.
 
+**`validate` resolves a named backend's BINARY, and stops there.** Added 2026-09-17, after
+`infrena validate` was found reporting "✓ Configuration valid" for a project whose
+`backend:` named a plugin that was not installed, while `plan` on the same project failed
+with "no binary for state backend". validate already refuses a missing PROVIDER plugin, and
+it is the cheap gate a CI pipeline runs first, so that combination is a pipeline approving a
+project that cannot run. Resolving a binary is a filesystem lookup, which is why it sits
+inside validate's promise not to contact providers; `backendhost.Verify` is deliberately
+written as a PREFIX of `Open` — find, then check the lockfile, then stop — so the two cannot
+drift about where a backend lives. `migrate_from:` is checked the same way, since a
+migration whose source cannot be opened fails as completely as one whose destination cannot.
+
+**What that leaves unchecked, on purpose:** the block's own CONTENTS. A backend validates
+its configuration in `Configure`, and for the S3 backend `Configure` also proves the store
+honours conditional writes — a network round trip, which validate may not make. So a
+credential wrongly written into `backend:` is still only refused once the plugin runs, which
+is at `plan`. Closing that would need a protocol method that parses without connecting;
+`backendproto` v1 has none, and adding one is a version bump rather than a quiet addition
+(§61).
+
 **`backend:` never interpolates.** `plugin:` is the only key infrena reads; every other
 key crosses to the backend untouched, so an unrecognised key here is not an error (the
 engine cannot know what an s3 backend accepts) while a missing `plugin:` is. A `${...}`

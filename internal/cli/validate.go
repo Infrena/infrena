@@ -7,6 +7,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/infrena/infrena/internal/backendhost"
 	"github.com/infrena/infrena/internal/compiler"
 	"github.com/infrena/infrena/internal/config"
 	"github.com/infrena/infrena/internal/diag"
@@ -58,6 +59,7 @@ func newValidateCommand(opts *GlobalOptions) *cobra.Command {
 			rw := ro.Report()
 
 			envs, ds := environmentsToValidate(opts.Dir, args)
+			ds.Extend(validateBackends(opts))
 			// Declared out here so the failure path below can ask it what was
 			// missing. It stays nil when the environments themselves did not
 			// resolve, and configurationIsNotValid handles that.
@@ -92,6 +94,65 @@ func newValidateCommand(opts *GlobalOptions) *cobra.Command {
 			return nil
 		},
 	}
+}
+
+// validateBackends checks that a `backend:` (and a `migrate_from:`) naming a
+// plugin can actually be resolved to a binary on disk.
+//
+// ONCE PER RUN, NOT ONCE PER ENVIRONMENT. Where state lives is a property of
+// the project, so running it inside the per-environment loop would say the same
+// thing three times for a project declaring three environments. foldByEnvironment
+// would collapse the duplicates, but relying on that to hide a check that should
+// not have run three times is the wrong way round.
+//
+// It resolves and stops there — no process is started and nothing is contacted,
+// which is what keeps it inside validate's promise. See backendhost.Verify for
+// what that leaves unchecked: the block's own CONTENTS are the plugin's to
+// validate, and the plugin only gets to do that when it runs.
+//
+// Why this exists at all: validate already refuses a missing PROVIDER plugin,
+// and it used to report "✓ Configuration valid" for a project whose backend was
+// not installed. `plan` then failed on the same project. validate is the cheap
+// gate a CI pipeline runs, so that combination is a pipeline approving a project
+// that cannot run.
+func validateBackends(opts *GlobalOptions) diag.Diagnostics {
+	var ds diag.Diagnostics
+
+	files, err := config.Load(opts.Dir)
+	if err != nil {
+		// Reported by the per-environment pass, which loads the same files.
+		// Saying it twice from two places is the same problem told twice.
+		return ds
+	}
+	project, dds := config.Decode(files)
+	if dds.HasErrors() {
+		// A block that did not decode has already been reported as such, and
+		// a plugin name read out of a broken block is not one to go looking
+		// for on disk.
+		return ds
+	}
+
+	dirs := backendhost.Search(opts.Dir, opts.PluginDirs)
+	for _, b := range []struct {
+		key  string
+		decl config.BackendDecl
+	}{
+		{"backend", project.Backend},
+		{"migrate_from", project.MigrateFrom},
+	} {
+		if b.decl.Plugin == "" || b.decl.Plugin == localBackendName {
+			continue
+		}
+		if err := backendhost.Verify(b.decl.Plugin, opts.Dir, dirs); err != nil {
+			ds.Add(diag.Diagnostic{
+				Severity: diag.SeverityError,
+				Summary:  "`" + b.key + "` names state backend " + strconv.Quote(b.decl.Plugin) + ", which is not installed",
+				Detail:   err.Error(),
+				Origin:   b.decl.Origin,
+			})
+		}
+	}
+	return ds
 }
 
 // environmentsToValidate decides which environments one `infra validate` run
