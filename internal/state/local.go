@@ -159,7 +159,7 @@ func (l *Local) Put(ctx context.Context, environment string, s *State) error {
 // (.lock) and Put's in-flight temporaries (.state-*.tmp) sit in the same
 // directory, and reporting either as an environment would have discover
 // exclude resources against a file holding no resources at all.
-func (l *Local) List() ([]string, error) {
+func (l *Local) List(ctx context.Context) ([]string, error) {
 	entries, err := os.ReadDir(l.stateDir())
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, nil

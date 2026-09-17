@@ -25,7 +25,7 @@ import (
 // A project with no state at all is an empty index and not an error: that is
 // the ordinary case for the command that needs this.
 func managedProviderIDs(ctx context.Context, backend *state.Local) (map[string]string, error) {
-	environments, err := backend.List()
+	environments, err := backend.List(ctx)
 	if err != nil {
 		return nil, err
 	}

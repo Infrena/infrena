@@ -43,11 +43,15 @@ type Backend interface {
 	// slice and no error, because a project that has never applied
 	// anything is the ordinary case for the commands that ask.
 	//
-	// It takes no context: unlike the other six, callers use it to
-	// enumerate what exists rather than to move state, and adding one here
-	// would change a signature the CLI already depends on for no gain a
-	// caller could use.
-	List() ([]string, error)
+	// It takes a context like the rest. An earlier draft left it out,
+	// reasoning that callers enumerate with it rather than move state so a
+	// context bought nothing. That reasoning holds only for Local, where
+	// List is a directory read. For a REMOTE backend it is a network call —
+	// a prefix listing over the wire — and cancellation and deadline are
+	// exactly the gain the draft said no caller could use. A signature that
+	// cannot be cancelled is not one to discover after a host is built
+	// around it.
+	List(ctx context.Context) ([]string, error)
 	// Inspect reports the current lock holder for an environment. The bool
 	// distinguishes "no lock is held" (false, nil error) from "the lock
 	// could not be read" (false, error): a caller that conflates them

@@ -274,7 +274,7 @@ func TestListReportsEnvironmentsThatHaveState(t *testing.T) {
 		}
 	}
 
-	got, err := l.List()
+	got, err := l.List(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -288,7 +288,7 @@ func TestListReportsEnvironmentsThatHaveState(t *testing.T) {
 // A project that has never applied anything is the common case for discover,
 // so this must be an empty list and not an error.
 func TestListOnAProjectWithNoStateIsEmpty(t *testing.T) {
-	got, err := NewLocal(t.TempDir()).List()
+	got, err := NewLocal(t.TempDir()).List(context.Background())
 	if err != nil {
 		t.Fatalf("List errored on a project with no state: %v", err)
 	}
@@ -311,7 +311,7 @@ func TestListIgnoresLockFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := l.List()
+	got, err := l.List(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
