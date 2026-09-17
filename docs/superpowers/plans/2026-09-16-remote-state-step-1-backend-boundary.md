@@ -290,7 +290,7 @@ release."
 
 **Interfaces:**
 - Consumes: Tasks 1 and 2.
-- Produces: `func Serve(b backend.Backend)` — the whole of a backend plugin's `main()`.
+- Produces: `func Serve(b backend.Backend, in io.Reader, out io.Writer) error` — the whole of a backend plugin's `main()`. The reader and writer are parameters, not `os.Stdin`/`os.Stdout` directly, so the SDK is testable over a pipe pair without spawning a process; check whether `pkg/pluginsdk.Serve` does the same and match it exactly rather than diverging.
 
 **Note:** `backend.Backend` here is the *plugin-side* interface, which is `state.Backend` minus nothing — the same seven methods. Define it in `pkg/backend` in this task so an author has one import.
 
@@ -657,7 +657,116 @@ never quietly falls back to writing state somewhere else."
 
 ---
 
-## Task 7: Documentation
+## Task 7: `plugin.yaml` says what kind of plugin it is
+
+Spec §4. Without this, nothing distinguishes a backend from a provider, and `plugins search` cannot tell a user which they are installing.
+
+**Files:**
+- Modify: `pkg/pluginmanifest/manifest.go`, `internal/cli/plugins.go`, `internal/backendhost/host.go`
+- Test: `pkg/pluginmanifest/manifest_test.go`, `internal/cli/plugins_search_test.go`
+
+**Interfaces:**
+- Produces: `pluginmanifest.Manifest.Kind string` with `KindProvider = "provider"`, `KindBackend = "backend"`.
+
+- [ ] **Step 1: Write the failing test**
+
+```go
+// Defaulting keeps every manifest published before this valid, which is every
+// manifest that exists today. An absent kind is a provider because that is
+// what every existing plugin is.
+func TestKindDefaultsToProvider(t *testing.T) {
+	m, _, err := Parse([]byte("manifest: 2\nname: aws\nversion: 0.5.0\nprotocol: [4]\nplatforms: [linux/amd64]\ndescription: x\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Kind != KindProvider {
+		t.Errorf("Kind = %q, want %q", m.Kind, KindProvider)
+	}
+}
+
+func TestKindBackendIsAccepted(t *testing.T) {
+	m, _, err := Parse([]byte("manifest: 2\nname: s3\nkind: backend\nversion: 1.0.0\nprotocol: [1]\nplatforms: [linux/amd64]\ndescription: x\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Kind != KindBackend {
+		t.Errorf("Kind = %q, want %q", m.Kind, KindBackend)
+	}
+}
+
+// An unknown kind is refused rather than treated as a provider. A manifest
+// saying `kind: backhand` describes something infrena cannot run, and
+// guessing would run it as the wrong thing.
+func TestAnUnknownKindIsRefused(t *testing.T) {
+	_, _, err := Parse([]byte("manifest: 2\nname: x\nkind: backhand\nversion: 1.0.0\nprotocol: [1]\nplatforms: [linux/amd64]\ndescription: x\n"))
+	if err == nil {
+		t.Fatal("an unknown kind was accepted")
+	}
+	if !strings.Contains(err.Error(), "backhand") {
+		t.Errorf("error does not name what was written: %v", err)
+	}
+}
+```
+
+```go
+// Loading a provider as a backend must fail at load with a message naming
+// both, not at the first state write with a protocol mismatch.
+func TestOpeningAProviderAsABackendIsRefusedAtLoad(t *testing.T) {
+	dir := buildFakeProvider(t)
+
+	_, _, err := Open(context.Background(), "fake", []string{dir}, nil)
+	if err == nil {
+		t.Fatal("a provider was opened as a backend")
+	}
+	if !strings.Contains(err.Error(), "provider") || !strings.Contains(err.Error(), "backend") {
+		t.Errorf("error does not name both kinds: %v", err)
+	}
+}
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `go test -run 'TestKind|TestAnUnknownKind' ./pkg/pluginmanifest/ -v && go test -run TestOpeningAProvider ./internal/backendhost/ -v`
+Expected: FAIL — `Kind` undefined; `Open` does not check.
+
+- [ ] **Step 3: Write minimal implementation**
+
+Add the field with a default, refuse an unrecognised value, and check it in `backendhost.Open`. Add a KIND column to `plugins list` and `plugins search` output.
+
+Document on the field why this rather than a second naming convention:
+
+```go
+	// Kind is what this plugin is: a provider or a state backend. Absent
+	// means provider, which keeps every manifest published before this
+	// valid.
+	//
+	// Considered and rejected: a separate `infrena-backend-<name>` repository
+	// and binary convention. It would mean two search paths, two install
+	// paths and two lock files for one concept. The manifest already exists
+	// to say what a thing is, so it says this too.
+	Kind string
+```
+
+- [ ] **Step 4: Run tests to verify they pass**
+
+Run: `INFRENA_REQUIRE_PLUGIN=1 go test -count=1 ./... 2>&1 | tail -5`
+Expected: PASS.
+
+- [ ] **Step 5: Commit**
+
+```bash
+gofmt -l . && go vet ./...
+git add pkg/pluginmanifest internal/cli internal/backendhost
+git commit -m "Let a manifest say whether it is a provider or a backend
+
+One search path and one install path for both, rather than a second
+naming convention for the same concept. A provider opened as a backend is
+refused when it loads."
+```
+
+---
+
+## Task 8: Documentation
 
 **Files:**
 - Modify: `PLAN.md` (§52, §31.2, §61), `CLAUDE.md`
