@@ -644,6 +644,123 @@ func installedBinaryExists(t *testing.T, dir, binary string) bool {
 	return err == nil && !info.IsDir()
 }
 
+// A fresh clone needs every plugin the project names. One command, and it is
+// unambiguous by construction, because the project says both the names and
+// the kinds.
+func TestBareInstallInstallsEverythingTheProjectDeclares(t *testing.T) {
+	dir := newProjectNeeding(t, []string{"aws", "fake"}, "s3")
+	trustSources(t)
+	srv := fakeGitHubServingAll(t)
+	t.Setenv("INFRENA_GITHUB_API", srv.URL)
+
+	stdout, stderr, code := runCommandWithStdin(t, dir, "", "plugins", "install")
+
+	if code != ExitOK {
+		t.Fatalf("exit = %d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	for _, bin := range []string{"infrena-plugin-aws", "infrena-plugin-fake", "infrena-backend-s3"} {
+		if !installedBinaryExists(t, dir, bin) {
+			t.Errorf("%s was not installed:\n%s", bin, stdout)
+		}
+	}
+}
+
+// Already installed is not an error and is not a reinstall: the point is to
+// reach a working state, and a second run must be safe.
+func TestBareInstallSkipsWhatIsAlreadyInstalled(t *testing.T) {
+	dir := newProjectNeeding(t, []string{"aws"}, "")
+	trustSources(t)
+	srv := fakeGitHubServingAll(t)
+	t.Setenv("INFRENA_GITHUB_API", srv.URL)
+
+	if _, stderr, code := runCommandWithStdin(t, dir, "", "plugins", "install"); code != ExitOK {
+		t.Fatalf("first run: exit = %d\n%s", code, stderr)
+	}
+	stdout, stderr, code := runCommandWithStdin(t, dir, "", "plugins", "install")
+
+	if code != ExitOK {
+		t.Fatalf("second run exit = %d\n%s", code, stderr)
+	}
+	if !strings.Contains(stdout, "already installed") {
+		t.Errorf("second run does not say it skipped:\n%s", stdout)
+	}
+}
+
+// A project declaring nothing is not a failure. It is a project that needs
+// no plugins, which is a real state - `init` produces one.
+//
+// NOT newProjectFixture, which declares a `fake.network` resource: a resource
+// type's prefix IS a plugin the project needs, so that fixture needs one.
+func TestBareInstallOnAProjectNeedingNothingSaysSo(t *testing.T) {
+	dir := newProjectNeeding(t, nil, "")
+	trustSources(t)
+
+	stdout, stderr, code := runCommandWithStdin(t, dir, "", "plugins", "install")
+
+	if code != ExitOK {
+		t.Errorf("exit = %d, want %d\n%s", code, ExitOK, stderr)
+	}
+	if !strings.Contains(stdout, "nothing") && !strings.Contains(stdout, "No plugins") {
+		t.Errorf("output does not say there was nothing to do:\n%s", stdout)
+	}
+}
+
+// With no project there is nothing to enumerate, so the error says that
+// rather than reporting an empty list as success.
+func TestBareInstallWithNoProjectIsAnError(t *testing.T) {
+	dir := t.TempDir()
+	trustSources(t)
+
+	_, stderr, code := runCommandWithStdin(t, dir, "", "plugins", "install", "--global")
+
+	if code == ExitOK {
+		t.Fatal("bare install succeeded with no project to read")
+	}
+	if !strings.Contains(stderr, "infra.yml") {
+		t.Errorf("error does not name what is missing:\n%s", stderr)
+	}
+}
+
+// One failure must not silently lose the others. Report what happened to
+// each and fail overall - a partial result a reader mistakes for a complete
+// one is the failure this project avoids everywhere.
+func TestBareInstallReportsEveryPluginEvenWhenOneFails(t *testing.T) {
+	dir := newProjectNeeding(t, []string{"aws", "nonesuch"}, "")
+	trustSources(t)
+	srv := fakeGitHubServingAll(t)
+	t.Setenv("INFRENA_GITHUB_API", srv.URL)
+
+	stdout, stderr, code := runCommandWithStdin(t, dir, "", "plugins", "install")
+
+	if code == ExitOK {
+		t.Fatal("a failed install reported success")
+	}
+	if !installedBinaryExists(t, dir, "infrena-plugin-aws") {
+		t.Error("the plugin that could be installed was not")
+	}
+	if !strings.Contains(stdout+stderr, "nonesuch") {
+		t.Errorf("the failure is not named:\n%s\n%s", stdout, stderr)
+	}
+}
+
+// newProjectNeeding is a project that NAMES the plugins it needs and declares
+// nothing else. No resources: a resource type's prefix is a plugin needed too,
+// and these fixtures are about the list being exactly what was asked for.
+func newProjectNeeding(t *testing.T, providers []string, backend string) string {
+	t.Helper()
+	body := "project: myapp\n"
+	if len(providers) > 0 {
+		body += "providers:\n"
+		for _, p := range providers {
+			body += "  - plugin: " + p + "\n"
+		}
+	}
+	if backend != "" {
+		body += "backend:\n  plugin: " + backend + "\n  bucket: acme-state\n"
+	}
+	return projectDir(t, body)
+}
+
 // newProjectNamingSource is a project that NAMES a source for a plugin, which
 // is the case the trust rule exists for: the file is committed and travels with
 // a `git clone`.

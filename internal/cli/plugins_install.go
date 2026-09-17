@@ -57,9 +57,9 @@ func newPluginsInstallCommand(opts *GlobalOptions) *cobra.Command {
 	var kind string
 
 	cmd := &cobra.Command{
-		Use:           "install <name>[@version]",
+		Use:           "install [<name>[@version]]",
 		Short:         "Download and install a plugin",
-		Args:          cobra.ExactArgs(1),
+		Args:          cobra.MaximumNArgs(1),
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -69,6 +69,15 @@ func newPluginsInstallCommand(opts *GlobalOptions) *cobra.Command {
 			}
 			defer closeRun()
 
+			// NO NAME MEANS THE PROJECT'S WHOLE LIST, which is what a fresh
+			// clone needs and is a different question from installing one
+			// thing: there is no kind to resolve, so --kind has nothing to say.
+			if len(args) == 0 {
+				if kind != "" {
+					return fmt.Errorf("--kind has nothing to apply to: `infrena plugins install` with no name installs every plugin this project declares, and the project already says which kind each of them is.\n\nSuggested action:\n  Drop --kind, or name the one plugin you meant.")
+				}
+				return runInstallDeclared(cmd, opts, ro.Out(), global)
+			}
 			return runInstall(cmd, opts, ro.Out(), args[0], global, kind)
 		},
 	}
@@ -295,6 +304,96 @@ func lockKey(role plugins.Role, name string) string {
 		return backendhost.LockKey(name)
 	}
 	return name
+}
+
+// runInstallDeclared is `infrena plugins install` with no name: everything this
+// project declares, in one command.
+//
+// NO KIND RESOLUTION AT ALL. The project says both the name AND the kind for
+// each one - `providers:` and a resource type's prefix name providers,
+// `backend:` names a backend - so the ambiguity a named install has to resolve
+// cannot arise here.
+//
+// ONE FAILURE DOES NOT HIDE THE OTHERS. Every plugin is attempted, each result
+// is reported, and the command fails at the end if any of them did: this is
+// discovery.Walk's rule, and the reason for it is the same. A run that stopped
+// at the first failure would leave a reader believing the plugins after it were
+// fine, and a partial answer mistaken for a complete one is the failure worth
+// avoiding.
+func runInstallDeclared(cmd *cobra.Command, opts *GlobalOptions, out io.Writer, global bool) error {
+	// THE PROJECT IS CHECKED BEFORE THE DESTINATION, because --global outside a
+	// project has a perfectly good destination and still nothing to enumerate.
+	// Reporting a missing home directory there would answer a question nobody
+	// asked.
+	if !hasProject(opts.Dir) {
+		return fmt.Errorf("no project in %s, so there is no list of plugins to install.\n\n`infrena plugins install` with no name installs every plugin a project's %s declares, and there is no %s here.\n\nSuggested action:\n  Run it inside a project, or name the plugin to install: `infrena plugins install <name>`.",
+			opts.Dir, config.ProjectFileName, config.ProjectFileName)
+	}
+
+	declared, err := declaredPlugins(opts.Dir)
+	if err != nil {
+		return err
+	}
+	if len(declared) == 0 {
+		// AN ANSWER, NOT A FAILURE. A project that needs no plugins is a real
+		// state, and `infrena init` produces one.
+		fmt.Fprintf(out, "This project declares no plugins, so there is nothing to install.\n")
+		return nil
+	}
+
+	dest, err := installDir(opts, global)
+	if err != nil {
+		return err
+	}
+
+	var failures []error
+	for _, d := range declared {
+		if path, ok := installedAlready(opts, d.role, d.name); ok {
+			fmt.Fprintf(out, "%s (%s) is already installed\n  %s\n", d.name, d.role, path)
+			continue
+		}
+		if err := installDeclared(cmd, opts, out, d, dest); err != nil {
+			// NAMED HERE, because the error underneath is about a plugin and
+			// the reader is looking at a list of several.
+			failures = append(failures, fmt.Errorf("%s (%s): %w", d.name, d.role, err))
+			fmt.Fprintf(cmd.ErrOrStderr(), "failed  %s (%s)\n", d.name, d.role)
+		}
+	}
+	return errors.Join(failures...)
+}
+
+// installDeclared installs one entry off the project's list, down the same path
+// a named install takes. A second way to install a plugin would be a second set
+// of rules about what may be installed.
+func installDeclared(cmd *cobra.Command, opts *GlobalOptions, out io.Writer, d declaredPlugin, dest string) error {
+	in, err := newInstallation(cmd, opts, out, d.name, "", dest)
+	if err != nil {
+		return err
+	}
+	return in.install(cmd, d.role)
+}
+
+// installedAlready reports whether this plugin's binary is already somewhere the
+// loader looks, and where.
+//
+// THE BINARY ON DISK, NOT THE LOCK AND NOT A BUILTIN. The lock records what an
+// install wrote and would call a deleted binary present; a builtin is served in
+// process and is not a thing a project can be missing. What makes a second run
+// safe is that the file the loader would open is there.
+func installedAlready(opts *GlobalOptions, role plugins.Role, name string) (string, bool) {
+	_, binary := releaseNames(role, name)
+	// The same directories for both kinds, which is backendhost.Search's whole
+	// point: only the binary's name differs.
+	for _, dir := range backendhost.Search(opts.Dir, opts.PluginDirs) {
+		if dir == "" {
+			continue
+		}
+		path := filepath.Join(dir, binary)
+		if info, err := os.Stat(path); err == nil && !info.IsDir() {
+			return path, true
+		}
+	}
+	return "", false
 }
 
 // parsePluginArg splits `name` or `name@version`.
