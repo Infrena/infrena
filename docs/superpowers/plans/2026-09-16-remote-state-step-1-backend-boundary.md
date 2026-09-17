@@ -16,7 +16,7 @@
 - **Third-party budget is two packages**: `github.com/spf13/cobra`, `gopkg.in/yaml.v3`. Everything new here is standard library.
 - **Local is built in and is NOT a backend plugin.** It is the bootstrap that works before anything is installed. A shipped infrena carries no *remote* backend.
 - **Every backend must lock.** A backend that does not implement locking is refused **when it loads**, never at apply time. Invariant 5 — two applies cannot mutate one environment concurrently — is absolute.
-- **`state:` may not interpolate variables, at all.** You need state before you can compile, and compiling is what resolves variables. A `${...}` there is a diagnostic explaining the cycle, never a feature to add.
+- **`backend:` may not interpolate variables, at all.** You need state before you can compile, and compiling is what resolves variables. A `${...}` there is a diagnostic explaining the cycle, never a feature to add.
 - **A backend stores bytes and does not interpret them.** `state.State` does not move to `pkg/`; a backend that parsed state would be a second reader free to disagree with the first.
 - **`Backend.Put` is called once per operation and writes the whole state.** The envelope must carry state as raw bytes, never JSON nested inside JSON.
 - **`backendproto.Version` is its own format version** (§61's seventh), independent of `pluginproto.Version`.
@@ -35,8 +35,8 @@
 | `pkg/backendproto/proto.go` *(new)* | The wire contract and `Version`. |
 | `pkg/backendsdk/serve.go` *(new)* | The whole of a backend's `main()`. |
 | `internal/backendhost/host.go` *(new)* | The host side: launch, handshake, dispatch. |
-| `internal/config/declarations.go` | `StateDecl` — the decoded `state:` block. |
-| `internal/config/decode_state.go` *(new)* | Decoding it, and refusing interpolation. |
+| `internal/config/declarations.go` | `BackendDecl` — the decoded `backend:` block. |
+| `internal/config/decode_backend.go` *(new)* | Decoding it, and refusing interpolation. |
 | `internal/cli/context.go` | `backendFor` returns `state.Backend` and routes. |
 
 ---
@@ -462,48 +462,55 @@ error callers already test for."
 
 ---
 
-## Task 5: `state:` in configuration
+## Task 5: The `backend:` block
 
 **Files:**
 - Modify: `internal/config/declarations.go`
-- Create: `internal/config/decode_state.go`
-- Test: `internal/config/decode_state_test.go`
+- Create: `internal/config/decode_backend.go`
+- Test: `internal/config/decode_backend_test.go`
 
 **Interfaces:**
-- Produces: `config.StateDecl{Backend string; Config map[string]any; Origin value.Origin}`, on `ProjectDecl.State`.
+- Produces: `config.BackendDecl{Plugin string; Config map[string]any; Origin value.Origin}`, on `ProjectDecl.Backend`. `plugin:` is the only reserved key; every other key lands in `Config` untouched.
 
 - [ ] **Step 1: Write the failing test**
 
 ```go
-func TestStateBlockDecodes(t *testing.T) {
+func TestBackendBlockDecodes(t *testing.T) {
 	p, ds := decodeTree(t, map[string]string{
 		ProjectFileName: projectWithNoResources + `
-state:
-  backend: s3
-  config:
-    bucket: acme-infra
-    region: us-east-1
+backend:
+  plugin: s3
+  bucket: some-bucket-name
+  profile: my-bucket-profile
+  path: /infrena/
 `,
 	})
 	if ds.HasErrors() {
 		t.Fatalf("unexpected errors: %v", ds)
 	}
-	if p.State.Backend != "s3" {
-		t.Errorf("Backend = %q, want s3", p.State.Backend)
+	if p.Backend.Plugin != "s3" {
+		t.Errorf("Plugin = %q, want s3", p.Backend.Plugin)
 	}
-	if p.State.Config["bucket"] != "acme-infra" {
-		t.Errorf("Config = %v", p.State.Config)
+	// plugin: is the ONLY reserved key. Everything else reaches the backend
+	// untouched, so the engine never learns what a bucket is.
+	for k, want := range map[string]any{"bucket": "some-bucket-name", "profile": "my-bucket-profile", "path": "/infrena/"} {
+		if p.Backend.Config[k] != want {
+			t.Errorf("Config[%q] = %v, want %v", k, p.Backend.Config[k], want)
+		}
+	}
+	if _, reserved := p.Backend.Config["plugin"]; reserved {
+		t.Error("plugin: was passed through to the backend as configuration")
 	}
 }
 
 // No state block means local, which is what every project does today.
-func TestNoStateBlockMeansLocal(t *testing.T) {
+func TestNoBackendBlockMeansLocal(t *testing.T) {
 	p, ds := decodeTree(t, map[string]string{ProjectFileName: projectWithNoResources})
 	if ds.HasErrors() {
 		t.Fatal(ds)
 	}
-	if p.State.Backend != "" {
-		t.Errorf("Backend = %q, want empty", p.State.Backend)
+	if p.Backend.Plugin != "" {
+		t.Errorf("Plugin = %q, want empty", p.Backend.Plugin)
 	}
 }
 
@@ -511,9 +518,9 @@ func TestNoStateBlockMeansLocal(t *testing.T) {
 // resolves variables, so a variable here can never be resolved. The
 // diagnostic must explain that rather than saying "unknown variable", which
 // would send a reader off to declare one.
-func TestAVariableInTheStateBlockIsRefusedWithTheReason(t *testing.T) {
+func TestAVariableInTheBackendBlockIsRefusedWithTheReason(t *testing.T) {
 	_, ds := decodeTree(t, map[string]string{
-		ProjectFileName: projectWithNoResources + "state:\n  backend: s3\n  config:\n    bucket: ${var.bucket}\n",
+		ProjectFileName: projectWithNoResources + "backend:\n  plugin: s3\n  bucket: ${var.bucket}\n",
 	})
 	if !ds.HasErrors() {
 		t.Fatal("a variable in the state block was accepted")
@@ -528,12 +535,19 @@ func TestAVariableInTheStateBlockIsRefusedWithTheReason(t *testing.T) {
 }
 
 // Fails closed on unknown keys, like every other block.
-func TestAnUnknownKeyInTheStateBlockIsAnError(t *testing.T) {
+// UNLIKE every other block, an unrecognised key here is NOT an error: every
+// key except plugin: belongs to the backend, and the engine cannot know which
+// keys an s3 backend accepts. A missing `plugin:` IS an error, because that is
+// the one key the engine owns.
+func TestAMissingPluginKeyIsAnError(t *testing.T) {
 	_, ds := decodeTree(t, map[string]string{
-		ProjectFileName: projectWithNoResources + "state:\n  bakend: s3\n",
+		ProjectFileName: projectWithNoResources + "backend:\n  bucket: acme\n",
 	})
 	if !ds.HasErrors() {
-		t.Fatal("an unknown key was accepted")
+		t.Fatal("a backend block with no plugin was accepted")
+	}
+	if !strings.Contains(ds.Error(), "plugin") {
+		t.Errorf("error does not name the missing key: %s", ds.Error())
 	}
 }
 ```
@@ -556,7 +570,7 @@ Decode with `yaml.Node` like every other block in this package. Scan every strin
 // compile — `destroy`, `refresh`, `discover` and `import` never compile at all
 // — so there is no point at which a value here could be filled in. It is a
 // cycle, not a missing feature, and a future request to "just support
-// variables in state:" is a request to break the ordering.
+// variables in backend:" is a request to break the ordering.
 ```
 
 - [ ] **Step 4: Run tests to verify they pass**
@@ -591,9 +605,9 @@ rather than reporting an undeclared variable."
 - [ ] **Step 1: Write the failing test**
 
 ```go
-// No state block: local, exactly as today, with nothing installed and no
+// No backend block: local, exactly as today, with nothing installed and no
 // process started. This is the bootstrap and it must never need a plugin.
-func TestAProjectWithNoStateBlockUsesLocalAndStartsNothing(t *testing.T) {
+func TestAProjectWithNoBackendBlockUsesLocalAndStartsNothing(t *testing.T) {
 	dir := newProjectFixture(t)
 	blocked := blockNetwork(t)
 
@@ -615,7 +629,7 @@ func TestAProjectWithNoStateBlockUsesLocalAndStartsNothing(t *testing.T) {
 // get it, not a silent fallback to local. Falling back would write state
 // somewhere the user did not ask for, which is the worst available outcome.
 func TestAMissingBackendPluginIsAnErrorAndNeverFallsBackToLocal(t *testing.T) {
-	dir := newProjectWithStateBackend(t, "s3")
+	dir := newProjectWithBackend(t, "s3")
 
 	_, _, err := backendFor(context.Background(), dir)
 	if err == nil {
@@ -631,12 +645,12 @@ func TestAMissingBackendPluginIsAnErrorAndNeverFallsBackToLocal(t *testing.T) {
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `go test -run 'TestAProjectWithNoStateBlock|TestAMissingBackendPlugin' ./internal/cli/ -v`
+Run: `go test -run 'TestAProjectWithNoBackendBlock|TestAMissingBackendPlugin' ./internal/cli/ -v`
 Expected: FAIL — `backendFor` takes one argument and returns one value.
 
 - [ ] **Step 3: Write minimal implementation**
 
-Decode `infra.yml` for the `state:` block — decode only, never compile. Empty backend gives `state.NewLocal` and a no-op closer. Otherwise `backendhost.Open`. Update all eight call sites; each must defer the closer.
+Decode `infra.yml` for the `backend:` block — decode only, never compile. An empty `plugin:` gives `state.NewLocal` and a no-op closer. Otherwise `backendhost.Open`. Update all eight call sites; each must defer the closer.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
@@ -650,135 +664,26 @@ gofmt -l . && go vet ./...
 git add internal/cli
 git commit -m "Send a project to the backend it names
 
-A project with no state block still gets the local backend and starts no
+A project with no backend block still gets the local backend and starts no
 process. One that names a backend it has not installed is told so, and
 never quietly falls back to writing state somewhere else."
 ```
 
 ---
 
-## Task 7: `plugin.yaml` says what kind of plugin it is
-
-Spec §4. Without this, nothing distinguishes a backend from a provider, and `plugins search` cannot tell a user which they are installing.
+## Task 7: Documentation
 
 **Files:**
-- Modify: `pkg/pluginmanifest/manifest.go`, `internal/cli/plugins.go`, `internal/backendhost/host.go`
-- Test: `pkg/pluginmanifest/manifest_test.go`, `internal/cli/plugins_search_test.go`
-
-**Interfaces:**
-- Produces: `pluginmanifest.Manifest.Kind string` with `KindProvider = "provider"`, `KindBackend = "backend"`.
-
-- [ ] **Step 1: Write the failing test**
-
-```go
-// Defaulting keeps every manifest published before this valid, which is every
-// manifest that exists today. An absent kind is a provider because that is
-// what every existing plugin is.
-func TestKindDefaultsToProvider(t *testing.T) {
-	m, _, err := Parse([]byte("manifest: 2\nname: aws\nversion: 0.5.0\nprotocol: [4]\nplatforms: [linux/amd64]\ndescription: x\n"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if m.Kind != KindProvider {
-		t.Errorf("Kind = %q, want %q", m.Kind, KindProvider)
-	}
-}
-
-func TestKindBackendIsAccepted(t *testing.T) {
-	m, _, err := Parse([]byte("manifest: 2\nname: s3\nkind: backend\nversion: 1.0.0\nprotocol: [1]\nplatforms: [linux/amd64]\ndescription: x\n"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if m.Kind != KindBackend {
-		t.Errorf("Kind = %q, want %q", m.Kind, KindBackend)
-	}
-}
-
-// An unknown kind is refused rather than treated as a provider. A manifest
-// saying `kind: backhand` describes something infrena cannot run, and
-// guessing would run it as the wrong thing.
-func TestAnUnknownKindIsRefused(t *testing.T) {
-	_, _, err := Parse([]byte("manifest: 2\nname: x\nkind: backhand\nversion: 1.0.0\nprotocol: [1]\nplatforms: [linux/amd64]\ndescription: x\n"))
-	if err == nil {
-		t.Fatal("an unknown kind was accepted")
-	}
-	if !strings.Contains(err.Error(), "backhand") {
-		t.Errorf("error does not name what was written: %v", err)
-	}
-}
-```
-
-```go
-// Loading a provider as a backend must fail at load with a message naming
-// both, not at the first state write with a protocol mismatch.
-func TestOpeningAProviderAsABackendIsRefusedAtLoad(t *testing.T) {
-	dir := buildFakeProvider(t)
-
-	_, _, err := Open(context.Background(), "fake", []string{dir}, nil)
-	if err == nil {
-		t.Fatal("a provider was opened as a backend")
-	}
-	if !strings.Contains(err.Error(), "provider") || !strings.Contains(err.Error(), "backend") {
-		t.Errorf("error does not name both kinds: %v", err)
-	}
-}
-```
-
-- [ ] **Step 2: Run test to verify it fails**
-
-Run: `go test -run 'TestKind|TestAnUnknownKind' ./pkg/pluginmanifest/ -v && go test -run TestOpeningAProvider ./internal/backendhost/ -v`
-Expected: FAIL — `Kind` undefined; `Open` does not check.
-
-- [ ] **Step 3: Write minimal implementation**
-
-Add the field with a default, refuse an unrecognised value, and check it in `backendhost.Open`. Add a KIND column to `plugins list` and `plugins search` output.
-
-Document on the field why this rather than a second naming convention:
-
-```go
-	// Kind is what this plugin is: a provider or a state backend. Absent
-	// means provider, which keeps every manifest published before this
-	// valid.
-	//
-	// Considered and rejected: a separate `infrena-backend-<name>` repository
-	// and binary convention. It would mean two search paths, two install
-	// paths and two lock files for one concept. The manifest already exists
-	// to say what a thing is, so it says this too.
-	Kind string
-```
-
-- [ ] **Step 4: Run tests to verify they pass**
-
-Run: `INFRENA_REQUIRE_PLUGIN=1 go test -count=1 ./... 2>&1 | tail -5`
-Expected: PASS.
-
-- [ ] **Step 5: Commit**
-
-```bash
-gofmt -l . && go vet ./...
-git add pkg/pluginmanifest internal/cli internal/backendhost
-git commit -m "Let a manifest say whether it is a provider or a backend
-
-One search path and one install path for both, rather than a second
-naming convention for the same concept. A provider opened as a backend is
-refused when it loads."
-```
-
----
-
-## Task 8: Documentation
-
-**Files:**
-- Modify: `PLAN.md` (§52, §31.2, §61), `CLAUDE.md`
+- Modify: `PLAN.md` (§52, §31.3, §61), `CLAUDE.md`
 - Create: `docs/state-backends.md`
 
 - [ ] **Step 1: Replace `PLAN.md` §52's six bullets**
 
-with the design's shape: backends are plugins, local is the bootstrap, every backend must lock, `state:` is literal-only. Mark step 1 shipped and steps 2–4 as designs.
+with the design's shape: backends are plugins, local is the bootstrap, every backend must lock, `backend:` is literal-only. Mark step 1 shipped and steps 2–4 as designs.
 
-- [ ] **Step 2: Update §31.2 and §61**
+- [ ] **Step 2: Update §31.3 and §61**
 
-`plugin.yaml` gains `kind: provider | backend`, defaulting to `provider`. `backendproto.Version` joins §61's table as the seventh format.
+§31.3's naming convention extends to backends: `infrena-backend-<name>` repository and binary. `backendproto.Version` joins §61's table as the seventh format.
 
 - [ ] **Step 3: Write `docs/state-backends.md`**
 
@@ -786,7 +691,7 @@ The trust boundary, stated plainly: **state reaches a backend in cleartext, exac
 
 - [ ] **Step 4: Update `CLAUDE.md`**
 
-Local is the bootstrap and is built in; every remote backend is a plugin; a shipped infrena carries no remote backend; `state:` never interpolates and why; `Backend.Put` is per-operation and carries raw bytes.
+Local is the bootstrap and is built in; every remote backend is a plugin; a shipped infrena carries no remote backend; `backend:` never interpolates and why; `Backend.Put` is per-operation and carries raw bytes.
 
 - [ ] **Step 5: Verify and commit**
 
