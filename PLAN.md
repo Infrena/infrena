@@ -4747,8 +4747,13 @@ Build order, each step useful alone:
    built, `backend:` decoded, and `backendFor` routing to a plugin or to local. Nothing
    user-visible changed, and the whole existing suite passing untouched is the proof the
    extraction was faithful.
-2. **The S3-compatible backend plugin.** DESIGN. Its own repository, locking via
-   conditional PUT with a clear refusal where the store cannot.
+2. **The S3-compatible backend plugin. SHIPPED 2026-09-17**, `infrena-backend-s3` v0.1.0.
+   Locking is a conditional PUT, and the store is PROVEN able to do one at configure time
+   rather than trusted: a probe writes twice and requires the second to be refused, which
+   catches both a store that refuses the header (Backblaze B2, `NotImplemented`) and one
+   that ignores it and overwrites, which is the silent case. Verified against real AWS S3
+   and MinIO — full live suite, infrena's conformance suite, and ten goroutines racing one
+   lock leaving exactly one winner — and against B2, where the refusal is the pass.
 3. **State versioning and migration.** DESIGN. `state migrate`, and the local → S3 →
    local round trip.
 4. **Concurrency tests.** DESIGN. Two environments applying concurrently succeed; two
