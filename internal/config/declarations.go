@@ -244,6 +244,28 @@ type ModuleLoadDecl struct {
 	Origin value.Origin
 }
 
+// BackendDecl is the decoded `backend:` block: where this project's state
+// lives (PLAN.md §52).
+//
+// `plugin:` is the ONLY key this package reserves. Every other key is the
+// BACKEND'S configuration and is carried across untouched, because the engine
+// has no way to know which keys an s3 backend accepts and guessing would make
+// adding a backend option a change to the core. That is why an unrecognised key
+// here is not an error, alone among the blocks in this language.
+//
+// Config is map[string]any rather than map[string]AttributeDecl, which is what
+// ProviderDecl.Config uses, and the difference is the point: an AttributeDecl
+// carries HasExpressions, and nothing here may carry an expression. A shape
+// that could express one would be a shape someone later tries to resolve.
+//
+// An empty Plugin means the project declared no backend, which is local — the
+// bootstrap that works before anything is installed.
+type BackendDecl struct {
+	Plugin string
+	Config map[string]any
+	Origin value.Origin
+}
+
 // ProjectDecl is the decoded, still-unresolved configuration.
 type ProjectDecl struct {
 	Project string
@@ -296,7 +318,11 @@ type ProjectDecl struct {
 	// refuse it silently by losing one, and silence is what sends a resource to the
 	// wrong account.
 	Providers []ProviderDecl
-	Origin    value.Origin
+	// Backend holds `backend:` — where this project's state lives (PLAN.md
+	// §52). The zero value means local, which is what every project written
+	// before the block existed says.
+	Backend BackendDecl
+	Origin  value.Origin
 }
 
 // NeededPlugins names every provider plugin a project's declarations imply.

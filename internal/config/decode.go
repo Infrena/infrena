@@ -264,12 +264,14 @@ func decodeDocument(path string, doc *yaml.Node, out *ProjectDecl, ds *diag.Diag
 			decodeRequiredVersion(path, key, val, out, ds)
 		case "plugins":
 			decodePluginConstraints(path, val, out, ds)
+		case "backend":
+			decodeBackend(path, key, val, out, ds)
 		default:
 			ds.Add(diag.Diagnostic{
 				Severity: diag.SeverityWarning,
 				Summary:  "unrecognised top-level key " + strconv.Quote(key.Value),
 				Detail: ProjectFileName + " understands `project`, `infrena`, `plugins`, " +
-					"`resources`, `variables`, `environments`, `providers` and `modules`.",
+					"`resources`, `variables`, `environments`, `providers`, `modules` and `backend`.",
 				Origin: originOf(path, key),
 			})
 		}
