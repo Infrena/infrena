@@ -139,12 +139,16 @@ Decode both blocks through **one function**, so the two cannot drift. Read `deco
 	// rules as Backend, decoded by the same code, because two blocks that
 	// mean the same thing must not be able to disagree about what a key means.
 	//
-	// IT IS INERT FOR EVERY COMMAND EXCEPT `state migrate` (spec §7). A
-	// migration run through CI is necessarily two commits — one adding this
-	// block, one removing it — and between them it sits in committed
-	// configuration. If `plan` or `apply` consulted it, a SUCCESSFUL migration
-	// would break the pipeline until somebody tidied up. So nothing reads this
-	// but one command, and leaving it behind is harmless.
+	// NO COMMAND BUT `state migrate` ACTS ON IT (spec §7). A migration run
+	// through CI is necessarily two commits — one adding this block, one
+	// removing it — and between them it sits in committed configuration. If
+	// `plan` or `apply` acted on it, a SUCCESSFUL migration would break the
+	// pipeline until somebody tidied up.
+	//
+	// Ordinary commands DO consult it for one GUARD, added after the first
+	// draft: while the destination is empty and the source holds state, the
+	// migration has not happened, and a command reading only `backend:` would
+	// see every resource as unmanaged and RECREATE ALL OF IT. See Task 4.
 	MigrateFrom BackendDecl
 ```
 
@@ -466,7 +470,128 @@ from the source."
 
 ---
 
-## Task 4: The real round trip
+## Task 4: Refuse to run into a backend awaiting migration
+
+**This is the task that stops the design destroying someone's infrastructure.** Read spec §7's "But ignoring it entirely recreates your infrastructure" before starting.
+
+**Files:**
+- Modify: `internal/cli/context.go` (`backendFor`)
+- Test: `internal/cli/backend_test.go`
+
+**Interfaces:**
+- Consumes: Task 1's `MigrateFrom`, Task 2's `openBackend`.
+- Produces: no new exported symbols; `backendFor` gains the guard.
+
+- [ ] **Step 1: Write the failing test**
+
+```go
+// THE HAZARD. Configuration lands with a new empty backend and a
+// migrate_from: naming the old one that holds everything. Nobody has run the
+// migration yet. Reading only `backend:`, every resource looks unmanaged and
+// apply would CREATE ALL OF IT AGAIN.
+//
+// In the CI flow this design exists for, that ordering is the LIKELY one:
+// config lands first, the pipeline runs before a human triggers anything.
+func TestCommandsRefuseWhileAMigrationIsPending(t *testing.T) {
+	dir := newProjectMigratingLocalToFake(t)
+	seedLocalState(t, dir, "dev") // the SOURCE holds state; the destination is empty
+
+	for _, args := range [][]string{{"plan", "dev"}, {"apply", "dev", "--auto-approve"}, {"refresh", "dev"}} {
+		_, stderr, code := runCommand(t, dir, args...)
+
+		if code == ExitOK || code == ExitChanges {
+			t.Errorf("%v proceeded into a backend awaiting migration", args)
+		}
+		if !strings.Contains(stderr, "state migrate") {
+			t.Errorf("%v: refusal does not name the fix:\n%s", args, stderr)
+		}
+	}
+}
+
+// Once migrated, the block is harmless and everything proceeds. This is the
+// property the whole inertness rule exists to protect: a SUCCESSFUL migration
+// must not break the pipeline while the removal commit is pending.
+func TestCommandsProceedOnceTheMigrationIsDone(t *testing.T) {
+	dir := newProjectMigratingLocalToFake(t)
+	seedLocalState(t, dir, "dev")
+	if _, _, code := runCommand(t, dir, "state", "migrate"); code != ExitOK {
+		t.Fatal("setup migration failed")
+	}
+
+	// migrate_from: is STILL present and must now be inert.
+	if _, stderr, code := runCommand(t, dir, "plan", "dev"); code == ExitError {
+		t.Errorf("plan refused after a completed migration:\n%s", stderr)
+	}
+}
+
+// A new project that has both blocks but nothing anywhere is not a pending
+// migration. Refusing here would block a legitimate first apply.
+func TestAnEmptySourceIsNotAPendingMigration(t *testing.T) {
+	dir := newProjectMigratingLocalToFake(t) // nothing seeded anywhere
+
+	if _, stderr, code := runCommand(t, dir, "plan", "dev"); code == ExitError {
+		t.Errorf("plan refused with nothing to migrate:\n%s", stderr)
+	}
+}
+
+// The guard must not cost anything in the ordinary case. With state at the
+// destination the source is never opened, which matters when opening it means
+// starting a plugin process and talking to a network.
+func TestTheSourceIsNotOpenedWhenTheDestinationHasState(t *testing.T) {
+	dir := newProjectMigratingLocalToCountingFake(t) // counts opens of the SOURCE
+	seedLocalState(t, dir, "dev")
+	runCommand(t, dir, "state", "migrate")
+
+	resetSourceOpenCount(t, dir)
+	runCommand(t, dir, "plan", "dev")
+
+	if n := sourceOpenCount(t, dir); n != 0 {
+		t.Errorf("the source backend was opened %d times when the destination already had state", n)
+	}
+}
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `go test -run 'TestCommandsRefuseWhile|TestCommandsProceedOnce|TestAnEmptySource|TestTheSourceIsNotOpened' ./internal/cli/ -v`
+Expected: FAIL — commands proceed into the empty backend.
+
+- [ ] **Step 3: Write minimal implementation**
+
+In `backendFor`, after opening the configured backend and only when `MigrateFrom.Plugin` is set:
+
+```go
+// Check the DESTINATION first. State there means the migration is done and
+// the source need never be opened -- which matters, because opening it may
+// start a plugin process and reach a network. Only an empty destination pays
+// for a second open, and an empty destination is already unusual.
+```
+
+Destination non-empty → proceed. Destination empty → open the source; if it holds state, refuse, naming the environments at risk and telling the user to run `state migrate` or remove the block. Source also empty → proceed.
+
+The refusal is a §44 diagnostic: what is wrong (this backend is waiting for a migration), what was expected, and the action.
+
+- [ ] **Step 4: Run tests to verify they pass**
+
+Run: `INFRENA_REQUIRE_PLUGIN=1 go test -count=1 ./... 2>&1 | tail -5`
+Expected: PASS.
+
+- [ ] **Step 5: Commit**
+
+```bash
+gofmt -l . && go vet ./...
+git add internal/cli
+git commit -m "Refuse to run into a backend that is waiting for a migration
+
+Between the config landing and the migration being run, the new backend
+is empty, so every resource looks unmanaged and an apply would create all
+of it again. The destination is checked first, so the ordinary case costs
+nothing."
+```
+
+---
+
+## Task 5: The real round trip
 
 **MANDATORY, and not satisfiable with a fake.** The spec asks for local → S3 → local specifically because it proves the two backends agree about what state IS, rather than proving one can read its own writing.
 
@@ -504,7 +629,7 @@ proves it can read its own writing."
 
 ---
 
-## Task 5: Documentation
+## Task 6: Documentation
 
 **Files:**
 - Modify: `PLAN.md` (§52 build order, §37 command list), `CLAUDE.md`, `docs/state-backends.md`
