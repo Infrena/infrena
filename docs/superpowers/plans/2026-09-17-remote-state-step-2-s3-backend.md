@@ -43,7 +43,7 @@ configure time and it is the case that fails silently, so it stays.
 **The refusal message should quote the store's own error.** B2's is genuinely informative —
 better than any generic "your store does not support locking" this plugin could invent.
 
-**Architecture:** A new repository, `infrena-backend-s3`, built the way `infrena-provider-aws` is built: its own module, its own dependency budget, compiled against a local infrena through a gitignored `go.work`. It implements `backend.Backend` from `pkg/backend` and is served by `pkg/backendsdk`. Locking is a conditional write (`If-None-Match: *`), and support for that is **proven at configure time, never assumed** — a store that ignores the header does not error, it silently overwrites, which is the corrupted-lock case.
+**Architecture:** A new repository, `infrena-backend-s3`, built the way `infrena-provider-aws` is built: its own module, its own dependency budget, compiled against a local infrena through a gitignored `go.work`. It implements `backend.Backend` from `pkg/backend` and is served by `pkg/backendsdk`. Locking is a conditional write (`If-None-Match: *`), and support for that is **proven at configure time, never assumed** — measured behaviour above, not documentation.
 
 **Tech Stack:** Go 1.27, `github.com/minio/minio-go/v7`, `github.com/infrena/infrena` (for `pkg/backend`, `pkg/backendsdk`, `pkg/pluginmanifest`). Tests use MinIO in a container.
 
@@ -54,7 +54,7 @@ better than any generic "your store does not support locking" this plugin could 
 - **This is a SEPARATE REPOSITORY**, `~/projects/infrena-backend-s3`. Do not add anything to `~/projects/infrena`. Follow `~/projects/infrena-provider-aws`'s layout, `go.work` arrangement and CI shape — read it before starting rather than inventing a second pattern.
 - Go 1.27.0 floor, matching infrena's. The plugin repo has its own dependency budget; infrena's two-package limit does not apply here and does not license carelessness either.
 - **Every backend must lock** (spec §5). A store that cannot do a compare-and-swap is refused, by name, saying what it lacks. There is no unsafe fallback and no opt-out.
-- **Conditional-write support is PROVEN, not assumed.** See Task 3. A store that ignores `If-None-Match` silently succeeds, so reading its documentation is not evidence.
+- **Conditional-write support is PROVEN, not assumed.** See Task 3 and the measured B2 result above. A store may refuse the header loudly (B2) or ignore it silently; the probe catches both, and a store's documentation catches neither.
 - **A backend stores bytes and does not interpret them.** State arrives as `[]byte` and is written unchanged. Never parse it.
 - **`plugin:` is the only key infrena reserves.** Every other key in the `backend:` block arrives in `configure` and is this plugin's to define.
 - **A profile name is configuration; an access key is a secret.** Accept `profile:`, read credentials from the environment, a credentials file or an instance role. Never accept an access key or secret in the `backend:` block, and say so if one is passed.
