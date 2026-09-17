@@ -93,7 +93,7 @@ func newStateUnlockCommand(opts *GlobalOptions) *cobra.Command {
 		Args:          cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			b := backendFor(opts.Dir)
-			lock, held, err := b.Inspect(args[0])
+			lock, held, err := b.Inspect(cmd.Context(), args[0])
 			if err != nil {
 				return err
 			}
@@ -102,7 +102,7 @@ func newStateUnlockCommand(opts *GlobalOptions) *cobra.Command {
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "Releasing lock held by %s on %s (pid %d) since %s.\n",
 				lock.User, lock.Host, lock.PID, lock.At.Format("2006-01-02 15:04:05 MST"))
-			return b.ForceUnlock(args[0])
+			return b.ForceUnlock(cmd.Context(), args[0])
 		},
 	}
 }

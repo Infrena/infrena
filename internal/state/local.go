@@ -83,7 +83,7 @@ func (l *Local) Get(ctx context.Context, environment string) (*State, error) {
 // open file handle (or a lease) across the write instead of re-reading a
 // path, which is more than this check-then-act design costs today.
 func (l *Local) Put(ctx context.Context, environment string, s *State) error {
-	if err := l.requireOwnLock(environment); err != nil {
+	if err := l.requireOwnLock(ctx, environment); err != nil {
 		return err
 	}
 

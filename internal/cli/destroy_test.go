@@ -419,7 +419,7 @@ func TestDestroyLockConflictNamesTheHolder(t *testing.T) {
 	if _, err := backend.Lock(lockCtx, "dev"); err != nil {
 		t.Fatalf("pre-locking dev: %v", err)
 	}
-	defer backend.ForceUnlock("dev")
+	defer backend.ForceUnlock(context.Background(), "dev")
 
 	opts := &GlobalOptions{Dir: dir, Parallelism: 4, AutoApprove: true}
 	cmd := newDestroyCommand(opts)
@@ -494,7 +494,7 @@ func TestDestroyLockRecordsItsOwnOperationName(t *testing.T) {
 	var held bool
 	var op string
 	for time.Now().Before(deadline) {
-		lock, ok, ierr := backend.Inspect("dev")
+		lock, ok, ierr := backend.Inspect(context.Background(), "dev")
 		if ierr != nil {
 			t.Fatalf("Inspect: %v", ierr)
 		}

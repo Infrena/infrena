@@ -218,7 +218,7 @@ resources: {}
 	if _, err := backend.Lock(lockCtx, "dev"); err != nil {
 		t.Fatalf("pre-locking dev: %v", err)
 	}
-	defer backend.ForceUnlock("dev")
+	defer backend.ForceUnlock(context.Background(), "dev")
 
 	opts := &GlobalOptions{Dir: dir, Parallelism: 4}
 	cmd := newRefreshCommand(opts)
@@ -462,7 +462,7 @@ resources: {}
 	contendCtx := state.WithOperation(context.Background(), "contender")
 	_, lockErr := backend.Lock(contendCtx, "dev")
 	if lockErr == nil {
-		backend.ForceUnlock("dev")
+		backend.ForceUnlock(context.Background(), "dev")
 		t.Fatal("Lock() = nil while refresh held the lock, want a conflict error")
 	}
 	if !strings.Contains(lockErr.Error(), `running "refresh"`) {

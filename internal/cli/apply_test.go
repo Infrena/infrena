@@ -83,7 +83,7 @@ resources:
 	if _, err := backend.Lock(lockCtx, "dev"); err != nil {
 		t.Fatalf("pre-locking dev: %v", err)
 	}
-	defer backend.ForceUnlock("dev")
+	defer backend.ForceUnlock(context.Background(), "dev")
 
 	opts := &GlobalOptions{Dir: dir, Parallelism: 4}
 	cmd := newApplyCommand(opts)
@@ -99,7 +99,7 @@ resources:
 	if !strings.Contains(stdout.String(), "No changes") {
 		t.Errorf("stdout does not report a clean plan:\n%s", stdout.String())
 	}
-	lock, held, err := backend.Inspect("dev")
+	lock, held, err := backend.Inspect(context.Background(), "dev")
 	if err != nil {
 		t.Fatalf("inspecting the lock after apply: %v", err)
 	}
@@ -515,7 +515,7 @@ resources:
 	if _, err := backend.Lock(lockCtx, "dev"); err != nil {
 		t.Fatalf("pre-locking dev: %v", err)
 	}
-	defer backend.ForceUnlock("dev")
+	defer backend.ForceUnlock(context.Background(), "dev")
 
 	opts := &GlobalOptions{Dir: dir, Parallelism: 4, AutoApprove: true}
 	cmd := newApplyCommand(opts)

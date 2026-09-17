@@ -84,7 +84,7 @@ func (l *Local) Lock(ctx context.Context, environment string) (Lock, error) {
 
 	if err := os.Link(tmpName, path); err != nil {
 		if errors.Is(err, fs.ErrExist) {
-			held, _, inspectErr := l.Inspect(environment)
+			held, _, inspectErr := l.Inspect(ctx, environment)
 			if inspectErr != nil {
 				return Lock{}, fmt.Errorf("environment %q is locked, and the lock file could not be read: %w", environment, ErrLocked)
 			}
@@ -100,7 +100,7 @@ func (l *Local) Lock(ctx context.Context, environment string) (Lock, error) {
 // by anyone else — otherwise "force" would mean nothing and a stray Unlock
 // could free an environment another apply is actively mutating.
 func (l *Local) Unlock(ctx context.Context, environment string) error {
-	held, ok, err := l.Inspect(environment)
+	held, ok, err := l.Inspect(ctx, environment)
 	if err != nil {
 		return err
 	}
@@ -116,7 +116,12 @@ func (l *Local) Unlock(ctx context.Context, environment string) error {
 
 // ForceUnlock removes a lock regardless of holder. `infra state unlock` uses it
 // after telling the user who holds the lock.
-func (l *Local) ForceUnlock(environment string) error {
+//
+// ctx is unused: removing a local lock is one os.Remove and cannot block, so
+// there is nothing to cancel. It is in the signature because Backend demands
+// it, and Backend demands it because a backend reached over a wire can block
+// here for as long as the network takes.
+func (l *Local) ForceUnlock(ctx context.Context, environment string) error {
 	return l.removeLock(environment)
 }
 
@@ -137,8 +142,8 @@ func (l *Local) ForceUnlock(environment string) error {
 // concurrent applies, not an adversary; if that changes, the lock file
 // should carry a random token alongside PID/host and this check should
 // compare the token instead.
-func (l *Local) requireOwnLock(environment string) error {
-	held, ok, err := l.Inspect(environment)
+func (l *Local) requireOwnLock(ctx context.Context, environment string) error {
+	held, ok, err := l.Inspect(ctx, environment)
 	if err != nil {
 		return fmt.Errorf("checking lock for %q before writing state: %w", environment, err)
 	}
@@ -164,7 +169,11 @@ func (l *Local) removeLock(environment string) error {
 }
 
 // Inspect reports the current lock holder, if any.
-func (l *Local) Inspect(environment string) (Lock, bool, error) {
+//
+// ctx is unused: reading a local lock file is a synchronous os.ReadFile with
+// nothing to cancel. It is in the signature because Backend demands it, and
+// Backend demands it because a backend reached over a wire can block here.
+func (l *Local) Inspect(ctx context.Context, environment string) (Lock, bool, error) {
 	data, err := os.ReadFile(l.lockPath(environment))
 	if errors.Is(err, fs.ErrNotExist) {
 		return Lock{}, false, nil

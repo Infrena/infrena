@@ -77,13 +77,13 @@ func TestInspectDescribesTheLock(t *testing.T) {
 	b := NewLocal(t.TempDir())
 	ctx := context.Background()
 
-	if _, held, err := b.Inspect("dev"); err != nil || held {
+	if _, held, err := b.Inspect(ctx, "dev"); err != nil || held {
 		t.Fatalf("Inspect before locking = held %v, err %v", held, err)
 	}
 	if _, err := b.Lock(ctx, "dev"); err != nil {
 		t.Fatalf("Lock: %v", err)
 	}
-	lock, held, err := b.Inspect("dev")
+	lock, held, err := b.Inspect(ctx, "dev")
 	if err != nil || !held {
 		t.Fatalf("Inspect after locking = held %v, err %v", held, err)
 	}
@@ -110,10 +110,10 @@ func TestUnlockRefusesAnotherProcessesLockButForceSucceeds(t *testing.T) {
 	if err := b.Unlock(ctx, "production"); err == nil {
 		t.Error("Unlock must refuse a lock held by another process, or `force` means nothing")
 	}
-	if err := b.ForceUnlock("production"); err != nil {
+	if err := b.ForceUnlock(ctx, "production"); err != nil {
 		t.Errorf("ForceUnlock should override: %v", err)
 	}
-	if _, ok, _ := b.Inspect("production"); ok {
+	if _, ok, _ := b.Inspect(ctx, "production"); ok {
 		t.Error("the lock should be gone after ForceUnlock")
 	}
 }
@@ -181,7 +181,7 @@ func TestConcurrentLockAttemptsElectExactlyOneWinner(t *testing.T) {
 		// ForceUnlock, not Unlock: this goroutine's own PID never actually
 		// took the lock (one of the 16 spawned goroutines did, and which
 		// one is not tracked), so a PID-checked Unlock would refuse it.
-		if err := b.ForceUnlock("production"); err != nil {
+		if err := b.ForceUnlock(ctx, "production"); err != nil {
 			t.Fatalf("round %d: ForceUnlock: %v", round, err)
 		}
 	}
@@ -231,7 +231,7 @@ func TestConcurrentInspectNeverObservesAPartiallyWrittenLock(t *testing.T) {
 						return
 					default:
 					}
-					_, _, err := b.Inspect("production")
+					_, _, err := b.Inspect(ctx, "production")
 					if err == nil {
 						continue
 					}
@@ -251,7 +251,7 @@ func TestConcurrentInspectNeverObservesAPartiallyWrittenLock(t *testing.T) {
 		close(stop)
 		wg.Wait()
 
-		if err := b.ForceUnlock("production"); err != nil {
+		if err := b.ForceUnlock(ctx, "production"); err != nil {
 			t.Fatalf("round %d: ForceUnlock: %v", round, err)
 		}
 	}
@@ -295,7 +295,7 @@ func TestSecondLockStillRefusedAndNamesHolderAfterLinkFix(t *testing.T) {
 	}
 
 	// The first holder's lock must still be intact, not overwritten.
-	held, ok, err := b.Inspect("production")
+	held, ok, err := b.Inspect(ctx, "production")
 	if err != nil || !ok {
 		t.Fatalf("Inspect after refused second Lock: held %v, err %v", ok, err)
 	}

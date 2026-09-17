@@ -2,30 +2,23 @@ package state
 
 import (
 	"context"
-	"errors"
-	"time"
+
+	"github.com/infrena/infrena/pkg/backend"
 )
 
-// ErrLocked is wrapped by every lock conflict so callers can test for it.
-var ErrLocked = errors.New("environment is locked")
+// Lock is an alias, not a copy. Two structs would be two things to keep in
+// step, and the first drift would be a lock a backend can build and the
+// engine cannot read.
+type Lock = backend.Lock
 
-// ErrNotLocked is wrapped by Put when the caller has not acquired the
-// environment's lock — or no longer holds it — at the moment of the write.
-// The storage layer enforces this itself, at the write, rather than relying
-// on callers to have locked earlier: invariant 5 is a property of what the
-// backend allows, not of caller discipline (spec §9.2, §15).
-var ErrNotLocked = errors.New("state write refused: environment is not locked by this process")
-
-// Lock describes who holds an environment lock. It exists so a conflict can
-// report the holder rather than merely refusing. Spec §9.2.
-type Lock struct {
-	Environment string    `json:"environment"`
-	PID         int       `json:"pid"`
-	Host        string    `json:"host"`
-	User        string    `json:"user"`
-	Operation   string    `json:"operation"`
-	At          time.Time `json:"at"`
-}
+// ErrLocked and ErrNotLocked are re-exported rather than redeclared, for the
+// same reason Lock is an alias: errors.Is must give the same answer whether
+// the error came from the built-in local backend or from a plugin that only
+// ever saw the public package.
+var (
+	ErrLocked    = backend.ErrLocked
+	ErrNotLocked = backend.ErrNotLocked
+)
 
 // Backend is the storage abstraction from PLAN.md §21. Get and Put move whole
 // states, which is what lets the same shape serve a local file today and an S3
@@ -44,6 +37,29 @@ type Backend interface {
 	// implementation — an S3 backend in Phase 4, for instance — must enforce
 	// it too, by whatever locking mechanism it uses.
 	Put(ctx context.Context, environment string, s *State) error
+	// List names every environment this backend holds state for, in a
+	// stable order. An environment the backend has never stored state for
+	// is simply absent; a backend with no state at all returns an empty
+	// slice and no error, because a project that has never applied
+	// anything is the ordinary case for the commands that ask.
+	//
+	// It takes no context: unlike the other six, callers use it to
+	// enumerate what exists rather than to move state, and adding one here
+	// would change a signature the CLI already depends on for no gain a
+	// caller could use.
+	List() ([]string, error)
+	// Inspect reports the current lock holder for an environment. The bool
+	// distinguishes "no lock is held" (false, nil error) from "the lock
+	// could not be read" (false, error): a caller that conflates them
+	// would report an unreadable lock as a free environment and let a
+	// second apply start.
+	Inspect(ctx context.Context, environment string) (Lock, bool, error)
+	// ForceUnlock removes a lock regardless of who holds it, for
+	// `infra state unlock` after it has told the user whose lock it is
+	// about to drop. Implementations must report a lock that was not there
+	// as an error rather than a silent success — a typo in an environment
+	// name must not look like it worked.
+	ForceUnlock(ctx context.Context, environment string) error
 	// Lock acquires an exclusive lock on an environment, failing if already held.
 	Lock(ctx context.Context, environment string) (Lock, error)
 	// Unlock releases a lock held on an environment.
