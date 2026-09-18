@@ -645,6 +645,22 @@ func bindOneExpression(
 				}
 				break
 			}
+			// A for_each resource EXISTS but has no address of its own: only
+			// its instances do. "Undeclared" is true of the address and false
+			// of the resource, and sends the reader looking for a typo in a
+			// name that is right there in the file.
+			if b, bound := inst.Scope.Lookup(ref.Target.Name); bound && len(b.Instances) > 0 {
+				ds.Add(diag.Diagnostic{
+					Severity: diag.SeverityError,
+					Summary: "resource " + strconv.Quote(ref.Target.Name) + " declares `for_each`, so " +
+						"a reference must name one instance",
+					Detail: "${" + ref.String() + "} names the whole set. Instances:\n  " +
+						strings.Join(instanceKeys(b.Instances), "\n  "),
+					Action: "Write ${" + ref.Target.Name + "[\"" + b.Instances[0].Key + "\"]." + ref.Attribute + "}.",
+					Origin: origin,
+				})
+				break
+			}
 			ds.Add(diag.Diagnostic{
 				Severity: diag.SeverityError,
 				Summary:  "reference to undeclared resource or module " + strconv.Quote(target),
@@ -877,4 +893,14 @@ func declaredInstancesDetail(table providers.Table) string {
 		return "\nThis project declares no provider instances."
 	}
 	return "\nDeclared instances:\n  " + strings.Join(names, "\n  ")
+}
+
+// instanceKeys renders a for_each resource's instances for a diagnostic that
+// has to say which ones exist.
+func instanceKeys(instances []address.Address) []string {
+	out := make([]string, 0, len(instances))
+	for _, a := range instances {
+		out = append(out, a.String())
+	}
+	return out
 }

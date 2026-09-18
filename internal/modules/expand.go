@@ -305,6 +305,35 @@ func (w *walker) expand(lv level, scope *Scope, dir string, module []string, inh
 		}
 		addr := addressIn(module, r.Name)
 		skipped, skipOrigin := w.excluded(r, scope.In(r.Dir), w.env)
+
+		// for_each AFTER skip, deliberately. A resource excluded from this
+		// environment is not here at all, so evaluating how many of it to make
+		// would report errors about a resource nobody asked for — and
+		// `for_each: ${var.zones}` in an environment that sets no zones is
+		// exactly that case.
+		if !skipped && r.ForEach.Name != "" {
+			entries, ok := w.forEachInstances(r, scope.In(r.Dir))
+			if !ok {
+				continue
+			}
+			for _, entry := range entries {
+				keyed := addr.WithKey(entry.Key)
+				w.instances = append(w.instances, Instance{
+					Address:          keyed,
+					Decl:             instantiateDecl(r, module),
+					Scope:            eachScope(scope, entry),
+					ProviderInstance: providerFor(r, inherited),
+				})
+				produced = append(produced, keyed)
+			}
+			// Bound under the DECLARED name, carrying every instance it made,
+			// so a reference can name the set and stage 6 can pick an instance
+			// out of it. Binding each key separately would make `${subnet}`
+			// resolve to nothing, which is the form a reader writes first.
+			scope.bind(r.Name, Binding{Kind: BindsResource, Address: addr, Instances: produced[len(produced)-len(entries):]})
+			continue
+		}
+
 		w.instances = append(w.instances, Instance{
 			Address:          addr,
 			Decl:             instantiateDecl(r, module),

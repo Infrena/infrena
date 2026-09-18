@@ -73,6 +73,25 @@ func (s *Scope) Override(name string, v value.Value) {
 	s.vars[name] = v
 }
 
+// With returns a COPY of s carrying one extra name, leaving s untouched.
+//
+// Override mutates the map every narrowing of this scope shares, which is right
+// for the three process variables — they are the same for the whole run — and
+// wrong for anything per-instance. `for_each` binds a different `each` for
+// every instance, so mutating would leave every instance seeing the last one's
+// key, and the resources would all be built from the final entry.
+//
+// The copy is shallow: values are immutable once resolved, so only the map
+// itself needs to be fresh.
+func (s Scope) With(name string, v value.Value) Scope {
+	next := Scope{vars: make(map[string]value.Value, len(s.vars)+1)}
+	for k, existing := range s.vars {
+		next.vars[k] = existing
+	}
+	next.vars[name] = v
+	return next
+}
+
 // Resolve is compiler stage 4. It builds the ordered scope stack in exactly
 // PLAN.md §7's order and resolves each variable to the entry that wins,
 // recording both what KIND of thing the value is (Source) and WHICH RUNG

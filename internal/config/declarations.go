@@ -124,6 +124,19 @@ type ResourceDecl struct {
 	// switch off. A bare slice loses both and cannot hold an expression at all.
 	Skip AttributeDecl
 	Only AttributeDecl
+	// ForEach declares that this resource is a SET of instances, one per entry
+	// (PLAN.md §40). A list yields an instance per element, keyed by the
+	// element; a map yields one per key.
+	//
+	// AttributeDecl for the same reasons Skip and Only are: the Origin travels
+	// so a diagnostic lands on the line that wrote it, and HasExpressions
+	// survives so `for_each: ${var.zones}` works at all.
+	//
+	// There is deliberately NO `count`. An instance's identity is its key,
+	// never its position, so removing one entry affects exactly one resource —
+	// where an ordinal would shift every later instance and propose destroying
+	// and recreating resources that did not change.
+	ForEach AttributeDecl
 	// Provider names the provider INSTANCE this resource belongs to (PLAN.md
 	// §12.1), or is unset for the default one. A name, never a plugin.
 	//

@@ -8,6 +8,7 @@ package address
 import (
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -20,19 +21,53 @@ import (
 type Address struct {
 	Module []string `json:"module,omitempty"` // empty at the root
 	Name   string   `json:"name"`
+	// Key identifies one instance of a resource declared with `for_each`
+	// (PLAN.md §40), and is empty for a resource declared once.
+	//
+	// IDENTITY IS THE KEY, NEVER A POSITION, and that is the whole reason this
+	// is a string rather than an index. Terraform's `count` addresses
+	// instances by ordinal, so removing the middle element of a list shifts
+	// every later one: the third instance becomes the second, and a plan
+	// proposes destroying and recreating resources that did not change. A key
+	// belongs to the thing it names, so removing one element affects exactly
+	// one resource.
+	//
+	// omitempty, so a resource declared once serialises exactly as it did
+	// before this field existed and state written by an older build still
+	// decodes — absent means "not an instance", which is what every resource
+	// in every existing state file is.
+	Key string `json:"key,omitempty"`
 }
 
-// String renders the canonical dotted form, e.g. "module.net.database".
+// String renders the canonical dotted form, e.g. "module.net.database", with a
+// for_each instance written as `subnet["eu-west-1a"]`.
+//
+// The key is BRACKETED AND QUOTED rather than appended with a separator,
+// because a key is user data: an availability zone, a tenant name, an
+// environment. A dotted `subnet.eu-west-1a` would be ambiguous with a module
+// path, and a key containing a dot would be unparseable. Brackets make the
+// boundary explicit whatever the key contains, and match how the reference is
+// written in configuration.
 func (a Address) String() string {
+	name := a.Name
+	if a.Key != "" {
+		name += "[" + strconv.Quote(a.Key) + "]"
+	}
 	if len(a.Module) == 0 {
-		return a.Name
+		return name
 	}
 	parts := make([]string, 0, len(a.Module)*2+1)
 	for _, m := range a.Module {
 		parts = append(parts, "module", m)
 	}
-	parts = append(parts, a.Name)
+	parts = append(parts, name)
 	return strings.Join(parts, ".")
+}
+
+// WithKey returns the address of one for_each instance of a.
+func (a Address) WithKey(key string) Address {
+	a.Key = key
+	return a
 }
 
 // InModule returns the address as seen from inside a parent module

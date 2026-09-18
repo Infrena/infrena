@@ -36,6 +36,12 @@ type Binding struct {
 	// Nothing is addressed with the call's own name after expansion, so this is
 	// how an edge naming it is resolved.
 	Addresses []address.Address
+	// Instances is every address a `for_each` resource produced, when Kind is
+	// BindsResource and the resource declared one (§40). Empty for a resource
+	// declared once, which is what distinguishes the two at a reference site:
+	// `${subnet.id}` is an attribute of one resource, and an error naming the
+	// instances when there are several.
+	Instances []address.Address
 	// Outputs are the call's collected outputs keyed by name, when Kind is
 	// BindsModule. A value here is routinely unknown (Ruling 5).
 	Outputs map[string]value.Value
@@ -124,7 +130,20 @@ func (s *Scope) Qualify(e *value.Expr) *value.Expr {
 	switch b.Kind {
 	case BindsResource:
 		out := *e
-		out.Ref = value.Reference{Target: b.Address, Attribute: e.Ref.Attribute, Path: e.Ref.Path}
+		target := b.Address
+		// A for_each resource is addressed by KEY, and the key travelled on the
+		// reference's own target. Carried across here so the reference names one
+		// instance; a key naming no instance, or a missing key where instances
+		// exist, is left for stage 6 to report against the candidate list.
+		if len(b.Instances) > 0 && e.Ref.Target.Key != "" {
+			for _, in := range b.Instances {
+				if in.Key == e.Ref.Target.Key {
+					target = in
+					break
+				}
+			}
+		}
+		out.Ref = value.Reference{Target: target, Attribute: e.Ref.Attribute, Path: e.Ref.Path}
 		return &out
 
 	case BindsModule:

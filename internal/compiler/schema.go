@@ -173,11 +173,26 @@ func checkConfiguredAttributes(attrs map[string]value.Value, def *schema.Resourc
 
 		attr, known := def.Attribute(name)
 		if !known {
+			action := "Remove the attribute, or correct its name."
+			if name == "count" {
+				// `count` is NOT a reserved word here, and deliberately so: a
+				// provider may legitimately have an attribute of that name — a
+				// service's replica count, say — and refusing it at decode time
+				// would break perfectly good configuration for the sake of a
+				// hint. So the hint lives here instead, where it is only
+				// reached by a `count` this type genuinely has no attribute
+				// for, which is almost always somebody writing Terraform.
+				action = "infrena has no `count`: an instance's identity is its KEY, never its " +
+					"position, because removing one entry from a count would shift every later " +
+					"instance and propose destroying resources that had not changed. Write " +
+					"`for_each:` over a list or map, and use ${each.key} where you would have " +
+					"used an index."
+			}
 			ds.Add(diag.Diagnostic{
 				Severity: diag.SeverityError,
 				Summary:  def.Type + " has no attribute " + strconv.Quote(name),
 				Detail:   "Attributes of " + def.Type + ":\n  " + strings.Join(attributeNames(def), "\n  "),
-				Action:   "Remove the attribute, or correct its name.",
+				Action:   action,
 				Origin:   v.Origin,
 			})
 			continue

@@ -447,6 +447,15 @@ func parseSteps(segments []string, ref string, origin value.Origin, ds *diag.Dia
 		}
 		out = append(out, value.Step{Kind: value.StepKey, Key: key})
 		for _, raw := range indices {
+			// A QUOTED bracket is a key, not an index: ${subnet["eu-west-1a"]}
+			// names a for_each instance (§40), and ${res.tags["Name"]} reads a
+			// map entry whose key is not a bare word. Quoting is what
+			// distinguishes the two, so a key that looks like a number —
+			// ${subnet["0"]} — still reads as a key.
+			if unquoted, ok := unquoteBracketKey(raw); ok {
+				out = append(out, value.Step{Kind: value.StepKey, Key: unquoted})
+				continue
+			}
 			n, err := strconv.Atoi(raw)
 			if err != nil {
 				bracket := strings.Index(ref, "[")
@@ -457,9 +466,12 @@ func parseSteps(segments []string, ref string, origin value.Origin, ds *diag.Dia
 				ds.Add(diag.Diagnostic{
 					Severity: diag.SeverityError,
 					Summary:  "index " + strconv.Quote(raw) + " in ${" + ref + "} is not a literal integer",
-					Detail: "An index is a literal integer. A varying index is only useful if something " +
-						"varies it, which is iteration, and this language has none.",
-					Action: "Write a literal, as ${" + refPrefix + "[0]}.",
+					Detail: "An index is a literal integer, and a quoted bracket is a key: " +
+						"${" + refPrefix + "[0]} reads a list, ${" + refPrefix + "[\"name\"]} reads a map " +
+						"entry or a for_each instance. A computed index is not offered — iteration " +
+						"happens in `for_each`, where each instance is named rather than numbered.",
+					Action: "Write a literal index as ${" + refPrefix + "[0]}, or quote it to mean a key: " +
+						"${" + refPrefix + "[\"" + raw + "\"]}.",
 					Origin: origin,
 				})
 				return nil, false
@@ -546,6 +558,34 @@ func parseReference(src string, origin value.Origin, ds *diag.Diagnostics) *valu
 			Origin: origin,
 		})
 		return nil
+	}
+
+	// `each` is the for_each namespace (§40), rewritten onto an ordinary
+	// variable called "each" holding a two-key map.
+	//
+	// A REWRITE rather than a new node kind, so `${each.key}` is an existing
+	// path step over an existing map and no evaluation machinery exists for it
+	// at all. The name is reserved the way `var` is: a resource may not be
+	// called `each`, because `${each.key}` would otherwise be ambiguous with a
+	// reference to its `key` attribute.
+	if segments[0] == "each" {
+		if len(segments) == 1 {
+			ds.Add(diag.Diagnostic{
+				Severity: diag.SeverityError,
+				Summary:  "${each} names nothing",
+				Detail:   "`each` carries the current for_each entry: ${each.key} and ${each.value}.",
+				Action:   "Write ${each.key} or ${each.value}.",
+				Origin:   origin,
+			})
+			return nil
+		}
+		rest, ok := parseSteps(segments[1:], src, origin, ds)
+		if !ok {
+			return nil
+		}
+		ref := value.VarRef("each")
+		ref.Path = rest
+		return &value.Expr{Op: value.OpVarRef, Ref: ref, Origin: origin}
 	}
 
 	// `template` and `file` name a file under templates/. Both take the REST
@@ -726,7 +766,73 @@ func parseReference(src string, origin value.Origin, ds *diag.Diagnostics) *valu
 	if !ok {
 		return nil
 	}
-	ref := value.LocalRef(segments[0], attrSteps[0].Key)
+	// segments[0] may carry a for_each instance key — ${subnet["eu-west-1a"].id}
+	// — so it is PARSED rather than taken verbatim. Taken verbatim the target
+	// name would literally be `subnet["eu-west-1a"]`, which binds to nothing and
+	// reports as a missing resource whose name contains punctuation.
+	targetSteps, ok := parseSteps(segments[0:1], src, origin, ds)
+	if !ok {
+		return nil
+	}
+	if len(targetSteps) == 0 || targetSteps[0].Kind != value.StepKey {
+		ds.Add(diag.Diagnostic{
+			Severity: diag.SeverityError,
+			Summary:  "malformed reference " + strconv.Quote(src),
+			Detail:   "A reference begins with a resource name.",
+			Origin:   origin,
+		})
+		return nil
+	}
+	ref := value.LocalRef(targetSteps[0].Key, attrSteps[0].Key)
+	if len(targetSteps) > 1 {
+		if targetSteps[1].Kind != value.StepKey {
+			ds.Add(diag.Diagnostic{
+				Severity: diag.SeverityError,
+				Summary:  "malformed reference " + strconv.Quote(src),
+				Detail: "A for_each instance is named, not numbered: an instance's identity is its " +
+					"key, so it is selected by key rather than by position.",
+				Action: "Write ${" + targetSteps[0].Key + "[\"<name>\"].<attribute>}.",
+				Origin: origin,
+			})
+			return nil
+		}
+		// The KEY travels on the target address, which is where identity lives
+		// — so everything downstream that already handles an address handles an
+		// instance without learning a second shape.
+		ref.Target.Key = targetSteps[1].Key
+		if len(targetSteps) > 2 {
+			ds.Add(diag.Diagnostic{
+				Severity: diag.SeverityError,
+				Summary:  "malformed reference " + strconv.Quote(src),
+				Detail:   "A resource has at most one for_each key.",
+				Origin:   origin,
+			})
+			return nil
+		}
+	}
 	ref.Path = append(attrSteps[1:], rest...)
 	return &value.Expr{Op: value.OpResourceRef, Ref: ref, Origin: origin}
+}
+
+// unquoteBracketKey reads a quoted bracket as a map key.
+//
+// Both quote styles, because YAML makes single quotes the convenient ones: a
+// double-quoted expression inside a double-quoted YAML scalar needs escaping,
+// and a user who reaches for `${subnet['eu-west-1a']}` to avoid that has not
+// made a mistake.
+func unquoteBracketKey(raw string) (string, bool) {
+	if len(raw) < 2 {
+		return "", false
+	}
+	q := raw[0]
+	if (q != '"' && q != '\'') || raw[len(raw)-1] != q {
+		return "", false
+	}
+	inner := raw[1 : len(raw)-1]
+	// A quote inside a quoted key would change where the key ends, so it is
+	// refused rather than guessed at.
+	if strings.ContainsRune(inner, rune(q)) {
+		return "", false
+	}
+	return inner, true
 }

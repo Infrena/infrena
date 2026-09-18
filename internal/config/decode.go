@@ -619,6 +619,15 @@ func decodeResources(path string, node *yaml.Node, dst *[]*ResourceDecl, ds *dia
 				} else {
 					r.Only = d
 				}
+			case "for_each":
+				// A named key for the same reason skip and only are: the
+				// default arm below turns anything unrecognised into an
+				// ATTRIBUTE, so falling through would reach stage 7 as "no
+				// attribute for_each" on every resource using the feature.
+				v, hasExpr := decodeValue(path, "`for_each`", val, ds)
+				r.ForEach = AttributeDecl{
+					Name: "for_each", Value: v, HasExpressions: hasExpr, Origin: keyOrigin,
+				}
 			case "lifecycle":
 				decodeLifecycle(path, val, r, ds)
 			default:

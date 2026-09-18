@@ -706,6 +706,65 @@ Validation must happen during `infra validate` and before planning.
 
 Do not build a general-purpose programming language into variable expressions.
 
+## 40. `for_each`, and why there is no `count`
+
+**SHIPPED 2026-09-18.** A resource may declare a set of instances:
+
+```yaml
+subnet:
+  type: aws.subnet
+  for_each: ${var.zones}          # a list, or a map
+  availability_zone: ${each.key}
+  vpc: ${vpc}
+```
+
+giving `subnet["eu-west-1a"]` and `subnet["eu-west-1b"]`.
+
+**IDENTITY IS THE KEY, NEVER A POSITION, and that is the whole design.**
+Terraform's `count` addresses instances by ordinal, so removing the middle
+element of a three-item list shifts every later one: the third becomes the
+second, and a plan proposes destroying and recreating resources that did not
+change. A key belongs to the thing it names, so removing one entry affects
+exactly one resource. There is an integration test that removes the middle of
+three and asserts one destroy, no replacements and no creates.
+
+`count` is therefore **not implemented, and also not reserved**. A provider may
+legitimately have an attribute called `count` — a service's replica count — and
+refusing it at decode time would break good configuration for the sake of a
+hint. The hint lives where an unknown attribute is reported instead, so it is
+only reached by a `count` the type genuinely has none of, which is almost always
+somebody writing Terraform.
+
+**Keys must be known; values need not be.** `for_each` decides which resources
+exist, and that cannot depend on something that does not exist yet — a plan
+whose set of resources was unknown could not say what it was going to do. The
+VALUES may be unknown, so `for_each: ${var.zones}` is fine whatever the zones
+contain.
+
+**An empty list or map declares nothing**, and is not an error. That is the
+optional-resource case, which is why there is no `count: enabled ? 1 : 0` idiom
+to learn.
+
+**A duplicate key is refused, not deduplicated.** Two entries with one key
+describe two resources sharing an identity, and the second would replace the
+first in state — the same failure the whole design exists to avoid, arrived at
+from the input side.
+
+**`${each.key}` and `${each.value}`** are a parser rewrite onto an ordinary
+variable called `each` holding a two-key map, so a path step over a map does all
+the work and no evaluation machinery exists for them.
+
+**`address.Address` gained `Key`,** `omitempty`: a resource declared once
+serialises exactly as it did before, so state written by an older build still
+decodes. `String()` renders `subnet["eu-west-1a"]`, bracketed and quoted because
+a key is user data and a dotted form would be ambiguous with a module path.
+
+**A quoted bracket is now a key everywhere**, not only on a resource:
+`${res.tags["Name"]}` reads a map entry whose key is not a bare word, where an
+unquoted bracket stays an integer index.
+
+---
+
 ## 39. Templates
 
 **SHIPPED 2026-09-18**, filling the `templates/` directory §4.1 reserved and left
