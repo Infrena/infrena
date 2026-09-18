@@ -2,6 +2,7 @@ package modules
 
 import (
 	"slices"
+	"strconv"
 
 	"github.com/infrena/infrena/internal/config"
 	"github.com/infrena/infrena/pkg/address"
@@ -119,4 +120,16 @@ func (w *walker) attachEdges(to []address.Address, edges []address.Address) {
 func sortAddresses(a []address.Address) []address.Address {
 	address.Sort(a)
 	return a
+}
+
+// keyedCallName renders one instance of a `for_each` module call as the name of
+// a module level: `store["orders"]`.
+//
+// THE SAME SPELLING address.Address.String() gives a keyed resource, and
+// deliberately so — a user reading `module.store["orders"].db` in a plan should
+// not have to learn that the brackets mean something different one segment to
+// the left. Quoted because a key is user data: it can contain a hyphen, a space
+// or a dot, and a dotted form would be ambiguous with the module path separator.
+func keyedCallName(name, key string) string {
+	return name + "[" + strconv.Quote(key) + "]"
 }

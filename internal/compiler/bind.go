@@ -579,7 +579,19 @@ func bindOneExpression(
 		if !ok || b.Kind != modules.BindsModule {
 			continue
 		}
-		for _, a := range b.Addresses {
+		// A reference naming ONE instance of a `for_each` call depends on that
+		// instance alone. Depending on everything the call produced would be
+		// conservatively safe for ordering and wrong in two ways that matter:
+		// it serialises instances that have nothing to do with each other, and
+		// two instances referring to each other's outputs would form a cycle
+		// the configuration does not contain.
+		targets := b.Addresses
+		if ref.Target.Key != "" {
+			if keyed, ok := b.KeyedAddresses[ref.Target.Key]; ok {
+				targets = keyed
+			}
+		}
+		for _, a := range targets {
 			recordEdge(edges, a.String(), origin)
 		}
 	}
@@ -621,6 +633,25 @@ func bindOneExpression(
 			// resource would name a call the user can plainly see in their own
 			// file; the scope knows better.
 			if outs, isCall := inst.Scope.OutputNames(ref.Target.Name); isCall {
+				// A `for_each` CALL has no single set of outputs, so a
+				// reference naming no instance lands here with an attribute the
+				// module does plainly declare — and the generic message then
+				// contradicts itself: "has no output endpoint. Outputs it
+				// declares: endpoint". Same shape as the resource arm below,
+				// and the same reason: "no such output" is true of the address
+				// and false of the module.
+				if b, bound := inst.Scope.Lookup(ref.Target.Name); bound && len(b.Keys) > 0 {
+					ds.Add(diag.Diagnostic{
+						Severity: diag.SeverityError,
+						Summary: "module call " + strconv.Quote(ref.Target.Name) + " declares `for_each`, " +
+							"so a reference must name one instance",
+						Detail: "${" + ref.String() + "} names the whole set. Instances:\n  " +
+							strings.Join(callInstances(ref.Target.Name, b.Keys), "\n  "),
+						Action: "Write ${" + ref.Target.Name + "[\"" + b.Keys[0] + "\"]." + ref.Attribute + "}.",
+						Origin: origin,
+					})
+					break
+				}
 				ds.Add(diag.Diagnostic{
 					Severity: diag.SeverityError,
 					Summary:  "module call " + strconv.Quote(ref.Target.Name) + " has no output " + strconv.Quote(ref.Attribute),
@@ -893,6 +924,20 @@ func declaredInstancesDetail(table providers.Table) string {
 		return "\nThis project declares no provider instances."
 	}
 	return "\nDeclared instances:\n  " + strings.Join(names, "\n  ")
+}
+
+// callInstances renders a for_each MODULE CALL's instances for a diagnostic
+// that has to say which ones exist.
+//
+// The call's own name rather than any address it produced: the resources inside
+// are what the plan lists, but `store["orders"]` is what the user writes, and a
+// diagnostic telling them to write something has to show that.
+func callInstances(name string, keys []string) []string {
+	out := make([]string, 0, len(keys))
+	for _, k := range keys {
+		out = append(out, name+"[\""+k+"\"]")
+	}
+	return out
 }
 
 // instanceKeys renders a for_each resource's instances for a diagnostic that

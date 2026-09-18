@@ -269,7 +269,8 @@ you looking for a typo in a name that is right there in the file.
   and it is why there is no `count: enabled ? 1 : 0` idiom to learn.
 - **Map keys are ordered** before expansion, so plans are deterministic.
 
-`for_each` works on a module exactly as it works on a resource; see [modules.md](modules.md).
+`for_each` works on a module call, and on a resource inside a module; see
+[modules.md](modules.md#for_each-and-modules).
 
 ## lifecycle
 

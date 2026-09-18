@@ -373,31 +373,63 @@ func (w *walker) expand(lv level, scope *Scope, dir string, module []string, inh
 			scope.markSkipped(r.Name, skipOrigin)
 			continue
 		}
-		// REFUSED rather than ignored. The resource loop above honours
-		// for_each; this loop never read it, so a call carrying one expanded
-		// exactly once and reported nothing — somebody asking for two of
-		// something got one, with a clean plan and no diagnostic. Silently
-		// discarding what a user wrote is the worst of the three options, and
-		// refusing is the honest one until the feature exists: every resource
-		// inside would need a keyed address, and every output would need
-		// keying to match.
+		// A CALL WITH for_each expands once per entry (§40), exactly as a
+		// resource does, and every resource inside lands under the keyed call:
+		// module.store["orders"].db.
 		//
-		// After `excluded`, for the same reason the resource loop puts it
-		// there: a call excluded from this environment is not here at all, and
-		// should not be refused for how it was written.
+		// The inputs are evaluated once PER ENTRY rather than once, because
+		// `each.key` and `each.value` are the whole point — a call that could
+		// not vary its inputs per instance would be a loop producing N copies
+		// of one thing.
+		//
+		// It was silently ignored before 2026-09-18: this loop never read
+		// ForEach, so a call carrying one expanded exactly once and reported
+		// nothing. Somebody asking for two databases got one, with a clean plan.
 		if r.ForEach.Name != "" {
-			w.ds.Add(diag.Diagnostic{
-				Severity: diag.SeverityError,
-				Summary:  "`for_each` is not supported on a module call",
-				Detail: "It works on a resource, but a module call cannot yet expand into " +
-					"several instances — and written here it would have made exactly one, " +
-					"silently.",
-				Action: "Declare the call once per entry, or move the `for_each` onto a " +
-					"resource inside " + strconv.Quote(strings.TrimPrefix(r.Type, TypePrefix)) + ".",
-				Origin: r.ForEach.Origin,
+			entries, ok := w.forEachInstances(r, scope.In(r.Dir))
+			if !ok {
+				continue
+			}
+			var all []address.Address
+			keys := make([]string, 0, len(entries))
+			keyedOutputs := make(map[string]map[string]value.Value, len(entries))
+			keyedAddresses := make(map[string][]address.Address, len(entries))
+			for _, entry := range entries {
+				each := eachScope(scope, entry)
+				// The call's name carries the key, so addressIn builds the
+				// keyed module path with no change to addressing: one
+				// instantiation of a module is a module level, and a keyed one
+				// is a module level whose name happens to be bracketed. The
+				// alternative — a Key on every level of address.Address — would
+				// change the state key of every resource in every module for
+				// the benefit of a feature most projects never use.
+				keyed := *r
+				keyed.Name = keyedCallName(r.Name, entry.Key)
+
+				supplied := w.evaluateCall(r, each.In(r.Dir), exprs[r.Name])
+				inner, outputs := w.instantiate(&keyed, loaded, each, supplied, dir, module, inherited)
+
+				keys = append(keys, entry.Key)
+				keyedOutputs[entry.Key] = outputs
+				keyedAddresses[entry.Key] = inner
+				// Per ENTRY, so `network: ${net.id}` on the call is a
+				// dependency of that entry's resources. Evaluated in the
+				// entry's own scope for the same reason the inputs are.
+				w.attachEdges(inner, w.callReferences(exprs[r.Name], each))
+				all = append(all, inner...)
+			}
+			calls[r.Name] = all
+			produced = append(produced, all...)
+			scope.bind(r.Name, Binding{
+				Kind:           BindsModule,
+				Addresses:      all,
+				Keys:           keys,
+				KeyedOutputs:   keyedOutputs,
+				KeyedAddresses: keyedAddresses,
 			})
 			continue
 		}
+
 		supplied := w.evaluateCall(r, scope.In(r.Dir), exprs[r.Name])
 		inner, outputs := w.instantiate(r, loaded, scope, supplied, dir, module, inherited)
 		calls[r.Name] = inner

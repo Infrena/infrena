@@ -44,7 +44,25 @@ type Binding struct {
 	Instances []address.Address
 	// Outputs are the call's collected outputs keyed by name, when Kind is
 	// BindsModule. A value here is routinely unknown (Ruling 5).
+	//
+	// Empty when the call declared `for_each`: a keyed call has one set of
+	// outputs PER INSTANCE and no single answer to `${store.endpoint}`, which
+	// is why Keys exists to make the reference an error naming the instances
+	// rather than a silent pick.
 	Outputs map[string]value.Value
+	// Keys are the instances a `for_each` module call produced, in sorted
+	// order, when Kind is BindsModule. Empty for a call made once — which is
+	// what tells the two apart at a reference site, exactly as Instances does
+	// for a resource.
+	Keys []string
+	// KeyedOutputs are one instance's outputs, by key, for a `for_each` call.
+	KeyedOutputs map[string]map[string]value.Value
+	// KeyedAddresses are one instance's resources, by key. A reference naming
+	// an instance depends on THAT instance rather than on everything the call
+	// produced — otherwise `${store["orders"].endpoint}` would wait for every
+	// other instance too, which is slower and can invent a cycle that the
+	// configuration does not contain.
+	KeyedAddresses map[string][]address.Address
 }
 
 // Lookup reports what a bare name binds to at this level.
@@ -147,7 +165,22 @@ func (s *Scope) Qualify(e *value.Expr) *value.Expr {
 		return &out
 
 	case BindsModule:
-		v, declared := b.Outputs[e.Ref.Attribute]
+		outputs := b.Outputs
+		if len(b.Keys) > 0 {
+			// A keyed call. A reference naming no instance is left alone for
+			// the same reason the resource arm leaves one alone: stage 6 says
+			// which instances exist, which is a better message than picking
+			// one or reporting the name as undeclared.
+			if e.Ref.Target.Key == "" {
+				return e
+			}
+			byKey, ok := b.KeyedOutputs[e.Ref.Target.Key]
+			if !ok {
+				return e
+			}
+			outputs = byKey
+		}
+		v, declared := outputs[e.Ref.Attribute]
 		if !declared {
 			// The module arm of attribute-existence. Left unresolved for the
 			// same check that catches `${store.endpoint}` on a provider
@@ -200,6 +233,13 @@ func (s *Scope) OutputNames(name string) ([]string, bool) {
 	b, ok := s.names[name]
 	if !ok || b.Kind != BindsModule {
 		return nil, false
+	}
+	if len(b.Keys) > 0 {
+		// Every instance of one call exposes the same outputs, because they
+		// come from one module file — so the first is the whole answer, and
+		// answering from it keeps "which outputs exist" a question about the
+		// module rather than about which instance you happened to name.
+		return sortedValueKeys(b.KeyedOutputs[b.Keys[0]]), true
 	}
 	return sortedValueKeys(b.Outputs), true
 }

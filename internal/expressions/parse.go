@@ -742,23 +742,22 @@ func parseReference(src string, origin value.Origin, ds *diag.Diagnostics) *valu
 	// target nothing is permitted to declare, which is why ${vpc.tags.Name}
 	// reported an undeclared resource "vpc.tags".
 	//
-	// The target is used as-is below, not run through parseSteps — a resource
-	// name is never indexed, only its attributes are. A bracket here
-	// (${vpc[0].id}) would otherwise construct a resource literally named
-	// "vpc[0]", reported much later as an undeclared resource instead of as
-	// malformed at the point of the mistake.
-	if strings.ContainsAny(segments[0], "[]") {
-		ds.Add(diag.Diagnostic{
-			Severity: diag.SeverityError,
-			Summary:  "malformed reference " + strconv.Quote(src),
-			Detail: strconv.Quote(segments[0]) + " is not a valid resource name — a resource is " +
-				"never indexed, only an attribute or a path step is.",
-			Action: "Remove the bracket from the resource name, and index an attribute instead, " +
-				"as ${vpc.id[0]}.",
-			Origin: origin,
-		})
-		return nil
-	}
+	// The target IS run through parseSteps below, because a `for_each` instance
+	// is selected on the resource — ${subnet["eu-west-1a"].id} — and the key
+	// belongs to the target's address.
+	//
+	// It was rejected outright here until 2026-09-18, by a guard written when a
+	// resource could not be indexed at all. The guard survived `for_each`
+	// landing, so the key-parsing below it could never run: every reference
+	// naming an instance AND an attribute was refused as malformed, and only
+	// the whole-resource form ${subnet["eu-west-1a"]} worked. That the
+	// unreachable code had its own tests is why nothing caught it — they
+	// exercised the parser directly, where this function is reached with
+	// segments already split, and the guard sits on the path the CLI takes.
+	//
+	// What the guard was protecting against is still refused, one layer down:
+	// ${vpc[0].id} is a NUMERIC index, and the "a for_each instance is named,
+	// not numbered" diagnostic below says so with the actual reason.
 	attrSteps, ok := parseSteps(segments[1:2], src, origin, ds)
 	if !ok {
 		return nil

@@ -124,7 +124,47 @@ infrena state show dev module.stack.db
 
 ## for_each and modules
 
-`for_each` works on a resource **inside** a module, and the key lands on that resource:
+`for_each` works on a module **call**, and on a resource **inside** a module. They key
+different things.
+
+### On a call
+
+```yaml
+resources:
+  store:
+    type: module.app_stack
+    for_each: {orders: postgres, billing: mysql}
+    network: ${network.id}
+    engine: ${each.value}
+```
+
+The whole module is instantiated once per entry, and every resource inside lands under the
+keyed call:
+
+```
+module.store["orders"].db
+module.store["orders"].subnet_group
+module.store["billing"].db
+module.store["billing"].subnet_group
+```
+
+The call's inputs are evaluated **once per entry**, which is what makes `${each.key}` and
+`${each.value}` useful here: without that it would be a loop producing N copies of one thing.
+
+Read one instance's output by naming it:
+
+```yaml
+    database_url: ${store["orders"].endpoint}
+```
+
+Referring to the whole call is an error that names the instances, because a keyed call has no
+single set of outputs. The dependency lands on **that instance**, not on everything the call
+produced, so instances that have nothing to do with each other are not serialised behind one
+another.
+
+Removing one entry destroys that instance's resources and leaves the others alone.
+
+### Inside a module
 
 ```yaml
 # modules/app-stack/module.yml
@@ -140,22 +180,10 @@ module.primary.store["postgres"]
 module.primary.store["mysql"]
 ```
 
-**It does not work on the module call itself.** Writing it there is refused:
+The two compose: a keyed resource inside a keyed call is
+`module.store["orders"].db["postgres"]`.
 
-```
-Error: `for_each` is not supported on a module call
-
-  It works on a resource, but a module call cannot yet expand into several
-  instances — and written here it would have made exactly one, silently.
-
-  Suggested action:
-    Declare the call once per entry, or move the `for_each` onto a resource
-    inside "app_stack".
-```
-
-Until it exists, declare the call once per entry. Expanding a call means every resource
-inside needs a keyed address and every output needs keying to match, which is more than a
-loop.
+See [configuration.md](configuration.md#for_each) for the rules that apply to both.
 
 ## Remote modules
 
