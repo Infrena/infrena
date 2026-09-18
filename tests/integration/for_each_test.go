@@ -259,3 +259,50 @@ resources:
 		}
 	}
 }
+
+// TestForEachOnAModuleCallIsRefused rather than ignored.
+//
+// It was ignored: the resource loop in stage 5 honours for_each and the module
+// CALL loop never read it, so a call carrying one expanded exactly once and
+// said nothing. A user asking for two databases got one, with a clean plan and
+// no diagnostic — the worst of the three possible behaviours, because nothing
+// anywhere reported that what they wrote had been discarded.
+//
+// The refusal is deliberately not silent about WHY, and names both ways out:
+// declare the call once per entry, or put the for_each on a resource inside
+// the module, which does work (TestForEachInsideAModule).
+func TestForEachOnAModuleCallIsRefused(t *testing.T) {
+	dir := project(t, `
+project: myapp
+resources:
+  net:
+    type: fake.network
+    cidr: 10.0.0.0/16
+  store:
+    type: module.app_stack
+    for_each: [orders, billing]
+    network: ${net.id}
+`)
+	writeIn(t, dir, "modules/app-stack/module.yml", `
+inputs:
+  network:
+    type: string
+resources:
+  db:
+    type: fake.database
+    engine: postgres
+    network: ${var.network}
+`)
+
+	r := run(t, dir, "plan", "dev")
+	if r.ExitCode == 2 {
+		t.Fatalf("for_each on a module call produced a plan; it must be refused while it does nothing\n%s",
+			r.combined())
+	}
+	out := r.combined()
+	for _, want := range []string{"for_each", "module call", "app_stack"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the diagnostic never mentions %q:\n%s", want, out)
+		}
+	}
+}

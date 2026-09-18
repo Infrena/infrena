@@ -62,11 +62,17 @@ const DiscoveredDirName = "discovered"
 // variables visible only to the resources declared there (§4.1).
 const ScopedVarsDirName = "vars"
 
-// TemplatesDirName is reserved and unread (§4.1). It will hold text blobs
-// rendered into attributes, which needs a template language — `${}`
-// interpolation is deliberately not one (§10). Named now so the layout does not
-// change when the engine arrives, and skipped by the resources walk so a
-// project that already has one is not an error today.
+// TemplatesDirName holds text blobs rendered into attributes, read on demand
+// rather than loaded (§39): `${template.NAME}` interpolates one in the same
+// grammar as configuration, `${file.NAME}` reads it verbatim. Resolution lives
+// in internal/cli/templates.go, which is why nothing here reads it — the
+// resources walk skips this directory so its contents are never mistaken for
+// declarations.
+//
+// SHIPPED 2026-09-18. This was "reserved and unread" until then, and the note
+// said a template language would be needed first; what shipped runs Go's
+// text/template over the arguments a reference passes and then the project's
+// own `${}` pass over the result, in that order (§39.1).
 const TemplatesDirName = "templates"
 
 // FileKind says which of the three shapes a loaded file has. Stage 1 does not

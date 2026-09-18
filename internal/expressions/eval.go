@@ -420,12 +420,14 @@ func evaluateSecret(e *value.Expr, scope Scope, ds *diag.Diagnostics) value.Valu
 		ds.Add(diag.Diagnostic{
 			Severity: diag.SeverityError,
 			Summary:  "secret " + strconv.Quote(name) + " is not set",
-			Detail: "${secret." + name + "} reads the environment variable " + name +
-				", and it is unset or empty. It is refused rather than read as an empty string, " +
-				"because an empty credential does not fail here — it fails at the provider, " +
-				"after a plan somebody has already approved.",
-			Action: "Set " + name + " in the environment this runs in. In CI that is a secret " +
-				"the pipeline injects; nothing about it belongs in a file infrena reads.",
+			Detail: "${secret." + name + "} is answered by the environment variable " + name +
+				" first, then by this project's vault — secrets/<environment>.yml, then " +
+				"secrets.yml. None of them supplied it, or what they supplied was empty. " +
+				"Empty is refused rather than read as an empty string, because an empty " +
+				"credential does not fail here — it fails at the provider, after a plan " +
+				"somebody has already approved.",
+			Action: "Set " + name + " in the environment this runs in — in CI that is a secret " +
+				"the pipeline injects — or put it in a vault with `infrena vault edit secrets.yml`.",
 			Origin: e.Origin,
 		})
 		return unknownFrom(e, value.KindString, true)

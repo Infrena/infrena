@@ -373,6 +373,31 @@ func (w *walker) expand(lv level, scope *Scope, dir string, module []string, inh
 			scope.markSkipped(r.Name, skipOrigin)
 			continue
 		}
+		// REFUSED rather than ignored. The resource loop above honours
+		// for_each; this loop never read it, so a call carrying one expanded
+		// exactly once and reported nothing — somebody asking for two of
+		// something got one, with a clean plan and no diagnostic. Silently
+		// discarding what a user wrote is the worst of the three options, and
+		// refusing is the honest one until the feature exists: every resource
+		// inside would need a keyed address, and every output would need
+		// keying to match.
+		//
+		// After `excluded`, for the same reason the resource loop puts it
+		// there: a call excluded from this environment is not here at all, and
+		// should not be refused for how it was written.
+		if r.ForEach.Name != "" {
+			w.ds.Add(diag.Diagnostic{
+				Severity: diag.SeverityError,
+				Summary:  "`for_each` is not supported on a module call",
+				Detail: "It works on a resource, but a module call cannot yet expand into " +
+					"several instances — and written here it would have made exactly one, " +
+					"silently.",
+				Action: "Declare the call once per entry, or move the `for_each` onto a " +
+					"resource inside " + strconv.Quote(strings.TrimPrefix(r.Type, TypePrefix)) + ".",
+				Origin: r.ForEach.Origin,
+			})
+			continue
+		}
 		supplied := w.evaluateCall(r, scope.In(r.Dir), exprs[r.Name])
 		inner, outputs := w.instantiate(r, loaded, scope, supplied, dir, module, inherited)
 		calls[r.Name] = inner
