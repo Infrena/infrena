@@ -844,6 +844,7 @@ func providerInstanceFor(inst modules.Instance, table providers.Table, ds *diag.
 func lifecycleFor(decl config.LifecycleDecl, inst providers.Instance) resource.Lifecycle {
 	out := resource.Lifecycle{
 		PreventDestroy: decl.PreventDestroy,
+		PreventReplace: decl.PreventReplace,
 		Retain:         decl.Retain,
 		// Carried as WRITTEN; stage 7 canonicalises it against the schema, where the
 		// attribute names are known. Deliberately not settable from an instance's
@@ -854,6 +855,11 @@ func lifecycleFor(decl config.LifecycleDecl, inst providers.Instance) resource.L
 	if !decl.PreventDestroySet {
 		if b, ok := inst.Defaults["prevent_destroy"].AsBool(); ok {
 			out.PreventDestroy = b
+		}
+	}
+	if !decl.PreventReplaceSet {
+		if b, ok := inst.Defaults["prevent_replace"].AsBool(); ok {
+			out.PreventReplace = b
 		}
 	}
 	if !decl.RetainSet {

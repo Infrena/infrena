@@ -75,6 +75,7 @@ type ProviderDecl struct {
 // LifecycleDecl configures how a resource is created and destroyed.
 type LifecycleDecl struct {
 	PreventDestroy bool
+	PreventReplace bool
 	Retain         bool
 	// PreventDestroySet and RetainSet record whether the resource WROTE the key,
 	// which a bare bool cannot express: absent and `false` are the same value.
@@ -85,6 +86,7 @@ type LifecycleDecl struct {
 	// `false` would read as "said nothing" and the default would win — which is the
 	// direction that REFUSES a destroy the user asked for.
 	PreventDestroySet bool
+	PreventReplaceSet bool
 	RetainSet         bool
 
 	// IgnoreChanges names attributes whose drift this resource does not want reverted,

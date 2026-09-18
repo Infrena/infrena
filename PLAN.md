@@ -4536,6 +4536,48 @@ production
 
 These protections should be enforceable by the engine, not merely conventions.
 
+## 38.1 `lifecycle.prevent_replace`
+
+**SHIPPED 2026-09-18.** A per-resource guard against REPLACEMENT — destroying a
+resource and creating a new one in its place — declared beside `prevent_destroy`:
+
+```yaml
+db:
+  type: aws.rds
+  lifecycle:
+    prevent_replace: true
+```
+
+**It guards a different mistake from `prevent_destroy`, and neither implies the
+other.** `prevent_destroy` is about a resource LEAVING configuration: somebody
+deleted the block. `prevent_replace` is about one that STAYS in configuration
+while an attribute the provider marks `ForceNew` changes underneath it — the more
+insidious of the two, because the configuration still names the resource, the diff
+reads as an edit, and the data is gone all the same.
+
+**It exists because §38's environment-wide `prevent_destroy` deliberately does not
+cover replacements**, and that left nothing able to protect against one at all. The
+environment-wide exclusion is right: refusing every replacement across an
+environment would make any immutable attribute unchangeable there, which is far
+more than anyone asking for destroy protection wants. This is the per-resource
+answer, for the few resources it matters for — the database, the volume, the thing
+whose contents do not survive being recreated.
+
+Refused at plan time, like every other lifecycle guard, so the refusal arrives
+before the approval. The diagnostic NAMES THE ATTRIBUTES that forced the
+replacement, because this is the harder refusal to act on: without them, a reader
+looking at what reads as an ordinary edit has to work out for themselves why it
+became a replacement.
+
+**Still open: `create_before_destroy`.** §53 lists "resource replacement
+strategies" and this is the other half — building the replacement before removing
+the old one, for a resource that must not be absent in between. It is NOT a small
+addition and is deliberately not attempted here: it inverts the destroy→create edge
+that `BuildExecution` adds, and with it the assumption every dependency edge in
+that function is written against; both resources exist simultaneously, which
+collides on name or address in most clouds; and dependents must be re-pointed
+before the old one goes. It needs a design before code.
+
 ---
 
 # 39. Configuration Validation

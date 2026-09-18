@@ -22,6 +22,24 @@ import (
 // rather than a silent format change with no version bump.
 type Lifecycle struct {
 	PreventDestroy bool `json:"prevent_destroy"`
+	// PreventReplace refuses a plan that would REPLACE this resource: destroy
+	// it and create a new one in its place (PLAN.md §38.1).
+	//
+	// Separate from PreventDestroy because they guard different mistakes, and
+	// neither implies the other. PreventDestroy is about a resource LEAVING
+	// configuration — somebody deleted the block. PreventReplace is about a
+	// resource STAYING in configuration while an attribute the provider marks
+	// ForceNew changes underneath it, which is the more insidious of the two:
+	// the configuration still names the resource, the diff looks like an edit,
+	// and the data is gone all the same.
+	//
+	// It is deliberately opt-in per resource rather than an environment-wide
+	// setting. An environment that refused every replacement could never
+	// change an immutable attribute on anything, which is a far larger
+	// restriction than the one people actually want — and the resources this
+	// matters for are specific and few: the database, the volume, the thing
+	// whose contents do not survive being recreated.
+	PreventReplace bool `json:"prevent_replace,omitempty"`
 	Retain         bool `json:"retain"`
 
 	// IgnoreChanges names attributes whose drift the planner does not propose to

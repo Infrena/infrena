@@ -3,6 +3,7 @@ package planner
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -317,6 +318,27 @@ func operationFor(
 	kind := OpNoOp
 	switch {
 	case forcesReplacement(reasons):
+		if rc.Lifecycle.PreventReplace {
+			// REFUSED AT PLAN TIME, like every other lifecycle guard, so the
+			// refusal arrives before the approval rather than after it.
+			//
+			// The reasons are named because this is the harder refusal to act
+			// on: the resource is still in configuration and the diff reads as
+			// an edit, so without saying WHICH attribute forced it the reader
+			// has to work out for themselves why an update became a
+			// replacement.
+			ds.Add(diag.Diagnostic{
+				Severity: diag.SeverityError,
+				Summary:  addr.String() + " would be replaced, and it sets `lifecycle.prevent_replace`",
+				Detail: "Replacing it destroys the existing resource and creates a new one, so anything " +
+					"it holds is lost. Forced by: " + replacementCauses(reasons) + ".",
+				Action: "Revert " + replacementCauses(reasons) + " to the recorded value, or clear " +
+					"`lifecycle.prevent_replace` on " + addr.String() + " if losing and recreating it is " +
+					"what you mean.",
+				Related: []address.Address{addr},
+			})
+			return nil, ds
+		}
 		kind = OpReplace
 	case len(reasons) > 0:
 		kind = OpUpdate
@@ -634,4 +656,22 @@ func hashState(st *state.State) (string, error) {
 	}
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:]), nil
+}
+
+// replacementCauses lists the attributes that forced a replacement, for a
+// diagnostic that has to say why an update became one.
+func replacementCauses(reasons []ChangeReason) string {
+	var names []string
+	for _, r := range reasons {
+		if r.ForceNew && r.Attribute != "" {
+			names = append(names, r.Attribute)
+		}
+	}
+	if len(names) == 0 {
+		// Defensive: forcesReplacement said yes, so at least one reason forces
+		// it. Saying "an attribute" beats an empty list if that ever changes.
+		return "an attribute the provider marks as forcing replacement"
+	}
+	sort.Strings(names)
+	return strings.Join(names, ", ")
 }
