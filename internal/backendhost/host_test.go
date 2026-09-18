@@ -255,9 +255,11 @@ func buildFake() {
 		fakeErr = fmt.Errorf("%v\n%s", err, out)
 		return
 	}
-	if err := os.Link(first, filepath.Join(dir, BinaryName("crash-on-put"))); err != nil {
-		fakeErr = err
-		return
+	for _, alias := range []string{"crash-on-put", "picky", "configonly"} {
+		if err := os.Link(first, filepath.Join(dir, BinaryName(alias))); err != nil {
+			fakeErr = err
+			return
+		}
 	}
 	fakeDir = dir
 }

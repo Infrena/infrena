@@ -35,12 +35,12 @@ import (
 // other, so raising one must never oblige anybody to re-release the other. A
 // single shared number would mean a new attribute flag on a provider schema
 // orphaning every backend in the world for no reason at all.
-const Version = 1
+const Version = 2
 
 // Supported lists every backend protocol version this build can talk to,
 // newest first. A set rather than a number, like pluginproto.Supported, so
 // raising Version does not immediately orphan every backend in existence.
-var Supported = []int{1}
+var Supported = []int{2, 1}
 
 // IsSupported reports whether a backend's protocol version can be spoken here.
 func IsSupported(v int) bool {
@@ -71,6 +71,7 @@ const CookieEnv = "INFRENA_PLUGIN_COOKIE"
 // on the read.
 const (
 	MethodConfigure   = "configure"
+	MethodValidate    = "validate"
 	MethodGet         = "get"
 	MethodPut         = "put"
 	MethodList        = "list"
@@ -125,6 +126,13 @@ const (
 	// KindNotLocked is a write refused because the caller does not hold the
 	// lock. It maps back to state.ErrNotLocked.
 	KindNotLocked ErrorKind = "not_locked"
+	// KindUnsupported is "I do not implement this method", which is a
+	// different fact from "the answer is no" and must not be reported as a
+	// failure. Protocol 2 added `validate` as OPTIONAL, so a backend that
+	// does not offer it says so here and the host carries on exactly as it
+	// did before the method existed. Without the distinction, every backend
+	// that had not implemented it yet would fail every `infrena validate`.
+	KindUnsupported ErrorKind = "unsupported"
 )
 
 // Error is a failure crossing the wire, carrying its own classification.
@@ -162,6 +170,27 @@ func (e *Error) Error() string { return e.Message }
 // before anything is compiled, which is the whole reason a variable in it can
 // never be resolved.
 type ConfigureParams struct {
+	Config map[string]any `json:"config,omitempty"`
+}
+
+// ValidateParams asks a backend whether a `backend:` block is one it could
+// read, WITHOUT CONTACTING ANYTHING. Protocol 2.
+//
+// It exists because `infrena validate` promises to check configuration without
+// reaching the network, and Configure cannot keep that promise: a backend
+// configures by building a client, and the s3 backend's Configure also proves
+// the store supports conditional writes, which is a round trip. So the one
+// check that would catch a long-lived access key committed to infra.yml was the
+// one that did not run in CI, where committed credentials actually arrive.
+//
+// THE CONTRACT IS OFFLINE-ONLY, and it is a contract rather than a hint: a
+// backend that dials here turns the cheap gate back into the expensive one and
+// breaks the promise validate makes to every project, not just its own.
+//
+// Same shape as ConfigureParams deliberately. This answers "could you read
+// this?" about the very bytes Configure would later receive, and two shapes
+// would let them drift into disagreeing about what was checked.
+type ValidateParams struct {
 	Config map[string]any `json:"config,omitempty"`
 }
 

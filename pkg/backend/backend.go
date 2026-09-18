@@ -113,6 +113,35 @@ type Configurable interface {
 	Configure(ctx context.Context, config map[string]any) error
 }
 
+// Validator is the optional NINTH method: a backend that can tell offline
+// whether a `backend:` block is readable implements it, and `infrena validate`
+// calls it.
+//
+// It exists because Configure cannot answer this question cheaply. Configuring
+// means building a client, and a backend may legitimately prove something about
+// the store while doing so — the s3 backend checks that conditional writes work,
+// because a store that cannot do one cannot lock. Those are round trips, and
+// `validate` promises not to make any.
+//
+// The result was that a credential committed into infra.yml passed `validate`
+// and was only refused at `plan`. That is the wrong way round: validate is the
+// cheap CI gate, so the check that would catch a long-lived key entering a
+// repository was the one that did not run where keys enter repositories.
+//
+// THE IMPLEMENTATION MUST NOT CONTACT ANYTHING. No DNS, no HTTP, no credential
+// file, no clock-dependent answer. Check the block's shape and refuse what can
+// be refused from the bytes alone; leave everything else to Configure. A
+// backend that dials here makes every project's validate slow and unreliable,
+// not only its own.
+//
+// OPTIONAL, and a backend that does not implement it loses nothing: validate
+// behaves exactly as it did before, checking that the plugin exists and
+// stopping there. The same is true of a backend built against protocol 1, which
+// is never asked.
+type Validator interface {
+	ValidateConfig(config map[string]any) error
+}
+
 type holderKey struct{}
 
 // WithHolder labels a context with the run asking for a lock. The SDK calls it

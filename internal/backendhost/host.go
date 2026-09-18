@@ -23,6 +23,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -95,18 +96,66 @@ func Open(ctx context.Context, name, projectDir string, dirs []string, config ma
 // a filesystem lookup, so it sits inside validate's promise not to contact
 // providers.
 //
-// WHAT IT CANNOT CHECK IS THE BLOCK'S CONTENTS. A backend's own configuration
-// is validated by Configure, which for the S3 backend also proves the store
-// honours conditional writes — a network round trip, and not something
-// `validate` may do. So a credential wrongly written into `backend:` is still
-// only caught once the plugin runs. Closing that would need a protocol method
-// that parses without connecting, which backendproto v1 does not have.
+// IT DOES NOT CHECK THE BLOCK'S CONTENTS. ValidateConfig does, and it is a
+// separate call because this one starts no process at all.
 func Verify(name, projectDir string, dirs []string) error {
 	path, err := find(name, dirs)
 	if err != nil {
 		return err
 	}
 	return checkLock(name, projectDir, path)
+}
+
+// ValidateConfig asks a backend whether it could read this `backend:` block,
+// WITHOUT letting it contact anything. Protocol 2's `validate`.
+//
+// It closes the hole Verify leaves. A backend's own configuration is only
+// understood by that backend, and the natural place to check it — Configure —
+// cannot be called here: configuring means building a client, and the s3
+// backend's Configure also proves the store honours conditional writes, which
+// is a round trip `validate` promises not to make. So a credential written into
+// infra.yml passed `validate` and was refused only at `plan` — the cheap CI
+// gate approving exactly the mistake that reaches a repository through CI.
+//
+// IT DOES START THE PROCESS, which Verify deliberately does not, and that is
+// the cost of the check: answering a question only the backend can answer means
+// asking the backend. It still contacts no network, because the method's
+// contract is offline-only.
+//
+// SILENT ON A BACKEND THAT CANNOT ANSWER, in both of the two ways that happens:
+// protocol 1, which predates the method, and protocol 2 without the optional
+// Validator, which reports KindUnsupported. Both leave validate behaving
+// exactly as it did before this existed. A backend author is never obliged to
+// implement a method to keep working, which is the promise `Supported` being a
+// SET makes in the first place.
+func ValidateConfig(ctx context.Context, name, projectDir string, dirs []string, config map[string]any) error {
+	path, err := find(name, dirs)
+	if err != nil {
+		return err
+	}
+	if err := checkLock(name, projectDir, path); err != nil {
+		return err
+	}
+
+	c, err := launch(name, path)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = c.close() }()
+
+	if c.handshake.Protocol < 2 {
+		return nil
+	}
+	err = c.call(ctx, backendproto.MethodValidate, backendproto.ValidateParams{Config: config}, nil)
+	// backendhost.Error, not backendproto.Error: the wire type is rebuilt into
+	// this package's own on the way out of call, which is what makes a lock
+	// conflict arrive as state.ErrLocked. The Kind is carried across, so this
+	// asks the type callers actually receive.
+	var known *Error
+	if errors.As(err, &known) && known.Kind == backendproto.KindUnsupported {
+		return nil
+	}
+	return err
 }
 
 // Search names the directories a backend binary is looked for in.

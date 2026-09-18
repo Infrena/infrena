@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"strconv"
@@ -147,6 +148,31 @@ func validateBackends(opts *GlobalOptions) diag.Diagnostics {
 			ds.Add(diag.Diagnostic{
 				Severity: diag.SeverityError,
 				Summary:  "`" + b.key + "` names state backend " + strconv.Quote(b.decl.Plugin) + ", which is not installed",
+				Detail:   err.Error(),
+				Origin:   b.decl.Origin,
+			})
+			// The CONTENTS check below needs the binary Verify just failed to
+			// find, so asking would only restate this.
+			continue
+		}
+
+		// THE BLOCK'S CONTENTS, which Verify cannot judge because only the
+		// backend understands its own settings. Protocol 2's `validate` asks
+		// it, under a contract that it contacts nothing — so this stays inside
+		// validate's promise while closing the case it existed to catch: a
+		// long-lived credential committed into infra.yml used to pass here and
+		// be refused only at `plan`, which is the cheap CI gate approving the
+		// exact mistake that arrives through CI.
+		//
+		// Silent for a backend that cannot answer — protocol 1, or protocol 2
+		// without the optional method — so nothing that worked yesterday
+		// starts failing today.
+		if err := backendhost.ValidateConfig(
+			context.Background(), b.decl.Plugin, opts.Dir, dirs, b.decl.Config,
+		); err != nil {
+			ds.Add(diag.Diagnostic{
+				Severity: diag.SeverityError,
+				Summary:  "`" + b.key + "` is not a block the " + b.decl.Plugin + " backend can read",
 				Detail:   err.Error(),
 				Origin:   b.decl.Origin,
 			})

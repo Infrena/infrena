@@ -27,12 +27,20 @@ import (
 
 func main() {
 	name := strings.TrimPrefix(filepath.Base(os.Args[0]), "infrena-backend-")
-	backendsdk.Main(&memory{
+	m := &memory{
 		name:       name,
 		crashOnPut: name == "crash-on-put",
 		states:     map[string][]byte{},
 		locks:      map[string]backend.Lock{},
-	})
+	}
+	switch name {
+	case "picky":
+		backendsdk.Main(pickyConfig{m})
+	case "configonly":
+		backendsdk.Main(configOnly{m})
+	default:
+		backendsdk.Main(m)
+	}
 }
 
 // memory is the smallest thing that is honestly a backend: a map, a mutex, and
@@ -127,3 +135,36 @@ func (m *memory) Unlock(ctx context.Context, environment string) error {
 	delete(m.locks, environment)
 	return nil
 }
+
+// pickyConfig makes the memory backend take configuration, so the two optional
+// methods can be tested apart from each other.
+//
+// Three behaviours under three names, because what matters here is not what a
+// backend reads but WHICH of the optional methods it implements:
+//
+//   - memory     — neither Configurable nor Validator
+//   - configonly — Configurable, no Validator: `validate` must answer
+//     UNSUPPORTED and the host must carry on as though the method did not exist
+//   - picky      — both: `validate` refuses a `secret` key offline, which is the
+//     shape of the case the method was added for
+type pickyConfig struct{ *memory }
+
+func (p pickyConfig) Configure(ctx context.Context, config map[string]any) error {
+	if _, ok := config["explode"]; ok {
+		return fmt.Errorf("configure refused it")
+	}
+	return nil
+}
+
+// ValidateConfig is the offline half, and refuses what can be refused from the
+// bytes alone.
+func (p pickyConfig) ValidateConfig(config map[string]any) error {
+	if _, ok := config["secret"]; ok {
+		return fmt.Errorf("`backend.secret` is a credential and this backend will not read one")
+	}
+	return nil
+}
+
+type configOnly struct{ *memory }
+
+func (c configOnly) Configure(ctx context.Context, config map[string]any) error { return nil }

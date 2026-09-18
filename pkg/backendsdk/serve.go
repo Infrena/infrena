@@ -149,6 +149,13 @@ func (s *server) dispatch(ctx context.Context, req backendproto.Request) (any, e
 		}
 		return nil, s.configure(ctx, p.Config)
 
+	case backendproto.MethodValidate:
+		var p backendproto.ValidateParams
+		if err := backendproto.Decode(req.Method, req.Params, &p); err != nil {
+			return nil, err
+		}
+		return nil, s.validate(p.Config)
+
 	case backendproto.MethodGet:
 		var p backendproto.GetRequest
 		if err := backendproto.Decode(req.Method, req.Params, &p); err != nil {
@@ -229,6 +236,41 @@ func (s *server) configure(ctx context.Context, config map[string]any) error {
 	if c, ok := s.backend.(backend.Configurable); ok {
 		return c.Configure(ctx, config)
 	}
+	return s.refuseUnreadableConfig(config)
+}
+
+// validate answers protocol 2's `validate`: can this `backend:` block be read,
+// decided WITHOUT CONTACTING ANYTHING.
+//
+// Three outcomes, and the third is the one that makes the method addable at
+// all. A backend implementing backend.Validator answers for itself. A backend
+// that takes no configuration can still answer the one question it has —
+// whether the block set keys it will ignore — which is worth keeping, because a
+// key that silently does nothing is a user who believes their state is in one
+// place while it is written to another. Anything else reports UNSUPPORTED,
+// which the host treats as "ask no further", not as a failure.
+func (s *server) validate(config map[string]any) error {
+	if v, ok := s.backend.(backend.Validator); ok {
+		return v.ValidateConfig(config)
+	}
+	if _, ok := s.backend.(backend.Configurable); ok {
+		// It reads configuration but has no offline opinion about it. Saying
+		// "valid" here would be a promise this backend never made, and the
+		// block is still checked at Configure exactly as before.
+		return &backendproto.Error{
+			Kind:    backendproto.KindUnsupported,
+			Message: "this backend does not validate its configuration offline",
+		}
+	}
+	// Takes no configuration at all: the refusal below is decidable from the
+	// bytes, so it belongs in validate rather than waiting for Configure.
+	return s.refuseUnreadableConfig(config)
+}
+
+// refuseUnreadableConfig is the "this backend takes no configuration" refusal,
+// shared by configure and validate so the two cannot come to disagree about
+// which keys are acceptable.
+func (s *server) refuseUnreadableConfig(config map[string]any) error {
 	if len(config) == 0 {
 		return nil
 	}
@@ -268,6 +310,16 @@ func (s *server) respond(id uint64, result any, err error) {
 // without wrapping ErrLocked is one whose conflicts reach the user as storage
 // failures, which is why the interface documents the wrapping.
 func kindOf(err error) backendproto.ErrorKind {
+	// An error that already carries a kind keeps it. Without this the
+	// classification is recomputed from scratch and anything not recognised
+	// below silently becomes the empty kind — which would erase
+	// KindUnsupported and turn "I do not implement validate" into "your
+	// configuration is invalid", failing every backend that has not
+	// implemented the optional method.
+	var known *backendproto.Error
+	if errors.As(err, &known) && known.Kind != "" {
+		return known.Kind
+	}
 	switch {
 	case errors.Is(err, backend.ErrLocked):
 		return backendproto.KindLocked

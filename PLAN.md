@@ -5628,7 +5628,7 @@ was written:
 | `report.Version` | `pkg/report` | `--output` reports | additive. **At 2 since 2026-09-15**: the format gained the `plan` line (§37.2), so a consumer that only understands 1 can tell |
 | lockfile `Version` | `internal/modules/source` | `modules.lock` | internal |
 | `plugins.lock` `version` | Phase B (§31.3) | the resolved plugins and their checksums | internal |
-| `backendproto.Version`, `Supported` | `pkg/backendproto` | the state-backend wire | negotiated per backend; `Supported` is a SET. **At 1 since 2026-09-16** (§52) |
+| `backendproto.Version`, `Supported` | `pkg/backendproto` | the state-backend wire | negotiated per backend; `Supported` is a SET. **At 2 since 2026-09-18** — 2 added the OPTIONAL `validate` method so `infrena validate` can check a `backend:` block's contents without connecting; 1 stays supported and is never asked |
 | `pluginmanifest.Version`, `Supported` | `pkg/pluginmanifest` | `plugin.yaml` | **At 2 since the 2026-09-14 rename** — `infrata:` became `infrena:`, a renamed key rather than an added one. 1 stays readable, so a pre-rename release keeps meaning what it meant |
 | cache `Version` | `internal/modules/source` | module cache metadata | internal |
 

@@ -41,11 +41,29 @@ func TestStateCrossesTheWireAsRawBytesNotNestedJSON(t *testing.T) {
 // independent of the provider protocol. A state format change must not force
 // a provider release, and vice versa.
 func TestVersionIsIndependentOfThePluginProtocol(t *testing.T) {
-	if Version != 1 {
-		t.Errorf("Version = %d, want 1", Version)
+	// The literal is the TRIPWIRE. Raising it must be a deliberate edit here
+	// as well as there, because a bump obliges every backend author to read
+	// what changed. 2 added the optional `validate` method (2026-09-18).
+	if Version != 2 {
+		t.Errorf("Version = %d, want 2", Version)
 	}
 	if !slices.Contains(Supported, Version) {
 		t.Error("Supported does not include Version")
+	}
+}
+
+// TestEveryEarlierVersionStaysSupported is the promise `Supported` being a SET
+// exists to make: a backend built against an older protocol keeps working.
+//
+// It matters for 2 specifically, because 2's only addition is OPTIONAL. A
+// protocol-1 backend is never asked to validate and behaves exactly as it did;
+// dropping 1 here would orphan every backend in existence to gain a method
+// nobody is obliged to implement.
+func TestEveryEarlierVersionStaysSupported(t *testing.T) {
+	for v := 1; v <= Version; v++ {
+		if !IsSupported(v) {
+			t.Errorf("protocol %d is no longer supported, which orphans every backend speaking it", v)
+		}
 	}
 }
 

@@ -51,6 +51,25 @@ what it does not recognise would make every backend option a change to the core.
 instance profile, a credentials file, whatever it chooses. A bucket name is configuration;
 a secret key is not.
 
+`infrena validate` enforces that, which matters because `infra.yml` is committed and
+`validate` is the cheap gate CI runs. Writing an `access_key_id` into the block fails there,
+before anything is contacted and before the key is ever pushed:
+
+```
+Error: `backend` is not a block the s3 backend can read
+  at infra.yml:2:1
+
+  backend s3: `backend.access_key_id` is a secret and this backend will not read
+  one: infra.yml is committed to git. Set `profile:` to name a profile in your AWS
+  credentials file instead, or leave credentials to the environment or an
+  instance role
+```
+
+The backend answers that question itself, over an offline-only protocol method, because only
+the backend knows which of its keys are credentials. A backend that does not implement the
+method is not asked, and its block is checked when it runs — as every backend's was before
+the method existed.
+
 ### `backend:` may not use variables, and this will not change
 
 A `${...}` anywhere in the block — including three maps deep, or behind a YAML anchor — is
