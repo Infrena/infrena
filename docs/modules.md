@@ -190,12 +190,42 @@ That is deliberate. The failure mode of module systems is a module that quietly 
 something at the call site, so it works in the project it was written in and nowhere else.
 Inputs and outputs being the entire interface is what makes a module movable.
 
-## A known limitation
+## A known limitation: declare `providers:` if everything is in modules
 
-A project whose resources live **only** inside modules currently fails to load its plugins:
-plugin discovery reads the types declared in the root configuration, and module files are
-read later. The error names the resource type inside the module, which reads as the module
-being wrong rather than the plugin never having been loaded.
+Which plugins to load is worked out from the resource types the **root** configuration
+declares, and `module.<name>` is not one of them. Module files are not read until later, so a
+provider used *only* inside a module is never discovered, and the plan fails naming a type
+inside the module:
 
-The workaround is to declare at least one resource of that provider at the root, which most
-projects do anyway. This is recorded and will be fixed.
+```
+Error: unknown resource type "fake.network"
+  at modules/db/module.yml:5:3, in module.primary
+
+  Known types:
+
+  Suggested action:
+    Correct the type, or check that the provider offering it is available.
+```
+
+The empty "Known types" list is the tell: no provider was loaded at all.
+
+**The fix is to name the provider explicitly**, which is what `providers:` is for:
+
+```yaml
+project: myapp
+
+providers:
+  - plugin: fake
+
+resources:
+  primary:
+    type: module.db
+    cidr: 10.0.0.0/16
+```
+
+`providers:` is optional precisely *because* a resource type usually implies its plugin. When
+every resource is inside a module there is nothing at the root to imply it, so say it. Most
+projects reach for `providers:` anyway to set a region or an account.
+
+This is recorded as a bug: the diagnostic should say the plugin was never loaded rather than
+blame the type.
