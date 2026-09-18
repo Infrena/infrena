@@ -1,10 +1,12 @@
 package cli
 
 import (
+	"context"
 	"strings"
 	"testing"
 
 	"github.com/infrena/infrena/internal/discovery"
+	"github.com/infrena/infrena/internal/registry"
 	"github.com/infrena/infrena/internal/state"
 	"github.com/infrena/infrena/pkg/address"
 	"github.com/infrena/infrena/pkg/resource"
@@ -248,7 +250,7 @@ func TestAnAmbiguousSelectorIsRefusedRatherThanResolvedArbitrarily(t *testing.T)
 		{Name: "net", Type: "fake.network", Provider: "acct2", ProviderID: "net-1"},
 	}
 
-	_, err := narrowToSelectors(found, []string{"fake.network.net-1"}, "")
+	_, err := narrowToSelectors(context.Background(), registry.New(), found, []string{"fake.network.net-1"}, "")
 	if err == nil {
 		t.Fatal("two accounts hold net-1; picking one silently adopts a resource the user did not name")
 	}
@@ -268,7 +270,7 @@ func TestProviderNarrowsAnOtherwiseAmbiguousSelector(t *testing.T) {
 		{Name: "net", Type: "fake.network", Provider: "acct2", ProviderID: "net-1"},
 	}
 
-	got, err := narrowToSelectors(found, []string{"fake.network.net-1"}, "acct2")
+	got, err := narrowToSelectors(context.Background(), registry.New(), found, []string{"fake.network.net-1"}, "acct2")
 	if err != nil {
 		t.Fatalf("--provider acct2 must resolve the ambiguity: %v", err)
 	}
@@ -287,7 +289,7 @@ func TestAnUnambiguousSelectorStillWorksWithoutProvider(t *testing.T) {
 		{Name: "other", Type: "fake.network", Provider: "main", ProviderID: "net-2"},
 	}
 
-	got, err := narrowToSelectors(found, []string{"fake.network.net-2"}, "")
+	got, err := narrowToSelectors(context.Background(), registry.New(), found, []string{"fake.network.net-2"}, "")
 	if err != nil {
 		t.Fatalf("net-2 is held by exactly one instance: %v", err)
 	}
@@ -306,7 +308,7 @@ func TestProviderNamingNoInstanceIsRefused(t *testing.T) {
 		{Name: "net", Type: "fake.network", Provider: "main", ProviderID: "net-1"},
 	}
 
-	if _, err := narrowToSelectors(found, nil, "acct3"); err == nil {
+	if _, err := narrowToSelectors(context.Background(), registry.New(), found, nil, "acct3"); err == nil {
 		t.Error("--provider naming an instance that holds nothing must be refused, not treated as an empty import")
 	}
 }

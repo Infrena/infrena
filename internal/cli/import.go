@@ -18,6 +18,7 @@ import (
 	"github.com/infrena/infrena/internal/registry"
 	"github.com/infrena/infrena/internal/state"
 	"github.com/infrena/infrena/pkg/address"
+	"github.com/infrena/infrena/pkg/provider"
 )
 
 // newImportCommand builds `infrena import <environment> [type.id...]` (spec §26).
@@ -297,7 +298,7 @@ func selectForImport(
 		return nil, nil, problems, err
 	}
 	kept, skipped = withoutSystemOwned(kept, selectors)
-	out, err := narrowToSelectors(kept, selectors, instance)
+	out, err := narrowToSelectors(ctx, reg, kept, selectors, instance)
 	return out, skipped, problems, err
 }
 
@@ -418,6 +419,7 @@ func withoutManaged(
 // Split out from selectForImport so it is testable without a registry or a plugin: what
 // is worth testing here is the choosing, not the discovering.
 func narrowToSelectors(
+	ctx context.Context, reg *registry.Registry,
 	found []discovery.Result, selectors []string, instance string,
 ) ([]discovery.Result, error) {
 	if instance != "" {
@@ -427,10 +429,18 @@ func narrowToSelectors(
 				held = append(held, r)
 			}
 		}
-		if len(held) == 0 {
+		if len(held) == 0 && len(selectors) == 0 {
 			// NOT an empty import. With no selectors this would otherwise adopt
 			// nothing and report success, so a typo in --provider would read as
 			// "there was nothing to import".
+			//
+			// ONLY WITH NO SELECTORS, since selectors were given a way past
+			// discovery. An instance whose scan scope covers nothing can still be
+			// asked for a resource by name, and refusing here would put the
+			// combination that needs the direct fetch most — a narrow scan scope
+			// plus an explicitly named resource — beyond reach. A selector that
+			// then fails is reported by name below, which is the better error
+			// anyway: it says which resource, not merely which instance.
 			names := map[string]bool{}
 			for _, r := range found {
 				names[r.Provider] = true
@@ -452,8 +462,18 @@ func narrowToSelectors(
 		byID[key] = append(byID[key], r)
 	}
 
+	// The names discovery already settled on, so a directly fetched resource
+	// cannot be given one of them. discovery.Unique both reads and records here,
+	// which is why it is built once and passed down rather than rebuilt per
+	// selector — two directly fetched resources must not collide with each other
+	// either.
+	taken := make(map[string]string, len(found))
+	for _, r := range found {
+		taken[r.Name] = r.ProviderID
+	}
+
 	var out []discovery.Result
-	var missing []string
+	var missing, unreachable []string
 	for _, sel := range selectors {
 		candidates := byID[sel]
 		switch {
@@ -475,13 +495,126 @@ func narrowToSelectors(
 				sel, strings.Join(sortedKeys(held), ", "))
 		}
 	}
-	if len(missing) > 0 {
-		sort.Strings(missing)
-		return nil, fmt.Errorf("not found by discovery: %s\n"+
-			"Run `infrena discover` to see what exists. A selector is `<type>.<provider id>`",
-			strings.Join(missing, ", "))
+	// A SELECTOR DISCOVERY DID NOT RETURN IS ASKED FOR DIRECTLY, not refused.
+	//
+	// Discovery is bounded — an AWS instance scans the regions `discover_regions`
+	// names — so a resource outside that scope was previously unimportable at any
+	// price, including by naming it exactly. Naming a `type.id` is a statement that
+	// you know the resource exists, and discarding that statement in favour of a
+	// survey that was never meant to be exhaustive is the wrong way round.
+	//
+	// Only for selectors that were NAMED. A bare `infrena import` still adopts
+	// exactly what discovery returned, because there is no statement to act on.
+	for _, sel := range missing {
+		r, err := fetchDirectly(ctx, reg, sel, instance, taken)
+		if err != nil {
+			unreachable = append(unreachable, sel+": "+err.Error())
+			continue
+		}
+		out = append(out, r)
+	}
+	if len(unreachable) > 0 {
+		sort.Strings(unreachable)
+		return nil, fmt.Errorf("could not import: %s\n"+
+			"Each was named explicitly, so infrena asked its provider for it directly rather "+
+			"than relying on discovery. A selector is `<type>.<provider id>`",
+			strings.Join(unreachable, "\n  "))
 	}
 	return out, nil
+}
+
+// fetchDirectly asks a provider for one resource by type and ID, for a selector
+// discovery did not return.
+//
+// THE TYPE IS TAKEN FROM THE REGISTRY, NOT FROM THE DOTS. A selector is matched
+// whole everywhere else in this file precisely because a provider ID may contain
+// dots — a hostname, an ARN, a resource path — so splitting at the last one would
+// mangle it. Here a split is unavoidable, since the provider has to be told the
+// type and the ID separately, and the registry is the authority on which prefixes
+// are types. Longest match wins, so a plugin registering both `x.db` and
+// `x.db.replica` resolves to the more specific one rather than to whichever
+// happened to be checked first.
+//
+// SYSTEM-OWNED IS NOT CHECKED HERE, and cannot be: the flag is something a
+// provider reports during DISCOVERY, and this resource is one discovery never
+// returned. That loses no protection that was in force, because import already
+// treats a selector as consent — withoutSystemOwned drops a cloud-owned resource
+// only when nothing named it. Naming it is the override, and it was given.
+func fetchDirectly(
+	ctx context.Context, reg *registry.Registry, selector, instance string, taken map[string]string,
+) (discovery.Result, error) {
+	resourceType, providerID, ok := splitSelector(reg, selector)
+	if !ok {
+		return discovery.Result{}, fmt.Errorf("no registered resource type is named by this selector")
+	}
+
+	holder := instance
+	if holder == "" {
+		var candidates []string
+		for _, name := range reg.InstanceNames() {
+			if _, ok := reg.ProviderFor(resourceType, name); ok {
+				candidates = append(candidates, name)
+			}
+		}
+		switch len(candidates) {
+		case 0:
+			return discovery.Result{}, fmt.Errorf("no provider instance offers %s", resourceType)
+		case 1:
+			holder = candidates[0]
+		default:
+			// The same answer withoutManaged gives for a discovered ID found in
+			// two instances, and for the same reason: a provider ID is unique
+			// within an account rather than across them, so asking an arbitrary
+			// one could adopt a resource from the wrong account. That is not a
+			// mistake a later diagnostic can undo.
+			return discovery.Result{}, fmt.Errorf(
+				"%s is offered by more than one provider instance (%s); narrow it with --provider <instance>",
+				resourceType, strings.Join(candidates, ", "))
+		}
+	}
+
+	p, ok := reg.ProviderFor(resourceType, holder)
+	if !ok {
+		return discovery.Result{}, fmt.Errorf("provider instance %q does not offer %s", holder, resourceType)
+	}
+	rs, err := p.Import(ctx, resourceType, providerID)
+	if err != nil {
+		return discovery.Result{}, err
+	}
+	if rs == nil {
+		return discovery.Result{}, fmt.Errorf("provider instance %q reports no such resource", holder)
+	}
+
+	// Named through the SAME function discovery names by, against the same taken
+	// map, so a directly fetched resource cannot collide with a discovered one and
+	// is named the way the user would expect from `infrena discover`.
+	dr := provider.DiscoveredResource{
+		Type:       resourceType,
+		ProviderID: providerID,
+		Attributes: rs.Attributes,
+	}
+	return discovery.Result{
+		Name:       discovery.Unique(reg, taken, dr),
+		Type:       resourceType,
+		ProviderID: providerID,
+		Provider:   holder,
+		Attributes: rs.Attributes,
+	}, nil
+}
+
+// splitSelector separates a selector into a registered resource type and the
+// provider ID that follows it. See fetchDirectly for why the registry decides
+// this rather than the dots.
+func splitSelector(reg *registry.Registry, selector string) (resourceType, providerID string, ok bool) {
+	for _, t := range reg.Types() {
+		if !strings.HasPrefix(selector, t+".") {
+			continue
+		}
+		if len(t) > len(resourceType) {
+			resourceType, providerID, ok = t, selector[len(t)+1:], true
+		}
+	}
+	return resourceType, providerID, ok && providerID != ""
 }
 
 // sortedKeys lists a set's members in a stable order, so a diagnostic naming several

@@ -336,6 +336,8 @@ type delayedProvider struct {
 	mu            sync.Mutex
 	concurrent    int
 	maxConcurrent int
+	completed     int
+	started       int
 }
 
 func (p *delayedProvider) Name() string { return "delayed" }
@@ -346,6 +348,7 @@ func (p *delayedProvider) Definitions() []*schema.ResourceDefinition {
 
 func (p *delayedProvider) Read(ctx context.Context, current *resource.ResourceState) (*resource.ResourceState, error) {
 	p.mu.Lock()
+	p.started++
 	p.concurrent++
 	if p.concurrent > p.maxConcurrent {
 		p.maxConcurrent = p.concurrent
@@ -364,6 +367,7 @@ func (p *delayedProvider) Read(ctx context.Context, current *resource.ResourceSt
 
 	p.mu.Lock()
 	p.concurrent--
+	p.completed++
 	p.mu.Unlock()
 
 	if p.fail[current.Address.String()] {
@@ -703,22 +707,41 @@ func TestRefreshSkipsProviderReadWhenContextAlreadyCancelled(t *testing.T) {
 // provider with an idle semaphore, was not started at all. It was harmless while
 // there was one provider and stopped being harmless when the AWS provider shipped.
 //
-// The shape here is the smallest one that can tell the difference: `slow` is
-// bounded to ONE concurrent read and given four resources of 60ms each, so its
-// queue is saturated for ~240ms. `quick` has a single resource that returns
-// immediately, dispatched last so it sits behind the whole slow queue in address
-// order.
+// `slow` is bounded to ONE concurrent read and given four resources, so its queue
+// is saturated for the whole run. `quick` has a single resource, sorted last, so
+// it sits at the back of the dispatch queue — the position the old code could not
+// rescue it from.
 //
-// With the old placement the quick read cannot begin until the slow queue drains,
-// because the dispatch loop is blocked on slow's semaphore — so it finishes at
-// ~240ms. With the semaphore taken inside the worker, the quick read is dispatched
-// straight away and finishes almost immediately.
+// THE ASSERTION IS NOT A DURATION. It asks how many of slow's four reads had been
+// STARTED at the moment the quick read ran, which is a count of how far the
+// dispatch loop got before it reached the quick resource.
 //
-// The assertion is on WHEN the quick read finished relative to the whole refresh,
-// not on a fixed millisecond count, so a slow machine moves both numbers together.
+// With the old placement the loop cannot reach the quick resource until it has
+// handed out all four slow ones, so the answer is always 4. With the semaphore
+// taken inside the worker it is 1: the first slow read is in flight and the quick
+// one goes straight past it.
+//
+// Two earlier versions of this assertion were wrong, which is worth recording. The
+// first compared elapsed time against half the run and went flaky under `-race` at
+// 120ms of 241ms — measuring the machine, the same mistake
+// TestConcurrentApplyToTwoEnvironmentsOverlaps was fixed for on the same day. The
+// second counted FINISHED reads and did not discriminate at all: the loop releases
+// slow's semaphore as each read completes, so three had finished and the fourth was
+// in flight, and a test looking for four passed against the very bug it was written
+// for. Starts, not finishes, and not seconds.
 func TestOneProvidersQueueDoesNotStallAnother(t *testing.T) {
-	slow := &delayedProvider{resourceType: "slow.thing", delay: 60 * time.Millisecond}
-	quick := &delayedProvider{resourceType: "quick.thing"}
+	slow := &delayedProvider{resourceType: "slow.thing", delay: 40 * time.Millisecond}
+
+	var mu sync.Mutex
+	slowStartedWhenQuickRan := -1
+	quick := &probeProvider{resourceType: "quick.thing", onRead: func() {
+		slow.mu.Lock()
+		started := slow.started
+		slow.mu.Unlock()
+		mu.Lock()
+		slowStartedWhenQuickRan = started
+		mu.Unlock()
+	}}
 
 	reg := registry.New()
 	if err := reg.Register("slow", slow); err != nil {
@@ -729,10 +752,10 @@ func TestOneProvidersQueueDoesNotStallAnother(t *testing.T) {
 	}
 
 	st := state.New("myapp", "dev")
-	// Names chosen so the slow resources sort BEFORE the quick one: Refresh walks
-	// addresses in sorted order, so this puts the quick read at the back of the
-	// queue, which is the position the old code could not rescue it from.
-	for i := range 4 {
+	// Names sort the slow resources BEFORE the quick one: Refresh walks addresses
+	// in sorted order, so this puts the quick read at the back of the queue.
+	const slowCount = 4
+	for i := range slowCount {
 		name := fmt.Sprintf("a-slow-%d", i)
 		st.Set(&resource.ResourceState{
 			Provider: "slow", Address: address.Address{Name: name},
@@ -744,36 +767,73 @@ func TestOneProvidersQueueDoesNotStallAnother(t *testing.T) {
 		Type: "quick.thing", ProviderID: "z-quick",
 	})
 
-	var mu sync.Mutex
-	var quickAt time.Duration
-	start := time.Now()
-
-	// perProvider 1, so slow's four reads are strictly one at a time and its queue
-	// is genuinely saturated. Global parallelism 8, so nothing global is the
-	// constraint — if the quick read waits, only the per-provider bound can explain it.
-	_, ds := Refresh(context.Background(), st, reg, 8, 1, func(o Observation) {
-		if o.Address.Name == "z-quick" {
-			mu.Lock()
-			quickAt = time.Since(start)
-			mu.Unlock()
-		}
-	})
-	total := time.Since(start)
-	if ds.HasErrors() {
+	// perProvider 1 so slow's reads are strictly one at a time and its queue is
+	// genuinely saturated; global parallelism 8 so nothing global is the
+	// constraint. If the quick read waits, only the per-provider bound explains it.
+	if _, ds := Refresh(context.Background(), st, reg, 8, 1, nil); ds.HasErrors() {
 		t.Fatalf("unexpected diagnostics: %+v", ds)
 	}
 
 	mu.Lock()
-	at := quickAt
+	started := slowStartedWhenQuickRan
 	mu.Unlock()
-	if at == 0 {
-		t.Fatal("the quick provider's resource was never observed")
+	if started < 0 {
+		t.Fatal("the quick provider's resource was never read")
 	}
-	// Half the run is a generous line: the quick read should land near zero, and
-	// the serialised behaviour lands at essentially the whole run.
-	if at > total/2 {
-		t.Errorf("the quick provider's read finished %v into a %v refresh — it waited on the "+
-			"slow provider's queue, so one provider's bound is still stalling another", at, total)
+	// Half the queue is the line. Working dispatch gives 1, the old behaviour gives
+	// all four, and nothing sensible lands in between — the margin is there so a
+	// scheduling stall cannot fail an otherwise correct run.
+	if started > slowCount/2 {
+		t.Errorf("%d of %d slow reads had been dispatched before the quick read ran — it waited "+
+			"on the slow provider's queue, so one provider's bound is still stalling another",
+			started, slowCount)
 	}
-	t.Logf("quick read finished %v into a %v refresh", at, total)
+	t.Logf("%d of %d slow reads had been dispatched when the quick read ran", started, slowCount)
 }
+
+// probeProvider is a Provider double that reports the instant its Read runs and
+// returns immediately. It exists so a test can ask WHEN a read happened relative
+// to another provider's progress rather than relative to the clock.
+type probeProvider struct {
+	resourceType string
+	onRead       func()
+}
+
+func (p *probeProvider) Name() string { return "quick" }
+
+func (p *probeProvider) Definitions() []*schema.ResourceDefinition {
+	return []*schema.ResourceDefinition{{Type: p.resourceType}}
+}
+
+func (p *probeProvider) Read(_ context.Context, current *resource.ResourceState) (*resource.ResourceState, error) {
+	if p.onRead != nil {
+		p.onRead()
+	}
+	return current.Clone(), nil
+}
+
+func (p *probeProvider) Create(context.Context, *resource.DesiredResource) (*resource.ResourceState, error) {
+	return nil, provider.ErrNotImplemented
+}
+
+func (p *probeProvider) Update(context.Context, *resource.ResourceState, *resource.DesiredResource) (*resource.ResourceState, error) {
+	return nil, provider.ErrNotImplemented
+}
+
+func (p *probeProvider) Delete(context.Context, *resource.ResourceState) error {
+	return provider.ErrNotImplemented
+}
+
+func (p *probeProvider) Discover(context.Context, provider.DiscoverRequest) ([]provider.DiscoveredResource, error) {
+	return nil, provider.ErrNotImplemented
+}
+
+func (p *probeProvider) Import(context.Context, string, string) (*resource.ResourceState, error) {
+	return nil, provider.ErrNotImplemented
+}
+
+func (p *probeProvider) ClassifyError(error) provider.Retryability {
+	return provider.NotSafeToRetry
+}
+
+var _ provider.Provider = (*probeProvider)(nil)
