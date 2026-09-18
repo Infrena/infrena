@@ -62,7 +62,7 @@ resources:
 		"https://github.com/acme/alpha:v1.0.0": "alpha",
 	}}
 
-	exp, ds := Expand(decl, variables.Scope{}, nil, Env{Name: "dev"}, dir, git, nil, nil)
+	exp, ds := Expand(decl, variables.Scope{}, nil, Env{Name: "dev"}, dir, git, nil, nil, nil)
 	if ds.HasErrors() {
 		t.Fatalf("unexpected diagnostics: %+v", ds)
 	}
@@ -92,7 +92,7 @@ func TestLocalPathsProduceNoResolutions(t *testing.T) {
 		"m/module.yml": "resources:\n  thing:\n    type: test.thing\n",
 	})
 
-	exp, ds := Expand(decl, variables.Scope{}, nil, Env{Name: "dev"}, dir, paths{}, nil, nil)
+	exp, ds := Expand(decl, variables.Scope{}, nil, Env{Name: "dev"}, dir, paths{}, nil, nil, nil)
 	if ds.HasErrors() {
 		t.Fatalf("unexpected diagnostics: %+v", ds)
 	}
@@ -129,7 +129,7 @@ resources:
 `,
 	})
 
-	exp, ds := Expand(decl, variables.Scope{}, nil, Env{Name: "dev"}, dir, paths{}, nil, nil)
+	exp, ds := Expand(decl, variables.Scope{}, nil, Env{Name: "dev"}, dir, paths{}, nil, nil, nil)
 	if ds.HasErrors() {
 		t.Fatalf("unexpected diagnostics: %+v", ds)
 	}
@@ -166,7 +166,7 @@ resources:
 		"modules/b/module.yml": "modules:\n  - ../a\nresources:\n  gamma:\n    type: module.a\n",
 	})
 
-	_, ds := Expand(decl, variables.Scope{}, nil, Env{Name: "dev"}, dir, paths{}, nil, nil)
+	_, ds := Expand(decl, variables.Scope{}, nil, Env{Name: "dev"}, dir, paths{}, nil, nil, nil)
 	if !ds.HasErrors() {
 		t.Fatal("a module instantiating itself transitively must be a diagnostic, not a stack overflow")
 	}
@@ -189,7 +189,7 @@ func TestExpandReportsACycleAsACycleAndNotAsExcessiveDepth(t *testing.T) {
 		"modules/b/module.yml": "modules:\n  - ../a\nresources:\n  gamma:\n    type: module.a\n",
 	})
 
-	_, ds := Expand(decl, variables.Scope{}, nil, Env{Name: "dev"}, dir, paths{}, nil, nil)
+	_, ds := Expand(decl, variables.Scope{}, nil, Env{Name: "dev"}, dir, paths{}, nil, nil, nil)
 	for _, s := range summaries(ds) {
 		if strings.Contains(s, "deeper than") {
 			t.Fatalf("a 3-deep cycle was reported as excessive nesting (%q); the cycle check must run first", s)
@@ -218,7 +218,7 @@ func chain(depth int) map[string]string {
 func TestExpandRefusesNestingDeeperThanMaxDepth(t *testing.T) {
 	decl, dir := fixture(t, chain(MaxDepth+1))
 
-	_, ds := Expand(decl, variables.Scope{}, nil, Env{Name: "dev"}, dir, paths{}, nil, nil)
+	_, ds := Expand(decl, variables.Scope{}, nil, Env{Name: "dev"}, dir, paths{}, nil, nil, nil)
 	if !ds.HasErrors() {
 		t.Fatalf("nesting %d deep must be refused", MaxDepth+1)
 	}
@@ -237,7 +237,7 @@ func TestExpandAcceptsNestingExactlyAtMaxDepth(t *testing.T) {
 	// indistinguishable and the limit silently becomes 31 or 33.
 	decl, dir := fixture(t, chain(MaxDepth))
 
-	exp, ds := Expand(decl, variables.Scope{}, nil, Env{Name: "dev"}, dir, paths{}, nil, nil)
+	exp, ds := Expand(decl, variables.Scope{}, nil, Env{Name: "dev"}, dir, paths{}, nil, nil, nil)
 	if ds.HasErrors() {
 		t.Fatalf("nesting exactly %d deep is within the limit: %+v", MaxDepth, ds)
 	}
@@ -268,7 +268,7 @@ func TestManySiblingModulesNeverTripTheDepthBound(t *testing.T) {
 	files["infra.yml"] = res.String()
 	decl, dir := fixture(t, files)
 
-	exp, ds := Expand(decl, variables.Scope{}, nil, Env{Name: "dev"}, dir, paths{}, nil, nil)
+	exp, ds := Expand(decl, variables.Scope{}, nil, Env{Name: "dev"}, dir, paths{}, nil, nil, nil)
 	if ds.HasErrors() {
 		t.Fatalf("%d sibling modules are all at depth 1; the bound counts module boundaries "+
 			"crossed, not modules loaded: %+v", n, ds)
@@ -295,7 +295,7 @@ resources:
 		"shared/module.yml": "resources:\n  thing:\n    type: test.thing\n",
 	})
 
-	exp, ds := Expand(decl, variables.Scope{}, nil, Env{Name: "dev"}, dir, paths{}, nil, nil)
+	exp, ds := Expand(decl, variables.Scope{}, nil, Env{Name: "dev"}, dir, paths{}, nil, nil, nil)
 	if ds.HasErrors() {
 		t.Fatalf("instantiating one source twice is not a cycle: %+v", ds)
 	}
@@ -309,7 +309,7 @@ func TestExpandRefusesAnInstantiationOfAnUnloadedModule(t *testing.T) {
 		"infra.yml": "project: demo\nresources:\n  prod:\n    type: module.app_stack\n",
 	})
 
-	_, ds := Expand(decl, variables.Scope{}, nil, Env{Name: "dev"}, dir, paths{}, nil, nil)
+	_, ds := Expand(decl, variables.Scope{}, nil, Env{Name: "dev"}, dir, paths{}, nil, nil, nil)
 	if !hasFragment(ds, "no module named \"app_stack\" is loaded") {
 		t.Errorf("instantiating a module that no `modules:` entry loads must be refused; got %+v", ds)
 	}
@@ -339,7 +339,7 @@ resources:
 		"modules/net/module.yml": "project: prod\nresources:\n  subnet:\n    type: test.thing\n",
 	})
 
-	_, ds := Expand(decl, variables.Scope{}, nil, Env{Name: "dev"}, dir, paths{}, nil, nil)
+	_, ds := Expand(decl, variables.Scope{}, nil, Env{Name: "dev"}, dir, paths{}, nil, nil, nil)
 	if !ds.HasErrors() {
 		t.Fatal("a module file declaring `project:` must be refused by the module decoder (§11.3: a module has no project name)")
 	}
@@ -388,7 +388,7 @@ func deepCycle() map[string]string {
 // Swap the two blocks in expand and this fails; nothing else does.
 func TestADeepCycleIsReportedAsACycleNotAsDepth(t *testing.T) {
 	decl, dir := fixture(t, deepCycle())
-	_, ds := Expand(decl, variables.Scope{}, nil, Env{Name: "dev"}, dir, paths{}, nil, nil)
+	_, ds := Expand(decl, variables.Scope{}, nil, Env{Name: "dev"}, dir, paths{}, nil, nil, nil)
 	if !ds.HasErrors() {
 		t.Fatalf("a %d-deep cycle must be refused", MaxDepth)
 	}

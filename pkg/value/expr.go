@@ -16,6 +16,13 @@ const (
 	// OpVarRef references a variable. Variables arrive in M4; the node exists
 	// now so the AST does not change shape then.
 	OpVarRef
+	// OpTemplateRef references a file under templates/, whose contents are
+	// interpolated in the same grammar configuration uses (PLAN.md §39).
+	OpTemplateRef
+	// OpFileRef references a file under templates/ and reads it VERBATIM. It
+	// exists because shell scripts and user-data contain ${...} of their own,
+	// which interpolation would otherwise eat.
+	OpFileRef
 	// OpSecretRef references a secret by name, resolved from the process
 	// environment at compile time and always marked sensitive (PLAN.md §36).
 	OpSecretRef

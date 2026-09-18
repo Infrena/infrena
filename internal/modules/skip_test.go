@@ -34,7 +34,7 @@ func listOf(items ...string) value.Value {
 func expandIn(t *testing.T, env Env, body string, extra map[string]string) (*Expansion, string) {
 	t.Helper()
 	decl, dir := declIn(t, body, extra)
-	exp, ds := Expand(decl, variables.Scope{}, nil, env, dir, paths{}, nil, nil)
+	exp, ds := Expand(decl, variables.Scope{}, nil, env, dir, paths{}, nil, nil, nil)
 	var sb strings.Builder
 	ds.Render(&sb)
 	return exp, sb.String()
@@ -197,7 +197,7 @@ resources:
     type: fake.network
     cidr: 10.0.0.0/16
     `+attr+"\n", nil)
-		exp, ds := Expand(decl, scope, nil, Env{Name: "dev", Declared: []string{"dev", "production"}}, dir, paths{}, nil, nil)
+		exp, ds := Expand(decl, scope, nil, Env{Name: "dev", Declared: []string{"dev", "production"}}, dir, paths{}, nil, nil, nil)
 		if ds.HasErrors() {
 			var sb strings.Builder
 			ds.Render(&sb)
@@ -291,7 +291,7 @@ resources:
 `,
 	})
 
-	exp, ds := Expand(decl, scope, nil, Env{Name: "dev", Declared: []string{"dev", "production"}}, dir, paths{}, nil, nil)
+	exp, ds := Expand(decl, scope, nil, Env{Name: "dev", Declared: []string{"dev", "production"}}, dir, paths{}, nil, nil, nil)
 	if ds.HasErrors() {
 		var sb strings.Builder
 		ds.Render(&sb)

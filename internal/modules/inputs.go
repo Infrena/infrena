@@ -50,6 +50,14 @@ type Scope struct {
 	// say — as opposed to one name being absent. See
 	// expressions.SecretSourceError for why the two must not be conflated.
 	SecretsErr func() error
+	// Templates resolves ${template.NAME} and ${file.NAME}. dir is the
+	// resources directory the referencing resource lives in, so a scoped
+	// templates/ can win over the project-wide one.
+	Templates func(dir, name string) (content string, origin value.Origin, ok bool)
+	// dir is which resources directory this scope is bound to, set by In. It is
+	// what makes a scoped template reachable at all: without it every lookup
+	// would ask the project-wide question.
+	dir string
 	// dirVars is stage 4's per-directory scopes, keyed by config.ResourceDecl.Dir
 	// — resources/<dir>/vars/** (PLAN.md §4.1). Set on the ROOT scope only: a
 	// module sees its own inputs and the process variables and nothing else
@@ -124,11 +132,30 @@ func (s *Scope) markSkipped(name string, origin value.Origin) {
 // would land on the level's map where the narrowed copy could not see it.
 // TestAResourceCanReferToOneInAnotherDirectory is what notices.
 func (s *Scope) In(dir string) *Scope {
-	vars, ok := s.dirVars[dir]
-	if !ok {
+	// A directory with no vars/ of its own STILL NARROWS, because vars are no
+	// longer the only thing a directory can scope: resources/<dir>/templates/
+	// is looked up by this same dir (§39), and the early return that used to
+	// take this path left it empty — so a directory that had templates but no
+	// variables silently fell back to the project-wide ones.
+	//
+	// An empty dir is still s: there is nothing to narrow to.
+	if dir == "" {
 		return s
 	}
-	return &Scope{Module: s.Module, Vars: vars, Secrets: s.Secrets, SecretsErr: s.SecretsErr, dirVars: s.dirVars, names: s.names, skipped: s.skipped}
+	// The directory's own vars if it has any, and the CALLER'S otherwise —
+	// never the zero scope. Taking the zero value here wiped every variable for
+	// any directory that had templates but no vars/ of its own, which is a
+	// perfectly ordinary project and exactly what the early return used to
+	// protect by accident.
+	vars := s.Vars
+	if scoped, ok := s.dirVars[dir]; ok {
+		vars = scoped
+	}
+	return &Scope{
+		Module: s.Module, Vars: vars, Secrets: s.Secrets, SecretsErr: s.SecretsErr,
+		Templates: s.Templates, dir: dir,
+		dirVars: s.dirVars, names: s.names, skipped: s.skipped,
+	}
 }
 
 // Variable satisfies half of expressions.Scope.
@@ -137,6 +164,19 @@ func (s *Scope) Variable(name string) (value.Value, bool) { return s.Vars.Variab
 // Secret satisfies expressions.SecretScope. A nil Secrets reports every secret
 // unset, which is the right answer for a caller that supplies none: the
 // alternative is an empty string standing in for a credential.
+// Template satisfies expressions.TemplateScope.
+//
+// A module gets the caller's templates but NOT the caller's directory: a
+// module's own resources are not in the caller's resources directory, so a
+// scoped template there is not theirs to read. The project-wide templates/ is
+// shared, which is what makes a template usable from inside a module at all.
+func (s *Scope) Template(name string) (string, value.Origin, bool) {
+	if s.Templates == nil {
+		return "", value.Origin{}, false
+	}
+	return s.Templates(s.dir, name)
+}
+
 // SecretSourceError satisfies expressions.SecretSourceError.
 func (s *Scope) SecretSourceError() error {
 	if s.SecretsErr == nil {
@@ -172,7 +212,8 @@ func (w *walker) moduleScope(
 	r *config.ResourceDecl, lv level, caller *Scope,
 	supplied map[string]value.Value, module []string,
 ) *Scope {
-	inner := &Scope{Module: module, Secrets: caller.Secrets, SecretsErr: caller.SecretsErr, names: map[string]Binding{}, skipped: map[string]value.Origin{}}
+	inner := &Scope{Module: module, Secrets: caller.Secrets, SecretsErr: caller.SecretsErr,
+		Templates: caller.Templates, names: map[string]Binding{}, skipped: map[string]value.Origin{}}
 
 	// The three facts about the invocation cross every module boundary, each
 	// copied as-is, keeping the provenance the compiler stamped. A module that

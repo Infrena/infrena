@@ -45,6 +45,7 @@ func compilerOptions(opts *GlobalOptions, environment string) (compiler.Options,
 		Dir:        opts.Dir,
 		Secrets:    secrets,
 		SecretsErr: secretsErr,
+		Templates:  templateSource(opts),
 		// The running build, for a project's `infrena:` floor. The compiler takes it
 		// as an input rather than reading it, so this is the one place it is supplied.
 		Version:     version.Version(),

@@ -93,8 +93,10 @@ type Options struct {
 	// SecretsErr reports that the secret source itself failed, so a diagnostic
 	// can say "the vault would not open" instead of "that secret is not set".
 	SecretsErr func() error
-	Vars       map[string]string      // from --var
-	FileVars   map[string]value.Value // from --var-file
+	// Templates resolves ${template.NAME} and ${file.NAME} (PLAN.md §39).
+	Templates func(dir, name string) (content string, origin value.Origin, ok bool)
+	Vars      map[string]string      // from --var
+	FileVars  map[string]value.Value // from --var-file
 }
 
 // Context is Options.Ctx, or Background when the caller set none.

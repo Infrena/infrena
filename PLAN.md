@@ -706,6 +706,57 @@ Validation must happen during `infra validate` and before planning.
 
 Do not build a general-purpose programming language into variable expressions.
 
+## 39. Templates
+
+**SHIPPED 2026-09-18**, filling the `templates/` directory §4.1 reserved and left
+deliberately unread. Two references, two behaviours:
+
+```yaml
+tags:
+  policy:    ${template.policy.json}   # interpolated
+  bootstrap: ${file.user-data.sh}      # verbatim
+```
+
+Read from `<project>/templates/` and from `resources/<directory>/templates/` for a
+resource in that directory, nearest winning — the same shape `vars/` has.
+
+**THERE IS NO TEMPLATE ENGINE, and that is the decision, not an omission.** A
+template's contents go through the SAME evaluator configuration does. Four reasons,
+in increasing order of what they would cost:
+
+1. §707 above already rules out a general-purpose language in expressions, and
+   conditionals and loops are that, arrived at through a side door.
+2. "Simpler than Terraform" (§56) is a stated differentiator, and Terraform's answer
+   is a second language inside `templatefile()`. One small language used everywhere is
+   the product.
+3. **Dependency edges fall out for free.** A policy naming `${bucket.arn}` is the
+   canonical case: through the evaluator that is the same reference it would be in
+   YAML, with the same deferral and the same edge, so the document renders after the
+   bucket exists. A template engine handed a string would render before it.
+4. **Redaction would break, silently.** `pkg/value.Format` is the one redaction path
+   and sensitivity propagates through concatenation automatically, so a
+   `${secret.X}` inside a template makes the rendered document sensitive. An engine
+   writing values with `fmt.Fprint` produces a plain string, and that string carries
+   the secret in clear into the plan, the state and the report. Preserving redaction
+   would mean reimplementing sensitivity tracking inside the engine.
+
+**What it costs, stated rather than discovered:** no loops and no conditionals, so
+"one statement per bucket" cannot be written. The escape hatch is `${file.…}` —
+generate the document however you like and read it verbatim — and `join` covers some
+list cases.
+
+**`${file.…}` is not a convenience.** Shell scripts, user-data and cloud-init contain
+`${...}` of their own, and interpolating one would silently consume `${HOME}` and
+substitute nothing — producing a script that RUNS and misbehaves rather than one that
+fails. That is the worse of the two outcomes by a distance.
+
+Both take the rest of the reference as one opaque name, because filenames contain
+dots: `${template.policy.v2.json}` names one file. The same rule `${secret.…}`
+follows. A name that escapes the templates directory is refused.
+
+Templates may reference templates, bounded at 8 deep, so a cycle fails with a message
+rather than growing a string until the process dies.
+
 ---
 
 # 10. Expressions

@@ -38,6 +38,12 @@ func evaluate(e *value.Expr, scope Scope, ds *diag.Diagnostics) value.Value {
 	case value.OpLiteral:
 		return e.Literal.WithOrigin(e.Origin)
 
+	case value.OpTemplateRef:
+		return evaluateTemplate(e, scope, ds)
+
+	case value.OpFileRef:
+		return evaluateFile(e, scope, ds)
+
 	case value.OpSecretRef:
 		return evaluateSecret(e, scope, ds)
 
@@ -427,4 +433,150 @@ func evaluateSecret(e *value.Expr, scope Scope, ds *diag.Diagnostics) value.Valu
 	// Sensitive whatever the schema says, and origin from the use site so a
 	// diagnostic points at the configuration rather than at the environment.
 	return v.WithSensitive(true).WithOrigin(e.Origin)
+}
+
+// TemplateScope supplies the contents of a file under templates/. Optional, for
+// the reason SecretScope is: most scopes have no templates to offer.
+type TemplateScope interface {
+	// Template returns a file's contents, and where it was found so that a
+	// diagnostic about the file's CONTENT points at the file rather than at the
+	// line of YAML that referenced it.
+	Template(name string) (content string, origin value.Origin, ok bool)
+}
+
+// maxTemplateDepth bounds how far templates may nest.
+//
+// A template may reference another, which is useful — a policy that includes a
+// shared statement block — and is also a loop waiting to happen. The limit is
+// generous enough that no honest document reaches it and small enough that a
+// cycle fails in milliseconds with a message, rather than growing a string
+// until the process dies.
+const maxTemplateDepth = 8
+
+// nested is a Scope wearing a depth counter, used only while expanding a
+// template's contents.
+//
+// The counter lives on the SCOPE rather than in evaluate's signature because
+// evaluate is called from a dozen places that know nothing about templates, and
+// threading a parameter through all of them to be read by one would put
+// templates in every signature in this package.
+type nested struct {
+	Scope
+	depth int
+}
+
+func (n nested) Template(name string) (string, value.Origin, bool) {
+	ts, ok := n.Scope.(TemplateScope)
+	if !ok {
+		return "", value.Origin{}, false
+	}
+	return ts.Template(name)
+}
+
+func (n nested) Secret(name string) (value.Value, bool) {
+	ss, ok := n.Scope.(SecretScope)
+	if !ok {
+		return value.Value{}, false
+	}
+	return ss.Secret(name)
+}
+
+func (n nested) SecretSourceError() error {
+	se, ok := n.Scope.(SecretSourceError)
+	if !ok {
+		return nil
+	}
+	return se.SecretSourceError()
+}
+
+// evaluateTemplate reads a file under templates/ and evaluates its contents in
+// the SAME grammar and the SAME scope the configuration uses.
+//
+// ONE LANGUAGE, deliberately, rather than a template engine (PLAN.md §39). A
+// real engine would bring conditionals and loops, which §707 rules out; it
+// would break the single redaction path, because a secret written through
+// fmt.Fprint is a plain string and the rendered document would carry it in
+// clear into the plan, the state and the report; and it would lose dependency
+// discovery, so a policy naming ${bucket.arn} would render before the bucket
+// had one instead of after.
+//
+// Evaluating the contents HERE, through evaluate, is what buys all three: a
+// reference inside a template is the same reference it would be in YAML, with
+// the same deferral, the same dependency edge and the same sensitivity.
+func evaluateTemplate(e *value.Expr, scope Scope, ds *diag.Diagnostics) value.Value {
+	name := e.Ref.VarName()
+	content, origin, ok := lookupTemplate(e, scope, name, ds)
+	if !ok {
+		return unknownFrom(e, value.KindString, false)
+	}
+
+	depth := 0
+	if n, isNested := scope.(nested); isNested {
+		depth = n.depth
+	}
+	if depth >= maxTemplateDepth {
+		ds.Add(diag.Diagnostic{
+			Severity: diag.SeverityError,
+			Summary:  "templates nest more than " + strconv.Itoa(maxTemplateDepth) + " deep at " + strconv.Quote(name),
+			Detail: "A template may reference another, so this is most likely a cycle — a file that " +
+				"reaches itself, directly or through others.",
+			Action: "Break the cycle.",
+			Origin: e.Origin,
+		})
+		return unknownFrom(e, value.KindString, false)
+	}
+
+	// Parsed with the TEMPLATE'S origin, so a malformed reference inside the
+	// file reports the file and line it is on rather than the configuration
+	// line that referenced it.
+	inner, parseDiags := Parse(content, origin)
+	ds.Extend(parseDiags)
+	if parseDiags.HasErrors() || inner == nil {
+		return unknownFrom(e, value.KindString, false)
+	}
+	return evaluate(inner, nested{Scope: scope, depth: depth + 1}, ds)
+}
+
+// evaluateFile reads a file under templates/ VERBATIM.
+//
+// The reason it exists is narrow and important: shell scripts, user-data and
+// cloud-init contain ${...} of their own. Interpolating one would silently
+// consume ${HOME} and ${AWS_REGION} out of a bootstrap script and substitute
+// nothing, producing a script that runs and misbehaves rather than one that
+// fails. A raw form is the difference between the feature being usable for that
+// case and being a trap.
+func evaluateFile(e *value.Expr, scope Scope, ds *diag.Diagnostics) value.Value {
+	name := e.Ref.VarName()
+	content, _, ok := lookupTemplate(e, scope, name, ds)
+	if !ok {
+		return unknownFrom(e, value.KindString, false)
+	}
+	return value.String(content, value.SourceExplicit).WithOrigin(e.Origin)
+}
+
+// lookupTemplate finds a file and reports the two ways it can be absent.
+func lookupTemplate(e *value.Expr, scope Scope, name string, ds *diag.Diagnostics) (string, value.Origin, bool) {
+	ts, ok := scope.(TemplateScope)
+	if !ok {
+		ds.Add(diag.Diagnostic{
+			Severity: diag.SeverityError,
+			Summary:  "templates are not available here",
+			Detail:   strconv.Quote(name) + " was referenced somewhere this engine does not supply templates to.",
+			Origin:   e.Origin,
+		})
+		return "", value.Origin{}, false
+	}
+	content, origin, found := ts.Template(name)
+	if !found {
+		ds.Add(diag.Diagnostic{
+			Severity: diag.SeverityError,
+			Summary:  "no template named " + strconv.Quote(name),
+			Detail: "Templates are read from templates/ beside the project, and from " +
+				"resources/<directory>/templates/ for a resource in that directory, which wins.",
+			Action: "Create templates/" + name + ", or correct the name.",
+			Origin: e.Origin,
+		})
+		return "", value.Origin{}, false
+	}
+	return content, origin, true
 }

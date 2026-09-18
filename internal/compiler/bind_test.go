@@ -523,7 +523,7 @@ resources:
 // of these unit tests an integration test of stage 5.
 func rootOnly(t *testing.T, p *config.ProjectDecl, opts Options) *modules.Expansion {
 	t.Helper()
-	exp, ds := modules.Expand(p, scopeFor(t, opts), nil, modules.Env{Name: "dev"}, t.TempDir(), noRemotes{}, nil, nil)
+	exp, ds := modules.Expand(p, scopeFor(t, opts), nil, modules.Env{Name: "dev"}, t.TempDir(), noRemotes{}, nil, nil, nil)
 	if ds.HasErrors() {
 		t.Fatalf("rootOnly: expanding a module-free project must not fail: %+v", ds)
 	}

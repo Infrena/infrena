@@ -548,6 +548,36 @@ func parseReference(src string, origin value.Origin, ds *diag.Diagnostics) *valu
 		return nil
 	}
 
+	// `template` and `file` name a file under templates/. Both take the REST
+	// of the reference as one opaque name rather than parsing path steps,
+	// because a filename contains dots — `${template.iam-policy.json}` names
+	// one file, not a `json` field of an `iam-policy` field. The same rule
+	// `secret.` follows, and for the same reason.
+	if segments[0] == "template" || segments[0] == "file" {
+		kind := segments[0]
+		if len(segments) == 1 {
+			ds.Add(diag.Diagnostic{
+				Severity: diag.SeverityError,
+				Summary:  "${" + kind + "} names no file",
+				Detail:   "`" + kind + "` is the namespace files under templates/ live in, not a file itself.",
+				Action:   "Name one, as ${" + kind + ".policy.json}.",
+				Origin:   origin,
+			})
+			return nil
+		}
+		op := value.OpTemplateRef
+		if kind == "file" {
+			op = value.OpFileRef
+		}
+		// Rejoined rather than taking segments[1]: the split already happened,
+		// and a name with two dots (`policy.v2.json`) is still one filename.
+		return &value.Expr{
+			Op:     op,
+			Ref:    value.VarRef(strings.Join(segments[1:], ".")),
+			Origin: origin,
+		}
+	}
+
 	// `secret` is the secret namespace, and is `var`'s sibling by design
 	// (PLAN.md §36, amended). §36 sketched a mapping spelling —
 	// `password: {secret: DATABASE_PASSWORD}` — which was written before the
