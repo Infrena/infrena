@@ -72,3 +72,55 @@ func TestDescribeCarriesTheFormatsItIsGiven(t *testing.T) {
 		t.Errorf("incomplete: %+v", info)
 	}
 }
+
+// TestAPseudoVersionFromATaggedRepositoryIsNotARelease is the case the
+// all-zero test could not see, and it only became reachable when this
+// repository grew its first tag.
+//
+// Go derives a pseudo-version from the NEAREST TAG, so once v0.11.1 existed, a
+// build from any later commit reported v0.11.2-0.<stamp>-<rev>. That is not all
+// zero, it parses cleanly, and it was answered as release 0.11.2 — a version
+// that has never been published, reported by a binary built from a working
+// tree, in exactly the string a bug report quotes.
+func TestAPseudoVersionFromATaggedRepositoryIsNotARelease(t *testing.T) {
+	for _, v := range []string{
+		// After a release tag. The form that broke, and the reason for this test.
+		"v0.11.2-0.20260918163216-b7f0de604428",
+		// After a pre-release tag.
+		"v0.12.0-rc1.0.20260918163216-b7f0de604428",
+		// No earlier tag at all — the form the all-zero check already caught,
+		// kept here so both routes stay covered by one table.
+		"v0.0.0-20260913163216-b7f0de604428",
+		// Uppercase v, as build info sometimes carries it.
+		"0.11.2-0.20260918163216-b7f0de604428",
+		// A DIRTY WORKING TREE, which is what a developer actually builds and the
+		// case that caught this function lying while its own tests passed. The `+`
+		// lands inside the pre-release rather than being dropped by the parser, so
+		// the revision reads as 18 characters unless metadata is stripped first.
+		"v0.11.2-0.20260918004204-25cb98f3acb3+dirty",
+	} {
+		if got := releaseVersion(v); got != "" {
+			t.Errorf("releaseVersion(%q) = %q, want \"\" — a pseudo-version is a build from a "+
+				"commit no tag names, and reporting one as a release names a version that does not exist", v, got)
+		}
+	}
+}
+
+// TestAGenuinePreReleaseIsStillARelease is the inverse, and the pair is what
+// discriminates: a check that answered "" for everything would satisfy the test
+// above perfectly while making `infrena version` useless on every release
+// candidate anyone ever tags.
+func TestAGenuinePreReleaseIsStillARelease(t *testing.T) {
+	for v, want := range map[string]string{
+		"v0.12.0-rc1":     "0.12.0-rc1",
+		"v0.12.0-alpha.2": "0.12.0-alpha.2",
+		// A dash inside the pre-release, which the tail test must not mistake
+		// for a revision separator.
+		"v0.12.0-beta-3": "0.12.0-beta-3",
+		"v0.11.1":        "0.11.1",
+	} {
+		if got := releaseVersion(v); got != want {
+			t.Errorf("releaseVersion(%q) = %q, want %q — this is a tag a person made on purpose", v, got, want)
+		}
+	}
+}
