@@ -216,3 +216,46 @@ resources:
 		t.Errorf("a Terraform user is not pointed at the replacement:\n%s", r.combined())
 	}
 }
+
+// TestForEachInsideAModule. A module's resources are expanded by the same walk
+// as the root's, so this works without special handling — which is worth a test
+// precisely because nothing in the implementation mentions modules, and a
+// future change to either could break the combination silently.
+//
+// The address is the proof: module path, then name, then key.
+func TestForEachInsideAModule(t *testing.T) {
+	dir := projectWithFiles(t, `
+project: myapp
+environments:
+  dev: {}
+resources:
+  net:
+    type: fake.network
+    cidr: 10.0.0.0/16
+  primary:
+    type: module.db
+    engines: [postgres, mysql]
+`, map[string]string{"modules/db/module.yml": `
+inputs:
+  engines:
+    type: list
+resources:
+  store:
+    type: fake.database
+    for_each: ${var.engines}
+    engine: ${each.key}
+`})
+
+	r := run(t, dir, "plan", "dev")
+	if r.ExitCode != 2 {
+		t.Fatalf("plan exit = %d, want 2\n%s", r.ExitCode, r.combined())
+	}
+	for _, want := range []string{
+		`module.primary.store["postgres"]`,
+		`module.primary.store["mysql"]`,
+	} {
+		if !strings.Contains(r.combined(), want) {
+			t.Errorf("plan does not contain %q:\n%s", want, r.combined())
+		}
+	}
+}

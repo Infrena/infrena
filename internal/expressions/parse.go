@@ -392,6 +392,17 @@ func parseCall(src string, open int, origin value.Origin, ds *diag.Diagnostics) 
 		return nil
 	}
 
+	// `${template.x({...})}` and `${file.x}` reach here because they contain a
+	// paren, and they are references rather than function calls — intercepted
+	// before the generic path so the argument shape can be checked where the
+	// name is still visible.
+	if rest, isTemplate := strings.CutPrefix(name, "template."); isTemplate {
+		return parseTemplateCall(value.OpTemplateRef, rest, src, open, origin, ds)
+	}
+	if rest, isFile := strings.CutPrefix(name, "file."); isFile {
+		return parseTemplateCall(value.OpFileRef, rest, src, open, origin, ds)
+	}
+
 	inner := src[open+1 : len(src)-1]
 	var args []*value.Expr
 	for _, raw := range splitArgs(inner) {
@@ -835,4 +846,53 @@ func unquoteBracketKey(raw string) (string, bool) {
 		return "", false
 	}
 	return inner, true
+}
+
+// parseTemplateCall reads `${template.NAME({...})}` and `${file.NAME}`.
+//
+// A template takes AT MOST ONE ARGUMENT, a map, and that is what the `{{ }}`
+// pass inside the file can see — nothing else. Making the inputs explicit at
+// the call site is what keeps the two passes honest about secrets: the template
+// engine cannot reach an ambient scope, so it cannot write a secret into the
+// rendered text as a literal and strip its sensitivity on the way. A secret is
+// either passed deliberately, where we know it was sensitive and can taint the
+// result, or written `${secret.X}` inside the file, where the second pass
+// handles it.
+//
+// `file` takes NO argument. It reads the file verbatim, so there is nothing for
+// an argument to affect, and accepting one would advertise a behaviour that
+// does not happen.
+func parseTemplateCall(op value.ExprOp, name, src string, open int, origin value.Origin, ds *diag.Diagnostics) *value.Expr {
+	inner := strings.TrimSpace(src[open+1 : len(src)-1])
+	if name == "" {
+		ds.Add(diag.Diagnostic{
+			Severity: diag.SeverityError,
+			Summary:  "malformed reference " + strconv.Quote(src),
+			Detail:   "The namespace has to be followed by a file name.",
+			Origin:   origin,
+		})
+		return nil
+	}
+
+	out := &value.Expr{Op: op, Ref: value.VarRef(name), Origin: origin}
+	if inner == "" {
+		return out
+	}
+	if op == value.OpFileRef {
+		ds.Add(diag.Diagnostic{
+			Severity: diag.SeverityError,
+			Summary:  "${file." + name + "} takes no arguments",
+			Detail: "A file reference reads the file verbatim, so there is nothing for an argument " +
+				"to affect. ${template." + name + "(...)} renders it instead.",
+			Action: "Remove the arguments, or use ${template." + name + "(...)}.",
+			Origin: origin,
+		})
+		return nil
+	}
+	arg := parseArgument(inner, origin, ds)
+	if arg == nil {
+		return nil
+	}
+	out.Args = []*value.Expr{arg}
+	return out
 }

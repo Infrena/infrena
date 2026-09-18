@@ -526,6 +526,46 @@ func evaluateTemplate(e *value.Expr, scope Scope, ds *diag.Diagnostics) value.Va
 		return unknownFrom(e, value.KindString, false)
 	}
 
+	// THE `{{ }}` PASS FIRST, when the call gave it arguments. It sees only
+	// those arguments — never the project's scope — which is what stops a
+	// template engine writing a secret into the text as a literal and losing
+	// its sensitivity on the way. `${...}` is left alone here and handled
+	// below, so a reference inside a template keeps its deferral and its edge.
+	sensitiveArgs := false
+	if len(e.Args) > 0 {
+		arg := evaluate(e.Args[0], scope, ds)
+		data, known, sensitive, argErr := templateArguments(arg)
+		sensitiveArgs = sensitive
+		if argErr != nil {
+			ds.Add(diag.Diagnostic{
+				Severity: diag.SeverityError,
+				Summary:  "the argument to ${template." + name + "} is not usable",
+				Detail:   argErr.Error(),
+				Action:   "Pass a map, as ${template." + name + "({team: \"platform\"})}.",
+				Origin:   e.Origin,
+			})
+			return unknownFrom(e, value.KindString, sensitive)
+		}
+		if !known {
+			// A template cannot represent "not yet", so the whole render is
+			// deferred rather than rendered around the gap. The executor
+			// evaluates this again once the argument resolves.
+			return unknownFrom(e, value.KindString, sensitive)
+		}
+		rendered, renderErr := renderTemplate(name, content, data)
+		if renderErr != nil {
+			ds.Add(diag.Diagnostic{
+				Severity: diag.SeverityError,
+				Summary:  "template " + strconv.Quote(name) + " could not be rendered",
+				Detail:   renderErr.Error(),
+				Action:   "Correct the {{ }} in " + origin.File + ". Its functions are: " + strings.Join(TemplateFuncNames(), ", ") + ".",
+				Origin:   e.Origin,
+			})
+			return unknownFrom(e, value.KindString, sensitive)
+		}
+		content = rendered
+	}
+
 	// Parsed with the TEMPLATE'S origin, so a malformed reference inside the
 	// file reports the file and line it is on rather than the configuration
 	// line that referenced it.
@@ -534,7 +574,15 @@ func evaluateTemplate(e *value.Expr, scope Scope, ds *diag.Diagnostics) value.Va
 	if parseDiags.HasErrors() || inner == nil {
 		return unknownFrom(e, value.KindString, false)
 	}
-	return evaluate(inner, nested{Scope: scope, depth: depth + 1}, ds)
+	out := evaluate(inner, nested{Scope: scope, depth: depth + 1}, ds)
+	// A SENSITIVE ARGUMENT TAINTS THE WHOLE RENDERED DOCUMENT, and it has to be
+	// the whole thing: the template decides where the value lands, so there is
+	// no leaf to mark. Coarse, and correct in the only direction that matters —
+	// the alternative is a rendered policy carrying a credential in clear.
+	if sensitiveArgs {
+		out = out.WithSensitive(true)
+	}
+	return out
 }
 
 // evaluateFile reads a file under templates/ VERBATIM.

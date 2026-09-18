@@ -809,6 +809,60 @@ list cases.
 substitute nothing — producing a script that RUNS and misbehaves rather than one that
 fails. That is the worse of the two outcomes by a distance.
 
+### 39.1 Arguments, and the `{{ }}` pass
+
+**Added 2026-09-18.** A template may take one argument, a map, and its contents are
+then rendered by Go's `text/template` BEFORE the `${ }` pass:
+
+```yaml
+policy: "${template.policy.json(var.args)}"
+```
+
+```
+{"team":"{{ .team }}"{{ range $b := .buckets }},{"r":{{ $b | quote }},"vpc":"${net.id}"}{{ end }}}
+```
+
+**TWO PASSES, IN THIS ORDER, AND THE ORDER IS THE DESIGN:**
+
+> **`{{ }}` sees what you passed it. `${ }` sees the project.**
+
+That split is what makes the combination safe rather than merely powerful. A template
+engine handed the project's scope could write a secret into the rendered text as a
+LITERAL, and the second pass would then see a plain string with no sensitivity — which
+reaches the plan, the state and the report in clear. Pass one can reach nothing it was
+not handed, and what it was handed we evaluated, so we still know what was sensitive.
+
+It is also why `${bucket.arn}` inside a template keeps working: pass one leaves `${...}`
+alone, so the reference survives with its deferral and its dependency edge intact.
+
+**A sensitive argument taints the WHOLE rendered document.** The template decides where
+the value lands, so there is no leaf to mark. Coarse, and correct in the only direction
+that matters.
+
+**An unknown argument defers the whole render** to apply, because a template cannot
+represent "not yet".
+
+**The function set is ours, not sprig's**, and is tiny: `until`, `seq`, `indent`,
+`quote`, `upper`, `lower`, `trim`, `join`, `sortAlpha`. Every one is PURE — same inputs,
+same output, no I/O, no clock, no randomness — and the set is pinned by a test, the way
+the expression language's own six built-ins are.
+
+sprig was measured and rejected on 2026-09-18: 211 functions across 26 modules, of which
+sixteen contradict guarantees this project asserts. `env` and `expandenv` read the
+environment, so a secret would reach rendered text as a literal with its sensitivity
+stripped — exactly the leak this design prevents, handed back as a builtin. `uuidv4`,
+`now` and the `rand*` family break invariant 6, so two plans of one configuration would
+differ. `getHostByName` performs a DNS lookup while rendering. Excluding them means a
+denylist against an API that grows on somebody else's schedule, where a miss is silent.
+
+**Map and list literals hold literal values** (§10.3), so an argument mixing literals
+with references is written as a map variable, or composed with `merge`:
+`${template.x(merge(var.base, {team: platform}))}`. The argument itself is an ordinary
+expression, so a bare `var.args` is the common case.
+
+**`${file.…}` takes no argument.** It reads verbatim, so there is nothing for one to
+affect, and accepting one would advertise a behaviour that does not happen.
+
 Both take the rest of the reference as one opaque name, because filenames contain
 dots: `${template.policy.v2.json}` names one file. The same rule `${secret.…}`
 follows. A name that escapes the templates directory is refused.
