@@ -61,6 +61,10 @@ func (c *Client) Path() string { return c.path }
 // PluginVersion is the version the plugin reported.
 func (c *Client) PluginVersion() string { return c.handshake.Version }
 
+// MaxConcurrency is the ceiling this plugin declared, or 0 for no claim
+// (protocol 5). See pluginproto.Handshake.MaxConcurrency.
+func (c *Client) MaxConcurrency() int { return c.handshake.MaxConcurrency }
+
 // start reads the handshake and then serves responses until the stream ends.
 func (c *Client) start(r io.Reader, expectName string) error {
 	sc := bufio.NewScanner(r)

@@ -359,6 +359,45 @@ func (r *Registry) Instances() []Instance {
 	return out
 }
 
+// DeclaredConcurrency reports, per plugin name, the ceiling that plugin said
+// its API tolerates. A plugin that made no claim is absent from the map.
+//
+// It reads the PLUGIN rather than an instance because that is what the
+// executor's per-provider bound keys on: two instances of one plugin are two
+// accounts on one API, and the ceiling the plugin declared is a statement about
+// that API. Whether two accounts should each get the full ceiling is a
+// different question and deliberately not answered here — the existing bound
+// already shares one number between instances, and changing that quietly while
+// adding this would be two changes wearing one coat.
+func (r *Registry) DeclaredConcurrency() map[string]int {
+	// Nil-safe: executorOptions builds its Options before a registry
+	// necessarily exists in some callers and in tests, and a concurrency
+	// ceiling is exactly the kind of read that must not be the thing that
+	// panics an apply.
+	if r == nil {
+		return nil
+	}
+	var out map[string]int
+	for name, p := range r.plugins {
+		// nil is a plugin known only because a caller handed over a built
+		// provider rather than a factory — see the `plugins` field.
+		if p == nil {
+			continue
+		}
+		l, ok := p.(interface{ MaxConcurrency() int })
+		if !ok {
+			continue
+		}
+		if n := l.MaxConcurrency(); n > 0 {
+			if out == nil {
+				out = map[string]int{}
+			}
+			out[name] = n
+		}
+	}
+	return out
+}
+
 // InstanceNames lists every instance, sorted, for diagnostics that suggest what a
 // user might have meant.
 func (r *Registry) InstanceNames() []string {

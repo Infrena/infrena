@@ -90,9 +90,10 @@ type server struct {
 
 func (s *server) run(in io.Reader) error {
 	if err := s.write(pluginproto.Handshake{
-		Protocol: pluginproto.Version,
-		Name:     s.plugin.Name(),
-		Version:  versionOf(s.plugin),
+		Protocol:       pluginproto.Version,
+		Name:           s.plugin.Name(),
+		Version:        versionOf(s.plugin),
+		MaxConcurrency: maxConcurrencyOf(s.plugin),
 	}); err != nil {
 		return err
 	}
@@ -373,4 +374,33 @@ func resultOf(rs *resource.ResourceState) pluginproto.ResourceResult {
 		ProviderID: rs.ProviderID,
 		Attributes: rs.Attributes,
 	}
+}
+
+// ConcurrencyLimiter is implemented by a plugin that knows what its API
+// tolerates. It is OPTIONAL, like Versioned: a plugin that does not implement
+// it makes no claim and the host keeps its own conservative default.
+//
+// Implement it when you know a real number — a documented rate limit, a
+// measured one, an account quota. Do not implement it to say "8": the host
+// already assumes something of that order, and a guess restated by the plugin
+// is worth less than silence, because silence is visibly a non-claim.
+type ConcurrencyLimiter interface {
+	// MaxConcurrency is how many operations may be in flight against this
+	// plugin at once. Zero or negative is treated as no claim.
+	MaxConcurrency() int
+}
+
+// maxConcurrencyOf reads a plugin's declared ceiling, or 0 when it makes no
+// claim. Negative is folded to 0 rather than passed on: a ceiling below one
+// would stop work entirely, and a plugin that computed one by accident should
+// be ignored rather than deadlock the host.
+func maxConcurrencyOf(p provider.Plugin) int {
+	l, ok := p.(ConcurrencyLimiter)
+	if !ok {
+		return 0
+	}
+	if n := l.MaxConcurrency(); n > 0 {
+		return n
+	}
+	return 0
 }

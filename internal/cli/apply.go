@@ -622,10 +622,13 @@ func executorOptions(opts *GlobalOptions, reg *registry.Registry, backend state.
 	return executor.Options{
 		Parallelism: opts.Parallelism,
 		PerProvider: perProviderParallelism,
-		Registry:    reg,
-		Backend:     backend,
-		Environment: environment,
-		Retry:       defaultRetryPolicy(),
-		Now:         time.Now,
+		// What individual plugins declared, which overrides the constant above
+		// for those that did. See executor.Options.ProviderLimits.
+		ProviderLimits: reg.DeclaredConcurrency(),
+		Registry:       reg,
+		Backend:        backend,
+		Environment:    environment,
+		Retry:          defaultRetryPolicy(),
+		Now:            time.Now,
 	}
 }

@@ -16,8 +16,8 @@ import (
 // The literal is duplicated on purpose. Reading it from the constant would assert that
 // the constant equals itself.
 func TestTheProtocolVersionIsDeliberate(t *testing.T) {
-	if Version != 4 {
-		t.Errorf("Version = %d, want 4. Changing it is a deliberate act: raise this literal "+
+	if Version != 5 {
+		t.Errorf("Version = %d, want 5. Changing it is a deliberate act: raise this literal "+
 			"together with the constant, and say in PLAN.md §61 what moved and why", Version)
 	}
 }
@@ -60,17 +60,39 @@ func TestSupportedIsNewestFirst(t *testing.T) {
 	}
 }
 
-func TestProtocolIsFourAndStillSpeaksThreeTwoAndOne(t *testing.T) {
-	if Version != 4 {
-		t.Errorf("Version = %d, want 4 — a system-owned flag on a discovered resource, the same additive shape optional/aliases and References had", Version)
+func TestProtocolIsFiveAndStillSpeaksItsPredecessors(t *testing.T) {
+	if Version != 5 {
+		t.Errorf("Version = %d, want 5 — a plugin-declared concurrency ceiling in the handshake, "+
+			"the same additive shape optional/aliases, References and system_owned had", Version)
 	}
-	for _, v := range []int{4, 3, 2, 1} {
+	for _, v := range []int{5, 4, 3, 2, 1} {
 		if !IsSupported(v) {
 			t.Errorf("protocol %d must still be supported — Supported is a set so raising the version does not orphan every plugin", v)
 		}
 	}
-	if IsSupported(5) {
+	if IsSupported(6) {
 		t.Error("an unreleased protocol must not be accepted")
+	}
+}
+
+// TestAPluginThatDeclaresNoCeilingIsUnaffected is why 4 stays supported, stated
+// as a test rather than left to the reasoning in the constant's doc comment.
+//
+// A protocol 4 plugin sends no max_concurrency, absent decodes as zero, and zero
+// means "no claim" — so the host keeps its own conservative default and nothing
+// about that plugin becomes wrong. The direction that WOULD have been dangerous
+// is the reverse: a ceiling an older host silently ignored would run a plugin
+// wider than it asked for, which is the failure this whole field exists to stop.
+func TestAPluginThatDeclaresNoCeilingIsUnaffected(t *testing.T) {
+	var h Handshake
+	if err := json.Unmarshal([]byte(`{"protocol":4,"name":"aws","version":"1.0.0"}`), &h); err != nil {
+		t.Fatalf("decoding a protocol 4 handshake: %v", err)
+	}
+	if h.MaxConcurrency != 0 {
+		t.Errorf("MaxConcurrency = %d from a handshake that carries none, want 0 (no claim)", h.MaxConcurrency)
+	}
+	if !IsSupported(h.Protocol) {
+		t.Error("a protocol 4 plugin must still be accepted: it is not wrong, it is quiet")
 	}
 }
 
@@ -84,8 +106,13 @@ func TestProtocolIsFourAndStillSpeaksThreeTwoAndOne(t *testing.T) {
 // and a default VPC would be offered for adoption with nothing anywhere saying
 // the plugin had flagged it.
 func TestProtocolFourIsSupportedAlongsideItsPredecessors(t *testing.T) {
-	if Version != 4 {
-		t.Errorf("Version = %d, want 4", Version)
+	// This test is about 4 REMAINING SUPPORTED, not about 4 being current. It
+	// asserted the version too, which made it a second copy of the deliberate
+	// version tripwire above and meant raising the version failed two tests
+	// saying different things about the same line. Version 5 left 4 exactly as
+	// it was, which is the claim this test should have been making all along.
+	if !IsSupported(4) {
+		t.Error("protocol 4 must stay supported: system_owned did not become wrong when 5 arrived")
 	}
 	// A protocol 3 plugin reports nothing and behaves exactly as today.
 	// Absence costs what it costs now, which is what makes it safe to add a

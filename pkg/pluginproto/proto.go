@@ -60,7 +60,9 @@ import (
 // The other direction costs nothing, which is what keeps 3 supported: a protocol 3 plugin
 // sends neither key, absent decodes as "the plugin made no claim", and that is exactly
 // what every plugin in existence means today.
-const Version = 4
+// Version 5 added Handshake.MaxConcurrency, so a plugin can declare the
+// concurrency its API tolerates rather than the host guessing on its behalf.
+const Version = 5
 
 // Supported lists every protocol version this build can talk to, newest first.
 //
@@ -68,7 +70,7 @@ const Version = 4
 // means exactly what it meant then — not optional, no aliases. Nothing about an older
 // plugin becomes wrong, so nothing about it should stop working. §61.1 calls this a
 // MINOR: a version added while the previous one keeps working.
-var Supported = []int{4, 3, 2, 1}
+var Supported = []int{5, 4, 3, 2, 1}
 
 // IsSupported reports whether a plugin's protocol version can be spoken here.
 func IsSupported(v int) bool {
@@ -104,6 +106,23 @@ type Handshake struct {
 	Protocol int    `json:"protocol"`
 	Name     string `json:"name"`
 	Version  string `json:"version"`
+	// MaxConcurrency is how many operations this plugin wants in flight
+	// against it at once, or 0 for "no claim". Protocol 5.
+	//
+	// THE PLUGIN IS THE ONLY PARTY THAT KNOWS. A rate limit belongs to a cloud
+	// API, and the host has never seen one: before this the ceiling was a
+	// constant of 8 chosen as "the order cloud APIs throttle at", which is a
+	// guess made by the one participant with no information. A user flag would
+	// only move the guess to somebody else.
+	//
+	// Absent means no claim, and the host keeps its conservative default — so
+	// a protocol 4 plugin is unaffected and correct, which is why 4 stays
+	// supported. The direction that would have been dangerous is the other
+	// one: a plugin whose declared ceiling an older host ignored would be run
+	// wider than it asked for and throttled. A plugin that actually depends on
+	// its ceiling being honoured says so with an `infrena: ">= …"` floor in its
+	// manifest, the same way any other protocol-gated behaviour is required.
+	MaxConcurrency int `json:"max_concurrency,omitempty"`
 }
 
 // Request is one call from host to plugin.

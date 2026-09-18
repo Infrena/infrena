@@ -2911,6 +2911,24 @@ before any request. **`pluginproto.Version` is 4 since 2026-09-15**, and `Suppor
 | 2 | `optional` and `aliases` on an attribute (§14.1) | |
 | 3 | `References` on an attribute (§14.3) | |
 | 4 | `system_owned` and `system_owned_reason` on a discovered resource (§25.1) | |
+| 5 | `max_concurrency` in the handshake (§34) | A plugin that declared a ceiling an older host ignored would be run wider than it asked for, and throttled |
+
+**Version 5, 2026-09-18: a plugin declares the concurrency its API tolerates.** The
+per-provider bound existed before this and was a CONSTANT of 8 in the CLI, chosen as "the
+order cloud APIs throttle at" — a guess made by the only participant with no information.
+A rate limit belongs to a cloud API and the host has never seen one. The plugin has.
+
+It is optional: absent means "no claim" and the host keeps its constant, so a protocol 4
+plugin is unaffected and correct, which is why 4 stays supported. The SDK exposes it as an
+optional `ConcurrencyLimiter` interface, deliberately alongside `Versioned` rather than as
+a required method — a plugin should implement it when it knows a real number, and stay
+silent otherwise, because a guess restated by the plugin is worth less than silence.
+Silence is visibly a non-claim.
+
+A user-facing flag was considered again here and rejected again for the reason §34 first
+gave: it moves the guess from infrena to the user, who also does not know. What a user can
+still do is lower `--parallelism`, which bounds everything.
+
 
 Each one is a KEY ADDED to a payload whose decode is lenient, which is exactly why it is
 announced. A plugin built against a newer SDK talking to an older host has the new key

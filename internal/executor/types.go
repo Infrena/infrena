@@ -67,6 +67,17 @@ type Options struct {
 	// cannot be exhausted by an unrelated wide graph touching many
 	// providers at once (PLAN.md §34). Values below 1 mean 1.
 	PerProvider int
+	// ProviderLimits is what individual plugins declared they tolerate,
+	// keyed by provider name, and it overrides PerProvider for those.
+	//
+	// A ceiling belongs to a cloud API, and the host has never seen one:
+	// PerProvider is a constant chosen as "the order cloud APIs throttle at",
+	// which is a guess made by the only participant with no information. A
+	// plugin that knows a real number says so in its handshake (protocol 5),
+	// and this is where that answer arrives. A provider absent from the map
+	// made no claim and keeps PerProvider, which is why an older plugin is
+	// unaffected.
+	ProviderLimits map[string]int
 	// Registry resolves a resource type to the provider that implements it.
 	Registry *registry.Registry
 	// Backend is where state is read from and persisted to, under a lock

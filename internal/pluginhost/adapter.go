@@ -47,6 +47,11 @@ func (p *Plugin) Definitions() []*schema.ResourceDefinition { return p.defs }
 // Version is what the plugin reported, for `plugins:` constraints and --verbose.
 func (p *Plugin) Version() string { return p.client.PluginVersion() }
 
+// MaxConcurrency reports what this plugin says its API tolerates, or 0 for no
+// claim. A built-in provider implements nothing here and is treated the same
+// way — the host's default stands.
+func (p *Plugin) MaxConcurrency() int { return p.client.MaxConcurrency() }
+
 // Close shuts the plugin down.
 func (p *Plugin) Close() error { return p.client.Close() }
 

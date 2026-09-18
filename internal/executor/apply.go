@@ -87,7 +87,7 @@ func Apply(ctx context.Context, p *planner.Plan, g *graph.Graph[planner.OpNode],
 				continue
 			}
 			providerName := r.providerNameFor(node)
-			if providerName != "" && providerInFlight[providerName] >= opts.PerProvider {
+			if providerName != "" && providerInFlight[providerName] >= providerCeiling(opts, providerName) {
 				deferred = append(deferred, node)
 				continue
 			}
@@ -647,4 +647,23 @@ func stampInstance(rs *resource.ResourceState, instance string) {
 		return
 	}
 	rs.Provider = instance
+}
+
+// providerCeiling is how many operations may run at once against one provider:
+// what that plugin declared, or opts.PerProvider when it declared nothing.
+//
+// Below 1 is folded to 1 rather than honoured. A ceiling of zero would admit no
+// work at all and the run would hang holding a state lock, which is a worse
+// outcome than ignoring a plugin that got its own arithmetic wrong — and this
+// number now comes from a third party, so "a plugin got it wrong" stopped being
+// hypothetical the moment it stopped being a constant in this file.
+func providerCeiling(opts Options, providerName string) int {
+	n, ok := opts.ProviderLimits[providerName]
+	if !ok {
+		return opts.PerProvider
+	}
+	if n < 1 {
+		return 1
+	}
+	return n
 }
