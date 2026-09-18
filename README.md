@@ -267,11 +267,25 @@ Exit codes are stable: `0` no changes, `1` error, `2` changes applied, `77` chan
 
 ## Getting started
 
-Download a binary from [Releases](https://github.com/Infrena/infrena/releases) and check it runs:
+Download a binary from [Releases](https://github.com/Infrena/infrena/releases) — there is one for
+Linux, macOS and Windows, on both Intel and ARM. Verify it, unpack it, and put it on your `PATH`:
 
 ```bash
+VERSION=0.11.1
+BASE=https://github.com/Infrena/infrena/releases/download/v$VERSION
+
+curl -fsSLO $BASE/infrena_${VERSION}_linux_amd64.tar.gz
+curl -fsSLO $BASE/SHA256SUMS
+sha256sum -c SHA256SUMS --ignore-missing     # shasum -a 256 -c on macOS
+
+tar -xzf infrena_${VERSION}_linux_amd64.tar.gz
+sudo mv infrena_${VERSION}_linux_amd64/infrena /usr/local/bin/
 infrena version
 ```
+
+**Check the checksum.** Infrena verifies every plugin it installs against `plugins.lock`, and a
+tool that does that while shrugging at its own download would not be worth believing. `SHA256SUMS`
+is published with every release for exactly this.
 
 Create a project — by default in `./infrena/`, so infrastructure sits beside the application it belongs to:
 
