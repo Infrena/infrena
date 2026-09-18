@@ -4217,14 +4217,52 @@ password:
 
 State must protect sensitive values.
 
-Support references such as:
+**SHIPPED 2026-09-18, as `${secret.NAME}` rather than the mapping sketched here.**
+The sketch was:
 
 ```yaml
 password:
   secret: DATABASE_PASSWORD
 ```
 
-Eventually support external secret stores such as AWS Secrets Manager.
+and what shipped is a namespace alongside `${var.}`:
+
+```yaml
+password: ${secret.DATABASE_PASSWORD}
+database_url: postgres://app:${secret.DATABASE_PASSWORD}@db.internal/app
+```
+
+**The spelling changed for three reasons**, recorded because this section still
+carries the original and a reader deserves to know which one is real:
+
+- **The mapping is ambiguous.** A map attribute whose only key happens to be
+  `secret` is indistinguishable from a secret lookup, so `tags: {secret: quiet}`
+  would silently read the environment variable `quiet`.
+- **It does not compose.** A connection string is the common shape and a mapping
+  cannot express one.
+- **It is a second grammar.** `${var.x}` shipped in v0.5.0 (§10.5), after this
+  section was written. A differently-shaped way to spell "a value from
+  elsewhere" is a thing to learn twice.
+
+**The environment is the only source, and that is what holds the open-core
+line.** infrena never stores or transports a secret: it reads what the process
+was already given. Vault, AWS Secrets Manager and 1Password are named in §60 as
+platform features, and that boundary stays easy to defend precisely because the
+core reads nothing it would have to hold.
+
+**Unset is an error, and so is empty.** An empty credential does not fail at the
+plan — it fails at the provider, after somebody approved the run. Empty is
+refused alongside missing because empty is the shape a CI failure actually
+takes: a repository secret that was never created expands to an empty string
+rather than disappearing.
+
+**A secret is sensitive whatever the schema says.** Schema-declared sensitivity
+describes the ATTRIBUTE; this describes the VALUE. Without that, redaction would
+depend on a provider having anticipated where somebody might put a credential —
+so a secret in `cidr` would print in clear.
+
+The plan artifact still holds it in cleartext at 0600, unchanged and deliberate
+(§37.2): `apply --plan` reads those values back and needs the real ones.
 
 ---
 

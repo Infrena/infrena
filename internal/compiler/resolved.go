@@ -82,7 +82,14 @@ type Options struct {
 	// single place the CLI assembles what compilation needs, and threading a
 	// parameter through eight stages that do not use it would put it in every
 	// signature to be used by one.
-	Ctx      context.Context
+	Ctx context.Context
+	// Secrets resolves ${secret.NAME} (PLAN.md §36). Nil supplies none, and a
+	// reference then reports "not set" rather than reading as empty.
+	//
+	// A FUNCTION, not a map, and injected rather than read from os.Getenv here:
+	// compilation stays a pure function of what it is given, so a test passes a
+	// map and does not have to set process-wide state to check a secret path.
+	Secrets  func(name string) (value.Value, bool)
 	Vars     map[string]string      // from --var
 	FileVars map[string]value.Value // from --var-file
 }

@@ -38,7 +38,7 @@ resources:
 `,
 	})
 
-	exp, ds := Expand(decl, variables.Scope{}, nil, Env{Name: "dev"}, dir, paths{})
+	exp, ds := Expand(decl, variables.Scope{}, nil, Env{Name: "dev"}, dir, paths{}, nil)
 	if ds.HasErrors() {
 		t.Fatalf("unexpected diagnostics: %+v", ds)
 	}
@@ -72,7 +72,7 @@ resources:
 `,
 	})
 
-	exp, ds := Expand(decl, variables.Scope{}, nil, Env{Name: "dev"}, dir, paths{})
+	exp, ds := Expand(decl, variables.Scope{}, nil, Env{Name: "dev"}, dir, paths{}, nil)
 	if ds.HasErrors() {
 		t.Fatalf("unexpected diagnostics: %+v", ds)
 	}
@@ -112,7 +112,7 @@ outputs:
 `,
 	})
 
-	exp, ds := Expand(decl, variables.Scope{}, nil, Env{Name: "dev"}, dir, paths{})
+	exp, ds := Expand(decl, variables.Scope{}, nil, Env{Name: "dev"}, dir, paths{}, nil)
 	if ds.HasErrors() {
 		t.Fatalf("unexpected diagnostics: %+v", ds)
 	}
@@ -154,7 +154,7 @@ outputs:
 `,
 	})
 
-	exp, _ := Expand(decl, variables.Scope{}, nil, Env{Name: "dev"}, dir, paths{})
+	exp, _ := Expand(decl, variables.Scope{}, nil, Env{Name: "dev"}, dir, paths{}, nil)
 	v, ds := evalAt(t, exp, "web", "postgres://${database.connection_string}/app")
 	if ds.HasErrors() {
 		t.Fatalf("an unknown output must not be a coercion failure: %+v", ds)
@@ -195,7 +195,7 @@ outputs:
 `,
 	})
 
-	exp, ds := Expand(decl, variables.Scope{}, nil, Env{Name: "dev"}, dir, paths{})
+	exp, ds := Expand(decl, variables.Scope{}, nil, Env{Name: "dev"}, dir, paths{}, nil)
 	if ds.HasErrors() {
 		t.Fatalf("unexpected diagnostics: %+v", ds)
 	}
@@ -247,7 +247,7 @@ outputs:
 `,
 	})
 
-	exp, ds := Expand(decl, variables.Scope{}, nil, Env{Name: "dev"}, dir, paths{})
+	exp, ds := Expand(decl, variables.Scope{}, nil, Env{Name: "dev"}, dir, paths{}, nil)
 	if ds.HasErrors() {
 		t.Fatalf("unexpected diagnostics: %+v", ds)
 	}
@@ -326,7 +326,7 @@ outputs:
 `,
 	})
 
-	exp, ds := Expand(decl, variables.Scope{}, nil, Env{Name: "dev"}, dir, paths{})
+	exp, ds := Expand(decl, variables.Scope{}, nil, Env{Name: "dev"}, dir, paths{}, nil)
 	if ds.HasErrors() {
 		t.Fatalf("PLAN.md §11's own example must compile: %+v", ds)
 	}
@@ -371,7 +371,7 @@ outputs:
 `,
 	})
 
-	_, ds := Expand(decl, variables.Scope{}, nil, Env{Name: "dev"}, dir, paths{})
+	_, ds := Expand(decl, variables.Scope{}, nil, Env{Name: "dev"}, dir, paths{}, nil)
 	if !hasFragment(ds, "module calls reference each other in a cycle") {
 		t.Errorf("two siblings each reading the other's output have no valid order; got %+v", ds)
 	}
@@ -438,7 +438,7 @@ resources:
 	var vars variables.Scope
 	vars.Override("scale", value.Unknown(value.KindInt, value.SourceVariable))
 
-	exp, ds := Expand(decl, vars, nil, Env{Name: "dev"}, dir, paths{})
+	exp, ds := Expand(decl, vars, nil, Env{Name: "dev"}, dir, paths{}, nil)
 	if ds.HasErrors() {
 		t.Fatalf("an unknown integer is exact to retype as a float — there is no datum to "+
 			"round: %+v", ds)
@@ -495,7 +495,7 @@ outputs:
 	var vars variables.Scope
 	vars.Override("scale", value.Unknown(value.KindInt, value.SourceVariable))
 
-	exp, ds := Expand(decl, vars, nil, Env{Name: "dev"}, dir, paths{})
+	exp, ds := Expand(decl, vars, nil, Env{Name: "dev"}, dir, paths{}, nil)
 	if ds.HasErrors() {
 		t.Fatalf("unexpected diagnostics: %+v", ds)
 	}

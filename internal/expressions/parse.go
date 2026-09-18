@@ -548,6 +548,54 @@ func parseReference(src string, origin value.Origin, ds *diag.Diagnostics) *valu
 		return nil
 	}
 
+	// `secret` is the secret namespace, and is `var`'s sibling by design
+	// (PLAN.md §36, amended). §36 sketched a mapping spelling —
+	// `password: {secret: DATABASE_PASSWORD}` — which was written before the
+	// v0.5.0 reference grammar existed. Three things make the namespace the
+	// better answer, and they are recorded because the sketch is still in the
+	// spec:
+	//
+	//   - IT IS UNAMBIGUOUS. A mapping whose only key is `secret` is
+	//     indistinguishable from a genuine map attribute that happens to have
+	//     one, so `tags: {secret: quiet}` would silently become a secret lookup
+	//     of the environment variable "quiet".
+	//   - IT COMPOSES. `url: "postgres://app:${secret.PW}@db"` is the common
+	//     shape and a mapping cannot express it at all.
+	//   - IT IS ONE GRAMMAR. `${var.x}` already exists; a second, differently
+	//     shaped way to spell "a value from elsewhere" is a thing to learn
+	//     twice.
+	if segments[0] == "secret" {
+		if len(segments) == 1 {
+			ds.Add(diag.Diagnostic{
+				Severity: diag.SeverityError,
+				Summary:  "${secret} names no secret",
+				Detail:   "`secret` is the namespace secrets live in, not a secret itself.",
+				Action:   "Name one, as ${secret.DATABASE_PASSWORD}.",
+				Origin:   origin,
+			})
+			return nil
+		}
+		if len(segments) > 2 {
+			// No path steps. A secret is an opaque string read from the
+			// environment, so `${secret.X.y}` cannot mean anything — and
+			// letting it parse would make the failure a confusing one at
+			// evaluation rather than a clear one here.
+			ds.Add(diag.Diagnostic{
+				Severity: diag.SeverityError,
+				Summary:  "malformed reference " + strconv.Quote(src),
+				Detail:   "A secret is a single opaque value, so `secret.` takes one name and nothing after it.",
+				Action:   "Write ${secret." + segments[1] + "}.",
+				Origin:   origin,
+			})
+			return nil
+		}
+		return &value.Expr{
+			Op:     value.OpSecretRef,
+			Ref:    value.VarRef(segments[1]),
+			Origin: origin,
+		}
+	}
+
 	// `var` is the variable namespace. Stripping it HERE means nothing below
 	// the parser learns the prefix exists: variables.Scope is still keyed on
 	// the bare name, and the process variables seeded by

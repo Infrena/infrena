@@ -30,6 +30,22 @@ type Scope struct {
 	// three process variables, or the project's whole variable scope at the
 	// root.
 	Vars variables.Scope
+	// Secrets resolves ${secret.NAME}, and is nil when the caller supplies no
+	// secrets — which reports "not set" rather than an empty string.
+	//
+	// INJECTED RATHER THAN READ HERE. Compilation is otherwise a pure function
+	// of what it is given, and a package that reached for os.LookupEnv would
+	// stop being testable without setting process-wide state. The CLI passes
+	// the environment; a test passes a map.
+	//
+	// It CROSSES the module boundary, unlike Vars and dirVars. A module's
+	// inputs stop at its edge because they are the caller's configuration,
+	// which the module should not read behind its back. A secret is not
+	// configuration: it is ambient credential material belonging to the run,
+	// and a module that needs one would otherwise have to take it as an input
+	// — which means the secret's VALUE travelling through a module call, where
+	// it is far easier to log, print or record by accident.
+	Secrets func(name string) (value.Value, bool)
 	// dirVars is stage 4's per-directory scopes, keyed by config.ResourceDecl.Dir
 	// — resources/<dir>/vars/** (PLAN.md §4.1). Set on the ROOT scope only: a
 	// module sees its own inputs and the process variables and nothing else
@@ -108,11 +124,21 @@ func (s *Scope) In(dir string) *Scope {
 	if !ok {
 		return s
 	}
-	return &Scope{Module: s.Module, Vars: vars, dirVars: s.dirVars, names: s.names, skipped: s.skipped}
+	return &Scope{Module: s.Module, Vars: vars, Secrets: s.Secrets, dirVars: s.dirVars, names: s.names, skipped: s.skipped}
 }
 
 // Variable satisfies half of expressions.Scope.
 func (s *Scope) Variable(name string) (value.Value, bool) { return s.Vars.Variable(name) }
+
+// Secret satisfies expressions.SecretScope. A nil Secrets reports every secret
+// unset, which is the right answer for a caller that supplies none: the
+// alternative is an empty string standing in for a credential.
+func (s *Scope) Secret(name string) (value.Value, bool) {
+	if s.Secrets == nil {
+		return value.Value{}, false
+	}
+	return s.Secrets(name)
+}
 
 // Attribute satisfies the other half. At compile time no resource has been
 // created, so every reference to one reports unavailable — which is what turns
@@ -134,7 +160,7 @@ func (w *walker) moduleScope(
 	r *config.ResourceDecl, lv level, caller *Scope,
 	supplied map[string]value.Value, module []string,
 ) *Scope {
-	inner := &Scope{Module: module, names: map[string]Binding{}, skipped: map[string]value.Origin{}}
+	inner := &Scope{Module: module, Secrets: caller.Secrets, names: map[string]Binding{}, skipped: map[string]value.Origin{}}
 
 	// The three facts about the invocation cross every module boundary, each
 	// copied as-is, keeping the provenance the compiler stamped. A module that

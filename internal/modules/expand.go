@@ -241,6 +241,7 @@ type walker struct {
 func Expand(
 	project *config.ProjectDecl, scope variables.Scope,
 	dirScopes map[string]variables.Scope, env Env, dir string, resolve Resolver,
+	secrets func(name string) (value.Value, bool),
 ) (*Expansion, diag.Diagnostics) {
 	var ds diag.Diagnostics
 
@@ -256,7 +257,7 @@ func Expand(
 	}
 
 	w := &walker{root: abs, resolve: resolve, env: env, ds: &ds}
-	w.expand(rootLevel(project), &Scope{Vars: scope, dirVars: dirScopes, names: map[string]Binding{}, skipped: map[string]value.Origin{}}, abs, nil, "")
+	w.expand(rootLevel(project), &Scope{Vars: scope, Secrets: secrets, dirVars: dirScopes, names: map[string]Binding{}, skipped: map[string]value.Origin{}}, abs, nil, "")
 
 	// ONE sort, here, after everything is collected. The walk is already
 	// deterministic — stage 2 sorts resources by name — but a deterministic

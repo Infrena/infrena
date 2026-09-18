@@ -38,6 +38,9 @@ func evaluate(e *value.Expr, scope Scope, ds *diag.Diagnostics) value.Value {
 	case value.OpLiteral:
 		return e.Literal.WithOrigin(e.Origin)
 
+	case value.OpSecretRef:
+		return evaluateSecret(e, scope, ds)
+
 	case value.OpVarRef:
 		name := e.Ref.VarName()
 		v, ok := scope.Variable(name)
@@ -341,4 +344,62 @@ func stringify(v value.Value) (string, bool) {
 	default:
 		return "", false
 	}
+}
+
+// SecretScope supplies secrets by name. It is an OPTIONAL interface on Scope:
+// most scopes in this tree — a module's, a test's — have no business holding
+// secrets, and requiring the method would make every one of them declare that
+// it does not.
+//
+// Separate from Variable deliberately, rather than seeding secrets into the
+// variable scope. A variable can be listed, defaulted, overridden per
+// environment and printed in a diagnostic that suggests near-misses; a secret
+// must do none of those. Sharing the namespace would mean every one of those
+// features had to learn an exception, and the first one to forget would print
+// it.
+type SecretScope interface {
+	Secret(name string) (value.Value, bool)
+}
+
+// evaluateSecret resolves ${secret.NAME}.
+//
+// A MISSING SECRET IS AN ERROR, never an empty string. The whole point of the
+// value is that something downstream authenticates with it, so an empty one
+// does not fail here — it fails at a provider, as a permission error, at the
+// far end of a plan somebody already approved.
+//
+// The result is marked sensitive whatever the schema says. Schema-declared
+// sensitivity describes the ATTRIBUTE; this describes the VALUE, and a secret
+// written into an attribute nobody marked is exactly the case where redaction
+// would otherwise be missing.
+func evaluateSecret(e *value.Expr, scope Scope, ds *diag.Diagnostics) value.Value {
+	name := e.Ref.VarName()
+	ss, ok := scope.(SecretScope)
+	if !ok {
+		ds.Add(diag.Diagnostic{
+			Severity: diag.SeverityError,
+			Summary:  "secrets are not available here",
+			Detail:   "${secret." + name + "} was written somewhere this engine does not supply secrets to.",
+			Origin:   e.Origin,
+		})
+		return unknownFrom(e, value.KindString, true)
+	}
+	v, found := ss.Secret(name)
+	if !found {
+		ds.Add(diag.Diagnostic{
+			Severity: diag.SeverityError,
+			Summary:  "secret " + strconv.Quote(name) + " is not set",
+			Detail: "${secret." + name + "} reads the environment variable " + name +
+				", and it is unset or empty. It is refused rather than read as an empty string, " +
+				"because an empty credential does not fail here — it fails at the provider, " +
+				"after a plan somebody has already approved.",
+			Action: "Set " + name + " in the environment this runs in. In CI that is a secret " +
+				"the pipeline injects; nothing about it belongs in a file infrena reads.",
+			Origin: e.Origin,
+		})
+		return unknownFrom(e, value.KindString, true)
+	}
+	// Sensitive whatever the schema says, and origin from the use site so a
+	// diagnostic points at the configuration rather than at the environment.
+	return v.WithSensitive(true).WithOrigin(e.Origin)
 }

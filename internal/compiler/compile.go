@@ -134,7 +134,7 @@ func Compile(files []config.File, reg *registry.Registry, opts Options) (Resolve
 	// The environment, and every environment declared, so stage 5 can resolve
 	// `skip`/`only` and refuse a name nothing declares (PLAN.md §6.2).
 	env := modules.Env{Name: opts.Environment, Declared: declaredEnvironments(project)}
-	expansion, moduleDiags := modules.Expand(project, scope, dirScopes, env, opts.Dir, source.NewCache(opts.Dir))
+	expansion, moduleDiags := modules.Expand(project, scope, dirScopes, env, opts.Dir, source.NewCache(opts.Dir), opts.Secrets)
 	ds.Extend(moduleDiags)
 	if moduleDiags.HasErrors() {
 		// This halt suppresses ALL of stage 6, including diagnostics with
