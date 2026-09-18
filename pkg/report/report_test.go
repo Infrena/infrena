@@ -75,7 +75,7 @@ func TestMetaLine(t *testing.T) {
 	var buf bytes.Buffer
 	w := NewWriter(&buf)
 	started := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
-	if err := w.Meta("apply", "prod", started); err != nil {
+	if err := w.Meta("apply", "prod", "0.0.0-test", started); err != nil {
 		t.Fatalf("Meta: %v", err)
 	}
 

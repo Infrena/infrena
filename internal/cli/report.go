@@ -11,6 +11,7 @@ import (
 	"github.com/infrena/infrena/internal/executor"
 	"github.com/infrena/infrena/internal/refresh"
 	"github.com/infrena/infrena/internal/state"
+	"github.com/infrena/infrena/internal/version"
 	"github.com/infrena/infrena/pkg/address"
 	"github.com/infrena/infrena/pkg/report"
 	"github.com/infrena/infrena/pkg/resource"
@@ -44,7 +45,7 @@ func openReport(opts *GlobalOptions, command, environment string, errOut io.Writ
 	// somebody approved it is exactly the one an audit asks about, so the
 	// record must not depend on reaching a success path.
 	rw.SetApprovedBy(opts.ApprovedBy)
-	if err := rw.Meta(command, environment, time.Now()); err != nil {
+	if err := rw.Meta(command, environment, version.Version(), time.Now()); err != nil {
 		f.Close()
 		return nil, func() {}, fmt.Errorf("writing --output meta line: %w", err)
 	}

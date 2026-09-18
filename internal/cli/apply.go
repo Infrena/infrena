@@ -391,6 +391,12 @@ func newApplyCommand(opts *GlobalOptions) *cobra.Command {
 				fmt.Fprint(ro.Out(), executor.Render(res, executor.RenderOptions{Verbose: opts.Verbose}))
 
 				result := applyResultFrom(res)
+				// AFTER Apply, so it is the serial the run produced rather than
+				// the one it started from. The executor writes state under
+				// context.WithoutCancel, so this is set even for a run that was
+				// interrupted after its last Put — which is the run an audit
+				// most wants to be able to place.
+				result.StateSerial = st.Serial
 				if execDiags.HasErrors() || len(res.Failed) > 0 {
 					return finishApply(cmd.ErrOrStderr(), rw, result, errors.New("apply completed with failures"))
 				}

@@ -42,7 +42,7 @@ func TestReadSavedPlanAcceptsAStream(t *testing.T) {
 		t.Fatal(err)
 	}
 	w := report.NewWriter(f)
-	if err := w.Meta("plan", "dev", time.Unix(0, 0)); err != nil {
+	if err := w.Meta("plan", "dev", "0.0.0-test", time.Unix(0, 0)); err != nil {
 		t.Fatal(err)
 	}
 	artifact, err := json.Marshal(&planner.Plan{Version: planner.PlanVersion, Project: "proj", Environment: "dev"})
@@ -70,7 +70,7 @@ func TestReadSavedPlanRefusesAStreamWithNoPlanLine(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "run.ndjson")
 	f, _ := os.OpenFile(path, os.O_CREATE|os.O_WRONLY, 0o600)
 	w := report.NewWriter(f)
-	_ = w.Meta("apply", "dev", time.Unix(0, 0))
+	_ = w.Meta("apply", "dev", "0.0.0-test", time.Unix(0, 0))
 	_ = w.WriteApplyResult(report.ApplyResult{})
 	f.Close()
 

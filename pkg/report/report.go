@@ -108,10 +108,21 @@ func (w *Writer) writeLine(v any) error {
 }
 
 // Meta writes the first line of every run this package reports on.
-func (w *Writer) Meta(command, environment string, startedAt time.Time) error {
+//
+// infrena is the BUILD that produced the report, which is not the same question
+// as `version`. `version` says how to decode these lines; `infrena` says what
+// wrote them. A report archived for a year is read long after the run, often by
+// somebody establishing what happened rather than replaying it, and "which
+// build did this" is the first thing they ask and the one thing the file could
+// not previously answer about itself.
+//
+// Empty for a development build, which is exactly what internal/version reports
+// for one and is more honest than stamping a number that names no release.
+func (w *Writer) Meta(command, environment, infrena string, startedAt time.Time) error {
 	return w.writeLine(metaLine{
 		Type:        "meta",
 		Version:     Version,
+		Infrena:     infrena,
 		Command:     command,
 		Environment: environment,
 		StartedAt:   startedAt,
@@ -121,6 +132,7 @@ func (w *Writer) Meta(command, environment string, startedAt time.Time) error {
 type metaLine struct {
 	Type        string    `json:"type"`
 	Version     int       `json:"version"`
+	Infrena     string    `json:"infrena,omitempty"`
 	Command     string    `json:"command"`
 	Environment string    `json:"environment"`
 	StartedAt   time.Time `json:"startedAt"`
@@ -279,12 +291,24 @@ type ApplyResult struct {
 	// could not have anticipated; an optional field on a line it already
 	// decodes is ignored by any consumer that does not know it and read by one
 	// that does.
-	ApprovedBy string            `json:"approved_by,omitempty"`
-	Applied    []string          `json:"applied,omitempty"`
-	Forgotten  []string          `json:"forgotten,omitempty"`
-	Failed     map[string]string `json:"failed,omitempty"`
-	Skipped    []string          `json:"skipped,omitempty"`
-	Error      string            `json:"error,omitempty"`
+	ApprovedBy string `json:"approved_by,omitempty"`
+	// StateSerial is the state's serial after the run, tying an archived
+	// report to the exact state version it produced.
+	//
+	// It is the strongest link a report can carry. Addresses say what was
+	// touched and timestamps say when, but a serial says WHICH STATE this run
+	// made — so two reports can be ordered against one another, a gap between
+	// serials shows a run that was never archived, and a report can be matched
+	// against a state file rather than believed on its own.
+	//
+	// Zero means no state was written: a failure before the first Put, or a
+	// command that writes none.
+	StateSerial uint64            `json:"state_serial,omitempty"`
+	Applied     []string          `json:"applied,omitempty"`
+	Forgotten   []string          `json:"forgotten,omitempty"`
+	Failed      map[string]string `json:"failed,omitempty"`
+	Skipped     []string          `json:"skipped,omitempty"`
+	Error       string            `json:"error,omitempty"`
 }
 
 // WriteApplyResult writes apply's final line.
