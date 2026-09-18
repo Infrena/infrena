@@ -356,3 +356,33 @@ func TestTheOmissionNoteSuitsItsReader(t *testing.T) {
 		}
 	}
 }
+
+// TestTheOmissionNoteNamesTheSyntax.
+//
+// The note used to say "TODO: set password" and stop, which left the reader
+// holding the one question the file could actually answer: set it to WHAT,
+// when the value must not be written here? ${secret.NAME} is that answer and
+// it arrived after the note did, so the note went on describing a gap it could
+// have closed.
+//
+// The environment variable name is asserted as an EXAMPLE, not a rule. infrena
+// imposes no convention — upper-casing the attribute is a plausible guess
+// offered so the reader adapts it.
+func TestTheOmissionNoteNamesTheSyntax(t *testing.T) {
+	rs := []Resource{{
+		Name: "orders", Type: "fake.database", ProviderID: "db-9",
+		Attributes: map[string]value.Value{
+			"engine":   prov("postgres"),
+			"password": prov("s3cret").WithSensitive(true),
+		},
+	}}
+
+	min := string(oneFile(t, rs).Bytes)
+	if strings.Contains(min, "s3cret") {
+		t.Fatalf("the secret itself was written into generated configuration:\n%s", min)
+	}
+	if !strings.Contains(min, "${secret.PASSWORD}") {
+		t.Errorf("the note does not show how to supply the value, which is the only question "+
+			"a reader has left:\n%s", min)
+	}
+}

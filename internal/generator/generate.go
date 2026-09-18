@@ -344,10 +344,22 @@ func renderResource(
 		// record they are reading. "TODO: set this" in an audit dump reads as
 		// an instruction to edit a file nobody is going to apply.
 		if opts.Minimal {
+			// NAMES THE SYNTAX, not just the omission. This note used to say
+			// "TODO: set password" and stop, which left the reader with the one
+			// question the file could answer: set it to WHAT, given the value
+			// must not be written here? ${secret.NAME} (PLAN.md §36) is that
+			// answer, and it arrived after this note did.
+			//
+			// The suggested name is the attribute upper-cased, which is a guess
+			// at a convention rather than a rule — it is offered as an example
+			// spelling precisely so a reader adapts it rather than believing
+			// infrena requires that name.
 			notes = append(notes, "TODO: set "+strings.Join(omittedSecrets, ", ")+
 				" — omitted because the provider marks "+
 				plural(len(omittedSecrets), "it", "them")+" sensitive, and this file is "+
-				"destined for version control")
+				"destined for version control. Read "+
+				plural(len(omittedSecrets), "it", "them")+" from the environment instead, as "+
+				secretExample(omittedSecrets[0]))
 		} else {
 			notes = append(notes, "omitted: "+strings.Join(omittedSecrets, ", ")+
 				" ("+plural(len(omittedSecrets), "marked", "marked")+" sensitive by the provider)")
@@ -546,4 +558,18 @@ func sortedValueKeys(m map[string]value.Value) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// secretExample renders the ${secret.NAME} spelling for one omitted attribute,
+// so the note shows the shape rather than describing it.
+//
+// The environment variable name is the attribute upper-cased with dots and
+// dashes folded to underscores: a plausible convention, offered as an example.
+// infrena imposes none — the name in the braces is whatever the environment
+// actually uses.
+func secretExample(attribute string) string {
+	env := strings.ToUpper(attribute)
+	env = strings.ReplaceAll(env, ".", "_")
+	env = strings.ReplaceAll(env, "-", "_")
+	return attribute + ": ${secret." + env + "}"
 }
