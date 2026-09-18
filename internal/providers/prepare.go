@@ -507,3 +507,81 @@ func correctionFor(name string, o value.Origin) string {
 	}
 	return "Correct the `providers:` entry for " + strconv.Quote(name) + "."
 }
+
+// PrepareLate loads plugins that only the EXPANDED configuration reveals, and
+// gives a newly loaded one an instance if the project named none.
+//
+// WHY IT HAS TO EXIST. Which plugins to load is derived from the resource types
+// configuration declares, and `module.<name>` is not one of them — a module call
+// is not a provider resource, so neededPlugins skips it, correctly. But a module
+// file is not read until stage 5, by which time the registry has been built. So
+// a provider used ONLY inside a module was never loaded, and the plan failed
+// naming a type inside the module: the module blamed for the plugin's absence.
+//
+// The honest workaround was to name the plugin in `providers:`. That works and
+// is now what the diagnostic suggested, but it is a block a reader gains nothing
+// from — the same "says nothing you could not already see" that makes
+// `providers:` optional in the first place. This closes it properly.
+//
+// AFTER EXPANSION, which is the only place the question is answerable: a nested
+// module's types are not knowable until its parent has been loaded, and a remote
+// module's are not knowable until it has been fetched.
+//
+// A SECOND PASS RATHER THAN A CHANGED FIRST ONE. Stage 4.5 has to run before
+// stage 5, because expansion needs the instance table to inherit a provider down
+// a module call. So the first pass cannot see module types and the second cannot
+// be merged into it; what it can do is reuse the same load path, so both passes
+// agree about what loading a plugin means.
+//
+// It is a NO-OP for the overwhelmingly common project, where every plugin a
+// module uses is already loaded because the root uses it too.
+func PrepareLate(
+	ctx context.Context, types []string, table Table, reg *registry.Registry,
+) (Table, diag.Diagnostics) {
+	var ds diag.Diagnostics
+
+	loaded := reg.PluginNames()
+	missing := map[string]bool{}
+	for _, t := range types {
+		prefix, _, ok := strings.Cut(t, ".")
+		if !ok || prefix == "" || slices.Contains(loaded, prefix) {
+			continue
+		}
+		missing[prefix] = true
+	}
+	if len(missing) == 0 {
+		return table, ds
+	}
+
+	names := make([]string, 0, len(missing))
+	for name := range missing {
+		names = append(names, name)
+	}
+	// Sorted, so two missing plugins are attempted and reported in the same
+	// order every run (invariant 6 covers diagnostics too).
+	sort.Strings(names)
+
+	for _, name := range names {
+		if err := reg.EnsurePlugin(ctx, name); err != nil {
+			// Deliberately NOT reported here. Stage 7 raises the diagnostic for
+			// a type it cannot resolve, and that one names the resource, its
+			// origin inside the module, and what to do — where this has only a
+			// plugin name and no idea who wanted it. Two messages about one
+			// absence is worse than the better one alone.
+			continue
+		}
+	}
+
+	// A plugin that has just loaded and has no instance cannot be dispatched to.
+	// Only recomputed when the project named NO instances: a project with a
+	// `providers:` block has said which instances exist, and inventing another
+	// because a module mentioned a plugin would put resources in an account
+	// nobody chose.
+	if len(table) == 0 {
+		if implicit := Implicit(reg); implicit != nil {
+			ds.Extend(Register(implicit, reg))
+			return implicit, ds
+		}
+	}
+	return table, ds
+}

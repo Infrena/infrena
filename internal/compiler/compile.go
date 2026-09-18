@@ -150,6 +150,26 @@ func Compile(files []config.File, reg *registry.Registry, opts Options) (Resolve
 		return ResolvedConfig{}, ds
 	}
 
+	// STAGE 5.5: plugins only the expanded configuration reveals.
+	//
+	// A provider used solely inside a module is invisible to stage 4.5, because
+	// that pass reads the types the ROOT declares and a `module.` call is not
+	// one of them. Module files are not read until the expansion just above, so
+	// this is the first moment the full set of types exists.
+	//
+	// A no-op for almost every project — a module's plugins are normally the
+	// root's plugins — and silent about a plugin it cannot load, because stage 7
+	// raises that with the resource, the origin and the action attached.
+	expandedTypes := make([]string, 0, len(expansion.Instances))
+	for _, inst := range expansion.Instances {
+		expandedTypes = append(expandedTypes, inst.Decl.Type)
+	}
+	table, lateDiags := providers.PrepareLate(opts.Context(), expandedTypes, table, reg)
+	ds.Extend(lateDiags)
+	if lateDiags.HasErrors() {
+		return ResolvedConfig{}, ds
+	}
+
 	// The lockfile comparison is a PURE READ, which is what lets `validate`
 	// report a moved tag without writing anything (Amendment 18b). Stage 5
 	// COLLECTS resolutions; nothing here records them — a command permitted to

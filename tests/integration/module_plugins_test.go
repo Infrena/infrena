@@ -23,46 +23,71 @@ resources:
     cidr: ${var.cidr}
 `
 
-// TestAModuleOnlyProjectSaysThePluginNeverLoaded.
+// TestAModuleOnlyProjectLoadsItsPlugins.
 //
-// Which plugins to load comes from the resource types the ROOT declares, and
-// `module.<name>` is not one of them — correctly, since a module call is not a
+// Which plugins to load is derived from the resource types configuration
+// declares, and `module.<name>` is not one of them — a module call is not a
 // provider resource. Module files are not read until stage 5, by which time the
-// registry is built, so a provider used only inside a module is never found.
+// registry was already built, so a provider used ONLY inside a module was never
+// loaded and the plan failed naming a type inside the module. The module got
+// blamed for the plugin's absence.
 //
-// What made it bad was the diagnostic rather than the gap. It named a type
-// inside the module and offered "Known types:" followed by NOTHING, because
-// nothing had loaded — advice to fix a spelling that was never wrong, and the
-// real fact left unsaid. This asserts the message names the actual cause and
-// the actual fix.
-func TestAModuleOnlyProjectSaysThePluginNeverLoaded(t *testing.T) {
+// Stage 5.5 loads what expansion revealed. This project declares no
+// `providers:` block on purpose: needing one was the workaround, and a block a
+// reader gains nothing from is exactly what makes `providers:` optional in the
+// first place.
+func TestAModuleOnlyProjectLoadsItsPlugins(t *testing.T) {
 	dir := project(t, moduleOnlyProject)
 	writeIn(t, dir, "modules/db/module.yml", dbModuleOnly)
 
 	r := run(t, dir, "plan", "dev")
-	if r.ExitCode == 2 {
-		t.Fatalf("a project with no plugin available produced a plan\n%s", r.combined())
+	if r.ExitCode != 2 {
+		t.Fatalf("a project whose resources are all inside modules did not plan: %d\n%s",
+			r.ExitCode, r.combined())
 	}
-	out := r.combined()
-	for _, want := range []string{
-		"never loaded",
-		"declared at the root",
-		"providers:",
-		"- plugin: fake",
-	} {
-		if !strings.Contains(out, want) {
-			t.Errorf("the diagnostic never mentions %q:\n%s", want, out)
-		}
-	}
-	// The old message's whole problem, asserted directly: an empty list of types
-	// presented as the answer.
-	if strings.Contains(out, "Known types:") {
-		t.Errorf("a list of known types was offered when no plugin had loaded:\n%s", out)
+	if !strings.Contains(r.combined(), "module.primary.net") {
+		t.Errorf("the module's resource is not in the plan:\n%s", r.combined())
 	}
 }
 
-// TestAProvidersBlockIsEnoughForAModuleOnlyProject — the documented fix has to
-// work, or the diagnostic is advice that fails.
+// TestAPluginThatIsGenuinelyMissingStillSaysSo, and says it about the plugin
+// rather than about the type.
+//
+// Stage 5.5 loading late must not turn a real absence into a worse message: the
+// diagnostic still has to name the plugin, report that nothing loaded, and not
+// offer a list of known types that cannot contain the answer.
+func TestAPluginThatIsGenuinelyMissingStillSaysSo(t *testing.T) {
+	dir := project(t, `
+project: myapp
+resources:
+  primary:
+    type: module.db
+    cidr: 10.0.0.0/16
+`)
+	writeIn(t, dir, "modules/db/module.yml", `
+inputs:
+  cidr:
+    type: string
+resources:
+  net:
+    type: nosuchplugin.network
+    cidr: ${var.cidr}
+`)
+
+	r := run(t, dir, "plan", "dev")
+	if r.ExitCode == 2 {
+		t.Fatalf("a type from a plugin nobody has produced a plan\n%s", r.combined())
+	}
+	out := r.combined()
+	if !strings.Contains(out, "nosuchplugin") {
+		t.Errorf("the diagnostic does not name the plugin:\n%s", out)
+	}
+}
+
+// TestAProvidersBlockIsEnoughForAModuleOnlyProject. No longer the required
+// workaround, and it must still work: naming a plugin explicitly is the older
+// and more explicit way to say the same thing, and plenty of projects have the
+// block anyway for a region or an account.
 func TestAProvidersBlockIsEnoughForAModuleOnlyProject(t *testing.T) {
 	dir := project(t, `
 project: myapp

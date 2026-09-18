@@ -190,41 +190,17 @@ That is deliberate. The failure mode of module systems is a module that quietly 
 something at the call site, so it works in the project it was written in and nowhere else.
 Inputs and outputs being the entire interface is what makes a module movable.
 
-## A known limitation: declare `providers:` if everything is in modules
+## A project built only of modules
 
-Which plugins to load is worked out from the resource types the **root** configuration
-declares, and `module.<name>` is not one of them. Module files are not read until later, so a
-provider used *only* inside a module is never discovered, and the plan fails naming a type
-inside the module:
+Nothing special is required. Which plugins to load is worked out from the resource types
+configuration declares, and `module.<name>` is not one of them — so for a while a provider
+used *only* inside a module was never loaded, and the plan failed naming a type inside the
+module, which read as the module being wrong.
 
-```
-Error: unknown resource type "fake.network"
-  at modules/db/module.yml:5:3, in module.primary
-
-  The fake plugin was never loaded, so nothing could offer "fake.network".
-  No provider plugins were loaded at all.
-
-  Which plugins to load is worked out from the resource types declared at the
-  root of the project, and a `module.` call is not one of them. Every resource
-  using fake is inside a module, so nothing at the root asked for it.
-
-  Suggested action:
-    Name it explicitly:
-
-      providers:
-        - plugin: fake
-
-    That block is optional only because a root resource type usually implies
-    its plugin.
-```
-
-**The fix is to name the provider explicitly**, which is what `providers:` is for:
+Module types are now collected after expansion, so this works:
 
 ```yaml
 project: myapp
-
-providers:
-  - plugin: fake
 
 resources:
   primary:
@@ -232,9 +208,6 @@ resources:
     cidr: 10.0.0.0/16
 ```
 
-`providers:` is optional precisely *because* a resource type usually implies its plugin. When
-every resource is inside a module there is nothing at the root to imply it, so say it. Most
-projects reach for `providers:` anyway to set a region or an account.
-
-Loading the plugin from the module's own contents would be the better fix, and is on the
-list. Until then the error says what actually happened rather than blaming the type.
+A `providers:` block is still the way to say anything *about* a provider — a region, an
+account, two instances of one plugin — and naming a plugin there has always been enough. It
+is simply no longer required to make a module-only project load.
