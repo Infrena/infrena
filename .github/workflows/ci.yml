@@ -65,11 +65,20 @@ jobs:
           - go: "1.27"
             name: current
     steps:
-      # The path is explicit and load-bearing: infrena-provider-fake's go.mod says
-      # `replace github.com/infrena/infrena => ../infrena`, so the directory beside it
-      # must be called that. The two have to agree, and CI is where a disagreement shows
-      # up — it failed once on exactly this, when that replace still named a local
-      # directory (`../ilan`) that no clone produces.
+      # The path is explicit and load-bearing: the two checkouts must be SIBLINGS, because
+      # tests/integration builds the fake plugin inside a go.work joining it to this one
+      # (see buildFakePlugin) and finds this checkout by walking up from the test's own
+      # directory.
+      #
+      # It used to be load-bearing for a different reason — infrena-provider-fake's go.mod
+      # carried `replace github.com/infrena/infrena => ../infrena`, so the sibling
+      # directory had to be named exactly that. CI is where a disagreement showed up: it
+      # failed once when that replace still named `../ilan`, a local directory no clone
+      # produces, and again on 2026-09-17 when the replace was REMOVED and this job began
+      # trying to fetch the private infrena module with no credentials on the step. The
+      # workspace is the durable answer, because it makes this repository state which
+      # infrena the plugin is built against rather than inherit it from a go.mod that
+      # nobody here reviews.
       - uses: actions/checkout@v7
         with:
           path: infrena

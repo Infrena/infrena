@@ -67,18 +67,22 @@ func fakePluginDir(t *testing.T) string {
 }
 
 func buildFakePlugin() {
+	wd, err := os.Getwd()
+	if err != nil {
+		pluginErr = err
+		return
+	}
+	// wd is <root>/tests/integration, so two levels up is this repository's root and
+	// three is the directory holding it, whose sibling is the plugin. Getting this
+	// wrong is how the first version of this looked inside the repo itself — which the
+	// skip message named, and is why it names it.
+	//
+	// root is needed whether or not the repo path was overridden, because the
+	// workspace below joins the plugin to THIS checkout either way.
+	root := filepath.Dir(filepath.Dir(wd))
+
 	repo := os.Getenv(pluginRepoEnv)
 	if repo == "" {
-		wd, err := os.Getwd()
-		if err != nil {
-			pluginErr = err
-			return
-		}
-		// wd is <root>/tests/integration, so three levels up is the directory holding
-		// this repository, and the plugin is its sibling. Getting this wrong is how the
-		// first version of this looked inside the repo itself — which the skip message
-		// named, and is why it names it.
-		root := filepath.Dir(filepath.Dir(wd))
 		repo = filepath.Join(filepath.Dir(root), "infrena-provider-fake")
 	}
 	if _, err := os.Stat(filepath.Join(repo, "go.mod")); err != nil {
@@ -94,15 +98,64 @@ func buildFakePlugin() {
 	// The binary NAME is how the host finds it (§31.1), so this is not arbitrary.
 	bin := filepath.Join(out, "infrena-plugin-fake")
 
+	// A WORKSPACE JOINING THE PLUGIN TO THIS CHECKOUT, and it is load-bearing twice.
+	//
+	// FIRST, it is what makes these tests test THIS infrena. The plugin's go.mod
+	// requires a released infrena, so a plain build here would link the plugin
+	// against whatever version that names and the integration suite would exercise
+	// the pairing of a working-tree host with a released SDK while reporting on the
+	// host under test. A protocol change would then be tested against the protocol
+	// it replaced.
+	//
+	// SECOND, it is what keeps this buildable without git credentials. infrena is a
+	// private module (PLAN.md §31.1), so resolving that require means an
+	// authenticated fetch; supplied by the workspace, it is never fetched at all.
+	// Only ordinary public dependencies still go to the proxy.
+	//
+	// This used to come for free from `replace ... => ../infrena` in the plugin's own
+	// go.mod, which is why CI checks the plugin out at a fixed path beside this repo.
+	// That replace was removed on 2026-09-17 when the plugin moved to a gitignored
+	// go.work of its own, and this build broke in CI the moment it merged — the
+	// private fetch, with no credentials on that step. Declaring the pairing HERE is
+	// the durable fix: this suite now states which infrena the plugin is built
+	// against instead of inheriting it from another repository's go.mod, where a
+	// change nobody here reviews can silently repoint it.
+	work := filepath.Join(out, "go.work")
+	if err := os.WriteFile(work, []byte(workspaceFor(root, repo)), 0o644); err != nil {
+		pluginErr = err
+		return
+	}
+
 	cmd := exec.Command("go", "build", "-o", bin, "./cmd/infrena-plugin-fake")
 	// Built from the PLUGIN's module, not this one: it is a separate module with its own
 	// go.mod, and `go build` of a path outside the main module is refused.
 	cmd.Dir = repo
+	// Explicit, so a go.work sitting in either checkout cannot change what is built.
+	cmd.Env = append(os.Environ(), "GOWORK="+work)
 	if combined, err := cmd.CombinedOutput(); err != nil {
 		pluginErr = fmt.Errorf("building infrena-plugin-fake in %s: %v\n%s", repo, err, combined)
 		return
 	}
 	pluginDir = out
+}
+
+// workspaceFor builds the go.work joining this checkout to the plugin's.
+//
+// The `go` directive is read from this repository's own go.mod rather than
+// written as a literal: a workspace declaring a version below either module's
+// is refused outright, so a hardcoded one turns the next toolchain bump into a
+// failure in a file nobody would think to look in.
+func workspaceFor(root, repo string) string {
+	version := "1.27.0"
+	if data, err := os.ReadFile(filepath.Join(root, "go.mod")); err == nil {
+		for _, line := range strings.Split(string(data), "\n") {
+			if rest, ok := strings.CutPrefix(strings.TrimSpace(line), "go "); ok {
+				version = strings.TrimSpace(rest)
+				break
+			}
+		}
+	}
+	return "go " + version + "\n\nuse (\n\t" + repo + "\n\t" + root + "\n)\n"
 }
 
 // TestAShippedBuildCarriesNoProvider is the cutover's governing claim, and the only test
