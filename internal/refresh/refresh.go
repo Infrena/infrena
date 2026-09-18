@@ -107,17 +107,39 @@ func Refresh(ctx context.Context, st *state.State, reg *registry.Registry, paral
 		}
 	}
 
+	// THE PER-PROVIDER SEMAPHORE IS TAKEN INSIDE THE WORKER, NOT HERE, and that
+	// placement is the whole point.
+	//
+	// It used to be taken on this goroutine, beside the global one. That made one
+	// provider's queue block the handing out of work for EVERY provider: with aws
+	// full, this loop stopped at `ps <- struct{}{}` and the next resource — belonging
+	// to some entirely unrelated provider with an idle semaphore — was not even
+	// started. 181ms of head-of-line delay measured. It was invisible while there was
+	// one provider, which is why the note carried "fix before a second one exists";
+	// the AWS provider is that second one.
+	//
+	// The global semaphore stays here. It is what bounds the number of live
+	// goroutines, which is what --parallelism means to a user, and taking it here
+	// means this loop applies back-pressure instead of spawning one goroutine per
+	// resource in state.
+	//
+	// WHAT THAT LEAVES, stated rather than glossed: a worker holding a global slot
+	// while waiting on its provider's semaphore still occupies that slot. So N
+	// resources of a saturated provider can hold global slots that a faster
+	// provider's work would otherwise use. That is bounded by parallelism and
+	// self-clearing, where the old behaviour was an unbounded serialisation of the
+	// dispatch loop itself. Removing it entirely means dropping the global bound
+	// here and acquiring both inside, which trades a known small delay for one
+	// goroutine per resource in state — not worth it until something measures it.
 	var wg sync.WaitGroup
 	for i, addr := range addrs {
 		wg.Add(1)
 		sem <- struct{}{}
-		if ps := perProviderSem[providerOf[i]]; ps != nil {
-			ps <- struct{}{}
-		}
 		go func() {
 			defer wg.Done()
 			defer func() { <-sem }()
 			if ps := perProviderSem[providerOf[i]]; ps != nil {
+				ps <- struct{}{}
 				defer func() { <-ps }()
 			}
 			results[i], problems[i] = readOne(ctx, st, reg, addr)

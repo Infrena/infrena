@@ -694,3 +694,86 @@ func TestRefreshSkipsProviderReadWhenContextAlreadyCancelled(t *testing.T) {
 		t.Errorf("provider Read was called %d times; want 0 — Refresh must check ctx before dispatching, not rely on the provider to notice", calls)
 	}
 }
+
+// TestOneProvidersQueueDoesNotStallAnother.
+//
+// The per-provider semaphore used to be taken on the DISPATCH goroutine, beside
+// the global one. So when one provider's bound was full, the loop handing out
+// work stopped dead — and the next resource, belonging to an entirely unrelated
+// provider with an idle semaphore, was not started at all. It was harmless while
+// there was one provider and stopped being harmless when the AWS provider shipped.
+//
+// The shape here is the smallest one that can tell the difference: `slow` is
+// bounded to ONE concurrent read and given four resources of 60ms each, so its
+// queue is saturated for ~240ms. `quick` has a single resource that returns
+// immediately, dispatched last so it sits behind the whole slow queue in address
+// order.
+//
+// With the old placement the quick read cannot begin until the slow queue drains,
+// because the dispatch loop is blocked on slow's semaphore — so it finishes at
+// ~240ms. With the semaphore taken inside the worker, the quick read is dispatched
+// straight away and finishes almost immediately.
+//
+// The assertion is on WHEN the quick read finished relative to the whole refresh,
+// not on a fixed millisecond count, so a slow machine moves both numbers together.
+func TestOneProvidersQueueDoesNotStallAnother(t *testing.T) {
+	slow := &delayedProvider{resourceType: "slow.thing", delay: 60 * time.Millisecond}
+	quick := &delayedProvider{resourceType: "quick.thing"}
+
+	reg := registry.New()
+	if err := reg.Register("slow", slow); err != nil {
+		t.Fatalf("Register slow: %v", err)
+	}
+	if err := reg.Register("quick", quick); err != nil {
+		t.Fatalf("Register quick: %v", err)
+	}
+
+	st := state.New("myapp", "dev")
+	// Names chosen so the slow resources sort BEFORE the quick one: Refresh walks
+	// addresses in sorted order, so this puts the quick read at the back of the
+	// queue, which is the position the old code could not rescue it from.
+	for i := range 4 {
+		name := fmt.Sprintf("a-slow-%d", i)
+		st.Set(&resource.ResourceState{
+			Provider: "slow", Address: address.Address{Name: name},
+			Type: "slow.thing", ProviderID: name,
+		})
+	}
+	st.Set(&resource.ResourceState{
+		Provider: "quick", Address: address.Address{Name: "z-quick"},
+		Type: "quick.thing", ProviderID: "z-quick",
+	})
+
+	var mu sync.Mutex
+	var quickAt time.Duration
+	start := time.Now()
+
+	// perProvider 1, so slow's four reads are strictly one at a time and its queue
+	// is genuinely saturated. Global parallelism 8, so nothing global is the
+	// constraint — if the quick read waits, only the per-provider bound can explain it.
+	_, ds := Refresh(context.Background(), st, reg, 8, 1, func(o Observation) {
+		if o.Address.Name == "z-quick" {
+			mu.Lock()
+			quickAt = time.Since(start)
+			mu.Unlock()
+		}
+	})
+	total := time.Since(start)
+	if ds.HasErrors() {
+		t.Fatalf("unexpected diagnostics: %+v", ds)
+	}
+
+	mu.Lock()
+	at := quickAt
+	mu.Unlock()
+	if at == 0 {
+		t.Fatal("the quick provider's resource was never observed")
+	}
+	// Half the run is a generous line: the quick read should land near zero, and
+	// the serialised behaviour lands at essentially the whole run.
+	if at > total/2 {
+		t.Errorf("the quick provider's read finished %v into a %v refresh — it waited on the "+
+			"slow provider's queue, so one provider's bound is still stalling another", at, total)
+	}
+	t.Logf("quick read finished %v into a %v refresh", at, total)
+}
