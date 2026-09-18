@@ -73,7 +73,7 @@ func newDestroyCommand(opts *GlobalOptions) *cobra.Command {
 			}
 			// STATE names the plugins here, not configuration: a destroy's premise is
 			// that nothing is configured.
-			if stateDiags := ensureStateProviders(reg, st0); stateDiags.HasErrors() {
+			if stateDiags := ensureStateProviders(reg, st0, nil); stateDiags.HasErrors() {
 				stateDiags.Render(cmd.ErrOrStderr())
 				return finishApply(cmd.ErrOrStderr(), rw, report.ApplyResult{}, errProviderInstances)
 			}
@@ -98,6 +98,7 @@ func newDestroyCommand(opts *GlobalOptions) *cobra.Command {
 			}
 
 			fmt.Fprint(ro.Out(), planner.Render(p, planner.RenderOptions{Verbose: opts.Verbose, Definition: reg.Definition}))
+			reportPlan(ro, p, report.StageProposed)
 
 			if !p.HasChanges() {
 				return finishApply(cmd.ErrOrStderr(), rw, report.ApplyResult{}, nil)
@@ -167,6 +168,7 @@ func newDestroyCommand(opts *GlobalOptions) *cobra.Command {
 				// same hook is what renders progress to stdout.
 				execOpts.OnEvent = eventHook(ro)
 
+				reportPlan(ro, p2, report.StageExecuting)
 				res, execDiags := executor.Apply(ctx, p2, g, st, execOpts)
 				renderDiagnostics(cmd.ErrOrStderr(), rw, execDiags)
 

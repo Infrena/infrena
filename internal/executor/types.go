@@ -5,7 +5,6 @@
 package executor
 
 import (
-	"context"
 	"time"
 
 	"github.com/infrena/infrena/internal/planner"
@@ -123,62 +122,6 @@ type Options struct {
 	// called concurrently from multiple workers; a receiver that is not
 	// itself safe for concurrent use must serialize its own access.
 	OnEvent func(Event)
-}
-
-// RetryPolicy governs how a failed provider call is retried. It carries no
-// behavior of its own; see retry.go for the classification rules and the
-// loop that reads these fields.
-type RetryPolicy struct {
-	// MaxAttempts is the total number of attempts, including the first —
-	// not the number of retries. Values below 1 mean 1: exactly one
-	// attempt, no retry.
-	MaxAttempts int
-	// Base is the delay before the first retry. Each subsequent retry
-	// doubles it, capped at Max.
-	Base time.Duration
-	// Max caps the backoff delay, however many attempts have elapsed.
-	Max time.Duration
-	// Sleep waits out one backoff delay. It is injectable so tests can
-	// supply a version that returns immediately instead of actually
-	// sleeping, and so the real implementation can return early — wrapping
-	// ctx.Err() — when the context is cancelled mid-wait, which is how a
-	// SIGINT during a retry delay is able to interrupt the wait rather than
-	// block until it elapses. nil means the real implementation.
-	Sleep func(context.Context, time.Duration) error
-	// Jitter perturbs a computed backoff delay before it is used, so many
-	// operations that failed at the same instant do not all wake up and
-	// retry in lockstep. It is injectable so tests can supply the identity
-	// function and assert exact delays. nil means the real implementation.
-	Jitter func(time.Duration) time.Duration
-	// OnRetry is called once per retry, immediately before the backoff wait
-	// begins: attempt is the attempt that just failed (1-based), err is why,
-	// and delay is how long the wait will be. nil means no notification.
-	//
-	// It exists because this loop is the only place that knows all three
-	// facts at the moment they are true. Task 8 needs them to emit
-	// EventRetrying with honest timing; reconstructing them from outside
-	// would mean guessing at the backoff schedule, and a progress line that
-	// guesses is worse than none. Called synchronously and before the wait,
-	// so an event reaches the user while the delay is still ahead rather
-	// than being reported after the fact.
-	//
-	// Called concurrently from multiple worker goroutines, exactly like
-	// OnEvent above: every retrying operation in a run calls Attempt with
-	// this same RetryPolicy value, and Apply may have several retrying at
-	// once. An implementation that is not itself safe for concurrent use
-	// must serialize its own access — the same requirement OnEvent already
-	// states, and for the same reason.
-	//
-	// One subtlety worth being explicit about: Apply gives each operation
-	// its own RetryPolicy value (a plain copy, so its own wrapping of
-	// OnRetry to also emit EventRetrying never races a sibling operation's
-	// copy), but a copy of the struct does not copy what a func value
-	// points to. If a caller's OnRetry closes over shared state — a
-	// counter, a slice it appends to, anything mutable — that state is
-	// still the ONE thing every retrying worker's copy of the policy calls
-	// into concurrently. The per-operation struct copy isolates the field
-	// itself; it does nothing for what the field, once called, touches.
-	OnRetry func(attempt int, err error, delay time.Duration)
 }
 
 // EventKind classifies one Event.

@@ -1087,3 +1087,51 @@ func TestEnvironmentMismatchProducesNoOperations(t *testing.T) {
 		t.Error("a plan with no operations must report no changes")
 	}
 }
+
+// AN EMPTY COLLECTION THE PROVIDER REPORTS IS NOT A CHANGE THE USER MADE.
+//
+// A cloud fills in empty collections nobody asked for — AWS reports
+// `Ipv6Addresses: []` on an EC2 network interface — and configuration that
+// simply does not mention them is not asking for anything to be removed.
+// Treating the difference as a change proposed REPLACING FOUR RUNNING EC2
+// INSTANCES on a real account, because the attribute holding it forces a new
+// resource.
+//
+// Deliberately narrow: only an EMPTY collection is forgiven. A list the user
+// really did shorten still differs, and unset semantics for anything carrying
+// a value are untouched.
+func TestAnEmptyCollectionTheProviderAddedIsNotAChange(t *testing.T) {
+	cfg := config(configured("db", "fake.database", map[string]value.Value{
+		"engine": str("postgres"),
+	}))
+	live := recorded("db", "fake.database", map[string]value.Value{
+		"engine": provAttr(str("postgres")),
+		// The cloud's own doing, and absent from configuration.
+		"tags": value.Map(map[string]value.Value{}, value.SourceProvider),
+	})
+
+	p, _ := Compute(cfg, stateOf(live), present(live), planOpts(t))
+
+	if p.HasChanges() {
+		t.Fatalf("an empty collection the provider reported was read as a change: %+v", p.Operations)
+	}
+}
+
+// The other side, so the rule above cannot be widened by accident: a
+// collection that HOLDS something and is absent from configuration is still
+// a change, because removing it from the file is a request to remove it.
+func TestANonEmptyCollectionAbsentFromConfigurationIsStillAChange(t *testing.T) {
+	cfg := config(configured("db", "fake.database", map[string]value.Value{
+		"engine": str("postgres"),
+	}))
+	live := recorded("db", "fake.database", map[string]value.Value{
+		"engine": provAttr(str("postgres")),
+		"tags":   value.Map(map[string]value.Value{"team": str("sre")}, value.SourceProvider),
+	})
+
+	p, _ := Compute(cfg, stateOf(live), present(live), planOpts(t))
+
+	if !p.HasChanges() {
+		t.Error("a populated collection removed from configuration must still be a change")
+	}
+}

@@ -19,6 +19,7 @@ import (
 	"github.com/infrena/infrena/internal/planner"
 	"github.com/infrena/infrena/internal/refresh"
 	"github.com/infrena/infrena/internal/registry"
+	"github.com/infrena/infrena/internal/retry"
 	"github.com/infrena/infrena/internal/state"
 	"github.com/infrena/infrena/pkg/address"
 	"github.com/infrena/infrena/pkg/report"
@@ -232,7 +233,7 @@ func newApplyCommand(opts *GlobalOptions) *cobra.Command {
 			// resource removed from configuration is still in state, and the plugin
 			// that manages it has to be loaded for the destroy to be planned at all.
 			ds := cds
-			ds.Extend(ensureStateProviders(reg, st0))
+			ds.Extend(ensureStateProviders(reg, st0, files))
 
 			var cfg compiler.ResolvedConfig
 			teardown := false
@@ -285,6 +286,7 @@ func newApplyCommand(opts *GlobalOptions) *cobra.Command {
 			}
 
 			fmt.Fprint(ro.Out(), planner.Render(p, planner.RenderOptions{Verbose: opts.Verbose, Definition: reg.Definition}))
+			reportPlan(ro, p, report.StageProposed)
 
 			if !p.HasChanges() {
 				return finishApply(cmd.ErrOrStderr(), rw, report.ApplyResult{}, nil)
@@ -380,6 +382,7 @@ func newApplyCommand(opts *GlobalOptions) *cobra.Command {
 				// are nil-safe — see eventHook.
 				execOpts.OnEvent = eventHook(ro)
 
+				reportPlan(ro, p2, report.StageExecuting)
 				res, execDiags := executor.Apply(ctx, p2, g, st, execOpts)
 				renderDiagnostics(cmd.ErrOrStderr(), rw, execDiags)
 
@@ -459,7 +462,7 @@ func computePlan(ctx context.Context, cmd *cobra.Command, backend state.Backend,
 	// phase dominates the wait, and an apply that says nothing while it runs
 	// is indistinguishable from one that has hung. st is passed as loaded,
 	// before refresh applies anything, which is what observationHook needs.
-	obs, refreshDiags := refresh.Refresh(ctx, st, reg, opts.Parallelism, perProviderParallelism,
+	obs, refreshDiags := refresh.Refresh(ctx, st, reg, opts.Parallelism, perProviderParallelism, readRetryPolicy(),
 		observationHook(ro, st))
 	renderDiagnostics(cmd.ErrOrStderr(), rw, refreshDiags)
 	if refreshDiags.HasErrors() {
@@ -541,6 +544,30 @@ func dependentsOf(p *planner.Plan) func(address.Address) []address.Address {
 // classification, is the executor's own decision (spec §15, §35: Create
 // never retried on an ambiguous failure, Delete only on SafeToRetry) — this
 // policy only supplies the timing, identical for apply and destroy.
+// readRetryPolicy is the backoff for a READ — refresh's provider reads and
+// discover's sweeps — and it is deliberately more patient than
+// defaultRetryPolicy below.
+//
+// The difference is not taste. defaultRetryPolicy is tuned for mutations,
+// where few attempts is itself the safety property: another Create may make
+// a second resource, so §15 spends attempts sparingly. A read cannot do
+// that. Its only cost is time, and the thing it is weighed against is
+// failing an entire plan over a throttle that would have cleared — which is
+// what a refresh of a large AWS environment actually hits, refresh being the
+// widest fan-out in the product.
+//
+// Five attempts from half a second doubles to 8s of waiting at worst, under
+// a 30s ceiling the schedule never reaches; full jitter spreads the herd, and
+// a refresh retries many resources at once by construction. The ceiling is
+// there for a policy that later grows more attempts, not for this one.
+func readRetryPolicy() retry.Policy {
+	return retry.Policy{
+		MaxAttempts: 5,
+		Base:        500 * time.Millisecond,
+		Max:         30 * time.Second,
+	}
+}
+
 func defaultRetryPolicy() executor.RetryPolicy {
 	return executor.RetryPolicy{
 		MaxAttempts: 3,

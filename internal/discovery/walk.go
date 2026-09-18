@@ -6,6 +6,7 @@ import (
 	"sort"
 
 	"github.com/infrena/infrena/internal/registry"
+	"github.com/infrena/infrena/internal/retry"
 	"github.com/infrena/infrena/pkg/provider"
 	"github.com/infrena/infrena/pkg/value"
 )
@@ -44,7 +45,7 @@ type Result struct {
 // Naming happens after the whole set is sorted, never during the walk: Unique
 // is order-dependent by construction, so naming as results arrive would make
 // the name a resource gets depend on which provider answered first.
-func Walk(ctx context.Context, reg *registry.Registry, types []string) ([]Result, []error) {
+func Walk(ctx context.Context, reg *registry.Registry, types []string, policy retry.Policy) ([]Result, []error) {
 	wanted := map[string]bool{}
 	for _, t := range types {
 		wanted[t] = true
@@ -65,7 +66,18 @@ func Walk(ctx context.Context, reg *registry.Registry, types []string) ([]Result
 			}
 		}
 
-		found, err := p.Discover(ctx, provider.DiscoverRequest{Types: ask})
+		// RETRIED on the provider's own classification, the same way
+		// refresh's Read is: a Discover asks for every type an instance
+		// serves, so against a real account it is at least as likely to be
+		// throttled as a refresh, and a throttle is refused before it acts.
+		// A zero policy means one attempt, so a caller that passes none
+		// keeps today's behaviour.
+		var found []provider.DiscoveredResource
+		err := retry.Attempt(ctx, retry.VerbRead, policy, p.ClassifyError, func() error {
+			var discoverErr error
+			found, discoverErr = p.Discover(ctx, provider.DiscoverRequest{Types: ask})
+			return discoverErr
+		})
 		if err != nil {
 			problems = append(problems, fmt.Errorf("provider %s: %w", inst.Name, err))
 			continue

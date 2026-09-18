@@ -11,6 +11,7 @@ import (
 	"github.com/infrena/infrena/internal/diag"
 	"github.com/infrena/infrena/internal/graph"
 	"github.com/infrena/infrena/internal/planner"
+	"github.com/infrena/infrena/internal/retry"
 	"github.com/infrena/infrena/internal/state"
 	"github.com/infrena/infrena/pkg/address"
 	"github.com/infrena/infrena/pkg/provider"
@@ -544,7 +545,7 @@ func (r *run) execute(node planner.OpNode, snapshot map[string]*resource.Resourc
 				userOnRetry(a, retryErr, delay)
 			}
 		}
-		err = Attempt(r.ctx, verb, policy, prov.ClassifyError, func() error {
+		err = retry.Attempt(r.ctx, verb, policy, prov.ClassifyError, func() error {
 			attempt++
 			var derr error
 			result, derr = dispatch(r.ctx, prov, node, current, desired)
@@ -602,19 +603,19 @@ func (r *run) execute(node planner.OpNode, snapshot map[string]*resource.Resourc
 // the same (Kind, Phase) mapping dispatch itself switches on — so Attempt's
 // retry classification is decided per provider call, as its own doc
 // requires. OpForget has no verb: no call is made, nothing to retry.
-func verbFor(node planner.OpNode) (Verb, bool) {
+func verbFor(node planner.OpNode) (retry.Verb, bool) {
 	switch {
 	case node.Kind == planner.OpCreate,
 		node.Kind == planner.OpReplace && node.Phase == planner.PhaseCreate:
-		return VerbCreate, true
+		return retry.VerbCreate, true
 	case node.Kind == planner.OpUpdate:
-		return VerbUpdate, true
+		return retry.VerbUpdate, true
 	case node.Kind == planner.OpDestroy,
 		node.Kind == planner.OpDestroyDeposed,
 		node.Kind == planner.OpReplace && node.Phase == planner.PhaseDestroy:
-		return VerbDelete, true
+		return retry.VerbDelete, true
 	default:
-		return VerbInvalid, false
+		return retry.VerbInvalid, false
 	}
 }
 

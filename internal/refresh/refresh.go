@@ -15,6 +15,7 @@ import (
 
 	"github.com/infrena/infrena/internal/diag"
 	"github.com/infrena/infrena/internal/registry"
+	"github.com/infrena/infrena/internal/retry"
 	"github.com/infrena/infrena/internal/state"
 	"github.com/infrena/infrena/pkg/address"
 	"github.com/infrena/infrena/pkg/resource"
@@ -67,7 +68,7 @@ type Observations map[string]Observation
 // hook — every other caller of Refresh (plan, and apply/destroy's
 // computePlan) passes nil, since neither reports refresh progress of its
 // own; only the refresh command does.
-func Refresh(ctx context.Context, st *state.State, reg *registry.Registry, parallelism, perProvider int, onObservation func(Observation)) (Observations, diag.Diagnostics) {
+func Refresh(ctx context.Context, st *state.State, reg *registry.Registry, parallelism, perProvider int, policy retry.Policy, onObservation func(Observation)) (Observations, diag.Diagnostics) {
 	if parallelism < 1 {
 		parallelism = 1
 	}
@@ -142,7 +143,7 @@ func Refresh(ctx context.Context, st *state.State, reg *registry.Registry, paral
 				ps <- struct{}{}
 				defer func() { <-ps }()
 			}
-			results[i], problems[i] = readOne(ctx, st, reg, addr)
+			results[i], problems[i] = readOne(ctx, st, reg, addr, policy)
 			if onObservation != nil {
 				onObservation(results[i])
 			}
@@ -181,7 +182,7 @@ func (o Observations) States() map[string]*resource.ResourceState {
 }
 
 // readOne reads one resource's current provider state.
-func readOne(ctx context.Context, st *state.State, reg *registry.Registry, addr address.Address) (Observation, diag.Diagnostics) {
+func readOne(ctx context.Context, st *state.State, reg *registry.Registry, addr address.Address, policy retry.Policy) (Observation, diag.Diagnostics) {
 	rs, ok := st.Get(addr)
 	if !ok {
 		// Unreachable in practice: addr always comes from st.Addresses().
@@ -229,7 +230,26 @@ func readOne(ctx context.Context, st *state.State, reg *registry.Registry, addr 
 	// package's obligation here: "Refresh and planning must never mutate the
 	// state that was loaded from disk." Cloning is what makes that true
 	// regardless of how a given provider's Read happens to behave.
-	current, err := prov.Read(ctx, rs.Clone())
+	// RETRIED, and the classification is the provider's own. A refresh is
+	// the widest fan-out in the product (see Refresh's own comment about
+	// §34), so it is the operation most likely to be throttled — and a
+	// throttle is refused before it acts, which is why a provider calls it
+	// SafeToRetry and why waiting is the whole fix. Without this the one
+	// path making the most provider calls was the one path that asked for
+	// no second attempt: `executor` had the loop, `refresh` never called it.
+	//
+	// A zero policy means exactly one attempt, so a caller that passes none
+	// gets today's behaviour rather than a surprise.
+	//
+	// The clone is taken per attempt, not once: Clone exists because a
+	// provider may mutate what it is handed, and handing a second attempt
+	// the object a failed first attempt already touched would defeat it.
+	var current *resource.ResourceState
+	err := retry.Attempt(ctx, retry.VerbRead, policy, prov.ClassifyError, func() error {
+		var readErr error
+		current, readErr = prov.Read(ctx, rs.Clone())
+		return readErr
+	})
 	if err != nil {
 		return readErrorObservation(addr, err)
 	}

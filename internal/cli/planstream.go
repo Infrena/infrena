@@ -63,6 +63,22 @@ func readSavedPlan(path string) (*planner.Plan, error) {
 		if err := json.Unmarshal(line, &pl); err != nil || pl.Type != "plan" {
 			continue
 		}
+		// THE SECOND GUARD ON THE STREAM SHAPE, and it sits here rather than
+		// above the loop so that a file with no plan line at all keeps the
+		// more specific refusal below. A `plan` line is taken only out of a
+		// file that reports on `plan`. apply and destroy write a plan of
+		// their own now — redacted, and typed "applying" precisely so this
+		// scan cannot see it — and that type name is what keeps the two
+		// apart today. This is what keeps them apart if some later line kind,
+		// or a file assembled by hand, carries the other name: applying a
+		// redacted plan would write "<sensitive>" into infrastructure, which
+		// is the worst outcome available on this path.
+		if command := commandOf(data); command != "plan" {
+			return nil, fmt.Errorf(
+				"%s is a report of a %q run, so the plan line in it is not a saved plan\n"+
+					"Point --plan at a file written by `infrena plan --output`",
+				path, command)
+		}
 		return planner.DecodePlan(pl.Plan)
 	}
 	if err := sc.Err(); err != nil {

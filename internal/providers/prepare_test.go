@@ -1,6 +1,7 @@
 package providers
 
 import (
+	"bytes"
 	"context"
 	"path/filepath"
 	"strings"
@@ -196,5 +197,42 @@ providers:
 	}
 	if _, ok := reg.ProviderFor("fake.network", "fake"); ok {
 		t.Error("an instance was constructed from configuration that did not resolve")
+	}
+}
+
+// A DECLARED INSTANCE MUST NEVER BE DROPPED IN SILENCE.
+//
+// Keeping an instance a caller already supplied is deliberate — see
+// TestAnAlreadyRegisteredInstanceIsLeftAlone — but it is only safe while the
+// existing instance stands in for the SAME thing. An entry carrying
+// configuration is not that: its `profile:`, `cloud:` or `assume_role_arn` is
+// what decides WHICH ACCOUNT the run touches, so keeping some other instance
+// under that name quietly points every provider call somewhere the user did
+// not ask for.
+//
+// That happened. An implicit, config-less instance registered before the
+// compile took the name, this branch dropped the declared one without a word,
+// and infrena read a different AWS account from the one `profile:` named —
+// reporting 63 live resources as deleted and planning to recreate them.
+func TestRegisterRefusesToDiscardADeclaredInstancesConfiguration(t *testing.T) {
+	dir := t.TempDir()
+	reg := registry.New()
+	if err := reg.Register("fake", testprovider.New(filepath.Join(dir, "mine.json"))); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	ds := Register(Table{"fake": Instance{
+		Name:   "fake",
+		Plugin: "fake",
+		Config: map[string]value.Value{"cloud": value.String("other.json", value.SourceExplicit)},
+	}}, reg)
+
+	if !ds.HasErrors() {
+		t.Fatal("a declared instance's configuration was discarded without a word")
+	}
+	var buf bytes.Buffer
+	ds.Render(&buf)
+	if !strings.Contains(buf.String(), "fake") {
+		t.Errorf("the diagnostic does not name the instance: %s", buf.String())
 	}
 }

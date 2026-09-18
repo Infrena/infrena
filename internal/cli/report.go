@@ -9,6 +9,7 @@ import (
 
 	"github.com/infrena/infrena/internal/diag"
 	"github.com/infrena/infrena/internal/executor"
+	"github.com/infrena/infrena/internal/planner"
 	"github.com/infrena/infrena/internal/refresh"
 	"github.com/infrena/infrena/internal/state"
 	"github.com/infrena/infrena/internal/version"
@@ -271,10 +272,93 @@ func attributeChanges(before, after *resource.ResourceState) []report.AttributeC
 		}
 		change := report.AttributeChange{Attribute: name}
 		if bok {
-			change.Before = report.Format(b)
+			change.Before = report.FormatPlanned(b)
 		}
 		if aok {
-			change.After = report.Format(a)
+			change.After = report.FormatPlanned(a)
+		}
+		out = append(out, change)
+	}
+	return out
+}
+
+// planChanges converts a plan into the redacted account of it that apply and
+// destroy report before they execute (report.PlanChanges).
+//
+// THE CONVERSION IS THE REDACTION. report.PlanChanges holds strings where
+// planner.Operation holds value.Value, so there is no way to build one
+// except through report.Format, and no way for a raw value to reach the
+// stream by someone forgetting. That is the same arrangement
+// classifyObservation has with an observation line, and the reason
+// pkg/report defines its own types rather than re-exporting the planner's.
+//
+// Before and After collapse into one per-attribute diff here rather than in
+// the consumer — see report.ResourceChange. Unlike attributeChanges above,
+// an attribute whose value is unchanged is KEPT: this is a plan rather than
+// a diff of observed state, and a frontend showing a create has nothing to
+// show if the attributes that are merely being set are dropped.
+func planChanges(p *planner.Plan, stage string) report.PlanChanges {
+	pc := report.PlanChanges{
+		Stage:       stage,
+		Project:     p.Project,
+		Environment: p.Environment,
+		ConfigHash:  p.ConfigHash,
+		StateSerial: p.StateSerial,
+		StateHash:   p.StateHash,
+		CreatedAt:   p.CreatedAt,
+		// Never nil: `"changes":null` and `"changes":[]` mean the same thing
+		// to a reader who checks the length and different things to one who
+		// iterates without checking, and a no-change run is exactly when
+		// this is empty.
+		Changes: []report.ResourceChange{},
+	}
+	for _, op := range p.Operations {
+		// A NoOp is not a change, and `changes` is what this field is. The
+		// planner keeps them because Render's verbose mode lists unchanged
+		// resources; carrying them here would put every attribute of every
+		// untouched resource into the report on every run, and would make a
+		// no-change run indistinguishable from a busy one without the
+		// consumer reimplementing Plan.HasChanges.
+		if op.Kind == planner.OpNoOp {
+			continue
+		}
+		rc := report.ResourceChange{
+			Address:  op.Address.String(),
+			Type:     op.Type,
+			Provider: op.Provider,
+			Kind:     op.Kind.String(),
+			Changes:  planAttributeChanges(op.Before, op.After),
+		}
+		for _, r := range op.Reasons {
+			rc.Reasons = append(rc.Reasons, report.ChangeReason{
+				Attribute: r.Attribute,
+				ForceNew:  r.ForceNew,
+				Note:      r.Note,
+			})
+		}
+		for _, d := range op.Dependents {
+			rc.Dependents = append(rc.Dependents, d.String())
+		}
+		pc.Changes = append(pc.Changes, rc)
+	}
+	return pc
+}
+
+// planAttributeChanges is attributeChanges for a plan's two attribute maps:
+// every attribute either side names, in sorted order.
+//
+// FormatPlanned, not Format: a plan says what apply WOULD do, so an unknown
+// value here is "(known after apply)" and not the "(unknown)" that every
+// other line in a report uses. Same redaction, different tense.
+func planAttributeChanges(before, after map[string]value.Value) []report.AttributeChange {
+	var out []report.AttributeChange
+	for _, name := range unionAttributeNames(before, after) {
+		change := report.AttributeChange{Attribute: name}
+		if b, ok := before[name]; ok {
+			change.Before = report.FormatPlanned(b)
+		}
+		if a, ok := after[name]; ok {
+			change.After = report.FormatPlanned(a)
 		}
 		out = append(out, change)
 	}

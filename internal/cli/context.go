@@ -654,6 +654,31 @@ func testRegistryFor(dir string) (*registry.Registry, func()) {
 // ensureStateProviders loads the plugins the RECORDED resources need, and registers
 // the implicit instance if the project declares none.
 //
+// "DECLARES NONE" IS READ FROM CONFIGURATION, never inferred from what the registry
+// happens to hold yet. It used to ask `len(reg.InstanceNames()) == 0`, which is the
+// same question only if the declared instances are already registered — and on the
+// plan and apply paths they are not, because they are built by stage 4.5 of the
+// compile that runs AFTER this. So a project that declared `providers:` got an
+// implicit, CONFIG-LESS instance registered here first, and providers.Register then
+// skipped the real one as a name already taken. Every provider call in the run went
+// to whatever account the plugin defaults to.
+//
+// That is not a hypothetical: `profile:` was silently dropped from a real project,
+// infrena read a different AWS account from the one named, reported 63 live
+// resources as deleted, and planned to create them again. An apply would have
+// created them — in the wrong account. compile.go's stage 4.5 comment says exactly
+// what is at stake: "a resource created in the wrong account is not a diagnostic
+// anybody gets to read."
+//
+// The trigger is state, which is why this survived: with nothing in state no plugin
+// is loaded before the compile, Implicit can derive nothing, and the declared
+// instance registers normally. It only breaks once state names a resource type.
+//
+// files may be nil, and is from `destroy` and `refresh`: both are state-only by
+// premise and have already been through registerStateInstances, which builds
+// declared instances from configuration itself — which is why those two commands
+// never had this bug.
+//
 // Configuration cannot answer this for a state-only command. `destroy`'s whole
 // premise is that nothing is configured — `resources: {}`, or no file at all — so
 // the only thing that says which plugins are involved is the state: a resource
@@ -662,7 +687,7 @@ func testRegistryFor(dir string) (*registry.Registry, func()) {
 //
 // Called AFTER state is read, which is why it is separate from
 // registerStateInstances: at the time that runs, state has not been opened yet.
-func ensureStateProviders(reg *registry.Registry, st *state.State) diag.Diagnostics {
+func ensureStateProviders(reg *registry.Registry, st *state.State, files []config.File) diag.Diagnostics {
 	var ds diag.Diagnostics
 	if st == nil {
 		return ds
@@ -700,9 +725,17 @@ func ensureStateProviders(reg *registry.Registry, st *state.State) diag.Diagnost
 		return ds
 	}
 
-	// Now that the plugins are here, the implicit instance can be derived. A project
-	// that DOES declare `providers:` already had its instances registered from
-	// configuration, and Register leaves those alone.
+	// A project that declares `providers:` gets its instances from that block, and
+	// nothing may stand in for them: an implicit instance registered here would be
+	// the one that wins, configuration and all. Decoding errors are ignored on the
+	// same terms as pluginConstraints — the compile that follows reports them, and
+	// a project whose configuration will not decode has a worse problem than an
+	// implicit instance it will never reach.
+	if decl, _ := config.Decode(files); len(decl.Providers) > 0 {
+		return ds
+	}
+
+	// Now that the plugins are here, the implicit instance can be derived.
 	if len(reg.InstanceNames()) == 0 {
 		ds.Extend(providers.Register(providers.Implicit(reg), reg))
 	}

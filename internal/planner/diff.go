@@ -58,6 +58,13 @@ func diffAttributes(
 			if !defined || attr.Computed {
 				continue
 			}
+			// An EMPTY collection is not something to remove. A cloud fills in
+			// empty lists and maps nobody asked for, and configuration that
+			// does not mention one is not requesting a removal — there is
+			// nothing there to remove. See emptyCollection.
+			if emptyCollection(got) {
+				continue
+			}
 			reasons = append(reasons, ChangeReason{
 				Attribute: name,
 				ForceNew:  attr.ForceNew,
@@ -117,8 +124,10 @@ func diffAttributes(
 		// value.Equal already ignores Source, Sensitive and Origin, and
 		// recurses through composites. A second comparison with different
 		// semantics is how two halves of an engine start disagreeing about
-		// what changed.
-		if want.Equal(got) {
+		// what changed — so equalBesidesProviderEmpties is value.Equal plus
+		// exactly ONE forgiveness, named and tested, rather than a rival
+		// implementation. See its doc comment.
+		if equalBesidesProviderEmpties(want, got) {
 			continue
 		}
 
@@ -140,6 +149,108 @@ func diffAttributes(
 	// could easily not come from unionKeys' sequence.
 	sortReasons(reasons)
 	return reasons, ds
+}
+
+// emptyCollection reports whether v is a list or map the provider reports as
+// holding nothing.
+//
+// The distinction it draws is between "the user removed this" and "the cloud
+// synthesised an empty one". Only the second is forgiven anywhere in this
+// file, and only because an empty collection carries no information to
+// remove.
+func emptyCollection(v value.Value) bool {
+	if !v.Known {
+		return false
+	}
+	switch v.Kind {
+	case value.KindList:
+		items, ok := v.Raw.([]value.Value)
+		return ok && len(items) == 0
+	case value.KindMap:
+		m, ok := v.Raw.(map[string]value.Value)
+		return ok && len(m) == 0
+	default:
+		return false
+	}
+}
+
+// equalBesidesProviderEmpties is value.Equal with one exception: a key the
+// PROVIDER reports and configuration does not mention is ignored when its
+// value is an empty collection.
+//
+// THE CASE THIS EXISTS FOR. AWS reports `Ipv6Addresses: []` inside an EC2
+// instance's NetworkInterfaces. Nobody wrote it, nothing can be done about
+// it, and a configuration that simply describes the interface it imported is
+// not asking for anything to change. Without this the difference read as a
+// change to NetworkInterfaces — which forces a new resource — and a plan on
+// an untouched account proposed REPLACING FOUR RUNNING INSTANCES.
+//
+// diffAttributes already applies exactly this rule to a TOP-LEVEL attribute,
+// where it can ask the schema whether the attribute is computed. Inside a
+// composite there is no per-leaf schema to ask, so the emptiness is the
+// evidence: an empty collection has nothing in it to remove.
+//
+// DELIBERATELY NARROW, in three ways that are each a test:
+//   - only a key MISSING from configuration is forgiven, never one that
+//     differs;
+//   - only an EMPTY collection, so a list the user really did shorten still
+//     reads as a change;
+//   - a key configuration sets and the provider does not report is still a
+//     change, because that direction is the user asking for something.
+func equalBesidesProviderEmpties(want, got value.Value) bool {
+	if want.Equal(got) {
+		return true
+	}
+	if want.Kind != got.Kind || !want.Known || !got.Known {
+		return false
+	}
+
+	switch want.Kind {
+	case value.KindMap:
+		wm, wok := want.Raw.(map[string]value.Value)
+		gm, gok := got.Raw.(map[string]value.Value)
+		if !wok || !gok {
+			return false
+		}
+		for k, gv := range gm {
+			wv, inWant := wm[k]
+			if !inWant {
+				// The one forgiveness.
+				if emptyCollection(gv) {
+					continue
+				}
+				return false
+			}
+			if !equalBesidesProviderEmpties(wv, gv) {
+				return false
+			}
+		}
+		// Anything configuration sets that the provider does not report is a
+		// change, and is not this function's business to forgive.
+		for k := range wm {
+			if _, inGot := gm[k]; !inGot {
+				return false
+			}
+		}
+		return true
+
+	case value.KindList:
+		wl, wok := want.Raw.([]value.Value)
+		gl, gok := got.Raw.([]value.Value)
+		// Length is meaning in a list: a shorter one is a removal.
+		if !wok || !gok || len(wl) != len(gl) {
+			return false
+		}
+		for i := range wl {
+			if !equalBesidesProviderEmpties(wl[i], gl[i]) {
+				return false
+			}
+		}
+		return true
+
+	default:
+		return false
+	}
 }
 
 // lifecyclePrefix marks a ChangeReason as describing a lifecycle setting

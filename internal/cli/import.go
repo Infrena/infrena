@@ -319,7 +319,7 @@ func selectForImport(
 	ctx context.Context, reg *registry.Registry, managed map[string]string,
 	selectors []string, instance string, filter discovery.Filter,
 ) (selected, skipped []discovery.Result, problems []error, err error) {
-	found, problems := discovery.Walk(ctx, reg, nil)
+	found, problems := discovery.Walk(ctx, reg, nil, readRetryPolicy())
 	// AFTER the walk, which is after naming: Unique is order-dependent, so a
 	// filter applied earlier would change the names of what survives it, and a
 	// resource would be adopted under a different name depending on a flag that

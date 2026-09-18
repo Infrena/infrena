@@ -239,8 +239,74 @@ things about it are easy to undo by accident:
 `--check` writes nothing and takes no lock, and **its exit code is the report**: 0 none
 needed, 2 pending (deliberately `plan`'s code — both mean "something is pending, run the
 matching command"), 3 already complete, 4 the ends differ, 1 error. 3 and 4 are new rows on
-§37.1's table and therefore a documented product-API change. `report.Version` is now 3,
-because the `result` line carries a `status` WORD a version-2 consumer has never seen.
+§37.1's table and therefore a documented product-API change. `report.Version` was 3 at that
+point, because the `result` line carries a `status` WORD a version-2 consumer has never seen.
+
+**The retry loop lives in `internal/retry`, not `internal/executor`.** It moved on 2026-09-18
+because `refresh` and `discovery` both needed it and neither can import `executor` —
+`executor` → `planner` → `refresh` is a real import cycle, verified, not guessed.
+`executor.RetryPolicy` stays as an exact alias of `retry.Policy` (it is the type of
+`Options.Retry`), and `retry.Attempt`/`retry.Verb*` are used directly everywhere else.
+
+**An empty collection the provider reports is not a change, and generation keeps it.**
+Two halves of one defect, both found on 2026-09-18 from a plan that proposed replacing four
+untouched EC2 instances: `internal/generator`'s `plainValue` dropped an empty list or map
+(that branch exists for a collection emptied by SECRETS, and now fires only then), and
+`planner.diffAttributes` counted the resulting absence as a change. AWS reports
+`Ipv6Addresses: []` inside NetworkInterfaces, which is force-new, so a single synthesised
+empty list was a replacement of running infrastructure.
+
+The diff rule is `equalBesidesProviderEmpties`: `value.Equal` plus exactly one forgiveness —
+a key the provider reports, configuration does not mention, and whose value is an EMPTY
+collection. A shortened list, a differing value, and a key configuration sets that the
+provider does not report all remain changes, each pinned by its own test. Top-level
+attributes already had this rule via `attr.Computed`; inside a composite there is no
+per-leaf schema to ask, so emptiness is the evidence.
+
+**`ensureStateProviders` reads "the project declares no `providers:`" FROM CONFIGURATION**,
+never from `len(reg.InstanceNames()) == 0`. Those are the same question only once the
+declared instances are registered, and on the plan and apply paths they are not — stage 4.5
+builds them in the compile that runs after. The old proxy registered an implicit,
+config-less instance first, `providers.Register` then skipped the declared one as a name
+already taken, and **every provider call in the run went to the account the plugin defaults
+to.** Real consequence, 2026-09-18: `profile:` silently dropped, a different AWS account
+read, 63 live resources reported deleted, a plan to create them again. `validate`, `refresh`
+and `destroy` were unaffected — they never take that path — and the disagreement between
+`validate` and `plan` about the SAME file is what identified it.
+
+**The trigger was state**, which is why it survived: with nothing in state no plugin is
+loaded before the compile, so `Implicit` derives nothing. Any test for this must apply
+first. `providers.Register` now refuses, loudly, to drop an entry that carries
+configuration when the name is taken — a config-less entry (implicit instance, or a test
+stub) still keeps what is there.
+
+**An exhausted retry SAYS SO**: `retry.Attempt` wraps the last failure as `after N attempts
+over D: ...` once it has actually retried, and returns a never-retried failure untouched.
+Without it an exhausted retry and a single failure printed identically, and neither the user
+nor the engineer could tell whether anything had waited — which cost a round trip on a
+throttled AWS read on 2026-09-18.
+
+**Reads retry; `cli.readRetryPolicy` is their policy and is deliberately not
+`defaultRetryPolicy`.** Five attempts / 500ms base / 30s cap for `refresh`'s provider Read
+and `discovery`'s Discover, against three attempts for the executor's mutations. The
+asymmetry is the point: §15 spends few attempts on a Create because another attempt may make
+a second resource, and a read carries no such risk — its only cost is time, weighed against
+failing a whole plan over a throttle that would have cleared. Both `Refresh` and `Walk` take
+a `retry.Policy`; the ZERO VALUE MEANS ONE ATTEMPT, so a caller that passes none gets the
+old behaviour rather than a surprise. This closed the gap where the provider classified a
+throttle `SafeToRetry` and the widest fan-out in the product never asked.
+
+**`report.Version` is now 4**, for the `applying` line `apply` and `destroy` write before
+they execute (`report.PlanChanges`, `cli.reportPlan`). Two per run: `stage: proposed`
+beside the human `planner.Render` call, `stage: executing` immediately before
+`executor.Apply` — they are not the same plan, since both commands re-plan inside the
+environment lock, and `executing` is the claim that the executor received one. It is
+REDACTED, unlike the `plan` line, and typed `applying` rather than `plan` for a
+load-bearing reason: `readSavedPlan` applies what it finds on a line typed `plan`, so a
+redacted plan wearing that name would write `<sensitive>` into infrastructure. That path
+now also refuses a `plan` line whose meta line names another command. **This format is
+deliberately not documented publicly beyond what `docs/ci.md` already says** — a UI is not
+being blocked, but it is not being helped either.
 
 **The round trip test is honest about what it can prove.** A literally byte-identical
 local → S3 → local round trip is IMPOSSIBLE: `internal/state/local.go` increments `Serial`

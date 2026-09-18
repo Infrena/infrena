@@ -25,6 +25,22 @@ import (
 	"github.com/infrena/infrena/pkg/value"
 )
 
+// FormatPlanned is Format for a value that HAS NOT HAPPENED YET — the
+// before/after of a plan line, and nothing else in this package.
+//
+// It exists because the two differ on exactly one point, and the difference
+// is a claim rather than a wording preference: an unknown value in a report
+// of a completed run is an anomaly ("(unknown)"), while an unknown value in
+// a plan is a promise ("(known after apply)"). value.ReportFormatOptions'
+// own doc comment draws that line. A frontend showing a plan line beside a
+// terminal showing the same plan must not find two words for one thing.
+//
+// It is still value.Format, so redaction is identical and a sensitive value
+// never renders either way.
+func FormatPlanned(v value.Value) string {
+	return value.Format(v, value.PlanFormatOptions)
+}
+
 // Version is the wire format's schema version, written on every meta line.
 // It is the single most important field in the format: it is the handshake
 // that lets the format evolve later without breaking a consumer that only
@@ -40,7 +56,11 @@ import (
 // --check` writes. A consumer written against version 2 has never seen a
 // result line carrying a "status", and the meta line is how it finds out one
 // may appear.
-const Version = 3
+//
+// Version 4 added the "applying" line (see PlanChanges), which apply and
+// destroy write before they execute. A consumer written against version 3
+// has never seen a line kind between "meta" and the first "event".
+const Version = 4
 
 // Format renders one attribute value the way every line in this package
 // must: through pkg/value.Format, the engine's one redaction path, so a
@@ -164,6 +184,92 @@ type PlanLine struct {
 // WritePlan writes the plan artifact line.
 func (w *Writer) WritePlan(artifact json.RawMessage) error {
 	return w.writeLine(PlanLine{Type: "plan", Plan: artifact})
+}
+
+// Stages a plan line can carry. A run emits at most one of each.
+//
+// The two are NOT the same plan and the distinction is the reason the field
+// exists: apply and destroy plan once for the preview and again inside the
+// environment lock, and only the second is what the executor is handed. A
+// consumer that drew a progress bar from the proposed line and never looked
+// at the executing one would be drawing the plan that did not run.
+const (
+	// StageProposed is the plan as it stood before the environment lock was
+	// taken, or, for `apply --plan`, the artifact as it was read. It is
+	// emitted even when the run stops here — no changes, or a saved plan
+	// refused because state moved — which is the point: it is the only
+	// account of what the run was going to do.
+	StageProposed = "proposed"
+	// StageExecuting is the plan the executor received. Its presence is the
+	// claim that execution started.
+	StageExecuting = "executing"
+)
+
+// ChangeReason explains one attribute's contribution to an operation. It
+// mirrors planner.ChangeReason, which this package cannot import — see
+// PlanLine for why that dependency stays pointed the way it is.
+//
+// It names attributes, never values, so unlike everything else here it needs
+// no redaction: the planner type carries none either, and for the same
+// reason (sensitivity is per-leaf, and a reason has no way to redact).
+type ChangeReason struct {
+	Attribute string `json:"attribute,omitempty"`
+	ForceNew  bool   `json:"force_new,omitempty"`
+	Note      string `json:"note,omitempty"`
+}
+
+// ResourceChange is one resource's proposed change, redacted.
+//
+// Before and After arrive as ONE per-attribute diff rather than two maps,
+// which is not how planner.Operation holds them. A consumer renders a
+// before/after pair; giving it the same AttributeChange an observation line
+// already carries means one renderer serves both, and means the merge
+// happens once here instead of in every consumer.
+type ResourceChange struct {
+	Address string `json:"address"`
+	Type    string `json:"type"`
+	// Provider is the instance this change runs against.
+	Provider string `json:"provider,omitempty"`
+	// Kind is the operation as a WORD — create, update, replace, destroy,
+	// forget — for the same reason MigrateResult carries its status as one.
+	Kind       string            `json:"kind"`
+	Changes    []AttributeChange `json:"changes,omitempty"`
+	Reasons    []ChangeReason    `json:"reasons,omitempty"`
+	Dependents []string          `json:"dependents,omitempty"`
+}
+
+// PlanChanges is what a run is about to do, as a report rather than as an
+// artifact.
+//
+// THIS IS NOT THE `plan` LINE AND MUST NEVER BECOME IT. PlanLine carries the
+// executor's instruction set with cleartext values because `apply --plan`
+// reads it back; this carries a redacted account of the same plan so that a
+// frontend can show a run before it happens. The type name differs for a
+// reason that is load-bearing rather than cosmetic: readSavedPlan scans a
+// stream for a line typed "plan" and applies what it finds, so a redacted
+// plan wearing that type would be applied with "<sensitive>" where its
+// values used to be.
+//
+// The fingerprints are carried because they are what a refusal later in the
+// run will be about: a saved plan is refused when state has moved, and a
+// frontend holding StateSerial can say which state that was.
+type PlanChanges struct {
+	Type        string           `json:"type"`
+	Stage       string           `json:"stage"`
+	Project     string           `json:"project,omitempty"`
+	Environment string           `json:"environment"`
+	ConfigHash  string           `json:"config_hash,omitempty"`
+	StateSerial uint64           `json:"state_serial"`
+	StateHash   string           `json:"state_hash,omitempty"`
+	CreatedAt   time.Time        `json:"created_at"`
+	Changes     []ResourceChange `json:"changes"`
+}
+
+// WritePlanChanges writes one plan line. Type is stamped here rather than
+// taken from the caller, the same way WriteObservation stamps its own.
+func (w *Writer) WritePlanChanges(pc PlanChanges) error {
+	pc.Type = "applying"
+	return w.writeLine(pc)
 }
 
 // Event is one apply/destroy progress notification, one per

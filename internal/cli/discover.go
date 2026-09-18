@@ -66,7 +66,7 @@ func newDiscoverCommand(opts *GlobalOptions) *cobra.Command {
 				return err
 			}
 
-			found, problems := discovery.Walk(cmd.Context(), reg, args)
+			found, problems := discovery.Walk(cmd.Context(), reg, args, readRetryPolicy())
 
 			// Reported before the results, because a partial answer a reader
 			// mistakes for a complete one is the failure worth avoiding here.

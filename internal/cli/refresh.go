@@ -78,7 +78,7 @@ func newRefreshCommand(opts *GlobalOptions) *cobra.Command {
 					return finishRefresh(cmd.ErrOrStderr(), rw, report.RefreshResult{}, err)
 				}
 				// STATE names the plugins here: refresh reads no configuration at all.
-				if stateDiags := ensureStateProviders(reg, st); stateDiags.HasErrors() {
+				if stateDiags := ensureStateProviders(reg, st, nil); stateDiags.HasErrors() {
 					stateDiags.Render(cmd.ErrOrStderr())
 					return finishRefresh(cmd.ErrOrStderr(), rw, report.RefreshResult{}, errProviderInstances)
 				}
@@ -89,7 +89,7 @@ func newRefreshCommand(opts *GlobalOptions) *cobra.Command {
 				// factored out of. st is still exactly as loaded here;
 				// applyObservations below is what mutates it, and the
 				// comparison classifyObservation makes has to happen first.
-				obs, ds := refresh.Refresh(ctx, st, reg, opts.Parallelism, perProviderParallelism,
+				obs, ds := refresh.Refresh(ctx, st, reg, opts.Parallelism, perProviderParallelism, readRetryPolicy(),
 					observationHook(ro, st))
 				renderDiagnostics(cmd.ErrOrStderr(), rw, ds)
 

@@ -2,6 +2,7 @@ package refresh
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/infrena/infrena/internal/registry"
+	"github.com/infrena/infrena/internal/retry"
 	"github.com/infrena/infrena/internal/state"
 	"github.com/infrena/infrena/pkg/address"
 	"github.com/infrena/infrena/pkg/provider"
@@ -54,7 +56,7 @@ func TestRefreshReadsCurrentProviderState(t *testing.T) {
 	st := state.New("myapp", "dev")
 	st.Set(created)
 
-	obs, ds := Refresh(context.Background(), st, reg, 4, 4, nil)
+	obs, ds := Refresh(context.Background(), st, reg, 4, 4, retry.Policy{}, nil)
 	if ds.HasErrors() {
 		t.Fatalf("unexpected diagnostics: %+v", ds)
 	}
@@ -112,7 +114,7 @@ func TestRefreshCallsOnObservationOncePerResource(t *testing.T) {
 		seen[o.Address.String()] = o
 	}
 
-	obs, ds := Refresh(context.Background(), st, reg, 4, 4, hook)
+	obs, ds := Refresh(context.Background(), st, reg, 4, 4, retry.Policy{}, hook)
 	if ds.HasErrors() {
 		t.Fatalf("unexpected diagnostics: %+v", ds)
 	}
@@ -156,7 +158,7 @@ func TestRefreshDetectsDeletionOutsideInfra(t *testing.T) {
 		t.Fatalf("Delete: %v", err)
 	}
 
-	obs, ds := Refresh(context.Background(), st, reg, 4, 4, nil)
+	obs, ds := Refresh(context.Background(), st, reg, 4, 4, retry.Policy{}, nil)
 	if ds.HasErrors() {
 		t.Fatalf("a deletion outside infra is not a planning error: %+v", ds)
 	}
@@ -194,7 +196,7 @@ func TestRefreshReadErrorIsADiagnosticAndNeverADeletion(t *testing.T) {
 		t.Fatalf("Save: %v", err)
 	}
 
-	obs, ds := Refresh(context.Background(), st, reg, 4, 4, nil)
+	obs, ds := Refresh(context.Background(), st, reg, 4, 4, retry.Policy{}, nil)
 	if !ds.HasErrors() {
 		t.Fatal("a read failure must fail planning for that resource")
 	}
@@ -211,7 +213,7 @@ func TestRefreshReadErrorIsADiagnosticAndNeverADeletion(t *testing.T) {
 	// exactly where it was — proving the first error was a transient read
 	// failure, not the resource going away. Mistaking the first result for
 	// absence would have proposed destroying live infrastructure.
-	obs2, ds2 := Refresh(context.Background(), st, reg, 4, 4, nil)
+	obs2, ds2 := Refresh(context.Background(), st, reg, 4, 4, retry.Policy{}, nil)
 	if ds2.HasErrors() {
 		t.Fatalf("the injected rule is one-shot; the second refresh must succeed: %+v", ds2)
 	}
@@ -250,7 +252,7 @@ func TestRefreshNeverWritesState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	if _, ds := Refresh(context.Background(), loaded, reg, 4, 4, nil); ds.HasErrors() {
+	if _, ds := Refresh(context.Background(), loaded, reg, 4, 4, retry.Policy{}, nil); ds.HasErrors() {
 		t.Fatalf("unexpected diagnostics: %+v", ds)
 	}
 
@@ -274,7 +276,7 @@ func TestRefreshUnregisteredTypeIsADiagnostic(t *testing.T) {
 		ProviderID: "ghost-1",
 	})
 
-	obs, ds := Refresh(context.Background(), st, reg, 4, 4, nil)
+	obs, ds := Refresh(context.Background(), st, reg, 4, 4, retry.Policy{}, nil)
 	if !ds.HasErrors() {
 		t.Fatal("a resource whose type is no longer registered must be a diagnostic, not silently skipped or treated as deleted")
 	}
@@ -291,7 +293,7 @@ func TestRefreshEmptyStateReturnsEmptyObservations(t *testing.T) {
 	reg := registry.New()
 	st := state.New("myapp", "dev")
 
-	obs, ds := Refresh(context.Background(), st, reg, 4, 4, nil)
+	obs, ds := Refresh(context.Background(), st, reg, 4, 4, retry.Policy{}, nil)
 	if ds.HasErrors() {
 		t.Fatalf("unexpected diagnostics: %+v", ds)
 	}
@@ -311,7 +313,7 @@ func TestRefreshTreatsParallelismBelowOneAsOne(t *testing.T) {
 	// on its first send, so "below 1 means 1" is the difference between a
 	// misconfigured flag and a hang.
 	for _, p := range []int{0, -1} {
-		obs, ds := Refresh(context.Background(), st, reg, p, p, nil)
+		obs, ds := Refresh(context.Background(), st, reg, p, p, retry.Policy{}, nil)
 		if ds.HasErrors() {
 			t.Fatalf("parallelism %d: unexpected diagnostics: %+v", p, ds)
 		}
@@ -421,7 +423,7 @@ func TestRefreshBoundsConcurrentReads(t *testing.T) {
 		})
 	}
 
-	obs, ds := Refresh(context.Background(), st, reg, 3, 3, nil)
+	obs, ds := Refresh(context.Background(), st, reg, 3, 3, retry.Policy{}, nil)
 	if ds.HasErrors() {
 		t.Fatalf("unexpected diagnostics: %+v", ds)
 	}
@@ -472,7 +474,7 @@ func TestRefreshBoundsReadsPerProviderIndependentlyOfGlobalParallelism(t *testin
 		})
 	}
 
-	obs, ds := Refresh(context.Background(), st, reg, 8, 2, nil)
+	obs, ds := Refresh(context.Background(), st, reg, 8, 2, retry.Policy{}, nil)
 	if ds.HasErrors() {
 		t.Fatalf("unexpected diagnostics: %+v", ds)
 	}
@@ -514,7 +516,7 @@ func TestRefreshDiagnosticsAreSortedByAddressNotCompletionOrder(t *testing.T) {
 	// zzz has no delay and fails almost immediately; aaa is deliberately
 	// slower. If diagnostics reflected completion order, zzz would come
 	// first despite sorting after aaa alphabetically.
-	_, ds := Refresh(context.Background(), st, reg, 2, 2, nil)
+	_, ds := Refresh(context.Background(), st, reg, 2, 2, retry.Policy{}, nil)
 	if len(ds) != 2 {
 		t.Fatalf("got %d diagnostics, want 2", len(ds))
 	}
@@ -593,7 +595,7 @@ func TestRefreshDoesNotExposeLiveStateToProviderRead(t *testing.T) {
 		},
 	})
 
-	if _, ds := Refresh(context.Background(), st, reg, 1, 1, nil); ds.HasErrors() {
+	if _, ds := Refresh(context.Background(), st, reg, 1, 1, retry.Policy{}, nil); ds.HasErrors() {
 		t.Fatalf("unexpected diagnostics: %+v", ds)
 	}
 
@@ -679,7 +681,7 @@ func TestRefreshSkipsProviderReadWhenContextAlreadyCancelled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	obs, ds := Refresh(ctx, st, reg, 4, 4, nil)
+	obs, ds := Refresh(ctx, st, reg, 4, 4, retry.Policy{}, nil)
 	if !ds.HasErrors() {
 		t.Fatal("a cancelled refresh must surface as diagnostics, not silently succeed")
 	}
@@ -770,7 +772,7 @@ func TestOneProvidersQueueDoesNotStallAnother(t *testing.T) {
 	// perProvider 1 so slow's reads are strictly one at a time and its queue is
 	// genuinely saturated; global parallelism 8 so nothing global is the
 	// constraint. If the quick read waits, only the per-provider bound explains it.
-	if _, ds := Refresh(context.Background(), st, reg, 8, 1, nil); ds.HasErrors() {
+	if _, ds := Refresh(context.Background(), st, reg, 8, 1, retry.Policy{}, nil); ds.HasErrors() {
 		t.Fatalf("unexpected diagnostics: %+v", ds)
 	}
 
@@ -837,3 +839,106 @@ func (p *probeProvider) ClassifyError(error) provider.Retryability {
 }
 
 var _ provider.Provider = (*probeProvider)(nil)
+
+// throttledReadProvider fails Read a fixed number of times with an error it
+// classifies as SafeToRetry, then succeeds — a throttled account, which is
+// what a real refresh of a large environment meets.
+type throttledReadProvider struct {
+	resourceType string
+	failures     int32
+	calls        atomic.Int32
+}
+
+func (p *throttledReadProvider) Name() string { return "throttled" }
+
+func (p *throttledReadProvider) Definitions() []*schema.ResourceDefinition {
+	return []*schema.ResourceDefinition{{Type: p.resourceType}}
+}
+
+func (p *throttledReadProvider) Read(ctx context.Context, current *resource.ResourceState) (*resource.ResourceState, error) {
+	if p.calls.Add(1) <= p.failures {
+		return nil, errors.New("ThrottlingException: Rate exceeded")
+	}
+	return current.Clone(), nil
+}
+
+func (p *throttledReadProvider) Create(context.Context, *resource.DesiredResource) (*resource.ResourceState, error) {
+	return nil, provider.ErrNotImplemented
+}
+
+func (p *throttledReadProvider) Update(context.Context, *resource.ResourceState, *resource.DesiredResource) (*resource.ResourceState, error) {
+	return nil, provider.ErrNotImplemented
+}
+
+func (p *throttledReadProvider) Delete(context.Context, *resource.ResourceState) error {
+	return provider.ErrNotImplemented
+}
+
+func (p *throttledReadProvider) Discover(context.Context, provider.DiscoverRequest) ([]provider.DiscoveredResource, error) {
+	return nil, provider.ErrNotImplemented
+}
+
+func (p *throttledReadProvider) Import(context.Context, string, string) (*resource.ResourceState, error) {
+	return nil, provider.ErrNotImplemented
+}
+
+// The provider's own judgement, which is the only thing that decides this:
+// a throttle is refused before anything happened, so another attempt is safe.
+func (p *throttledReadProvider) ClassifyError(error) provider.Retryability {
+	return provider.SafeToRetry
+}
+
+var _ provider.Provider = (*throttledReadProvider)(nil)
+
+// A throttle must not fail a refresh. The classification already said the
+// call was refused before it acted; the only thing missing was somebody
+// waiting and asking again.
+func TestRefreshRetriesAReadTheProviderCallsSafeToRetry(t *testing.T) {
+	const resourceType = "throttled.thing"
+	prov := &throttledReadProvider{resourceType: resourceType, failures: 2}
+	reg := registry.New()
+	if err := reg.Register("fake", prov); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	addr := address.Address{Name: "vpc"}
+	st := state.New("myapp", "dev")
+	st.Set(&resource.ResourceState{Address: addr, Type: resourceType, Provider: "fake", ProviderID: "vpc-0c833f25abd76f95e"})
+
+	policy := retry.Policy{MaxAttempts: 5, Sleep: func(context.Context, time.Duration) error { return nil }}
+	obs, ds := Refresh(context.Background(), st, reg, 4, 4, policy, nil)
+
+	if ds.HasErrors() {
+		t.Fatalf("a retryable throttle failed the refresh: %+v", ds)
+	}
+	if got := prov.calls.Load(); got != 3 {
+		t.Errorf("Read called %d times, want 3 — two throttles then a success", got)
+	}
+	if o, ok := obs[addr.String()]; !ok || o.Err != nil {
+		t.Fatalf("observation is not a clean read: %+v", obs)
+	}
+}
+
+// The other half: attempts are finite. A throttle that never clears still
+// ends as a diagnostic rather than an infinite wait.
+func TestRefreshGivesUpOnAThrottleThatNeverClears(t *testing.T) {
+	const resourceType = "throttled.thing"
+	prov := &throttledReadProvider{resourceType: resourceType, failures: 99}
+	reg := registry.New()
+	if err := reg.Register("fake", prov); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	st := state.New("myapp", "dev")
+	st.Set(&resource.ResourceState{Address: address.Address{Name: "vpc"}, Type: resourceType, Provider: "fake", ProviderID: "vpc-1"})
+
+	policy := retry.Policy{MaxAttempts: 4, Sleep: func(context.Context, time.Duration) error { return nil }}
+	_, ds := Refresh(context.Background(), st, reg, 4, 4, policy, nil)
+
+	if !ds.HasErrors() {
+		t.Fatal("a read that never succeeds must still be reported")
+	}
+	if got := prov.calls.Load(); got != 4 {
+		t.Errorf("Read called %d times, want exactly the 4 attempts the policy allows", got)
+	}
+}

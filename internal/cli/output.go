@@ -7,6 +7,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/infrena/infrena/internal/executor"
+	"github.com/infrena/infrena/internal/planner"
 	"github.com/infrena/infrena/internal/refresh"
 	"github.com/infrena/infrena/internal/state"
 	"github.com/infrena/infrena/pkg/report"
@@ -104,6 +105,29 @@ func observationHook(ro *runOutput, st *state.State) func(refresh.Observation) {
 			_ = rw.WriteObservation(classifyObservation(st, o))
 		}
 	}
+}
+
+// reportPlan writes one plan line for a run that is about to do something,
+// or does nothing when there is no report to write.
+//
+// THE RULE, and it is the whole reason this is a function rather than four
+// call sites that each remember it: stage "proposed" goes beside the human
+// render, and stage "executing" goes immediately before executor.Apply.
+// Stated that way it survives a fifth command being added; stated as "apply
+// writes two lines" it would not. The two are not the same plan — apply and
+// destroy re-plan inside the environment lock — which is why both exist.
+//
+// Best effort and silent, the same terms as observationHook and eventHook:
+// an apply's product is the change to the infrastructure, and failing a run
+// that is already holding the environment lock because a line did not reach
+// the disk would be the wrong trade. A write failure surfaces once, from the
+// final result line, which finishApply does report.
+func reportPlan(ro *runOutput, p *planner.Plan, stage string) {
+	rw := ro.Report()
+	if rw == nil || p == nil {
+		return
+	}
+	_ = rw.WritePlanChanges(planChanges(p, stage))
 }
 
 // eventHook is observationHook's counterpart for executor progress, shared

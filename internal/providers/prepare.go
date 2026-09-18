@@ -318,8 +318,29 @@ func Register(table Table, reg *registry.Registry) diag.Diagnostics {
 		// An instance the caller already supplied a provider object for keeps it —
 		// which is what every test that builds a stub relies on. Rebuilding it from
 		// configuration would throw that object away and replace it with a different
-		// one. Nothing in the production path reaches this, because internal/cli
-		// registers plugins only.
+		// one.
+		//
+		// UNLESS THIS ENTRY CARRIES CONFIGURATION, in which case keeping the other
+		// one is the wrong-account bug: `profile:`, `cloud:` and `assume_role_arn`
+		// decide which account every call in the run reaches, and an instance built
+		// without them reaches a different one. This branch dropped exactly that,
+		// silently, while an implicit instance registered before the compile held
+		// the name — and the silence is why it took a plan proposing to rebuild 63
+		// live resources to notice. A configuration-less entry is the implicit
+		// instance or a stub and still keeps what is there.
+		if reg.HasInstance(name) && len(inst.Config) > 0 {
+			ds.Add(diag.Diagnostic{
+				Severity: diag.SeverityError,
+				Summary: "provider instance " + strconv.Quote(name) +
+					" is already registered, so its configuration would be ignored",
+				Detail: "The `providers:` entry for " + strconv.Quote(name) + " configures it, but an " +
+					"instance of that name already exists and was built without that configuration. " +
+					"Running on would send every call to whichever account the plugin defaults to.",
+				Action: correctionFor(name, inst.Origin),
+				Origin: inst.Origin,
+			})
+			continue
+		}
 		if !reg.HasInstance(name) {
 			if err := reg.RegisterInstance(name, inst.Plugin, inst.Config); err != nil {
 				ds.Add(diag.Diagnostic{

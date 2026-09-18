@@ -98,7 +98,7 @@ func newPlanCommand(opts *GlobalOptions) *cobra.Command {
 			// resource removed from configuration is still in state, and the plugin
 			// that manages it has to be loaded for the destroy to be planned at all.
 			ds := cds
-			ds.Extend(ensureStateProviders(reg, st))
+			ds.Extend(ensureStateProviders(reg, st, files))
 
 			var cfg compiler.ResolvedConfig
 			switch disp, declared := dispositionOf(files, environment, st); disp {
@@ -136,7 +136,7 @@ func newPlanCommand(opts *GlobalOptions) *cobra.Command {
 			// resource's provider state is the phase that dominates the wait
 			// on a real account, and a plan that says nothing while it runs
 			// is indistinguishable from one that has hung.
-			obs, refreshDiags := refresh.Refresh(cmd.Context(), st, reg, opts.Parallelism, perProviderParallelism,
+			obs, refreshDiags := refresh.Refresh(cmd.Context(), st, reg, opts.Parallelism, perProviderParallelism, readRetryPolicy(),
 				observationHook(ro, st))
 			ds.Extend(refreshDiags)
 			if ds.HasErrors() {

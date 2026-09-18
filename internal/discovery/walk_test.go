@@ -6,8 +6,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/infrena/infrena/internal/registry"
+	"github.com/infrena/infrena/internal/retry"
 	"github.com/infrena/infrena/pkg/provider"
 	"github.com/infrena/infrena/pkg/resource"
 	"github.com/infrena/infrena/pkg/schema"
@@ -37,7 +39,7 @@ func TestWalkNamesEverythingItFinds(t *testing.T) {
 		"net-1": {Type: "fake.network", Attributes: map[string]any{"cidr": "10.0.0.0/16"}},
 	})
 
-	got, problems := Walk(context.Background(), reg, nil)
+	got, problems := Walk(context.Background(), reg, nil, retry.Policy{})
 	if len(problems) != 0 {
 		t.Fatalf("unexpected problems: %v", problems)
 	}
@@ -72,7 +74,7 @@ func TestWalkNamesDeterministically(t *testing.T) {
 
 	var first []string
 	for i := range 20 {
-		got, _ := Walk(context.Background(), reg, nil)
+		got, _ := Walk(context.Background(), reg, nil, retry.Policy{})
 		var names []string
 		for _, r := range got {
 			names = append(names, r.ProviderID+"="+r.Name)
@@ -122,7 +124,7 @@ func TestWalkSortsWhatAProviderReturns(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, problems := Walk(context.Background(), reg, nil)
+	got, problems := Walk(context.Background(), reg, nil, retry.Policy{})
 	if len(problems) != 0 {
 		t.Fatalf("unexpected problems: %v", problems)
 	}
@@ -163,7 +165,7 @@ func TestWalkAsksAProviderOnlyAboutItsOwnTypes(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, problems := Walk(context.Background(), reg, []string{"spy.thing"}); len(problems) != 0 {
+	if _, problems := Walk(context.Background(), reg, []string{"spy.thing"}, retry.Policy{}); len(problems) != 0 {
 		t.Fatalf("unexpected problems: %v", problems)
 	}
 	if len(spy.asked) != 1 {
@@ -177,7 +179,7 @@ func TestWalkAsksAProviderOnlyAboutItsOwnTypes(t *testing.T) {
 	// all. Asserting only the positive case passes against a Walk that asks
 	// every provider everything and filters afterwards.
 	spy.asked = nil
-	if _, problems := Walk(context.Background(), reg, []string{"other.thing"}); len(problems) != 0 {
+	if _, problems := Walk(context.Background(), reg, []string{"other.thing"}, retry.Policy{}); len(problems) != 0 {
 		t.Fatalf("unexpected problems: %v", problems)
 	}
 	if len(spy.asked) != 0 {
@@ -194,7 +196,7 @@ func TestWalkReportsAProviderThatCannotLook(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, problems := Walk(context.Background(), reg, nil)
+	got, problems := Walk(context.Background(), reg, nil, retry.Policy{})
 	if len(got) != 0 {
 		t.Errorf("a failing provider returned results: %+v", got)
 	}
@@ -248,4 +250,49 @@ func (p *recordingProvider) Import(context.Context, string, string) (*resource.R
 }
 func (p *recordingProvider) ClassifyError(error) provider.Retryability {
 	return provider.NotSafeToRetry
+}
+
+// throttlingProvider fails Discover a fixed number of times with an error it
+// calls SafeToRetry, then answers.
+type throttlingProvider struct {
+	recordingProvider
+	failures int
+	calls    int
+}
+
+func (p *throttlingProvider) Discover(_ context.Context, req provider.DiscoverRequest) ([]provider.DiscoveredResource, error) {
+	p.calls++
+	if p.calls <= p.failures {
+		return nil, errors.New("ThrottlingException: Rate exceeded")
+	}
+	return p.returns, nil
+}
+
+func (p *throttlingProvider) ClassifyError(error) provider.Retryability {
+	return provider.SafeToRetry
+}
+
+// Discover sweeps every type a provider serves, so against a real account it
+// is at least as throttle-prone as a refresh. A throttle must cost a wait,
+// not the whole discovery.
+func TestWalkRetriesADiscoverTheProviderCallsSafeToRetry(t *testing.T) {
+	prov := &throttlingProvider{failures: 2}
+	prov.returns = []provider.DiscoveredResource{{Type: "spy.thing", ProviderID: "id-1"}}
+	reg := registry.New()
+	if err := reg.Register("spy", prov); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	policy := retry.Policy{MaxAttempts: 5, Sleep: func(context.Context, time.Duration) error { return nil }}
+	got, problems := Walk(context.Background(), reg, nil, policy)
+
+	if len(problems) != 0 {
+		t.Fatalf("a retryable throttle failed the walk: %v", problems)
+	}
+	if prov.calls != 3 {
+		t.Errorf("Discover called %d times, want 3 — two throttles then an answer", prov.calls)
+	}
+	if len(got) != 1 {
+		t.Fatalf("discovery lost its result: %+v", got)
+	}
 }

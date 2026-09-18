@@ -386,3 +386,48 @@ func TestTheOmissionNoteNamesTheSyntax(t *testing.T) {
 			"a reader has left:\n%s", min)
 	}
 }
+
+// AN EMPTY COLLECTION THE PROVIDER REPORTS IS PART OF WHAT WAS IMPORTED.
+//
+// Dropping it writes a file that does not describe the resource it was
+// generated from, and the very next plan reads the difference as a change.
+// Measured on a real import: AWS reports `Ipv6Addresses: []` inside an EC2
+// instance's NetworkInterfaces, generation dropped it, and because
+// NetworkInterfaces forces a replacement the plan proposed REBUILDING FOUR
+// RUNNING INSTANCES that nobody had touched.
+//
+// Note an empty string and a zero were kept the whole time — it was only
+// collections that vanished, which is what made the file look right.
+func TestGenerationKeepsAnEmptyCollectionTheProviderReported(t *testing.T) {
+	f := oneFile(t, []Resource{{
+		Name: "orders", Type: "fake.database", ProviderID: "db-9",
+		Attributes: map[string]value.Value{
+			"engine": prov("postgres"),
+			"tags":   value.Map(map[string]value.Value{}, value.SourceProvider),
+		},
+	}})
+
+	if out := string(f.Bytes); !strings.Contains(out, "tags:") {
+		t.Errorf("the empty map the provider reported was dropped, so the file no longer describes what was imported:\n%s", out)
+	}
+}
+
+// The branch that drop belonged to: a collection is omitted when its contents
+// were SECRETS, and that must stay. The note tells the reader what to put
+// back; an empty `{}` written where a password used to be would claim the
+// resource has none.
+func TestGenerationStillOmitsACollectionEmptiedBySecrets(t *testing.T) {
+	files, _, err := Generate([]Resource{{
+		Name: "orders", Type: "fake.database", ProviderID: "db-9",
+		Attributes: map[string]value.Value{
+			"engine":   prov("postgres"),
+			"password": prov("hunter2").WithSensitive(true),
+		},
+	}}, testRegistry(t), MinimalOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out := string(files[0].Bytes); strings.Contains(out, "hunter2") {
+		t.Fatalf("a secret reached a generated file:\n%s", out)
+	}
+}

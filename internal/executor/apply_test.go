@@ -12,6 +12,7 @@ import (
 	"github.com/infrena/infrena/internal/diag"
 	"github.com/infrena/infrena/internal/planner"
 	"github.com/infrena/infrena/internal/registry"
+	"github.com/infrena/infrena/internal/retry"
 	"github.com/infrena/infrena/internal/state"
 	"github.com/infrena/infrena/pkg/address"
 	"github.com/infrena/infrena/pkg/provider"
@@ -1203,7 +1204,7 @@ func TestApplyReplaceLeavesNoStateWhenCreatePhaseFailsAfterDestroySucceeds(t *te
 // retries under SafeToRetry, the one classification every verb retries
 // under regardless of which verb it is (see retryable's table in
 // retry.go), so it cannot distinguish a correct mapping from a broken one.
-// Concretely: changing verbFor's create arm to return VerbUpdate, true
+// Concretely: changing verbFor's create arm to return retry.VerbUpdate, true
 // still left every test in the package green, because a create classified
 // as an update becomes retryable on ConditionallyRetryable too — precisely
 // the case spec §15 forbids by name, since a retried create is how
@@ -1215,15 +1216,15 @@ func TestVerbForMapsEveryOpNodeShapeToTheRightVerb(t *testing.T) {
 		name     string
 		kind     planner.OpKind
 		phase    planner.Phase
-		wantVerb Verb
+		wantVerb retry.Verb
 		wantOK   bool
 	}{
-		{"create", planner.OpCreate, planner.PhaseCreate, VerbCreate, true},
-		{"replace create phase", planner.OpReplace, planner.PhaseCreate, VerbCreate, true},
-		{"update", planner.OpUpdate, planner.PhaseCreate, VerbUpdate, true},
-		{"destroy", planner.OpDestroy, planner.PhaseDestroy, VerbDelete, true},
-		{"replace destroy phase", planner.OpReplace, planner.PhaseDestroy, VerbDelete, true},
-		{"forget", planner.OpForget, planner.PhaseDestroy, VerbInvalid, false},
+		{"create", planner.OpCreate, planner.PhaseCreate, retry.VerbCreate, true},
+		{"replace create phase", planner.OpReplace, planner.PhaseCreate, retry.VerbCreate, true},
+		{"update", planner.OpUpdate, planner.PhaseCreate, retry.VerbUpdate, true},
+		{"destroy", planner.OpDestroy, planner.PhaseDestroy, retry.VerbDelete, true},
+		{"replace destroy phase", planner.OpReplace, planner.PhaseDestroy, retry.VerbDelete, true},
+		{"forget", planner.OpForget, planner.PhaseDestroy, retry.VerbInvalid, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

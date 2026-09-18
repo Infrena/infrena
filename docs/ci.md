@@ -132,7 +132,7 @@ shape: a `meta` line, then `event`, `observation` and `diagnostic` lines as work
 then a final `result` line.
 
 ```json
-{"type":"meta","version":3,"infrena":"0.11.1","command":"apply","environment":"production","startedAt":"..."}
+{"type":"meta","version":4,"infrena":"0.11.1","command":"apply","environment":"production","startedAt":"..."}
 {"type":"event","event":"started","address":"db","op":"update","at":"..."}
 {"type":"result","approved_by":"https://github.com/acme/infra/pull/42","state_serial":18,"applied":["db"]}
 ```

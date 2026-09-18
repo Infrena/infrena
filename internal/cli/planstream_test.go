@@ -101,3 +101,30 @@ func TestPlanOutputRoundTripsThroughApply(t *testing.T) {
 		t.Fatalf("apply --plan exit = %d, want %d", code, ExitChanges)
 	}
 }
+
+// The second guard, in the same spirit as the two spec 2.4 already put here:
+// a `plan` line is accepted only from a file whose meta line says it reports
+// on `plan`. Apply and destroy now write a plan of their own — redacted, and
+// typed "applying" precisely so it cannot be read back — and the type name
+// is what stops that today. This is what stops it if some later line kind,
+// or a hand-assembled file, carries the other name.
+func TestReadSavedPlanRefusesAPlanLineFromAnotherCommandsReport(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "run.ndjson")
+	f, _ := os.OpenFile(path, os.O_CREATE|os.O_WRONLY, 0o600)
+	w := report.NewWriter(f)
+	_ = w.Meta("apply", "dev", "0.0.0-test", time.Unix(0, 0))
+	artifact, err := json.Marshal(&planner.Plan{Version: planner.PlanVersion, Project: "proj", Environment: "dev"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = w.WritePlan(artifact)
+	f.Close()
+
+	_, err = readSavedPlan(path)
+	if err == nil {
+		t.Fatal("readSavedPlan took a plan line out of an apply report")
+	}
+	if !strings.Contains(err.Error(), `"apply"`) {
+		t.Errorf("error does not name the run the file reports on: %v", err)
+	}
+}

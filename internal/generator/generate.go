@@ -504,7 +504,14 @@ func plainValue(v value.Value) (plain any, omitted []string, keep bool) {
 				out[k] = p
 			}
 		}
-		if len(out) == 0 {
+		// EMPTY ONLY BECAUSE ITS CONTENTS WERE SECRETS is the case this drop
+		// exists for, and the only one it may cover. An empty collection the
+		// provider genuinely reported is part of what was imported: omitting
+		// it writes a file that does not describe the resource, and the next
+		// plan reads the difference as a change. On a force-new attribute
+		// that is a REPLACEMENT — measured, on four running EC2 instances,
+		// from a single `Ipv6Addresses: []` that never reached the file.
+		if len(out) == 0 && len(hidden) > 0 {
 			return nil, hidden, false
 		}
 		return out, hidden, true
@@ -523,8 +530,14 @@ func plainValue(v value.Value) (plain any, omitted []string, keep bool) {
 				out = append(out, p)
 			}
 		}
-		if len(out) == 0 {
+		// See the map case above: an empty list is dropped only when secrets
+		// emptied it.
+		if len(out) == 0 && len(hidden) > 0 {
 			return nil, hidden, false
+		}
+		if out == nil {
+			// A nil slice encodes as `null`; an empty list must read as `[]`.
+			out = []any{}
 		}
 		return out, hidden, true
 

@@ -1,8 +1,9 @@
-package executor
+package retry
 
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -11,6 +12,7 @@ import (
 
 func alwaysSafe(error) provider.Retryability        { return provider.SafeToRetry }
 func alwaysConditional(error) provider.Retryability { return provider.ConditionallyRetryable }
+func alwaysNotSafe(error) provider.Retryability     { return provider.NotSafeToRetry }
 
 func TestRetryableTableMatchesSpec(t *testing.T) {
 	cases := []struct {
@@ -78,7 +80,7 @@ func TestRetryableRefusesVerbInvalid(t *testing.T) {
 }
 
 func TestBackoffDoublesThenCapsAtMax(t *testing.T) {
-	policy := RetryPolicy{
+	policy := Policy{
 		Base:   time.Second,
 		Max:    3 * time.Second,
 		Jitter: func(d time.Duration) time.Duration { return d }, // identity, so exact values are checkable
@@ -102,7 +104,7 @@ func TestBackoffDoublesThenCapsAtMax(t *testing.T) {
 func TestAttemptSucceedsWithoutRetryingOnFirstSuccess(t *testing.T) {
 	calls := 0
 	slept := 0
-	policy := RetryPolicy{
+	policy := Policy{
 		MaxAttempts: 5,
 		Sleep:       func(context.Context, time.Duration) error { slept++; return nil },
 	}
@@ -123,7 +125,7 @@ func TestAttemptSucceedsWithoutRetryingOnFirstSuccess(t *testing.T) {
 
 func TestAttemptWithZeroMaxAttemptsMeansOne(t *testing.T) {
 	calls := 0
-	err := Attempt(context.Background(), VerbRead, RetryPolicy{}, alwaysSafe, func() error {
+	err := Attempt(context.Background(), VerbRead, Policy{}, alwaysSafe, func() error {
 		calls++
 		return errors.New("fails")
 	})
@@ -144,7 +146,7 @@ func TestAttemptWithZeroMaxAttemptsMeansOne(t *testing.T) {
 // coverage matches what was asked for, not left as an unverified inference.
 func TestAttemptWithNegativeMaxAttemptsMeansOne(t *testing.T) {
 	calls := 0
-	err := Attempt(context.Background(), VerbRead, RetryPolicy{MaxAttempts: -5}, alwaysSafe, func() error {
+	err := Attempt(context.Background(), VerbRead, Policy{MaxAttempts: -5}, alwaysSafe, func() error {
 		calls++
 		return errors.New("fails")
 	})
@@ -162,7 +164,7 @@ func TestAttemptNeverRetriesCreateOnAnAmbiguousFailure(t *testing.T) {
 	// allows far more, and Sleep must never be reached at all.
 	calls := 0
 	boom := errors.New("ambiguous: timeout waiting for response")
-	policy := RetryPolicy{
+	policy := Policy{
 		MaxAttempts: 5,
 		Sleep: func(context.Context, time.Duration) error {
 			t.Fatal("Sleep must not be called — Create must not retry on ConditionallyRetryable")
@@ -183,7 +185,7 @@ func TestAttemptNeverRetriesCreateOnAnAmbiguousFailure(t *testing.T) {
 
 func TestAttemptRetriesCreateOnlyWhenSafeToRetry(t *testing.T) {
 	calls := 0
-	policy := RetryPolicy{
+	policy := Policy{
 		MaxAttempts: 5,
 		Sleep:       func(context.Context, time.Duration) error { return nil },
 	}
@@ -205,7 +207,7 @@ func TestAttemptRetriesCreateOnlyWhenSafeToRetry(t *testing.T) {
 func TestAttemptRetriesDeleteOnlyWhenSafeToRetry(t *testing.T) {
 	calls := 0
 	boom := errors.New("dependency still attached")
-	err := Attempt(context.Background(), VerbDelete, RetryPolicy{MaxAttempts: 5}, alwaysConditional, func() error {
+	err := Attempt(context.Background(), VerbDelete, Policy{MaxAttempts: 5}, alwaysConditional, func() error {
 		calls++
 		return boom
 	})
@@ -217,7 +219,7 @@ func TestAttemptRetriesDeleteOnlyWhenSafeToRetry(t *testing.T) {
 	}
 
 	calls = 0
-	policy := RetryPolicy{MaxAttempts: 5, Sleep: func(context.Context, time.Duration) error { return nil }}
+	policy := Policy{MaxAttempts: 5, Sleep: func(context.Context, time.Duration) error { return nil }}
 	err = Attempt(context.Background(), VerbDelete, policy, alwaysSafe, func() error {
 		calls++
 		if calls < 2 {
@@ -235,7 +237,7 @@ func TestAttemptRetriesDeleteOnlyWhenSafeToRetry(t *testing.T) {
 
 func TestAttemptRetriesUpdateOnConditionallyRetryable(t *testing.T) {
 	calls := 0
-	policy := RetryPolicy{MaxAttempts: 5, Sleep: func(context.Context, time.Duration) error { return nil }}
+	policy := Policy{MaxAttempts: 5, Sleep: func(context.Context, time.Duration) error { return nil }}
 	err := Attempt(context.Background(), VerbUpdate, policy, alwaysConditional, func() error {
 		calls++
 		if calls < 3 {
@@ -255,7 +257,7 @@ func TestAttemptStopsAtMaxAttemptsWithoutASleepAfterTheLastFailure(t *testing.T)
 	calls := 0
 	slept := 0
 	boom := errors.New("still failing")
-	policy := RetryPolicy{
+	policy := Policy{
 		MaxAttempts: 3,
 		Sleep:       func(context.Context, time.Duration) error { slept++; return nil },
 	}
@@ -277,7 +279,7 @@ func TestAttemptStopsAtMaxAttemptsWithoutASleepAfterTheLastFailure(t *testing.T)
 func TestAttemptStopsWhenSleepIsInterrupted(t *testing.T) {
 	calls := 0
 	boom := errors.New("throttled")
-	policy := RetryPolicy{
+	policy := Policy{
 		MaxAttempts: 5,
 		Sleep:       func(context.Context, time.Duration) error { return context.Canceled },
 	}
@@ -351,7 +353,7 @@ func TestAttemptNotifiesEachRetryBeforeWaiting(t *testing.T) {
 	slept := 0
 
 	boom := errors.New("throttled")
-	policy := RetryPolicy{
+	policy := Policy{
 		MaxAttempts: 3,
 		Base:        10 * time.Millisecond,
 		Max:         time.Second,
@@ -402,7 +404,7 @@ func TestAttemptNotifiesEachRetryBeforeWaiting(t *testing.T) {
 // TestAttemptWithNoOnRetryDoesNotPanic guards the nil case, since Options may
 // legitimately omit it.
 func TestAttemptWithNoOnRetryDoesNotPanic(t *testing.T) {
-	policy := RetryPolicy{
+	policy := Policy{
 		MaxAttempts: 2,
 		Base:        time.Millisecond,
 		Sleep:       func(context.Context, time.Duration) error { return nil },
@@ -410,4 +412,44 @@ func TestAttemptWithNoOnRetryDoesNotPanic(t *testing.T) {
 	_ = Attempt(context.Background(), VerbRead, policy,
 		func(error) provider.Retryability { return provider.SafeToRetry },
 		func() error { return errors.New("boom") })
+}
+
+// AN EXHAUSTED RETRY MUST NOT LOOK LIKE A SINGLE FAILURE. This cost a real
+// round trip: a throttled AWS read failed, and neither the user nor the
+// person reading the report could tell from the message whether the engine
+// had waited and tried five times or had never retried at all. The loop is
+// the only place that knows, so it says so.
+func TestAttemptSaysHowManyAttemptsItSpentOnceTheyAreExhausted(t *testing.T) {
+	boom := errors.New("ThrottlingException")
+	var slept time.Duration
+	policy := Policy{
+		MaxAttempts: 5,
+		Sleep:       func(_ context.Context, d time.Duration) error { slept += d; return nil },
+		Jitter:      func(d time.Duration) time.Duration { return d },
+	}
+
+	err := Attempt(context.Background(), VerbRead, policy, alwaysSafe, func() error { return boom })
+
+	if !errors.Is(err, boom) {
+		t.Fatalf("the cause must survive: %v", err)
+	}
+	if !strings.Contains(err.Error(), "5 attempts") {
+		t.Errorf("error does not say how many attempts were spent: %v", err)
+	}
+	if !strings.Contains(err.Error(), slept.String()) {
+		t.Errorf("error does not say how long was spent waiting (%s): %v", slept, err)
+	}
+}
+
+// The other side of it: a failure that was never eligible for a retry must
+// not claim an attempt count. "after 1 attempt" on an error that was refused
+// outright reads as though waiting might have helped.
+func TestAttemptDoesNotDressUpAFailureItNeverRetried(t *testing.T) {
+	boom := errors.New("InvalidRequestException")
+
+	err := Attempt(context.Background(), VerbRead, Policy{MaxAttempts: 5}, alwaysNotSafe, func() error { return boom })
+
+	if err != boom {
+		t.Errorf("a non-retryable failure was altered: %v", err)
+	}
 }

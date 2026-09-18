@@ -143,15 +143,16 @@ func TestWritePlanEmitsATypedLineCarryingTheArtifact(t *testing.T) {
 	}
 }
 
-func TestVersionIsThree(t *testing.T) {
+func TestVersionIsFour(t *testing.T) {
 	// The format gained a line kind, so a consumer that only understands an
 	// older version must be able to tell. PLAN.md section 61 keeps this
 	// independent of every other format version.
 	//
 	// 2 was the "plan" line; 3 is MigrateResult, the result line
-	// `state migrate --check` writes.
-	if Version != 3 {
-		t.Errorf("Version = %d, want 3", Version)
+	// `state migrate --check` writes; 4 is the "applying" line apply and
+	// destroy write before they execute.
+	if Version != 4 {
+		t.Errorf("Version = %d, want 4", Version)
 	}
 }
 
@@ -178,5 +179,75 @@ func TestMigrateResultCarriesTheStatusAsAString(t *testing.T) {
 	}
 	if len(got.Environments) != 2 || got.Environments[0] != "dev" {
 		t.Errorf("environments = %v", got.Environments)
+	}
+}
+
+// A plan line from apply is REDACTED, unlike the `plan` line `infrena plan`
+// writes. That is the whole difference between the two kinds: one is a
+// replayable input, this one is a report of a run, and this package's rule
+// for a report is that no value reaches it except through Format.
+func TestWritePlanChangesRedactsValues(t *testing.T) {
+	var buf bytes.Buffer
+	w := NewWriter(&buf)
+
+	err := w.WritePlanChanges(PlanChanges{
+		Stage:       StageProposed,
+		Environment: "dev",
+		Changes: []ResourceChange{{
+			Address: "aws.db.main",
+			Type:    "aws.db",
+			Kind:    "update",
+			Changes: []AttributeChange{{
+				Attribute: "password",
+				Before:    Format(value.String("hunter2", value.SourceExplicit).WithSensitive(true)),
+				After:     Format(value.String("hunter3", value.SourceExplicit).WithSensitive(true)),
+			}},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	line := bytes.TrimSpace(buf.Bytes())
+	if bytes.Contains(line, []byte("hunter")) {
+		t.Fatalf("a sensitive value reached the report: %s", line)
+	}
+
+	var got PlanChanges
+	if err := json.Unmarshal(line, &got); err != nil {
+		t.Fatal(err)
+	}
+	// NOT "plan": readSavedPlan scans a stream for that type and applies what
+	// it finds, so a redacted plan carrying it would be applied as if its
+	// values were real.
+	if got.Type != "applying" {
+		t.Errorf("type = %q, want applying", got.Type)
+	}
+	if got.Stage != StageProposed {
+		t.Errorf("stage = %q, want %q", got.Stage, StageProposed)
+	}
+	if len(got.Changes) != 1 || len(got.Changes[0].Changes) != 1 {
+		t.Fatalf("changes = %+v, want one resource with one attribute", got.Changes)
+	}
+	if before := got.Changes[0].Changes[0].Before; before != "<sensitive>" {
+		t.Errorf("before = %q, want the redacted marker", before)
+	}
+}
+
+// A plan line is a PROMISE ABOUT THE FUTURE, so an unknown value in it reads
+// the way the plan renderer reads it. ReportFormatOptions' "(unknown)" is for
+// a value that is still not known AFTER a run, which is an anomaly being
+// reported — see value.ReportFormatOptions. A UI rendering a plan line beside
+// a terminal's rendering of the same plan must not see two different words
+// for the same thing.
+func TestFormatPlannedSaysKnownAfterApply(t *testing.T) {
+	unknown := value.Unknown(value.KindString, value.SourceExplicit)
+	if got := FormatPlanned(unknown); got != "(known after apply)" {
+		t.Errorf("FormatPlanned(unknown) = %q, want the plan's wording", got)
+	}
+	// Still the one redaction path.
+	secret := value.String("hunter2", value.SourceExplicit).WithSensitive(true)
+	if got := FormatPlanned(secret); got != "<sensitive>" {
+		t.Errorf("FormatPlanned(sensitive) = %q, want the redacted marker", got)
 	}
 }

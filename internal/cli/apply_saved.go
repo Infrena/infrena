@@ -98,6 +98,7 @@ func applySavedPlan(
 	// Shown before the confirmation, and rendered from the artifact rather than
 	// recomputed: what the user is asked to approve has to be what will run.
 	fmt.Fprint(ro.Out(), planner.Render(p, planner.RenderOptions{Verbose: opts.Verbose, Definition: reg.Definition}))
+	reportPlan(ro, p, report.StageProposed)
 
 	if !p.HasChanges() {
 		fmt.Fprintln(ro.Out(), "This plan proposes no changes.")
@@ -175,6 +176,7 @@ func applySavedPlan(
 		// if the state they describe has moved.
 		execOpts.OnEvent = eventHook(ro)
 
+		reportPlan(ro, p, report.StageExecuting)
 		res, execDiags := executor.Apply(ctx, p, g, st, execOpts)
 		renderDiagnostics(cmd.ErrOrStderr(), rw, execDiags)
 		fmt.Fprint(ro.Out(), executor.Render(res, executor.RenderOptions{Verbose: opts.Verbose}))
