@@ -652,3 +652,57 @@ func TestAnOrdinaryMappingErrorIsNotGivenTheQuotingHint(t *testing.T) {
 		t.Errorf("an ordinary mapping error was given the interpolation hint:\n%v", err)
 	}
 }
+
+// TestAConventionalDirectoryAsAPlainFileIsExplained, for each of the three
+// directories that report it, and by BEHAVIOUR rather than by errno.
+//
+// These branches used to test `errors.Is(err, syscall.ENOTDIR)`, which is
+// correct on Unix and wrong on Windows in both directions: Windows returns
+// ERROR_DIRECTORY when a file is read as a directory and Go does not map that
+// to ENOTDIR, so the branch never fired; and Go defines
+// `syscall.ENOTDIR = ERROR_PATH_NOT_FOUND` there, which is what a MISSING path
+// returns, so the same test was true of a directory that simply was not there.
+// Only the os.IsNotExist check running first kept the second from turning "you
+// have no environments/" into "your environments/ is a file".
+//
+// We publish Windows binaries. The test cannot run there from here, so it pins
+// the behaviour through a path with no errno in it at all — which is also what
+// the fix does.
+func TestAConventionalDirectoryAsAPlainFileIsExplained(t *testing.T) {
+	for _, name := range []string{EnvironmentsDirName, ResourcesDirName, VarsDirName} {
+		t.Run(name, func(t *testing.T) {
+			dir := writeTree(t, map[string]string{ProjectFileName: minimalProject})
+			path := filepath.Join(dir, name)
+			if err := os.WriteFile(path, []byte("not a directory\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			_, err := Load(dir)
+			if err == nil {
+				t.Fatalf("Load accepted %s as a plain file", name)
+			}
+			if !strings.Contains(err.Error(), path) {
+				t.Errorf("error does not name the path: %v", err)
+			}
+			if !strings.Contains(err.Error(), "not a directory") {
+				t.Errorf("error does not say what was expected: %v", err)
+			}
+			// The raw OS error already carries the path and the word
+			// "directory", so the two checks above would pass against an
+			// unhandled error. This one only passes with a suggested action.
+			if !strings.Contains(err.Error(), "Remove") {
+				t.Errorf("error does not suggest an action: %v", err)
+			}
+		})
+	}
+}
+
+// TestAMissingConventionalDirectoryIsNotAnError, which is the other half of the
+// same correction: absent and present-but-wrong-kind must not collapse into one
+// answer. Every one of these directories is optional.
+func TestAMissingConventionalDirectoryIsNotAnError(t *testing.T) {
+	dir := writeTree(t, map[string]string{ProjectFileName: minimalProject})
+	if _, err := Load(dir); err != nil {
+		t.Fatalf("a project with none of the optional directories failed to load: %v", err)
+	}
+}

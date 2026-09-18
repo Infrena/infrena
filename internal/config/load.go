@@ -1,14 +1,12 @@
 package config
 
 import (
-	"errors"
 	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
-	"syscall"
 
 	"gopkg.in/yaml.v3"
 )
@@ -242,12 +240,49 @@ func walkScopedVars(resourcesRoot string) ([]File, error) {
 		return nil
 	})
 	if err != nil {
-		if os.IsNotExist(err) || errors.Is(err, syscall.ENOTDIR) {
+		if os.IsNotExist(err) || notADirectory(resourcesRoot) {
+			// A resources/ that is a plain file is treated as absent here
+			// rather than reported, because scoped variables are an optional
+			// feature of an optional directory — walkConventionalDir reports
+			// the same path properly when the resources walk reaches it.
 			return nil, nil
 		}
 		return nil, err
 	}
 	return out, nil
+}
+
+// notADirectory reports whether path exists and is something other than a
+// directory. It is how three call sites above tell "you wrote a file where a
+// directory belongs" from every other reason a read can fail.
+//
+// IT ASKS THE FILESYSTEM RATHER THAN THE ERRNO, and that is the correction
+// rather than a preference. The errno test was `errors.Is(err, syscall.ENOTDIR)`,
+// which is right on Unix and WRONG ON WINDOWS IN BOTH DIRECTIONS:
+//
+//   - Windows returns ERROR_DIRECTORY (267) when a file is read as a directory,
+//     and Go does not map that to ENOTDIR. So the branch never fired, and a
+//     project with `environments` as a plain file got the raw "The directory
+//     name is invalid", naming the path and neither the expectation nor an
+//     action — the exact shape §44 forbids and which these branches exist to fix.
+//   - Go defines `syscall.ENOTDIR = ERROR_PATH_NOT_FOUND` on Windows, which is
+//     what a genuinely MISSING path returns. The test was therefore also true
+//     of an absent directory; only the os.IsNotExist check running first kept
+//     that from turning "you have no environments/" into "your environments/ is
+//     a file".
+//
+// The original follow-up asked whether the file COMPILED on Windows, found
+// that it did, and stopped. It does compile; it just means something else there.
+// We publish Windows binaries, so that is not an acceptable place to stop.
+//
+// A SECOND SYSCALL, and the TOCTOU window it opens does not matter here: this
+// runs only after a read has already failed, and the answer chooses the WORDING
+// of a diagnostic rather than granting access to anything. If the path changes
+// underneath, the worst case is the raw error the caller would have returned
+// anyway.
+func notADirectory(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir()
 }
 
 // walkConventionalDir reads every .yml file under root, recursively.
@@ -265,6 +300,22 @@ func walkScopedVars(resourcesRoot string) ([]File, error) {
 //
 // A missing directory is not an error: most projects use none of these.
 func walkConventionalDir(root string, kind FileKind) ([]File, error) {
+	// BEFORE THE WALK, because the walk does not fail on this and that is what
+	// made it silent. filepath.WalkDir over a path that is a plain FILE does not
+	// error — it visits the file as a single entry, the `!d.IsDir()` arm drops
+	// it for not ending in .yml, and the walk succeeds having read nothing. So a
+	// project with `resources` as a file loaded cleanly with every resource in
+	// it missing, and `infrena validate` said "Configuration valid".
+	//
+	// Only `environments/` reported this, because it uses os.ReadDir, which does
+	// fail. The other two directories were never covered at all.
+	if notADirectory(root) {
+		return nil, fmt.Errorf(
+			"%s exists but is not a directory; it must be a directory holding YAML files. "+
+				"Remove the file or move it aside, then create %s as a directory.",
+			root, root)
+	}
+
 	var paths []string
 	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -295,12 +346,6 @@ func walkConventionalDir(root string, kind FileKind) ([]File, error) {
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
-		}
-		if errors.Is(err, syscall.ENOTDIR) {
-			return nil, fmt.Errorf(
-				"%s exists but is not a directory; it must be a directory holding YAML files. "+
-					"Remove the file or move it aside, then create %s as a directory.",
-				root, root)
 		}
 		return nil, err
 	}
@@ -388,10 +433,10 @@ func loadEnvironmentDir(dir string) ([]File, error) {
 		if os.IsNotExist(err) {
 			return nil, nil
 		}
-		if errors.Is(err, syscall.ENOTDIR) {
+		if notADirectory(dir) {
 			// environments/ exists but is a plain file: a typo, a `touch`
 			// where `mkdir` was meant, or a bad merge. Left as the raw
-			// ENOTDIR error, this would name the path but neither the
+			// OS error, this would name the path but neither the
 			// expectation nor an action — exactly the shape spec §44
 			// forbids, and the duplicate-spelling error below already
 			// gets right.
