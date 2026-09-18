@@ -3226,7 +3226,10 @@ already drifted — the same wrong sentence had to be corrected in both on 2026-
 - `docs/writing-a-provider.md` is the provider guide and stays. It already covers everything
   `AGENT.md` does, plus requirements, cancellation and more depth.
 - `AGENT.md`'s one unique section, its closing "checklist before calling a plugin done", folds
-  into that guide. The rest is duplication and goes.
+  into that guide. The rest is duplication and goes. **Done 2026-09-17, ahead of the day**, since
+  nothing about it needed the repository to be public: the checklist is section 15 of the guide,
+  `AGENT.md` is deleted, and the eight references to it in that repository's `CLAUDE.md` now name
+  the guide.
 - `docs/using-ai.md` is the new, separate document, and it is SHORT. It says AI may be used with
   no disclosure requirement, and that what does not change is authorship, understanding and the
   CLA's representation about your own original work. Written 2026-09-17 and already in this
