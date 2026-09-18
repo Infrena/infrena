@@ -34,6 +34,7 @@ import (
 func newImportCommand(opts *GlobalOptions) *cobra.Command {
 	var generate bool
 	var instance string
+	var as string
 	var filters filterFlags
 
 	cmd := &cobra.Command{
@@ -80,7 +81,7 @@ func newImportCommand(opts *GlobalOptions) *cobra.Command {
 			return withLockedEnvironment(environment, "import", backend, cmd.ErrOrStderr(),
 				func(ctx context.Context) error {
 					return runImport(ctx, cmd, opts, reg, tbl, backend, environment, args[1:],
-						generate, instance, filter)
+						generate, instance, as, filter)
 				})
 		},
 	}
@@ -92,6 +93,15 @@ func newImportCommand(opts *GlobalOptions) *cobra.Command {
 	// could not say at all.
 	cmd.Flags().StringVar(&instance, "provider", "",
 		"only adopt resources belonging to this provider instance")
+	// Naming is otherwise permanent. Discovery proposes a name from a tag or
+	// the provider ID — `network-vpc-0a1b2c3d` — and nothing renames a managed
+	// resource afterwards short of editing state by hand, so the proposal
+	// sticks. AT IMPORT TIME is the one moment renaming is safe: nothing
+	// references the resource yet, so there is no dependency edge, no
+	// generated file and no other resource's `${...}` to rewrite. A general
+	// `state mv` has all three problems and is a different feature.
+	cmd.Flags().StringVar(&as, "as", "",
+		"adopt the single named resource under this name instead of the proposed one")
 	// The same three narrowing flags `discover` takes, so the list a user read
 	// and the list they adopt are produced by the same question.
 	filters.register(cmd)
@@ -101,9 +111,18 @@ func newImportCommand(opts *GlobalOptions) *cobra.Command {
 func runImport(
 	ctx context.Context, cmd *cobra.Command, opts *GlobalOptions,
 	reg *registry.Registry, table providers.Table, backend state.Backend,
-	environment string, selectors []string, generate bool, instance string,
+	environment string, selectors []string, generate bool, instance, as string,
 	filter discovery.Filter,
 ) error {
+	// REFUSED rather than applied to the first of several. --as names ONE
+	// resource, so anything that could select a different number of them makes
+	// the flag ambiguous, and an ambiguous rename is one that silently puts a
+	// name on something the user was not looking at.
+	if as != "" && len(selectors) != 1 {
+		return fmt.Errorf("--as renames one resource, so it needs exactly one selector "+
+			"(%d given).\nName the resource you mean, as `infrena import %s <type>.<id> --as %s`",
+			len(selectors), environment, as)
+	}
 	managed, err := managedProviderIDs(ctx, backend)
 	if err != nil {
 		return err
@@ -116,6 +135,22 @@ func runImport(
 	if err != nil {
 		return err
 	}
+	// AFTER selection, so the name replaces a proposal rather than competing
+	// with the matching that found the resource — selectors match on
+	// type.provider_id and never on the name, so renaming earlier would change
+	// nothing about what was selected and only make that harder to see.
+	if as != "" {
+		if len(selected) != 1 {
+			// Reachable when the one selector matched nothing: the flag's
+			// precondition held on the command line and not on the result.
+			return fmt.Errorf("--as %s: the selector matched %d resources, not one", as, len(selected))
+		}
+		if err := refuseManagedName(as, managed, selected[0]); err != nil {
+			return err
+		}
+		selected[0].Name = as
+	}
+
 	reportSkipped(cmd.ErrOrStderr(), skipped)
 	if len(selected) == 0 {
 		fmt.Fprintln(cmd.OutOrStdout(), "Nothing to import.")
@@ -823,4 +858,25 @@ func projectName(dir string) string {
 		return ""
 	}
 	return decl.Project
+}
+
+// refuseManagedName refuses a --as that collides with a name this project
+// already manages.
+//
+// A collision would not merely be confusing: state is keyed by address, so
+// importing over an existing name would REPLACE that resource's entry, and the
+// resource it displaced would still exist in the cloud with nothing recording
+// it. That is the same "managed by two things, or by nothing" hazard the
+// already-managed check exists for, arrived at from the other side.
+func refuseManagedName(name string, managed map[string]string, r discovery.Result) error {
+	for providerID, address := range managed {
+		if address != name {
+			continue
+		}
+		return fmt.Errorf("--as %s: this project already manages a resource called %s (provider ID %s).\n"+
+			"Importing %s under that name would replace it in state and leave the displaced resource "+
+			"managed by nothing.\nChoose another name.",
+			name, name, providerID, r.ProviderID)
+	}
+	return nil
 }
