@@ -164,10 +164,42 @@ func applyObservations(st *state.State, obs refresh.Observations, out io.Writer)
 			st.Remove(addr)
 			wrote = true
 		default:
-			fmt.Fprintf(out, "  %s: refreshed\n", addr)
+			// WHAT DRIFTED, not merely that a read happened. Every resource
+			// used to print "refreshed" identically whether reality matched
+			// state or not, so the command whose entire job is detecting drift
+			// could not tell you it had found any — the information existed,
+			// reached the `--output` report as an observation's changes, and
+			// was discarded on the way to the terminal.
+			//
+			// attributeChanges rather than a second comparison written here:
+			// it already exists for the report, and it formats through
+			// report.Format, which is the single redaction path. A private
+			// diff in this file would be a second place for a secret to reach
+			// a terminal, and the duplicate-renderer defect is the one that
+			// put a secret in M2's output.
+			before, _ := st.Get(addr)
+			changes := attributeChanges(before, o.State)
 			st.Set(o.State)
 			wrote = true
+			if len(changes) == 0 {
+				fmt.Fprintf(out, "  %s: refreshed, no drift\n", addr)
+				break
+			}
+			fmt.Fprintf(out, "  %s: DRIFTED\n", addr)
+			for _, c := range changes {
+				fmt.Fprintf(out, "      %s: %s -> %s\n", c.Attribute, orNone(c.Before), orNone(c.After))
+			}
 		}
 	}
 	return wrote
+}
+
+// orNone renders an absent side of a drift line. An attribute that appeared or
+// disappeared is drift as much as one that changed value, and an empty string
+// would render it as though it had become blank.
+func orNone(s string) string {
+	if s == "" {
+		return "(none)"
+	}
+	return s
 }
