@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 var (
@@ -247,4 +248,58 @@ func readPlanArtifactBytes(t *testing.T, path string) []byte {
 	}
 	t.Fatalf("%s carries no plan line:\n%s", path, data)
 	return nil
+}
+
+// applyEventWindow returns the interval an `apply --output` run actually spent
+// working: the timestamp of its first `started` event to that of its last
+// `succeeded` one.
+//
+// It exists so that a test can assert two runs OVERLAPPED rather than infer it
+// from how long they took together. Wall-clock totals cannot tell a serialised
+// run on a fast machine from a concurrent one on a slow machine, and a CI
+// runner is exactly where that ambiguity bites; two absolute intervals either
+// intersect or they do not, whatever the machine was doing.
+//
+// It reads the report stream rather than stdout because `--output` silences
+// stdout by design, and because the stream is the only place these timestamps
+// exist at all — the human rendering never prints them.
+//
+// Parsed here rather than inline, for the reason readPlanArtifactBytes gives:
+// one parser survives an envelope change, and several inline ones quietly
+// disagree after it.
+func applyEventWindow(t *testing.T, label, path string) (first, last time.Time) {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading the %s apply report at %s: %v", label, path, err)
+	}
+	for _, line := range bytes.Split(data, []byte("\n")) {
+		line = bytes.TrimSpace(line)
+		if len(line) == 0 {
+			continue
+		}
+		var e struct {
+			Type  string    `json:"type"`
+			Event string    `json:"event"`
+			At    time.Time `json:"at"`
+		}
+		if err := json.Unmarshal(line, &e); err != nil || e.Type != "event" {
+			continue
+		}
+		switch e.Event {
+		case "started":
+			if first.IsZero() || e.At.Before(first) {
+				first = e.At
+			}
+		case "succeeded":
+			if last.IsZero() || e.At.After(last) {
+				last = e.At
+			}
+		}
+	}
+	if first.IsZero() || last.IsZero() {
+		t.Fatalf("the %s apply report at %s has no started/succeeded event pair, so it did no work:\n%s",
+			label, path, data)
+	}
+	return first, last
 }

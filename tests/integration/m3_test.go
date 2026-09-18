@@ -807,27 +807,35 @@ func waitAsync(t *testing.T, label string, cmd *exec.Cmd, stdout, stderr *bytes.
 // single global lock in front of the state backend and the two applies would
 // serialise, both would still exit 2 with "Apply complete:", both state files
 // would still be written, and this test would go on passing while the property
-// it is named for had been destroyed. So the real assertion is on ELAPSED TIME,
-// which is the only observable that distinguishes overlapping from serialised.
+// it is named for had been destroyed.
 //
-// The arithmetic, with latency_ms at 500 so each apply spends half a second
-// inside its provider's Create:
+// IT MEASURED WALL-CLOCK UNTIL 2026-09-17, AND WALL-CLOCK IS A BET ON THE
+// MACHINE. The old assertion was "both applies finish in under 800ms", placed
+// between an overlapping run (~500-600ms measured here) and a serialised one
+// (~1000ms). It failed in CI under `-race` at 1.073s. That is genuinely
+// ambiguous — 1.073s is what you would see from a serialised run on a fast
+// machine AND from an overlapping run on a runner whose per-process overhead is
+// half a second — so the failure could not be read either way without going and
+// measuring something else. It was the latter: the same commit measures 546-616ms
+// locally under `-race`, and the commit before it measures 544-596ms, so nothing
+// had regressed and the bound had simply been asked a question about a shared CI
+// runner rather than about infrena.
 //
-//   - SERIALISED is at least ~1000ms: one apply's Create finishes before the
-//     other's begins, so the two half-seconds add, and process startup and the
-//     plugin handshake land on top of that.
-//   - OVERLAPPING is ~500-600ms: the two Creates sleep through the same half
-//     second, and everything else is startup.
+// SO IT ASSERTS OVERLAP DIRECTLY NOW, which is the property its name claims.
+// Each apply writes a report stream carrying an absolute timestamp on every
+// event, so each run has a real interval — first `started` to last `succeeded`
+// — and two applies ran at the same time exactly when their intervals intersect.
+// A global lock makes them disjoint no matter how fast or slow the machine is,
+// so the regression this exists to catch still cannot hide, and a loaded runner
+// no longer looks like one.
 //
-// 800ms is placed deliberately between those two. Measured on this suite, ten
-// consecutive concurrent runs land between 537ms and 602ms, and the serialised
-// version of this same test (the two applies run one after the other) takes
-// 1.087s — so the bound sits roughly 200ms above the worst concurrent run and
-// roughly 280ms below the serialised one. Widening it past 1000ms would put the
-// serialised case inside the bound, and the test would stop catching the very
-// regression it exists for — at which point it should be deleted rather than
-// kept as decoration. If it ever goes flaky the fix is a larger latency_ms,
-// which moves both bounds apart proportionally, never a larger margin.
+// The overlap is required to be at least half the shorter interval rather than
+// merely non-zero. Two runs that share a single millisecond technically
+// intersect while being serial in every way that matters, and a ratio stays
+// machine-independent in a way a duration cannot.
+//
+// latency_ms is still 500, now only to make the intervals comfortably wider
+// than the clock's resolution rather than to separate two totals.
 func TestConcurrentApplyToTwoEnvironmentsOverlaps(t *testing.T) {
 	dir := project(t, `
 project: myapp
@@ -838,20 +846,20 @@ resources:
 `)
 	seedCloudLatency(t, dir, 500)
 
-	// Build the CLI and the fake plugin BEFORE the clock starts. Both are
-	// sync.Once'd, but if this test happens to run first the compile would be
-	// charged to the elapsed time and the bound below would be measuring go
-	// build.
+	// Build the CLI and the fake plugin BEFORE the applies start. Both are
+	// sync.Once'd, but if this test happens to run first, one apply would be
+	// charged for the compile and start measurably after the other.
 	binary(t)
 	fakePluginDir(t)
 
-	start := time.Now()
-	devCmd, devOut, devErr := startAsync(t, dir, "apply", "dev", "--auto-approve")
-	prodCmd, prodOut, prodErr := startAsync(t, dir, "apply", "production", "--auto-approve")
+	devReport := filepath.Join(t.TempDir(), "dev.ndjson")
+	prodReport := filepath.Join(t.TempDir(), "production.ndjson")
+
+	devCmd, devOut, devErr := startAsync(t, dir, "apply", "dev", "--auto-approve", "--output", devReport)
+	prodCmd, prodOut, prodErr := startAsync(t, dir, "apply", "production", "--auto-approve", "--output", prodReport)
 
 	dev := waitAsync(t, "dev", devCmd, devOut, devErr)
 	production := waitAsync(t, "production", prodCmd, prodOut, prodErr)
-	elapsed := time.Since(start)
 
 	for _, c := range []struct {
 		environment string
@@ -860,15 +868,36 @@ resources:
 		if c.res.ExitCode != 2 {
 			t.Fatalf("%s apply exit code %d, want 2 (changes applied)\n%s", c.environment, c.res.ExitCode, c.res.combined())
 		}
-		requireContains(t, c.res.Stdout, "Apply complete:")
+		// NOT an assertion on stdout: `--output` sends the run to the file and
+		// silences stdout entirely, which is the whole point of that flag.
 	}
 
-	if elapsed >= 800*time.Millisecond {
-		t.Errorf("two applies to different environments took %v, want under 800ms — "+
-			"at latency_ms 500 that is long enough for them to have run one after the "+
-			"other, so something is serialising environments that should be independent", elapsed)
+	devStart, devEnd := applyEventWindow(t, "dev", devReport)
+	prodStart, prodEnd := applyEventWindow(t, "production", prodReport)
+
+	// The intersection of two intervals: latest start to earliest end. Written
+	// out because Go's min/max builtins are for ordered types and time.Time is
+	// not one.
+	latestStart, earliestEnd := devStart, devEnd
+	if prodStart.After(latestStart) {
+		latestStart = prodStart
 	}
-	t.Logf("two concurrent applies to different environments finished in %v", elapsed)
+	if prodEnd.Before(earliestEnd) {
+		earliestEnd = prodEnd
+	}
+	overlap := earliestEnd.Sub(latestStart)
+	shorter := min(devEnd.Sub(devStart), prodEnd.Sub(prodStart))
+	if overlap <= 0 {
+		t.Errorf("the two applies did not overlap at all: dev ran %v-%v, production ran %v-%v — "+
+			"they ran one after the other, so something is serialising environments that should be independent",
+			devStart, devEnd, prodStart, prodEnd)
+	} else if overlap*2 < shorter {
+		t.Errorf("the two applies overlapped by only %v of a %v window (under half) — "+
+			"they are barely concurrent, which is what partial serialisation looks like",
+			overlap, shorter)
+	}
+	t.Logf("dev ran %v-%v, production ran %v-%v, overlapping by %v of a %v window",
+		devStart, devEnd, prodStart, prodEnd, overlap, shorter)
 
 	// Both environments have their own state, each holding its own copy of the
 	// resource: neither apply wrote over the other's file, and neither saw the
