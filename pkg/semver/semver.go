@@ -11,7 +11,7 @@
 //
 // BY HAND, not by a library. The whole syntax is comparison operators on
 // MAJOR.MINOR.PATCH with comma meaning AND — a few dozen lines — and the third-party
-// budget is two libraries for the entire product. A semver library would also bring
+// budget is three libraries for the entire product. A semver library would also bring
 // pre-release and build-metadata ordering, which this deliberately does not have:
 // every rule for what `1.0.0-rc1` sorts against is a rule a user has to know.
 package semver

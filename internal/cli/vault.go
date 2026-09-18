@@ -56,6 +56,16 @@ func vaultPassphrase(opts *GlobalOptions) (string, error) {
 	return p, err
 }
 
+// vaultNewPassphrase is vaultPassphrase for a vault being SEALED: a prompted
+// passphrase is confirmed, because a typo produces a file nobody can open.
+func vaultNewPassphrase(opts *GlobalOptions) (string, error) {
+	p, err := vault.NewPassphrase(opts.VaultPasswordFile)
+	if errors.Is(err, vault.ErrNoPassphrase) {
+		return "", errors.New(vault.NoPassphraseAdvice())
+	}
+	return p, err
+}
+
 func newVaultEncryptCommand(opts *GlobalOptions) *cobra.Command {
 	return &cobra.Command{
 		Use:           "encrypt <file>",
@@ -76,7 +86,9 @@ func newVaultEncryptCommand(opts *GlobalOptions) *cobra.Command {
 			if vault.IsVault(data) {
 				return fmt.Errorf("%s is already encrypted", path)
 			}
-			passphrase, err := vaultPassphrase(opts)
+			// NewPassphrase: this SEALS a vault, so a prompted passphrase is
+			// asked twice. A typo here produces a file nobody can open.
+			passphrase, err := vaultNewPassphrase(opts)
 			if err != nil {
 				return err
 			}
@@ -152,7 +164,14 @@ func newVaultCreateCommand(opts *GlobalOptions) *cobra.Command {
 			if _, err := os.Stat(path); err == nil {
 				return fmt.Errorf("%s already exists; use `infrena vault edit %s`", path, args[0])
 			}
-			return editVault(cmd, opts, path, []byte(
+			// BEFORE the editor, so a mistyped confirmation costs nothing. Asked
+			// afterwards, a user who had just written a file of secrets would
+			// lose it to a typo in the confirmation.
+			passphrase, err := vaultNewPassphrase(opts)
+			if err != nil {
+				return err
+			}
+			return editVault(cmd, passphrase, path, []byte(
 				"# Secrets, encrypted when you close this editor.\n"+
 					"# Each key is a name ${secret.NAME} can reference.\n"+
 					"# DB_PASSWORD: change-me\n"))
@@ -169,11 +188,14 @@ func newVaultEditCommand(opts *GlobalOptions) *cobra.Command {
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			path := projectPath(opts, args[0])
-			plaintext, err := openVault(opts, path)
+			// openVault resolved and PROVED the passphrase by decrypting with
+			// it, so it is reused rather than asked for again — a second prompt
+			// would be asking somebody to retype what just worked.
+			plaintext, passphrase, err := openVaultWith(opts, path)
 			if err != nil {
 				return err
 			}
-			return editVault(cmd, opts, path, plaintext)
+			return editVault(cmd, passphrase, path, plaintext)
 		},
 	}
 }
@@ -187,15 +209,16 @@ func newVaultRekeyCommand(opts *GlobalOptions) *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if newFile == "" {
-				return errors.New("rekey needs the new passphrase: pass --new-password-file")
+			if newFile == "" && !vault.Interactive() {
+				return errors.New("rekey needs the new passphrase: pass --new-password-file, " +
+					"or run this from a terminal to be prompted")
 			}
 			path := projectPath(opts, args[0])
 			plaintext, err := openVault(opts, path)
 			if err != nil {
 				return err
 			}
-			next, err := vault.Passphrase(newFile)
+			next, err := vault.NewPassphrase(newFile)
 			if err != nil {
 				return err
 			}
@@ -243,18 +266,33 @@ func projectPath(opts *GlobalOptions, p string) string {
 
 // openVault reads and decrypts, refusing a file that is not one.
 func openVault(opts *GlobalOptions, path string) ([]byte, error) {
+	plaintext, _, err := openVaultWith(opts, path)
+	return plaintext, err
+}
+
+// openVaultWith is openVault, also returning the passphrase that worked.
+//
+// It exists for `edit`, which re-seals what it just opened: the decrypt PROVED
+// the passphrase, so asking again would make a user retype what had visibly
+// worked seconds earlier — and a second prompt is a second chance to mistype
+// one, which here would seal the file under a passphrase nobody knows.
+func openVaultWith(opts *GlobalOptions, path string) ([]byte, string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	if !vault.IsVault(data) {
-		return nil, fmt.Errorf("%s is not an encrypted vault file", path)
+		return nil, "", fmt.Errorf("%s is not an encrypted vault file", path)
 	}
 	passphrase, err := vaultPassphrase(opts)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
-	return vault.Decrypt(data, passphrase)
+	plaintext, err := vault.Decrypt(data, passphrase)
+	if err != nil {
+		return nil, "", err
+	}
+	return plaintext, passphrase, nil
 }
 
 // writeVault writes a vault file at 0600.
@@ -273,7 +311,7 @@ func writeVault(path string, sealed []byte) error {
 // recovery lands there too rather than beside the configuration where a `git
 // add .` would sweep it up. The directory is removed on every path out,
 // including the ones where the editor failed.
-func editVault(cmd *cobra.Command, opts *GlobalOptions, path string, plaintext []byte) error {
+func editVault(cmd *cobra.Command, passphrase, path string, plaintext []byte) error {
 	editor := os.Getenv("EDITOR")
 	if editor == "" {
 		editor = os.Getenv("VISUAL")
@@ -306,10 +344,6 @@ func editVault(cmd *cobra.Command, opts *GlobalOptions, path string, plaintext [
 	}
 
 	edited, err := os.ReadFile(tmp)
-	if err != nil {
-		return err
-	}
-	passphrase, err := vaultPassphrase(opts)
 	if err != nil {
 		return err
 	}

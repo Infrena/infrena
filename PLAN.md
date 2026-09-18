@@ -2876,7 +2876,7 @@ standard library, so **it adds no third-party dependency**.
   sandbox also buys little here, because a provider holds cloud credentials by design and
   users choose which plugins they run. Worth revisiting if either of those changes.
 - **`hashicorp/go-plugin` with gRPC.** Proven, but it brings in grpc, protobuf and hclog,
-  far past a dependency budget that so far holds two libraries. Calls are counted in
+  far past a dependency budget that holds three libraries. Calls are counted in
   dozens to thousands per run, so gRPC's performance buys nothing measurable.
 
 ### Transport

@@ -73,6 +73,9 @@ CI then needs one secret instead of many — `INFRENA_VAULT_PASSWORD`, or
 `--vault-password-file`. **The environment still wins**, so a rotated credential can be
 injected for a single run without re-encrypting anything.
 
+At a terminal you are prompted instead, without echo. In CI there is no terminal, so a
+missing passphrase fails immediately rather than hanging on a prompt nobody can answer.
+
 Two things to know before committing one. Ciphertext in git is permanent: if the repository
 is ever published, every historical version goes with it, and a passphrase compromised later
 opens all of them — so rotate the secrets, not just the passphrase. And `secrets.yml` must be

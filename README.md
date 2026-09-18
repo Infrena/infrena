@@ -215,7 +215,7 @@ infrena plugins search aws  # find one across every source you trust
 
 A project may *name* where a plugin comes from. Only you may *trust* a source — project configuration travels with a `git clone`, so it must not be able to introduce a place Infrena downloads executables from.
 
-The engine has **two third-party dependencies**: Cobra and a YAML parser. The AWS provider's SDK lives in the AWS provider, not in your Infrena binary.
+The engine has **three third-party dependencies**: Cobra, a YAML parser, and `golang.org/x/term` for reading a vault passphrase without echoing it. The AWS provider's SDK lives in the AWS provider, not in your Infrena binary.
 
 ---
 

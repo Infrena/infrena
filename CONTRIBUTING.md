@@ -23,8 +23,11 @@ that breaks one will be sent back:
   reason, then make it pass. A test that passes when you delete the code it covers is worse
   than no test, because it reports safety that is not there. This project keeps a running
   count of tests that turned out to be incapable of failing; do not add to it.
-- **The third-party dependency budget is two packages** — Cobra and a YAML parser. Adding a
-  third is a decision to be argued in an issue, not in a pull request.
+- **The third-party dependency budget is three packages** — Cobra, a YAML parser, and
+  `golang.org/x/term`. The third was added deliberately on 2026-09-18, at the owner's
+  direction, so `infrena vault` can read a passphrase without echoing it; the alternatives
+  were echoing a passphrase into scrollback, or requiring a password file for every local
+  edit. A fourth is a decision to be argued in an issue, not in a pull request.
 - **Errors say what is wrong, where, what was expected, and what to do about it.** A
   diagnostic whose suggested action the reader cannot take is a bug.
 - **Values keep their provenance.** Do not merge defaults into user configuration and lose
