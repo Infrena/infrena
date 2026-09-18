@@ -261,7 +261,7 @@ migrate_from:               # where it lives today
 infrena apply production --output run.ndjson --auto-approve
 ```
 
-Exit codes are stable: `0` no changes, `1` error, `2` changes applied, `77` changes need an approval this run cannot obtain. That last one exists so a pipeline gets a distinguishable answer instead of a prompt nobody can see.
+Exit codes are stable: `0` no changes, `1` error, `2` changes applied, `77` changes need an approval this run cannot obtain. That last one exists so a pipeline gets a distinguishable answer instead of a prompt nobody can see. [docs/ci.md](docs/ci.md) is the whole picture: the two-stage reviewed-plan workflow, protected environments, secrets from the environment, and what the machine-readable output contains.
 
 ---
 
