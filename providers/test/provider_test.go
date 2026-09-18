@@ -520,21 +520,7 @@ func TestOperationsOverlapRatherThanSerialise(t *testing.T) {
 
 	const (
 		resources = 4
-		// 400ms rather than 150. The threshold below scales with this delay,
-		// but the FIXED cost of a read does not — loading the cloud file,
-		// scheduling four goroutines, and the race detector's own overhead are
-		// the same whatever the simulated latency is. At 150ms that fixed cost
-		// alone could cross a 300ms threshold on a loaded shared runner: this
-		// test passed on a push and failed on the release's own CI check two
-		// minutes later, at 423ms, and blocked the v0.7.0 release until it was
-		// re-run. A re-run only buys another roll of the dice.
-		//
-		// At 400ms the threshold is 800ms, far above any plausible fixed cost,
-		// and the test still catches what it is for: with Read holding the lock
-		// across the delay it measures about 1.6s and fails. Diagnosed and
-		// fixed first in infrena-provider-fake (ced5116), which hit the
-		// identical flake in its copy of this test.
-		delayMS = 400
+		delayMS   = 200
 	)
 
 	states := make([]*resource.ResourceState, 0, resources)
@@ -548,7 +534,39 @@ func TestOperationsOverlapRatherThanSerialise(t *testing.T) {
 		states = append(states, st)
 	}
 
-	// Introduce latency only now, so setup is not slowed.
+	readAll := func() time.Duration {
+		t.Helper()
+		start := time.Now()
+		var wg sync.WaitGroup
+		errs := make([]error, resources)
+		for i, st := range states {
+			wg.Add(1)
+			go func(i int, st *resource.ResourceState) {
+				defer wg.Done()
+				_, errs[i] = p.Read(ctx, st)
+			}(i, st)
+		}
+		wg.Wait()
+		elapsed := time.Since(start)
+		for i, err := range errs {
+			if err != nil {
+				t.Fatalf("concurrent Read %d: %v", i, err)
+			}
+		}
+		return elapsed
+	}
+
+	readEachInTurn := func() time.Duration {
+		t.Helper()
+		start := time.Now()
+		for _, st := range states {
+			if _, err := p.Read(ctx, st); err != nil {
+				t.Fatalf("serial Read: %v", err)
+			}
+		}
+		return time.Since(start)
+	}
+
 	c, err := LoadCloud(path)
 	if err != nil {
 		t.Fatalf("LoadCloud: %v", err)
@@ -558,34 +576,34 @@ func TestOperationsOverlapRatherThanSerialise(t *testing.T) {
 		t.Fatalf("Save: %v", err)
 	}
 
-	start := time.Now()
-	var wg sync.WaitGroup
-	errs := make([]error, resources)
-	for i, st := range states {
-		wg.Add(1)
-		go func(i int, st *resource.ResourceState) {
-			defer wg.Done()
-			_, errs[i] = p.Read(ctx, st)
-		}(i, st)
-	}
-	wg.Wait()
-	elapsed := time.Since(start)
+	// BOTH SIDES MEASURED, WHICH IS THE POINT OF THE REWRITE.
+	//
+	// This used to compare the concurrent time against a PREDICTED serial time,
+	// resources*delay, and fail at half of it. That prediction assumes the only
+	// thing four reads cost is four delays — no file loading, no goroutine
+	// scheduling, no race detector, and a runner that is not busy. On a shared
+	// CI runner none of that holds, and the assumption failed twice: at 150ms,
+	// where the fix was to raise the delay to 400ms, and again at 400ms, at
+	// 827ms against an 800ms threshold, blocking a release. Raising it a third
+	// time is the same losing move, because the quantity being guessed at is
+	// the one that varies.
+	//
+	// Running the same reads SEQUENTIALLY measures what serial actually costs
+	// on this machine, under this load, a second apart from the concurrent run.
+	// Whatever slows one slows the other, so the comparison survives a busy
+	// runner instead of being the first casualty of it.
+	serial := readEachInTurn()
+	concurrent := readAll()
 
-	for i, err := range errs {
-		if err != nil {
-			t.Fatalf("concurrent Read %d: %v", i, err)
-		}
-	}
-
-	// Serial execution takes at least resources*delay. Overlapping execution
-	// takes roughly one delay. The midpoint is the threshold, which is generous
-	// ONLY while the delay is large enough to dwarf the fixed cost of a read —
-	// see delayMS above, where that stopped being true and cost a release.
-	serial := time.Duration(resources) * delayMS * time.Millisecond
-	if elapsed >= serial/2 {
-		t.Errorf("%d concurrent reads with %dms latency took %v; serial would be ~%v. "+
-			"The provider is serialising — the mutex is covering the delay, so no "+
-			"concurrency test against this provider can fail.", resources, delayMS, elapsed, serial)
+	// Half of a measured serial run. An overlapping provider comes in around a
+	// quarter of it — one delay against four — so there is a full delay of
+	// headroom, and a serialising one exceeds it by construction rather than by
+	// arithmetic anybody had to predict.
+	if concurrent >= serial/2 {
+		t.Errorf("%d reads with %dms latency took %v concurrently and %v one after another; "+
+			"concurrent must come in under %v. The provider is serialising — the mutex is "+
+			"covering the delay, so no concurrency test against this provider can fail.",
+			resources, delayMS, concurrent, serial, serial/2)
 	}
 }
 
