@@ -361,6 +361,18 @@ type SecretScope interface {
 	Secret(name string) (value.Value, bool)
 }
 
+// SecretSourceError is an OPTIONAL companion to SecretScope, reporting that the
+// source itself failed rather than that one name was absent.
+//
+// It exists because the two are indistinguishable from `Secret`'s answer and
+// completely different to act on. A vault that will not open reports every name
+// as missing, so without this the user is told "DB_PASSWORD is not set — set it
+// in the environment" when what actually happened is that their passphrase is
+// wrong. Advice that confident and that wrong is worse than none (§44).
+type SecretSourceError interface {
+	SecretSourceError() error
+}
+
 // evaluateSecret resolves ${secret.NAME}.
 //
 // A MISSING SECRET IS AN ERROR, never an empty string. The whole point of the
@@ -386,6 +398,19 @@ func evaluateSecret(e *value.Expr, scope Scope, ds *diag.Diagnostics) value.Valu
 	}
 	v, found := ss.Secret(name)
 	if !found {
+		// The SOURCE failing is a different fact from this name being absent,
+		// and it is checked first because it explains every absence at once.
+		if se, ok := scope.(SecretSourceError); ok {
+			if err := se.SecretSourceError(); err != nil {
+				ds.Add(diag.Diagnostic{
+					Severity: diag.SeverityError,
+					Summary:  "the secrets for this project could not be read",
+					Detail:   err.Error() + "\n${secret." + name + "} needed them.",
+					Origin:   e.Origin,
+				})
+				return unknownFrom(e, value.KindString, true)
+			}
+		}
 		ds.Add(diag.Diagnostic{
 			Severity: diag.SeverityError,
 			Summary:  "secret " + strconv.Quote(name) + " is not set",

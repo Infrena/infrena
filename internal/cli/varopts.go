@@ -35,13 +35,16 @@ func compilerOptions(opts *GlobalOptions, environment string) (compiler.Options,
 	fileVars, fds := loadVarFiles(opts.Dir, opts.VarFiles)
 	ds.Extend(fds)
 
+	secrets, secretsErr := secretSource(opts, environment)
+
 	// Dir travels with the options because stage 5 resolves a module's relative
 	// `source:` against the project directory. Passing anything but opts.Dir
 	// here makes --chdir silently wrong for modules and right for everything
 	// else, which is the worst combination to debug.
 	return compiler.Options{
-		Dir:     opts.Dir,
-		Secrets: secretsFromEnvironment,
+		Dir:        opts.Dir,
+		Secrets:    secrets,
+		SecretsErr: secretsErr,
 		// The running build, for a project's `infrena:` floor. The compiler takes it
 		// as an input rather than reading it, so this is the one place it is supplied.
 		Version:     version.Version(),

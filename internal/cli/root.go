@@ -7,6 +7,8 @@ import (
 	"os"
 
 	"github.com/spf13/cobra"
+
+	"github.com/infrena/infrena/internal/vault"
 )
 
 // Exit codes. Spec §16: 0 success with no changes, 1 error, 2 success with
@@ -60,6 +62,9 @@ type GlobalOptions struct {
 	Output      string
 	Parallelism int
 	AutoApprove bool
+	// VaultPasswordFile holds the vault passphrase. A FILE rather than the
+	// value, so a passphrase never reaches ps output or shell history.
+	VaultPasswordFile string
 	// ApprovedBy records who or what approved this run, for the report. It is
 	// annotation, NOT an approval: see requireApprovalRefusal.
 	ApprovedBy string
@@ -92,6 +97,8 @@ func NewRootCommand() *cobra.Command {
 	f.StringVar(&opts.Output, "output", "", "write machine-readable output to this path")
 	f.IntVar(&opts.Parallelism, "parallelism", 10, "maximum concurrent operations")
 	f.BoolVar(&opts.AutoApprove, "auto-approve", false, "skip interactive approval")
+	f.StringVar(&opts.VaultPasswordFile, "vault-password-file", "",
+		"file holding the vault passphrase; "+vault.PasswordVar+" is read when this is not set")
 	f.StringVar(&opts.ApprovedBy, "approved-by", "",
 		"record who or what approved this run (a pull request URL, a name) in the report")
 	f.StringVar(&opts.Dir, "chdir", ".", "run as if infra had been started in this directory")
@@ -107,6 +114,7 @@ func NewRootCommand() *cobra.Command {
 
 	root.AddCommand(newVersionCommand(opts))
 	root.AddCommand(newInitCommand(opts))
+	root.AddCommand(newVaultCommand(opts))
 	root.AddCommand(newValidateCommand(opts))
 	root.AddCommand(newStateCommand(opts))
 	root.AddCommand(newPlanCommand(opts))

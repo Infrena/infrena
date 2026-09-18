@@ -60,6 +60,24 @@ database_url: postgres://app:${secret.DB_PASSWORD}@db.internal/app
 Inject `DB_PASSWORD` the way your CI system injects any secret. Infrena never stores it,
 never writes it to a file it manages, and redacts it everywhere it prints.
 
+**Or commit them, encrypted.** `infrena vault` encrypts a `secrets.yml` that feeds the same
+`${secret.NAME}` references, so a project with no secret manager can keep its secrets beside
+its configuration:
+
+```bash
+infrena vault create secrets.yml     # opens $EDITOR, writes encrypted
+infrena vault edit secrets.yml
+```
+
+CI then needs one secret instead of many — `INFRENA_VAULT_PASSWORD`, or
+`--vault-password-file`. **The environment still wins**, so a rotated credential can be
+injected for a single run without re-encrypting anything.
+
+Two things to know before committing one. Ciphertext in git is permanent: if the repository
+is ever published, every historical version goes with it, and a passphrase compromised later
+opens all of them — so rotate the secrets, not just the passphrase. And `secrets.yml` must be
+encrypted before it is committed; nothing stops you committing it in clear.
+
 **An unset or empty secret fails the plan.** That is deliberate: an empty credential does
 not fail at the plan, it fails at the provider, after somebody approved the run. An unset
 repository secret expands to an empty string rather than disappearing, so empty is treated

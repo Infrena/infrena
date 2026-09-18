@@ -54,7 +54,7 @@ resources:
 		"m/module.yml": moduleWithReplicas,
 	})
 
-	exp, ds := Expand(decl, variables.Scope{}, nil, Env{Name: "dev"}, dir, paths{}, nil)
+	exp, ds := Expand(decl, variables.Scope{}, nil, Env{Name: "dev"}, dir, paths{}, nil, nil)
 	if ds.HasErrors() {
 		t.Fatalf("unexpected diagnostics: %+v", ds)
 	}
@@ -79,7 +79,7 @@ func TestUnsuppliedInputTakesTheDeclaredDefaultAtScopeModuleDefault(t *testing.T
 		"m/module.yml": moduleWithReplicas,
 	})
 
-	exp, ds := Expand(decl, variables.Scope{}, nil, Env{Name: "dev"}, dir, paths{}, nil)
+	exp, ds := Expand(decl, variables.Scope{}, nil, Env{Name: "dev"}, dir, paths{}, nil, nil)
 	if ds.HasErrors() {
 		t.Fatalf("unexpected diagnostics: %+v", ds)
 	}
@@ -120,7 +120,7 @@ resources:
 	vars := callerVars("count", value.Int(9, value.SourceVariable).
 		WithScope(value.ScopeCLIOverride).WithSuppliedBy("--var"))
 
-	exp, ds := Expand(decl, vars, nil, Env{Name: "dev"}, dir, paths{}, nil)
+	exp, ds := Expand(decl, vars, nil, Env{Name: "dev"}, dir, paths{}, nil, nil)
 	if ds.HasErrors() {
 		t.Fatalf("unexpected diagnostics: %+v", ds)
 	}
@@ -170,7 +170,7 @@ resources:
 	vars := callerVars("size", value.String("from-the-caller", value.SourceVariable).
 		WithScope(value.ScopeBaseConfig))
 
-	exp, ds := Expand(decl, vars, nil, Env{Name: "dev"}, dir, paths{}, nil)
+	exp, ds := Expand(decl, vars, nil, Env{Name: "dev"}, dir, paths{}, nil, nil)
 	if ds.HasErrors() {
 		t.Fatalf("unexpected diagnostics: %+v", ds)
 	}
@@ -194,7 +194,7 @@ func TestModuleDoesNotSeeTheCallersVariables(t *testing.T) {
 
 	vars := callerVars("caller_only", value.String("x", value.SourceVariable))
 
-	exp, ds := Expand(decl, vars, nil, Env{Name: "dev"}, dir, paths{}, nil)
+	exp, ds := Expand(decl, vars, nil, Env{Name: "dev"}, dir, paths{}, nil, nil)
 	if ds.HasErrors() {
 		t.Fatalf("unexpected diagnostics: %+v", ds)
 	}
@@ -224,7 +224,7 @@ resources:
 		"m/module.yml": moduleWithReplicas,
 	})
 
-	_, ds := Expand(decl, variables.Scope{}, nil, Env{Name: "dev"}, dir, paths{}, nil)
+	_, ds := Expand(decl, variables.Scope{}, nil, Env{Name: "dev"}, dir, paths{}, nil, nil)
 	if !hasFragment(ds, "module \"m\" has no input \"replicase\"") {
 		t.Errorf("a typo'd input must be refused, not silently dropped in favour of the "+
 			"default; got %+v", ds)
@@ -247,7 +247,7 @@ resources:
 `,
 	})
 
-	exp, ds := Expand(decl, variables.Scope{}, nil, Env{Name: "dev"}, dir, paths{}, nil)
+	exp, ds := Expand(decl, variables.Scope{}, nil, Env{Name: "dev"}, dir, paths{}, nil, nil)
 	if !hasFragment(ds, "module \"app\" requires input \"image\"") {
 		t.Errorf("an input with no default and no value must be refused; got %+v", ds)
 	}
@@ -283,7 +283,7 @@ resources:
 `,
 	})
 
-	exp, _ := Expand(decl, variables.Scope{}, nil, Env{Name: "dev"}, dir, paths{}, nil)
+	exp, _ := Expand(decl, variables.Scope{}, nil, Env{Name: "dev"}, dir, paths{}, nil, nil)
 	got, ok := scopeOf(t, exp, "worker").Variable("count")
 	if !ok {
 		t.Fatal("count is not in scope")
@@ -313,7 +313,7 @@ resources:
 		"m/module.yml": moduleWithReplicas,
 	})
 
-	_, ds := Expand(decl, variables.Scope{}, nil, Env{Name: "dev"}, dir, paths{}, nil)
+	_, ds := Expand(decl, variables.Scope{}, nil, Env{Name: "dev"}, dir, paths{}, nil, nil)
 	if !ds.HasErrors() {
 		t.Fatal("a string supplied for an integer input must be refused")
 	}
@@ -372,7 +372,7 @@ resources:
 `,
 	})
 
-	_, ds := Expand(decl, variables.Scope{}, nil, Env{Name: "dev"}, dir, paths{}, nil)
+	_, ds := Expand(decl, variables.Scope{}, nil, Env{Name: "dev"}, dir, paths{}, nil, nil)
 	if !ds.HasErrors() {
 		t.Fatal("a whole-resource reference passed as a module input must be refused: a module " +
 			"input declares a type, not a relationship, so there is nothing to project against")
@@ -410,7 +410,7 @@ resources:
 `,
 	})
 
-	exp, ds := Expand(decl, variables.Scope{}, nil, Env{Name: "dev"}, dir, paths{}, nil)
+	exp, ds := Expand(decl, variables.Scope{}, nil, Env{Name: "dev"}, dir, paths{}, nil, nil)
 	if ds.HasErrors() {
 		t.Fatalf("unexpected diagnostics: %+v", ds)
 	}

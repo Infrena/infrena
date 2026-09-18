@@ -46,6 +46,10 @@ type Scope struct {
 	// — which means the secret's VALUE travelling through a module call, where
 	// it is far easier to log, print or record by accident.
 	Secrets func(name string) (value.Value, bool)
+	// SecretsErr reports that the secret SOURCE failed — an unopenable vault,
+	// say — as opposed to one name being absent. See
+	// expressions.SecretSourceError for why the two must not be conflated.
+	SecretsErr func() error
 	// dirVars is stage 4's per-directory scopes, keyed by config.ResourceDecl.Dir
 	// — resources/<dir>/vars/** (PLAN.md §4.1). Set on the ROOT scope only: a
 	// module sees its own inputs and the process variables and nothing else
@@ -124,7 +128,7 @@ func (s *Scope) In(dir string) *Scope {
 	if !ok {
 		return s
 	}
-	return &Scope{Module: s.Module, Vars: vars, Secrets: s.Secrets, dirVars: s.dirVars, names: s.names, skipped: s.skipped}
+	return &Scope{Module: s.Module, Vars: vars, Secrets: s.Secrets, SecretsErr: s.SecretsErr, dirVars: s.dirVars, names: s.names, skipped: s.skipped}
 }
 
 // Variable satisfies half of expressions.Scope.
@@ -133,6 +137,14 @@ func (s *Scope) Variable(name string) (value.Value, bool) { return s.Vars.Variab
 // Secret satisfies expressions.SecretScope. A nil Secrets reports every secret
 // unset, which is the right answer for a caller that supplies none: the
 // alternative is an empty string standing in for a credential.
+// SecretSourceError satisfies expressions.SecretSourceError.
+func (s *Scope) SecretSourceError() error {
+	if s.SecretsErr == nil {
+		return nil
+	}
+	return s.SecretsErr()
+}
+
 func (s *Scope) Secret(name string) (value.Value, bool) {
 	if s.Secrets == nil {
 		return value.Value{}, false
@@ -160,7 +172,7 @@ func (w *walker) moduleScope(
 	r *config.ResourceDecl, lv level, caller *Scope,
 	supplied map[string]value.Value, module []string,
 ) *Scope {
-	inner := &Scope{Module: module, Secrets: caller.Secrets, names: map[string]Binding{}, skipped: map[string]value.Origin{}}
+	inner := &Scope{Module: module, Secrets: caller.Secrets, SecretsErr: caller.SecretsErr, names: map[string]Binding{}, skipped: map[string]value.Origin{}}
 
 	// The three facts about the invocation cross every module boundary, each
 	// copied as-is, keeping the provenance the compiler stamped. A module that

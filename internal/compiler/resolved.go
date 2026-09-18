@@ -89,9 +89,12 @@ type Options struct {
 	// A FUNCTION, not a map, and injected rather than read from os.Getenv here:
 	// compilation stays a pure function of what it is given, so a test passes a
 	// map and does not have to set process-wide state to check a secret path.
-	Secrets  func(name string) (value.Value, bool)
-	Vars     map[string]string      // from --var
-	FileVars map[string]value.Value // from --var-file
+	Secrets func(name string) (value.Value, bool)
+	// SecretsErr reports that the secret source itself failed, so a diagnostic
+	// can say "the vault would not open" instead of "that secret is not set".
+	SecretsErr func() error
+	Vars       map[string]string      // from --var
+	FileVars   map[string]value.Value // from --var-file
 }
 
 // Context is Options.Ctx, or Background when the caller set none.
