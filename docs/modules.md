@@ -201,13 +201,22 @@ inside the module:
 Error: unknown resource type "fake.network"
   at modules/db/module.yml:5:3, in module.primary
 
-  Known types:
+  The fake plugin was never loaded, so nothing could offer "fake.network".
+  No provider plugins were loaded at all.
+
+  Which plugins to load is worked out from the resource types declared at the
+  root of the project, and a `module.` call is not one of them. Every resource
+  using fake is inside a module, so nothing at the root asked for it.
 
   Suggested action:
-    Correct the type, or check that the provider offering it is available.
-```
+    Name it explicitly:
 
-The empty "Known types" list is the tell: no provider was loaded at all.
+      providers:
+        - plugin: fake
+
+    That block is optional only because a root resource type usually implies
+    its plugin.
+```
 
 **The fix is to name the provider explicitly**, which is what `providers:` is for:
 
@@ -227,5 +236,5 @@ resources:
 every resource is inside a module there is nothing at the root to imply it, so say it. Most
 projects reach for `providers:` anyway to set a region or an account.
 
-This is recorded as a bug: the diagnostic should say the plugin was never loaded rather than
-blame the type.
+Loading the plugin from the module's own contents would be the better fix, and is on the
+list. Until then the error says what actually happened rather than blaming the type.

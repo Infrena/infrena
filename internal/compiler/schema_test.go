@@ -44,8 +44,16 @@ func oneResource(typ string, attrs map[string]value.Value) *ResolvedConfig {
 	}
 }
 
+// TestSchemaRejectsUnknownType covers the TYPO: a type the loaded plugin does
+// not offer, which is what the list of known types answers.
+//
+// It used to be written against "aws.rds" with only the fake plugin loaded,
+// which is a different fact — that plugin never loaded at all — and asserted
+// the list of types anyway. The two cases want opposite messages, so the test
+// now names one of them and TestSchemaSaysWhenAPluginNeverLoaded names the
+// other.
 func TestSchemaRejectsUnknownType(t *testing.T) {
-	cfg := oneResource("aws.rds", nil)
+	cfg := oneResource("fake.netwrok", nil)
 	ds := bindSchemas(cfg, testRegistry(t), Options{Environment: "dev"}, testTable())
 	if !ds.HasErrors() {
 		t.Fatal("an unregistered type must be an error")
@@ -54,6 +62,30 @@ func TestSchemaRejectsUnknownType(t *testing.T) {
 	ds.Render(&out)
 	if !strings.Contains(out.String(), "fake.database") {
 		t.Errorf("the diagnostic should list known types:\n%s", out.String())
+	}
+}
+
+// TestSchemaSaysWhenAPluginNeverLoaded, rather than offering a list that cannot
+// contain what was asked for.
+//
+// With nothing loaded the list is EMPTY, so the old message rendered a heading
+// above a blank line and advised correcting a spelling that was never wrong.
+// That is the shape a project whose resources live only inside modules hits,
+// where the cause is that nothing at the root asked for the plugin.
+func TestSchemaSaysWhenAPluginNeverLoaded(t *testing.T) {
+	cfg := oneResource("aws.rds", nil)
+	ds := bindSchemas(cfg, testRegistry(t), Options{Environment: "dev"}, testTable())
+	if !ds.HasErrors() {
+		t.Fatal("a type from an unloaded plugin must be an error")
+	}
+	var out strings.Builder
+	ds.Render(&out)
+	got := out.String()
+	if !strings.Contains(got, "never loaded") {
+		t.Errorf("the diagnostic does not say the plugin never loaded:\n%s", got)
+	}
+	if strings.Contains(got, "Known types:") {
+		t.Errorf("a list of known types cannot answer this and must not be offered:\n%s", got)
 	}
 }
 

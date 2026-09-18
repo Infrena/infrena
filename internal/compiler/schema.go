@@ -2,6 +2,7 @@ package compiler
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -26,13 +27,7 @@ func bindSchemas(
 
 		def, ok := reg.Definition(r.Type)
 		if !ok {
-			ds.Add(diag.Diagnostic{
-				Severity: diag.SeverityError,
-				Summary:  "unknown resource type " + strconv.Quote(r.Type),
-				Detail:   "Known types:\n  " + strings.Join(reg.Types(), "\n  "),
-				Action:   "Correct the type, or check that the provider offering it is available.",
-				Origin:   r.Origin,
-			})
+			ds.Add(unknownTypeDiagnostic(r, reg))
 			continue
 		}
 
@@ -53,6 +48,81 @@ func bindSchemas(
 	}
 
 	return ds
+}
+
+// unknownTypeDiagnostic explains an unresolvable resource type, and its whole
+// job is to tell apart the two very different reasons a type does not resolve.
+//
+// A TYPO in a type a loaded plugin does not offer is answered by the list of
+// types. A PLUGIN THAT NEVER LOADED is not: the list is the wrong answer to it,
+// and when nothing loaded at all the list is EMPTY, so the message used to read
+//
+//	unknown resource type "fake.network"
+//	Known types:
+//
+// — a blank line under a heading, offering a correction for a spelling that was
+// never wrong, while the real fact (no provider is here) went unsaid.
+//
+// The case that produces it: a project whose resources live only inside modules.
+// Which plugins to load is derived from the resource types the ROOT declares,
+// and `module.<name>` is not one of them (config.neededPlugins skips it,
+// correctly — a module call is not a provider resource). Module files are not
+// read until stage 5, by which time the registry is built. So the plan fails
+// naming a type inside the module, which reads as the module being wrong.
+//
+// The fix a user needs is `providers:`, which is the OTHER source neededPlugins
+// reads. That block is optional only because a root resource type usually
+// implies its plugin; when every resource is in a module, nothing at the root
+// does, so it has to be said.
+func unknownTypeDiagnostic(r *resource.ResolvedResource, reg *registry.Registry) diag.Diagnostic {
+	d := diag.Diagnostic{
+		Severity: diag.SeverityError,
+		Summary:  "unknown resource type " + strconv.Quote(r.Type),
+		Origin:   r.Origin,
+	}
+	plugin, _, _ := strings.Cut(r.Type, ".")
+	loaded := reg.PluginNames()
+
+	if slices.Contains(loaded, plugin) {
+		// The plugin IS here and does not offer this type, which is the case
+		// the list of types answers.
+		d.Detail = "The " + plugin + " plugin is loaded and does not offer it.\n\nKnown types:\n  " +
+			strings.Join(reg.Types(), "\n  ")
+		// NOT `infrena explain <the misspelling>`, which is the obvious
+		// phrasing and is advice that cannot work: the command would fail the
+		// same way for the same reason.
+		d.Action = "Correct the type. `infrena explain <type>` describes any of the types above."
+		return d
+	}
+
+	// The plugin never loaded. Say that, rather than offering a list that
+	// cannot contain what was asked for.
+	detail := "The " + plugin + " plugin was never loaded, so nothing could offer " +
+		strconv.Quote(r.Type) + ". "
+	switch {
+	case len(loaded) == 0:
+		detail += "No provider plugins were loaded at all."
+	default:
+		detail += "Loaded plugins: " + strings.Join(loaded, ", ") + "."
+	}
+
+	if len(r.Origin.Module) > 0 {
+		// The module case, which is the one that reads as the module's fault.
+		detail += "\n\nWhich plugins to load is worked out from the resource types " +
+			"declared at the root of the project, and a `module.` call is not one of them. " +
+			"Every resource using " + plugin + " is inside a module, so nothing at the root " +
+			"asked for it."
+		d.Action = "Name it explicitly:\n\n  providers:\n    - plugin: " + plugin +
+			"\n\nThat block is optional only because a root resource type usually implies " +
+			"its plugin."
+		d.Detail = detail
+		return d
+	}
+
+	d.Detail = detail
+	d.Action = "Install the " + plugin + " plugin, or correct the type. " +
+		"`infrena plugins list` reports what is installed and where it was loaded from."
+	return d
 }
 
 // canonicaliseAttributes rewrites configuration's attribute keys to the names the plugin

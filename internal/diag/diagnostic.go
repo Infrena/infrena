@@ -112,9 +112,7 @@ func (ds Diagnostics) Render(w io.Writer) {
 		}
 		if d.Detail != "" {
 			fmt.Fprintln(w)
-			for line := range strings.SplitSeq(d.Detail, "\n") {
-				fmt.Fprintf(w, "  %s\n", line)
-			}
+			writeIndented(w, "  ", d.Detail)
 		}
 		if len(d.Related) > 0 {
 			fmt.Fprintln(w)
@@ -126,8 +124,27 @@ func (ds Diagnostics) Render(w io.Writer) {
 		if d.Action != "" {
 			fmt.Fprintln(w)
 			fmt.Fprintln(w, "  Suggested action:")
-			fmt.Fprintf(w, "    %s\n", d.Action)
+			// Indented LINE BY LINE, like Detail above. A single Fprintf put the
+			// prefix on the first line only, so an action that showed the block
+			// a user should paste — the common shape for "write this in
+			// infra.yml" — came out with its first line indented and the rest
+			// flush left, reading as though the message had ended.
+			writeIndented(w, "    ", d.Action)
 		}
+	}
+}
+
+// writeIndented writes text with every line prefixed, leaving a blank line
+// blank rather than emitting the prefix as trailing whitespace: a diagnostic is
+// compared in tests and pasted into issues, and invisible trailing spaces are a
+// nuisance in both.
+func writeIndented(w io.Writer, prefix, text string) {
+	for line := range strings.SplitSeq(text, "\n") {
+		if line == "" {
+			fmt.Fprintln(w)
+			continue
+		}
+		fmt.Fprintf(w, "%s%s\n", prefix, line)
 	}
 }
 
