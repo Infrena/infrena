@@ -526,3 +526,50 @@ resources:
 		t.Errorf("the refusal does not explain itself:\n%s", r.combined())
 	}
 }
+
+// TestAKeyContainingADotSurvivesASavedPlan.
+//
+// A for_each key is user data and routinely contains a dot: a hostname, a
+// bucket name, a version. address.Parse used to split on dots blindly, so
+// subnet["eu.west.1a"] became three segments and was refused.
+//
+// Plan-and-apply never noticed, because that path does not read an address
+// back from text — the resources were created correctly and state was right.
+// What broke was `apply --plan`: `plan --output` wrote the address happily and
+// the saved plan could not be applied. That is §38's reviewed-plan workflow,
+// so it is the CI route into a protected environment, failing at APPLY after a
+// human had reviewed and approved it.
+//
+// The test goes through the saved plan deliberately. Asserting only that the
+// apply works would pass against the broken build.
+func TestAKeyContainingADotSurvivesASavedPlan(t *testing.T) {
+	dir := project(t, `
+project: myapp
+resources:
+  host:
+    type: fake.network
+    for_each: ["api.example.com", "cdn.example.com"]
+    cidr: 10.1.0.0/16
+`)
+	saved := filepath.Join(dir, "plan.ndjson")
+	if p := run(t, dir, "plan", "dev", "--output", saved); p.ExitCode != 2 {
+		t.Fatalf("plan: %d\n%s", p.ExitCode, p.combined())
+	}
+
+	a := run(t, dir, "apply", "dev", "--plan", saved, "--auto-approve")
+	if a.ExitCode != 2 {
+		t.Fatalf("a saved plan with a dotted key could not be applied: %d\n%s", a.ExitCode, a.combined())
+	}
+	for _, want := range []string{`host["api.example.com"]`, `host["cdn.example.com"]`} {
+		if !strings.Contains(a.combined(), want) {
+			t.Errorf("apply never mentions %q:\n%s", want, a.combined())
+		}
+	}
+
+	// And the address is reachable by name afterwards, which goes through the
+	// same parser from the other direction.
+	s := run(t, dir, "state", "show", "dev", `host["api.example.com"]`)
+	if s.ExitCode != 0 {
+		t.Errorf("the instance is not addressable by its dotted key:\n%s", s.combined())
+	}
+}

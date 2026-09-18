@@ -200,14 +200,40 @@ type SearchOptions struct {
 func (o SearchOptions) Dirs() []string { return o.dirs() }
 
 func (o SearchOptions) dirs() []string {
-	out := append([]string{}, o.Explicit...)
+	out := make([]string, 0, len(o.Explicit)+2)
+	for _, dir := range o.Explicit {
+		out = append(out, absolute(dir))
+	}
 	if o.ProjectDir != "" {
-		out = append(out, filepath.Join(o.ProjectDir, ".infra", "plugins"))
+		out = append(out, absolute(filepath.Join(o.ProjectDir, ".infra", "plugins")))
 	}
 	if o.HomeDir != "" {
 		out = append(out, filepath.Join(o.HomeDir, ".local", "share", "infrena", "plugins"))
 	}
 	return out
+}
+
+// absolute resolves a search directory against the working directory.
+//
+// NOT COSMETIC. `--plugin-dir .` with the binary sitting in that directory
+// produced `filepath.Join(".", "infrena-plugin-fake")`, which is
+// "infrena-plugin-fake" — a name with no separator in it. os/exec treats such a
+// name as a PATH LOOKUP rather than a path, so the binary that was right there
+// was never run and the error blamed $PATH for a directory the user had named
+// explicitly.
+//
+// It also makes the "looked in" list say where it actually looked, which for a
+// relative directory it previously did not.
+//
+// A failure leaves the path as written: an unreadable working directory is not
+// a reason to refuse a search that might still succeed, and the path is only
+// used to look for a file.
+func absolute(dir string) string {
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return dir
+	}
+	return abs
 }
 
 // NotFoundError is a plugin whose binary is nowhere to be found.

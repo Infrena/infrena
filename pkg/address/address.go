@@ -72,19 +72,46 @@ func (a Address) WithKey(key string) Address {
 
 // InModule returns the address as seen from inside a parent module
 // instantiation. It copies the module slice so callers cannot alias.
+//
+// The KEY is carried, not dropped. It used to be rebuilt as
+// Address{Module, Name}, which silently discarded it — harmless only because
+// every caller today applies WithKey afterwards. A keyed address that lost its
+// key on the way into a module would be a different resource in state.
 func (a Address) InModule(name string) Address {
 	next := make([]string, 0, len(a.Module)+1)
 	next = append(next, name)
 	next = append(next, a.Module...)
-	return Address{Module: next, Name: a.Name}
+	return Address{Module: next, Name: a.Name, Key: a.Key}
 }
 
-// Parse reads an address back from its canonical dotted form.
+// Parse reads an address back from its canonical dotted form. It is the exact
+// inverse of String, which TestAnAddressSurvivesARoundTrip pins.
+//
+// IT SPLITS ON DOTS OUTSIDE BRACKETS, which is the whole difficulty. A
+// for_each key is user data and routinely contains a dot — a hostname, a bucket
+// name, a version — and a plain strings.Split turned subnet["eu.west.1a"] into
+// three segments and refused it.
+//
+// That refusal was not theoretical. The apply path never parses an address back
+// from text, so plan-and-apply worked and the resources were correct, while
+// everything that reads one back BROKE: `apply --plan` refused the saved plan
+// outright, which is §38's reviewed-plan workflow and therefore the CI route
+// into a protected environment — failing at apply, after a human had reviewed
+// and approved it. `state show`, `state rm`, `depends_on` and import ids go
+// through here too.
+//
+// It also sets Key, which it never did. A single-segment keyed reference
+// happened to work anyway, because the whole bracketed string landed in Name
+// and compared equal to the rendered form by coincidence. Coincidence is not a
+// property to leave load-bearing.
 func Parse(s string) (Address, error) {
 	if s == "" {
 		return Address{}, fmt.Errorf("empty address")
 	}
-	parts := strings.Split(s, ".")
+	parts, err := splitSegments(s)
+	if err != nil {
+		return Address{}, fmt.Errorf("address %q: %w", s, err)
+	}
 	var out Address
 	for len(parts) > 0 {
 		if parts[0] != "module" {
@@ -93,14 +120,88 @@ func Parse(s string) (Address, error) {
 		if len(parts) < 2 || parts[1] == "" {
 			return Address{}, fmt.Errorf("address %q: %q must be followed by a module name", s, "module")
 		}
+		// VERBATIM, brackets and all. A keyed module call renders as one level
+		// named `store["orders"]` (internal/modules.keyedCallName), so keeping
+		// the text is what makes String and Parse inverses at every level
+		// rather than only at the last one.
 		out.Module = append(out.Module, parts[1])
 		parts = parts[2:]
 	}
 	if len(parts) != 1 || parts[0] == "" {
 		return Address{}, fmt.Errorf("address %q: expected a single logical name after any module path", s)
 	}
-	out.Name = parts[0]
+	name, key, err := splitKey(parts[0])
+	if err != nil {
+		return Address{}, fmt.Errorf("address %q: %w", s, err)
+	}
+	out.Name, out.Key = name, key
 	return out, nil
+}
+
+// splitSegments splits on dots that are outside brackets and outside quotes.
+//
+// Quotes are tracked as well as brackets because a key is rendered with
+// strconv.Quote, so it may legitimately contain a `]` — `subnet["a]b"]` — and
+// counting brackets alone would end the key early. Escapes are tracked because
+// it may contain a quote.
+func splitSegments(s string) ([]string, error) {
+	var (
+		out     []string
+		cur     strings.Builder
+		depth   int
+		inQuote bool
+		escaped bool
+	)
+	for _, r := range s {
+		switch {
+		case escaped:
+			escaped = false
+		case inQuote && r == '\\':
+			escaped = true
+		case r == '"':
+			inQuote = !inQuote
+		case inQuote:
+			// Any other character inside a key is content, including a dot.
+		case r == '[':
+			depth++
+		case r == ']':
+			depth--
+			if depth < 0 {
+				return nil, fmt.Errorf("unbalanced `]`")
+			}
+		case r == '.' && depth == 0:
+			out = append(out, cur.String())
+			cur.Reset()
+			continue
+		}
+		cur.WriteRune(r)
+	}
+	if inQuote {
+		return nil, fmt.Errorf("unterminated quote")
+	}
+	if depth != 0 {
+		return nil, fmt.Errorf("unbalanced `[`")
+	}
+	return append(out, cur.String()), nil
+}
+
+// splitKey separates a resource name from a for_each instance key.
+func splitKey(segment string) (name, key string, err error) {
+	if !strings.HasSuffix(segment, "]") {
+		return segment, "", nil
+	}
+	open := strings.IndexByte(segment, '[')
+	if open < 0 {
+		return "", "", fmt.Errorf("unbalanced `]`")
+	}
+	quoted := segment[open+1 : len(segment)-1]
+	k, uerr := strconv.Unquote(quoted)
+	if uerr != nil {
+		// A numeric index is the likely mistake, and it is refused on purpose:
+		// an instance's identity is its key, never its position.
+		return "", "", fmt.Errorf("%s is not a quoted for_each key — an instance is named, not numbered", quoted)
+	}
+	return segment[:open], k, nil
 }
 
 // Sort orders addresses by their canonical string. Plan operations are sorted
