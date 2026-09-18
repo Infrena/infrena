@@ -79,6 +79,18 @@ func isProjectOptional(cmd *cobra.Command) bool {
 	if projectOptionalCommands[cmd.Name()] {
 		return true
 	}
+	// `plan --show` reads a saved plan and nothing else. The artifact is
+	// complete by construction — that is why `apply --plan` does not recompile
+	// — so there is nothing for a project to supply, and requiring one would
+	// defeat the purpose: the reviewer §38 depends on is precisely the person
+	// reading the plan somewhere other than where it was made, on a machine
+	// that has never seen the project.
+	//
+	// Keyed on the FLAG rather than the command name, because `plan` without
+	// it does need a project and must keep saying so.
+	if cmd.Name() == "plan" && cmd.Flags().Changed("show") {
+		return true
+	}
 	return cmd.Parent() != nil && cmd.Parent().Name() == "plugins"
 }
 

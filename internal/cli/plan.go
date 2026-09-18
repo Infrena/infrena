@@ -27,10 +27,15 @@ var errChanges = errors.New("plan has changes")
 // repeatedly, in CI, and against an environment another command holds
 // locked.
 func newPlanCommand(opts *GlobalOptions) *cobra.Command {
-	return &cobra.Command{
+	var show string
+
+	cmd := &cobra.Command{
 		Use:   "plan <environment>",
 		Short: "Show what infra would change without applying it",
-		Args:  cobra.ExactArgs(1),
+		// MaximumNArgs rather than ExactArgs, because --show takes no
+		// environment: a saved plan already names the one it was made for, and
+		// asking for it again invites the two to disagree.
+		Args: cobra.MaximumNArgs(1),
 		// SilenceUsage/SilenceErrors are also set on root, which is enough
 		// in production: cobra's ExecuteC always resolves to the root
 		// command's flags when Execute is called through the root. But
@@ -43,6 +48,17 @@ func newPlanCommand(opts *GlobalOptions) *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if show != "" {
+				if len(args) > 0 {
+					return fmt.Errorf("plan --show reads a saved plan and takes no environment: "+
+						"the plan already names the one it was made for (%q was given)", args[0])
+				}
+				return showSavedPlan(cmd, opts, show)
+			}
+			if len(args) != 1 {
+				return errors.New("plan needs an environment: `infrena plan <environment>`, " +
+					"or `infrena plan --show <file>` to read a saved one")
+			}
 			environment := args[0]
 
 			ro, closeRun, err := openRun(cmd, opts, "plan", environment)
@@ -195,6 +211,48 @@ func newPlanCommand(opts *GlobalOptions) *cobra.Command {
 			return nil
 		},
 	}
+
+	cmd.Flags().StringVar(&show, "show", "",
+		"read a saved plan and render it, without touching state or any provider")
+	return cmd
+}
+
+// showSavedPlan renders a plan artifact and stops.
+//
+// IT EXISTS FOR THE REVIEWER. §38's `require_approval` makes a saved plan the
+// way CI applies to a protected environment, which only works if somebody reads
+// the plan first — and until this, the only ways to read one were to run
+// `apply --plan` and answer "no", or to read NDJSON by hand. Asking a reviewer
+// to invoke the apply command in order to decide whether to apply is a bad
+// thing to ask of the one person the protection depends on.
+//
+// IT LOADS NOTHING. No providers, no plugins, no state, no lock — the artifact
+// is complete by construction (that is why `apply --plan` does not recompile),
+// and planner.RenderOptions.Definition is optional. So a reviewer with nothing
+// installed, on a laptop that has never seen this project, can read the plan
+// they are being asked to approve. Requiring the plugins would have put the
+// review behind the same setup the pipeline has, which defeats the point of
+// reviewing somewhere else.
+//
+// The exit code matches `plan`'s: 2 when the plan has changes, 0 when it does
+// not. A reviewer's eye and a pipeline's `$?` get the same answer, and nothing
+// has to learn a third convention.
+func showSavedPlan(cmd *cobra.Command, opts *GlobalOptions, path string) error {
+	ro, closeRun, err := openRun(cmd, opts, "plan", "")
+	if err != nil {
+		return err
+	}
+	defer closeRun()
+
+	p, err := readSavedPlan(path)
+	if err != nil {
+		return fmt.Errorf("reading %s: %w", path, err)
+	}
+	fmt.Fprint(ro.Out(), planner.Render(p, planner.RenderOptions{Verbose: opts.Verbose}))
+	if p.HasChanges() {
+		return errChanges
+	}
+	return nil
 }
 
 // parseVars turns --var name=value flags into the map the compiler's

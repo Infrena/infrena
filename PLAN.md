@@ -4408,6 +4408,25 @@ every other `--output` file. `operations` still lists EVERY resource, `kind: "no
 included: it describes the whole plan, not only its changes, and `Plan.HasChanges()` is what
 decides the exit code.
 
+**`infrena plan --show FILE` renders a saved plan and stops.** Added 2026-09-18,
+because §38 made a saved plan the way CI applies to a protected environment and that
+only works if somebody reads the plan first — and the only ways to read one were
+`apply --plan` answered with "no", or NDJSON by hand. Asking the reviewer a protection
+depends on to invoke the APPLY command in order to decide whether to apply is the wrong
+shape.
+
+**It loads nothing**: no project, no plugins, no providers, no state, no lock. The
+artifact is complete by construction — the same property that lets `apply --plan` skip
+recompiling — and `RenderOptions.Definition` is optional, so a reviewer on a machine
+that has never seen the project can read what they are being asked to approve.
+Requiring the project would have put the review behind the same setup the pipeline has,
+which defeats the point of reviewing anywhere else. The project-root exemption is keyed
+on the FLAG, so `plan` without it still demands an environment.
+
+It takes no environment argument: the plan already names the one it was made for, and a
+second one could only disagree. Exit code matches `plan`'s — 2 with changes, 0 without —
+so a reviewer's eye and a pipeline's `$?` get the same answer.
+
 **`apply --plan` reads BOTH envelopes** — the bare artifact and the stream. That is a
 compatibility requirement, not a courtesy: plans saved by earlier releases are on disk, and
 refusing one would break applying a plan that was already reviewed. The envelope is sniffed
