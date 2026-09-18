@@ -4733,14 +4733,59 @@ replacement, because this is the harder refusal to act on: without them, a reade
 looking at what reads as an ordinary edit has to work out for themselves why it
 became a replacement.
 
-**Still open: `create_before_destroy`.** §53 lists "resource replacement
-strategies" and this is the other half — building the replacement before removing
-the old one, for a resource that must not be absent in between. It is NOT a small
-addition and is deliberately not attempted here: it inverts the destroy→create edge
-that `BuildExecution` adds, and with it the assumption every dependency edge in
-that function is written against; both resources exist simultaneously, which
-collides on name or address in most clouds; and dependents must be re-pointed
-before the old one goes. It needs a design before code.
+## 38.2 `lifecycle.create_before_destroy` — ROADMAP, not yet built
+
+**Decided 2026-09-18: we will build this, and not yet.** §53 lists "resource
+replacement strategies"; `prevent_replace` is the half that refuses one, and this is
+the half that reorders one. A replacement is destroy-then-create today, which means
+a window where the resource does not exist, and a failed create leaves nothing
+behind. `create_before_destroy: true` flips the pair for one resource.
+
+**It is table stakes rather than a nicety.** Terraform has had it as a `lifecycle`
+meta-argument for years, alongside `prevent_destroy` and `ignore_changes`, and it is
+the documented answer to replacing anything that serves traffic. Its absence is
+discovered at the worst possible moment — during an outage somebody did not expect a
+plan to cause — so shipping without it is a gap, not a scope choice.
+
+**Five things must be decided before any code.**
+
+1. **State cannot represent the window.** `state.State.Resources` is one record per
+   address, and the executor persists after EVERY node, so "old and new both real"
+   has to survive to disk rather than living in memory. A deposed list on the record
+   (Terraform's shape) or a second key; either is a `state.CurrentVersion` bump.
+
+2. **The flip is contagious, and this is the hard one.** Everything referencing the
+   old object must be moved onto the new one before the old one dies, so the
+   inversion propagates through dependents. HashiCorp's own documentation says
+   `create_before_destroy` "automatically propagates to all dependent resources" —
+   which means a flag on one resource silently changes the replacement behaviour of
+   resources that never mention it. **We should not copy that.** Either the plan
+   NAMES every resource the flag reaches, or a dependent that cannot take it is a
+   refusal. A plan that tells the truth is the entire pitch; a meta-argument with
+   invisible reach at a distance contradicts it.
+
+3. **Nothing knows whether two can coexist.** Unique names, ports and keys are
+   exactly why replacement is destroy-first by default. `pluginproto` has no way for
+   a type to say "two of me is legal". Options: the user's problem since they opted
+   in; a per-type declaration (a protocol bump); or attempt and let the create fail
+   on a collision. Only the second produces a good diagnostic, and it is work for
+   every provider author.
+
+4. **A half-failure leaks a live object.** Today destroy-then-create fails with the
+   address absent and says so. Inverted, a successful create followed by a failed
+   destroy leaves TWO real objects and state able to name one — a leak that bills
+   monthly until somebody notices. The behaviour has to be decided up front: keep
+   the deposed record and retry its destroy next apply, or do not ship the flag.
+
+5. **`executor.tracker` assumes the current order.** `applied` is keyed by address
+   and `isolation.go` says outright that last-write-wins is correct BECAUSE the
+   create phase runs second. Inverted, a completed replacement records
+   `removal: true` and the run reports the resource as removed. Small fix, invisible
+   to the suite.
+
+`retain` composes fine (the destroy phase becomes a forget, so it is create-then-
+forget) and `prevent_replace` does not interact at all, but both should be stated
+rather than discovered.
 
 ---
 
