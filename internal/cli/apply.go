@@ -168,7 +168,7 @@ func newApplyCommand(opts *GlobalOptions) *cobra.Command {
 				// with the declaration. What a variable can still supply without an
 				// environment is resolved; anything that needed one is refused by
 				// name rather than guessed at.
-				_, stateInstanceDiags := registerStateInstances(reg, opts, "")
+				_, stateInstanceDiags := registerStateInstances(reg, opts, "", false)
 				ds.Extend(stateInstanceDiags)
 				cfg = teardownConfig(st0, environment)
 				teardown = true

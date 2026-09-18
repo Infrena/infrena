@@ -134,7 +134,10 @@ func stateOnlyRegistry(
 	opts *GlobalOptions, environment string,
 ) (*registry.Registry, providers.Table, diag.Diagnostics, func()) {
 	reg, closePlugins := buildRegistry(opts)
-	table, ds := registerStateInstances(reg, opts, environment)
+	// usesDefaults false: `destroy` and `refresh` never compile, and an
+	// instance's `defaults:` are read only by the compiler's binding and by
+	// import's generator. Neither runs here.
+	table, ds := registerStateInstances(reg, opts, environment, false)
 	return reg, table, ds, closePlugins
 }
 
@@ -153,7 +156,7 @@ func stateOnlyRegistry(
 // is recorded in state, so the resource still reaches the right account whenever
 // that account's configuration does not itself depend on an environment.
 func registerStateInstances(
-	reg *registry.Registry, opts *GlobalOptions, environment string,
+	reg *registry.Registry, opts *GlobalOptions, environment string, usesDefaults bool,
 ) (providers.Table, diag.Diagnostics) {
 	var ds diag.Diagnostics
 
@@ -222,7 +225,7 @@ func registerStateInstances(
 	// unknown must not reach a plugin's Configure: it would be silently treated as
 	// absent and the command would survey or mutate whichever account the plugin
 	// defaults to, which is the one outcome nobody can see in the output.
-	ds.Extend(refuseUnresolvedInstances(table, environment))
+	ds.Extend(refuseUnresolvedInstances(table, environment, usesDefaults))
 	if ds.HasErrors() {
 		return nil, ds
 	}
@@ -249,18 +252,37 @@ func registerImplicit(reg *registry.Registry, ds diag.Diagnostics) (providers.Ta
 //
 // The action is --var, and unlike the old message that promise is now kept: these
 // commands accept it.
-func refuseUnresolvedInstances(table providers.Table, environment string) diag.Diagnostics {
+//
+// usesDefaults SAYS WHETHER THIS COMMAND WILL READ `defaults:` AT ALL, and only a
+// command that will is allowed to fail over one. An instance's configuration is a
+// different matter and is always checked: it crosses to the plugin's Configure, so an
+// unknown there picks an account silently.
+//
+// `defaults:` never reaches a plugin. It is read by the compiler when binding
+// lifecycle rules and by import's generator when writing configuration, so `discover`
+// — which does neither — was refusing to run over a value it would never have looked
+// at. `defaults: {region: ${aws_region}}` with a per-environment value made
+// `discover` impossible for no benefit at all, which is what this parameter fixes.
+// Checking it everywhere was the safe-looking default, and safe-looking is how a
+// check ends up guarding nothing while costing a command.
+func refuseUnresolvedInstances(table providers.Table, environment string, usesDefaults bool) diag.Diagnostics {
 	var ds diag.Diagnostics
 
 	for _, name := range table.Names() {
 		inst := table[name]
-		for _, part := range []struct {
+		parts := []struct {
 			what   string
 			values map[string]value.Value
 		}{
 			{"configuration", inst.Config},
-			{"`defaults`", inst.Defaults},
-		} {
+		}
+		if usesDefaults {
+			parts = append(parts, struct {
+				what   string
+				values map[string]value.Value
+			}{"`defaults`", inst.Defaults})
+		}
+		for _, part := range parts {
 			for _, key := range sortedAttributeKeys(part.values) {
 				if part.values[key].Known {
 					continue
@@ -687,7 +709,7 @@ func loadConfiguredPlugins(reg *registry.Registry, dir string) diag.Diagnostics 
 // could not resolve a per-environment provider value despite being handed the
 // environment on the command line.
 func discoveryRegistry(
-	opts *GlobalOptions, environment string,
+	opts *GlobalOptions, environment string, usesDefaults bool,
 ) (*registry.Registry, providers.Table, diag.Diagnostics, func()) {
 	reg, loader := buildRegistryWithLoader(opts)
 
@@ -708,7 +730,7 @@ func discoveryRegistry(
 	// `discover` passes "" here: it is the one command whose scope configuration does
 	// not set, so everything a variable can supply without an environment is resolved
 	// and anything that needs one is refused by name.
-	table, instanceDS := registerStateInstances(reg, opts, environment)
+	table, instanceDS := registerStateInstances(reg, opts, environment, usesDefaults)
 	ds.Extend(instanceDS)
 	if len(table) == 0 {
 		// ONE INSTANCE PER PLUGIN, which is EveryPlugin and deliberately not Implicit.

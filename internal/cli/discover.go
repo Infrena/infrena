@@ -46,7 +46,7 @@ func newDiscoverCommand(opts *GlobalOptions) *cobra.Command {
 				return err
 			}
 
-			reg, _, regDiags, closePlugins := discoveryRegistry(opts, "")
+			reg, _, regDiags, closePlugins := discoveryRegistry(opts, "", false)
 			defer closePlugins()
 			if regDiags.HasErrors() {
 				regDiags.Render(cmd.ErrOrStderr())

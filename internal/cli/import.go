@@ -64,7 +64,7 @@ func newImportCommand(opts *GlobalOptions) *cobra.Command {
 			// command's own environment, which discover does not have. Passing ""
 			// here left a per-environment provider value unresolvable by an `import
 			// dev` that had been handed "dev" on the command line.
-			reg, tbl, regDiags, closePlugins := discoveryRegistry(opts, environment)
+			reg, tbl, regDiags, closePlugins := discoveryRegistry(opts, environment, true)
 			defer closePlugins()
 			if regDiags.HasErrors() {
 				regDiags.Render(cmd.ErrOrStderr())

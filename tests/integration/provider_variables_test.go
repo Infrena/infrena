@@ -218,3 +218,71 @@ resources:
 	}
 	requireContains(t, d.combined(), "net")
 }
+
+// TestDiscoverIgnoresAnUnresolvedDefaultItWillNeverRead is the other side of
+// TestDiscoverRefusesAValueItCannotKnowRatherThanGuessing, and the distinction
+// between them is the whole point.
+//
+// An instance's CONFIGURATION crosses to the plugin's Configure, so an unknown
+// there picks an account silently and must be refused. Its `defaults:` never
+// reach a plugin at all — they are read by the compiler when binding lifecycle
+// rules and by import's generator when writing configuration, and `discover`
+// does neither. So refusing over one cost a command and bought nothing:
+// `defaults: {region: ${var.aws_region}}` with a per-environment value made
+// `discover` impossible on a project that was otherwise fine.
+//
+// Both halves asserted against ONE project, because the risk in narrowing a
+// safety check is narrowing it too far. The same file has an unresolved
+// `defaults` entry and a resolvable configuration, so this proves discover ran
+// over the first without proving it would tolerate the second.
+func TestDiscoverIgnoresAnUnresolvedDefaultItWillNeverRead(t *testing.T) {
+	dir := project(t, `
+project: varprov
+environments:
+  dev: {}
+variables:
+  engine:
+    type: string
+providers:
+  - plugin: fake
+    defaults:
+      engine: ${var.engine}
+resources:
+  net:
+    type: fake.network
+    cidr: 10.0.0.0/16
+`)
+	if err := os.MkdirAll(filepath.Join(dir, "environments"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(dir, "environments", "dev.yml"),
+		"variables:\n  engine: postgres\n")
+
+	// discover never reads `defaults:`, so an unresolved one must not stop it.
+	if r := run(t, dir, "discover"); r.ExitCode != 0 {
+		t.Errorf("discover refused over a `defaults:` value it never reads:\n%s", r.combined())
+	}
+
+	// And the check it kept still bites: an unresolved CONFIGURATION value does
+	// reach the plugin, so it is still refused. Without this, "stop checking
+	// defaults" and "stop checking anything" look identical from the outside.
+	dir2 := project(t, `
+project: varprov
+environments:
+  dev: {}
+variables:
+  cloud_file:
+    type: string
+providers:
+  - plugin: fake
+    cloud: ${var.cloud_file}
+resources:
+  net:
+    type: fake.network
+    cidr: 10.0.0.0/16
+`)
+	if r := run(t, dir2, "discover"); r.ExitCode == 0 {
+		t.Errorf("discover no longer refuses an unresolved CONFIGURATION value, "+
+			"so the check was narrowed too far:\n%s", r.combined())
+	}
+}

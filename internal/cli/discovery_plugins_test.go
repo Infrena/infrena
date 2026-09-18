@@ -82,7 +82,7 @@ func TestDiscoveryRegistersAnInstancePerPluginNotNone(t *testing.T) {
 	withTwoPlugins(t)
 	dir := projectDir(t, "project: p\nresources: {}\n")
 
-	reg, table, ds, closePlugins := discoveryRegistry(&GlobalOptions{Dir: dir}, "")
+	reg, table, ds, closePlugins := discoveryRegistry(&GlobalOptions{Dir: dir}, "", false)
 	defer closePlugins()
 	if ds.HasErrors() {
 		t.Fatalf("unexpected diagnostics:\n%s", renderToString(ds))
@@ -110,7 +110,7 @@ func TestDiscoveryRegistersAnInstancePerPluginNotNone(t *testing.T) {
 func TestOnePluginStillGetsItsInstance(t *testing.T) {
 	dir := projectDir(t, "project: p\nresources: {}\n")
 
-	_, table, ds, closePlugins := discoveryRegistry(&GlobalOptions{Dir: dir}, "")
+	_, table, ds, closePlugins := discoveryRegistry(&GlobalOptions{Dir: dir}, "", false)
 	defer closePlugins()
 	if ds.HasErrors() {
 		t.Fatalf("unexpected diagnostics:\n%s", renderToString(ds))
