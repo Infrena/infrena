@@ -3153,6 +3153,55 @@ instead of `0.0.0-dev` (§61.1).
 - **The README's Releases link resolves for a reader for the first time.** It has never been
   followed by anybody who is not signed in to the org, so it has never actually been tested.
 
+#### The repository is rebuilt, not just opened
+
+**Ruled by the owner, 2026-09-17.** Going public is not flipping a visibility switch on this
+repository as it stands. Four things happen first, and they are listed here because each is
+cheap to do deliberately and expensive to discover halfway through:
+
+1. **Git history is destroyed.** The public repository starts from a single commit. Nothing
+   about how this was built is part of what ships.
+2. **Every `CLAUDE.md` is removed**, here and in the plugin repositories.
+3. **`docs/superpowers/` is removed** — the specs and implementation plans under it are working
+   documents, not product documentation.
+4. **The remaining documentation is rewritten to read as a human wrote it for another human.**
+   Clean, plain, easy to follow. Professional without being stiff.
+
+**What destroying history costs, so it is decided rather than discovered:**
+
+- **Every tag stops pointing at anything**, and a GitHub release is a tag. The uploaded
+  archives survive as assets, but the tag-to-commit mapping does not, so releases need
+  re-tagging against the new single commit or the release history starts over. Decide which
+  before the rewrite, not after.
+- **`vcs.revision` baked into every shipped binary names a commit that no longer exists.** That
+  is cosmetic — `infrena version` still reports its release number — but a bug report quoting a
+  revision becomes unresolvable.
+- **The three consumer repositories pin infrena by VERSION, not by commit**, so they survive
+  intact as long as the tags are recreated. That is worth keeping true: a commit pin anywhere
+  would turn this into a coordinated rewrite across four repositories.
+
+**Point 4 is much larger than it sounds, and the surface was measured on 2026-09-17:**
+
+| What | In Go | In Markdown |
+| --- | --- | --- |
+| `Amendment <n>` — internal process vocabulary | 116 | 194 |
+| `contract.md` — **a file that does not exist in this repository** | 16 | 2 |
+| First-person comments (`I`, `my own`) | 18 | 3 |
+| `Found by the …` | 2 | — |
+
+The `contract.md` citations are the sharpest of these and are a defect TODAY rather than only
+on the day: sixteen comments name it as the authority for "Amendment 6 (owner ruling)" and a
+reader who goes looking finds nothing. `AGENT.md` has the same problem in the other direction —
+it lives in the reference plugin's repository, and §31.1 above refers to it as though it were
+here. A pointer to a document nobody can open is worse than no pointer.
+
+**PLAN.md itself is the biggest single question**, and it is deliberately left open here rather
+than answered. It is the design record, it is enormous, and it is written in the vocabulary of
+the people building it — milestones, amendments, rulings, "withdrawn", "the fake-plugin
+session". It is also where every decision's REASONING lives, which is the thing most worth
+keeping. Whether it ships as-is, ships rewritten, or stays behind as a working document is a
+decision for the day, and one that should be made on purpose.
+
 #### What does NOT flip, checked 2026-09-17
 
 - **`plugins search`'s unauthenticated wording is already correct and needs no change.**
