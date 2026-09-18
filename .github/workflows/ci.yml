@@ -141,3 +141,48 @@ jobs:
       - name: test -race
         # The executor is concurrent by design, and a data race there corrupts state.
         run: go test -count=1 -race ./...
+
+  # EVERY PLATFORM A RELEASE PUBLISHES, COMPILED ON EVERY PUSH.
+  #
+  # release.yml cross-compiles eight targets, two of them Windows. Nothing built
+  # them until release day, so a break on any non-Linux target stayed invisible
+  # until the one day it is worst to find — and the check job above runs on
+  # ubuntu-latest only, so a developer's machine cannot catch it either.
+  #
+  # Its own job rather than steps on `check`: this needs no plugin checkout, no
+  # secret and no test run, so it starts immediately, finishes in a minute or
+  # two, and still reports when the integration suite is what failed.
+  #
+  # `vet` rather than `build`, deliberately: `go build` skips _test.go files, and
+  # a test that names a platform-specific symbol is exactly the shape of breakage
+  # this is here for. vet typechecks tests too.
+  platforms:
+    name: platforms
+    runs-on: ubuntu-latest
+
+    env:
+      GOTOOLCHAIN: local
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.27"
+          check-latest: false
+
+      - name: cross-compile every published platform
+        run: |
+          set -euo pipefail
+          failed=0
+          while read -r goos goarch goarm; do
+            [ -z "${goos:-}" ] && continue
+            case "$goos" in \#*) continue;; esac
+            echo "==> $goos/$goarch${goarm:+ v$goarm}"
+            if ! CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" GOARM="${goarm:-}" \
+                 go vet ./...; then
+              echo "::error::$goos/$goarch does not build, and a release publishes it."
+              failed=1
+            fi
+          done < <(sed 's/#.*//' .github/platforms)
+          exit $failed

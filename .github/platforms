@@ -1,0 +1,19 @@
+# Every platform a release publishes, and therefore every platform CI builds.
+#
+# ONE LIST, READ BY BOTH WORKFLOWS. release.yml builds these into archives and
+# ci.yml cross-compiles them on every push. Two copies would drift, and the copy
+# that drifts is the one guarding what people download — the same reasoning that
+# makes release.yml call ci.yml rather than repeat its steps.
+#
+# Format: goos goarch [goarm]. Blank lines and # comments ignored.
+#
+# Adding a platform is a line. Go cross-compiles to far more than this; shipping
+# twenty archives nobody downloads is noise rather than generosity.
+linux   amd64
+linux   arm64
+linux   arm   7
+linux   386
+darwin  amd64
+darwin  arm64
+windows amd64
+windows arm64

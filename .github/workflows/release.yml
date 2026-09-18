@@ -97,17 +97,15 @@ jobs:
             rm -rf "$dir"
           }
 
-          # Every platform anyone is plausibly running. Adding one is a line: Go
-          # cross-compiles to far more, and shipping twenty archives nobody downloads
-          # is noise rather than generosity.
-          build linux   amd64
-          build linux   arm64
-          build linux   arm   7   # Raspberry Pi and friends
-          build linux   386
-          build darwin  amd64
-          build darwin  arm64
-          build windows amd64
-          build windows arm64
+          # The platform list lives in .github/platforms, read here and by ci.yml,
+          # so every target a release publishes is also a target CI compiles on
+          # every push. Two copies would drift, and the copy that drifts is this
+          # one — the one guarding what people download.
+          while read -r goos goarch goarm; do
+            [ -z "${goos:-}" ] && continue
+            case "$goos" in \#*) continue;; esac
+            build "$goos" "$goarch" "${goarm:-}"
+          done < <(sed 's/#.*//' .github/platforms)
 
           ls -la dist
 
