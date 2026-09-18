@@ -274,7 +274,7 @@ you looking for a typo in a name that is right there in the file.
 
 ## lifecycle
 
-Four options, all per resource:
+Five options, all per resource:
 
 ```yaml
 resources:
@@ -283,6 +283,7 @@ resources:
     lifecycle:
       prevent_destroy: true
       prevent_replace: true
+      create_before_destroy: true
       retain: true
       ignore_changes: [tags.LastModified]
 ```
@@ -306,8 +307,31 @@ system writes, the field a console edit is allowed to own.
 Refusals happen at plan time, so they arrive before any approval rather than part-way through
 an apply.
 
-`create_before_destroy` does not exist yet. It is on the roadmap with the open design
-questions written down; see PLAN.md §38.2.
+**`create_before_destroy`** reverses the two halves of a replacement: the new object is
+built, everything pointing at it is moved across, and only then is the old one destroyed.
+Use it for anything that must not be *absent* in between — a load balancer, an instance
+serving traffic.
+
+It is opt-in per resource and cannot be the default, because a great many resources cannot
+exist twice: a unique name, a fixed port, a key that is the identity. For those, reversing
+the order turns a clean replacement into a create that collides. You are the one who knows
+which kind you have.
+
+Two things worth knowing:
+
+- **Dependents follow automatically.** A resource referring to the replaced one is updated in
+  place to point at the new object, and that update finishes *before* the old one is
+  destroyed. Setting the flag on one resource does not silently change how any other resource
+  is replaced.
+- **If the old object cannot be deleted**, the run reports it and state keeps a record of it.
+  Every later plan proposes the cleanup until it succeeds:
+
+  ```
+  Plan: 0 to create, 0 to update, 0 to replace, 0 to destroy, 0 to forget. 1 left over from an interrupted replacement to clean up.
+  ```
+
+  That is deliberate. A real object nothing can name is a leak that bills monthly; one state
+  still names is a line in the next plan.
 
 ## depends_on
 

@@ -402,6 +402,15 @@ func renderAnnotated(v value.Value) string {
 // a plan with no operations of some kind needs no special case.
 func renderSummary(p *Plan) string {
 	counts := p.Counts()
-	return fmt.Sprintf("Plan: %d to create, %d to update, %d to replace, %d to destroy, %d to forget.",
+	line := fmt.Sprintf("Plan: %d to create, %d to update, %d to replace, %d to destroy, %d to forget.",
 		counts[OpCreate], counts[OpUpdate], counts[OpReplace], counts[OpDestroy], counts[OpForget])
+	// Appended rather than added as a sixth number, because it is not a change
+	// to anybody's infrastructure in the sense the other five are: it is
+	// clearing up after a replacement that half-failed, and it is rare enough
+	// that a reader meeting the word for the first time should be made to
+	// notice rather than scan past a zero.
+	if n := counts[OpDestroyDeposed]; n > 0 {
+		line += fmt.Sprintf(" %d left over from an interrupted replacement to clean up.", n)
+	}
+	return line
 }

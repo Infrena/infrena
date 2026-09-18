@@ -42,6 +42,20 @@ const (
 	// OpForget means the resource will be dropped from state without the
 	// provider being called.
 	OpForget
+	// OpDestroyDeposed removes an object a `create_before_destroy` replacement
+	// set aside and then failed to delete (§38.2).
+	//
+	// IT IS NOT OpDestroy, and the distinction is the whole reason it exists:
+	// the ADDRESS is not going anywhere. The resource is there, healthy, and
+	// described by configuration; what is being removed is a previous
+	// incarnation of it that outlived the run that should have deleted it.
+	// Reporting it as a destroy would tell a reader their database is about to
+	// be deleted.
+	//
+	// It is also the mechanism that keeps the window honest. Without it, a
+	// deposed object sits in state forever: real, billed, and named by nothing
+	// anybody runs.
+	OpDestroyDeposed
 )
 
 // String returns the operation's name, as written in the plan artifact.
@@ -59,6 +73,8 @@ func (k OpKind) String() string {
 		return "destroy"
 	case OpForget:
 		return "forget"
+	case OpDestroyDeposed:
+		return "destroy_deposed"
 	default:
 		return "unknown"
 	}
@@ -78,6 +94,10 @@ func (k OpKind) Symbol() string {
 		return "-"
 	case OpForget:
 		return "="
+	case OpDestroyDeposed:
+		// Same marker a destroy gets, because something really is being
+		// deleted. The renderer says WHICH object beside it.
+		return "-"
 	default:
 		return ""
 	}
@@ -97,7 +117,7 @@ func (k OpKind) MarshalText() ([]byte, error) { return []byte(k.String()), nil }
 // apply would report success and do nothing, which is the worst available outcome
 // and the reason this is not a lenient decode.
 func (k *OpKind) UnmarshalText(text []byte) error {
-	for _, candidate := range []OpKind{OpNoOp, OpCreate, OpUpdate, OpReplace, OpDestroy, OpForget} {
+	for _, candidate := range []OpKind{OpNoOp, OpCreate, OpUpdate, OpReplace, OpDestroy, OpForget, OpDestroyDeposed} {
 		if candidate.String() == string(text) {
 			*k = candidate
 			return nil

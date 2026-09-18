@@ -890,9 +890,10 @@ func providerInstanceFor(inst modules.Instance, table providers.Table, ds *diag.
 // key is absent, and absent is the same as unset.
 func lifecycleFor(decl config.LifecycleDecl, inst providers.Instance) resource.Lifecycle {
 	out := resource.Lifecycle{
-		PreventDestroy: decl.PreventDestroy,
-		PreventReplace: decl.PreventReplace,
-		Retain:         decl.Retain,
+		PreventDestroy:      decl.PreventDestroy,
+		PreventReplace:      decl.PreventReplace,
+		CreateBeforeDestroy: decl.CreateBeforeDestroy,
+		Retain:              decl.Retain,
 		// Carried as WRITTEN; stage 7 canonicalises it against the schema, where the
 		// attribute names are known. Deliberately not settable from an instance's
 		// `defaults:`: which attributes a resource lets drift is a property of that
@@ -907,6 +908,11 @@ func lifecycleFor(decl config.LifecycleDecl, inst providers.Instance) resource.L
 	if !decl.PreventReplaceSet {
 		if b, ok := inst.Defaults["prevent_replace"].AsBool(); ok {
 			out.PreventReplace = b
+		}
+	}
+	if !decl.CreateBeforeDestroySet {
+		if b, ok := inst.Defaults["create_before_destroy"].AsBool(); ok {
+			out.CreateBeforeDestroy = b
 		}
 	}
 	if !decl.RetainSet {

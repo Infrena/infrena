@@ -332,7 +332,33 @@ func (r *run) record(res nodeResult) error {
 	switch {
 	case res.removed:
 		r.st.Remove(res.node.Address)
+	case res.node.Kind == planner.OpDestroyDeposed,
+		res.node.Kind == planner.OpReplace && res.node.Phase == planner.PhaseDestroy && res.node.CreateBeforeDestroy:
+		// The deposed object is gone for real, so drop the record of it. The
+		// address itself stays: the new resource is there and was recorded by
+		// the create phase.
+		//
+		// If this never runs — the delete failed, or the process died between
+		// the two phases — the deposed entry SURVIVES in state, which is the
+		// whole reason it is written to disk rather than held in memory. A real
+		// object that nothing can name is a leak that bills monthly; one that
+		// state still names is a line in the next plan.
+		if cur := r.st.Resources[res.node.Address.String()]; cur != nil {
+			next := cur.Clone()
+			next.Deposed = nil
+			r.st.Set(next)
+		}
 	case res.state != nil:
+		if res.node.Kind == planner.OpReplace && res.node.Phase == planner.PhaseCreate && res.node.CreateBeforeDestroy {
+			// BEFORE the new record replaces the old one, because replacing it
+			// is what would lose the old object's ProviderID — the only handle
+			// anything has on a resource that is still running.
+			if prior := r.st.Resources[res.node.Address.String()]; prior != nil {
+				deposed := prior.Clone()
+				deposed.Deposed = nil
+				res.state.Deposed = append(res.state.Deposed, deposed)
+			}
+		}
 		r.st.Set(res.state)
 	default:
 		// A provider whose Create/Update returned (nil, nil): res.err is
@@ -437,6 +463,21 @@ func (r *run) execute(node planner.OpNode, snapshot map[string]*resource.Resourc
 	// doc comment for the whole argument, including why the merge cannot
 	// happen any earlier than this.
 	current := currentFor(node.Address, snapshot, r.opts.Observed)
+
+	// A create_before_destroy replacement's destroy phase deletes the DEPOSED
+	// object — the one the create phase set aside — not the record at this
+	// address, which by now describes the NEW resource. Handing the provider
+	// the current record would delete what was just built and leave the old one
+	// running: the exact inversion of the flag's purpose, and silent, because
+	// both calls succeed.
+	if node.Kind == planner.OpDestroyDeposed ||
+		(node.Kind == planner.OpReplace && node.Phase == planner.PhaseDestroy && node.CreateBeforeDestroy) {
+		d := deposedOf(snapshot[node.Address.String()])
+		if d == nil {
+			return nil, false, fmt.Errorf("%s: create_before_destroy: no deposed object to remove — the create phase either did not run or did not deposit the old one", node.Address)
+		}
+		current = d
+	}
 
 	var prov provider.Provider
 	if node.Kind != planner.OpForget {
@@ -569,6 +610,7 @@ func verbFor(node planner.OpNode) (Verb, bool) {
 	case node.Kind == planner.OpUpdate:
 		return VerbUpdate, true
 	case node.Kind == planner.OpDestroy,
+		node.Kind == planner.OpDestroyDeposed,
 		node.Kind == planner.OpReplace && node.Phase == planner.PhaseDestroy:
 		return VerbDelete, true
 	default:

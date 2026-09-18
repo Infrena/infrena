@@ -40,7 +40,25 @@ type Lifecycle struct {
 	// matters for are specific and few: the database, the volume, the thing
 	// whose contents do not survive being recreated.
 	PreventReplace bool `json:"prevent_replace,omitempty"`
-	Retain         bool `json:"retain"`
+	// CreateBeforeDestroy reverses the two halves of a replacement: the new
+	// object is built, everything pointing at it is moved across, and only then
+	// is the old one destroyed (PLAN.md §38.2).
+	//
+	// WHAT IT IS FOR is a resource that must not be ABSENT in between. A
+	// replacement is destroy-then-create by default, which leaves a window with
+	// nothing there — an outage for anything serving traffic — and means a
+	// failed create leaves nothing at all, the old object already gone.
+	//
+	// OPT-IN PER RESOURCE, and it cannot be the default, because a great many
+	// resources cannot exist twice: a unique name, a fixed port, a key that is
+	// the identity. For those, reversing the order turns a clean replacement
+	// into a create that collides.
+	//
+	// omitempty, for the same reason PreventReplace has it: state written
+	// before this field existed decodes unchanged, and absent means false,
+	// which is what every existing resource is.
+	CreateBeforeDestroy bool `json:"create_before_destroy,omitempty"`
+	Retain              bool `json:"retain"`
 
 	// IgnoreChanges names attributes whose drift the planner does not propose to
 	// revert (PLAN.md §14.2): the real resource keeps whatever it has, and the plan
@@ -132,6 +150,28 @@ type ResourceState struct {
 	Lifecycle    Lifecycle              `json:"lifecycle"`
 	CreatedAt    time.Time              `json:"created_at,omitzero"`
 	UpdatedAt    time.Time              `json:"updated_at,omitzero"`
+	// Deposed are objects this address used to be, still real and no longer
+	// current. It is how create_before_destroy survives a crash.
+	//
+	// THE WINDOW IS THE WHOLE PROBLEM. Reversing a replacement means both
+	// objects exist at once, and state is persisted after EVERY node — so
+	// "both are real" has to be representable on disk, not merely in memory.
+	// Without this, the create phase would overwrite the only record of the old
+	// object's ProviderID, and a destroy that then failed would leave something
+	// real that nothing can name: a leak that bills monthly until a human
+	// notices.
+	//
+	// Normally empty for a fraction of a second, between the create phase and
+	// the destroy phase of one replacement. An entry that OUTLIVES a run means
+	// the destroy failed, and the next plan schedules it.
+	//
+	// A full ResourceState rather than a bare id, because deleting it is an
+	// ordinary Delete call and the provider is handed the object's prior state.
+	//
+	// omitempty: state written before this existed decodes unchanged, and every
+	// resource that has never been replaced this way serialises exactly as it
+	// did.
+	Deposed []*ResourceState `json:"deposed,omitempty"`
 }
 
 // Clone copies a resource state so that a caller cannot mutate the original
@@ -159,5 +199,15 @@ func (s *ResourceState) Clone() *ResourceState {
 	out := *s
 	out.Attributes = value.CloneMap(s.Attributes)
 	out.Dependencies = append([]address.Address(nil), s.Dependencies...)
+	// Deposed entries are cloned too, not shared. They are ResourceStates and
+	// carry the same interior aliasing this method exists to prevent — and one
+	// of them is the only record of a live object, which is the worst thing in
+	// state to let a caller write through to.
+	if s.Deposed != nil {
+		out.Deposed = make([]*ResourceState, len(s.Deposed))
+		for i, d := range s.Deposed {
+			out.Deposed[i] = d.Clone()
+		}
+	}
 	return &out
 }

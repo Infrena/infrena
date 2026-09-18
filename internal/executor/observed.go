@@ -96,3 +96,18 @@ func currentFor(a address.Address, persisted map[string]*resource.ResourceState,
 	}
 	return out
 }
+
+// deposedOf returns the object a create_before_destroy replacement set aside,
+// or nil when there is none.
+//
+// The FIRST entry, and in practice there is only ever one: a second would mean
+// two replacements of one resource whose destroys both failed, which is a
+// situation to report rather than to tidy away silently. Taking the first keeps
+// each run removing exactly one, so a backlog drains one plan at a time with
+// every step visible.
+func deposedOf(s *resource.ResourceState) *resource.ResourceState {
+	if s == nil || len(s.Deposed) == 0 {
+		return nil
+	}
+	return s.Deposed[0]
+}

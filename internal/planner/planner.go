@@ -179,8 +179,51 @@ func Compute(cfg compiler.ResolvedConfig, st *state.State, obs refresh.Observati
 		}
 	}
 
+	// Deposed objects, AFTER the ordinary operations and in address order.
+	//
+	// A deposed object is a previous incarnation of a resource that a
+	// create_before_destroy replacement set aside and then failed to delete
+	// (§38.2). Nothing else in the plan would ever mention it: the address is
+	// present, healthy and matching configuration, so operationFor decides
+	// NoOp and moves on — while something real goes on existing and being
+	// billed for, named by nothing anybody runs.
+	//
+	// This is what makes the deposed record a step in a process rather than a
+	// place leaks accumulate. Every plan after the failure proposes the
+	// cleanup, every apply attempts it, and it keeps saying so until it works.
+	if st != nil {
+		for _, addr := range sortedStateAddresses(st) {
+			rs, ok := st.Get(addr)
+			if !ok || len(rs.Deposed) == 0 {
+				continue
+			}
+			for _, d := range rs.Deposed {
+				p.Operations = append(p.Operations, Operation{
+					Address:  addr,
+					Type:     rs.Type,
+					Provider: rs.Provider,
+					Kind:     OpDestroyDeposed,
+					Before:   copyAttrs(d.Attributes),
+					Reasons: []ChangeReason{{Note: "left over from an interrupted `create_before_destroy` replacement (" +
+						d.ProviderID + ")"}},
+				})
+			}
+		}
+	}
+
 	p.Diagnostics = append([]diag.Diagnostic(nil), ds...)
 	return p, ds
+}
+
+// sortedStateAddresses lists every address in state, in canonical order, so a
+// deposed cleanup appears in the same place on every run (invariant 6).
+func sortedStateAddresses(st *state.State) []address.Address {
+	out := make([]address.Address, 0, len(st.Resources))
+	for _, rs := range st.Resources {
+		out = append(out, rs.Address)
+	}
+	address.Sort(out)
+	return out
 }
 
 // operationFor decides the single operation for one address, per spec §11's

@@ -98,6 +98,7 @@ func dispatch(
 		return prov.Update(operationContext(ctx), current, desired)
 
 	case node.Kind == planner.OpDestroy,
+		node.Kind == planner.OpDestroyDeposed,
 		node.Kind == planner.OpReplace && node.Phase == planner.PhaseDestroy:
 		if prov == nil {
 			return nil, fmt.Errorf("%s: dispatch: no provider available for destroy", node.Address)

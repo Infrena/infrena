@@ -23,6 +23,16 @@ type OpNode struct {
 	Address address.Address
 	Kind    OpKind
 	Phase   Phase
+	// CreateBeforeDestroy is carried on the NODE, not looked up from the plan,
+	// because four separate decisions downstream turn on it and every one of
+	// them has only the node in hand: which way the two phases are ordered,
+	// whether the destroy phase deletes the current object or the deposed one,
+	// whether completing the destroy phase means the address is GONE, and what
+	// the run reports. A lookup in each place is four chances to disagree.
+	//
+	// Meaningful only for OpReplace. Every other kind has one phase and nothing
+	// to reorder.
+	CreateBeforeDestroy bool
 }
 
 // ID identifies the node uniquely, and readably enough to name in a test
@@ -42,6 +52,11 @@ func (n OpNode) ID() string {
 		return "destroy:" + n.Address.String()
 	case OpForget:
 		return "forget:" + n.Address.String()
+	case OpDestroyDeposed:
+		// Its OWN id, so it can coexist with an operation at the same address:
+		// the resource may be being updated in the same run that clears up
+		// after an earlier replacement of it.
+		return "deposed:" + n.Address.String()
 	default:
 		return "noop:" + n.Address.String()
 	}
@@ -88,6 +103,14 @@ func BuildExecution(p *Plan, deps func(address.Address) []address.Address) (*gra
 	seen := make(map[string]bool, len(p.Operations))
 	for _, op := range p.Operations {
 		key := op.Address.String()
+		if op.Kind == OpDestroyDeposed {
+			// A deposed cleanup is a SECOND operation at an address that
+			// legitimately has another: the resource itself may be unchanged,
+			// updated or replaced in the same run. It is keyed apart rather
+			// than exempted, so two deposed cleanups at one address are still
+			// caught — that would mean the planner emitted one twice.
+			key += " (deposed)"
+		}
 		if seen[key] {
 			return nil, fmt.Errorf("planner: BuildExecution: %s: a plan may contain at most one operation per address (a replace's destroy and create phases come from a single Operation, not two) — this plan has more than one", op.Address)
 		}
@@ -106,6 +129,17 @@ func BuildExecution(p *Plan, deps func(address.Address) []address.Address) (*gra
 
 	add := func(n OpNode) {
 		g.Add(n)
+		// A deposed cleanup is NOT recorded in `has`. That map answers "which
+		// phase node exists for this address" for the edge passes, and a
+		// deposed node shares an address and a phase with the real destroy —
+		// so recording it would overwrite the replacement's own destroy node,
+		// silently redirecting every edge meant for it and tripping the
+		// phases-disagree panic below. It takes part in no edges by design
+		// (see the node-adding switch), so it belongs in the graph and not in
+		// this index.
+		if n.Kind == OpDestroyDeposed {
+			return
+		}
 		key := n.Address.String()
 		if has[key] == nil {
 			has[key] = map[Phase]OpNode{}
@@ -120,9 +154,17 @@ func BuildExecution(p *Plan, deps func(address.Address) []address.Address) (*gra
 			// would put unchanged resources in the executor's path.
 			continue
 		case OpReplace:
-			add(OpNode{Address: op.Address, Kind: op.Kind, Phase: PhaseDestroy})
-			add(OpNode{Address: op.Address, Kind: op.Kind, Phase: PhaseCreate})
+			cbd := op.Lifecycle.CreateBeforeDestroy
+			add(OpNode{Address: op.Address, Kind: op.Kind, Phase: PhaseDestroy, CreateBeforeDestroy: cbd})
+			add(OpNode{Address: op.Address, Kind: op.Kind, Phase: PhaseCreate, CreateBeforeDestroy: cbd})
 		case OpDestroy, OpForget:
+			add(OpNode{Address: op.Address, Kind: op.Kind, Phase: PhaseDestroy})
+		case OpDestroyDeposed:
+			// UNORDERED with respect to everything else, deliberately. The
+			// object it removes is not referred to by anything: it left
+			// configuration when its replacement was created, and no dependency
+			// edge names it. Ordering it against the live resource at the same
+			// address would be inventing a constraint to look tidy.
 			add(OpNode{Address: op.Address, Kind: op.Kind, Phase: PhaseDestroy})
 		case OpCreate, OpUpdate:
 			add(OpNode{Address: op.Address, Kind: op.Kind, Phase: PhaseCreate})
@@ -141,7 +183,8 @@ func BuildExecution(p *Plan, deps func(address.Address) []address.Address) (*gra
 		if op.Kind == OpReplace {
 			// The two phases of one replacement are ordered relative to each
 			// other even when nothing else depends on it: a replacement with
-			// no dependents still has to destroy before it creates. Every
+			// no dependents still has to destroy before it creates — or, with
+			// create_before_destroy, the other way about. Every
 			// other edge in this function relates two DIFFERENT addresses,
 			// so without this, a dependent-free replacement's own pair is
 			// left unconstrained and can be scheduled in either order.
@@ -161,10 +204,19 @@ func BuildExecution(p *Plan, deps func(address.Address) []address.Address) (*gra
 				panic("planner: BuildExecution: replace at " + op.Address.String() +
 					" is missing a phase node — the node-adding and edge-adding passes disagree")
 			}
-			g.Edge(d.ID(), c.ID())
+			// THE ONE EDGE create_before_destroy REVERSES. Everything else
+			// about the replacement is unchanged: the same two nodes, the same
+			// provider calls, the same state writes. What differs is which of
+			// them may run first, and therefore whether there is a moment when
+			// the resource does not exist.
+			if op.Lifecycle.CreateBeforeDestroy {
+				g.Edge(c.ID(), d.ID())
+			} else {
+				g.Edge(d.ID(), c.ID())
+			}
 		}
 		for _, dependent := range deps(op.Address) {
-			addEdges(g, has, op.Address, dependent)
+			addEdges(g, has, op.Address, dependent, op.Lifecycle.CreateBeforeDestroy)
 		}
 	}
 
@@ -179,7 +231,10 @@ func BuildExecution(p *Plan, deps func(address.Address) []address.Address) (*gra
 // "forget:", so a prefix-based ID would name a node that was never Add-ed
 // and Edge would panic. Asking the node for its own ID keeps this correct
 // for every kind, including forget.
-func addEdges(g *graph.Graph[OpNode], has map[string]map[Phase]OpNode, target, dependent address.Address) {
+func addEdges(
+	g *graph.Graph[OpNode], has map[string]map[Phase]OpNode,
+	target, dependent address.Address, targetCreatesFirst bool,
+) {
 	t, d := target.String(), dependent.String()
 
 	// Build side: the target is created before its dependent is.
@@ -194,6 +249,28 @@ func addEdges(g *graph.Graph[OpNode], has map[string]map[Phase]OpNode, target, d
 			g.Edge(dd.ID(), td.ID())
 		}
 	}
+
+	if targetCreatesFirst {
+		// create_before_destroy, and this is the edge that makes it MEAN
+		// something rather than merely reorder two calls.
+		//
+		// The dependent's own work — an update pointing it at the new object,
+		// or its own creation — must finish BEFORE the old object is destroyed.
+		// Without it the old object could be torn down the instant the new one
+		// exists, while everything still refers to the old: the outage the flag
+		// was set to avoid, arriving one step later.
+		if dc, ok := has[d][PhaseCreate]; ok {
+			if td, ok := has[t][PhaseDestroy]; ok {
+				g.Edge(dc.ID(), td.ID())
+			}
+		}
+		// The "tear the dependent down before rebuilding the target" edge is
+		// deliberately NOT added here. It says the target's create waits for
+		// the dependent's destroy, which is the exact opposite of what this
+		// flag asks for — and combined with the edge above it is a cycle.
+		return
+	}
+
 	// A dependent being torn down must go before the target is rebuilt.
 	if dd, ok := has[d][PhaseDestroy]; ok {
 		if tc, ok := has[t][PhaseCreate]; ok {

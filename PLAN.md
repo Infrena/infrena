@@ -4733,59 +4733,86 @@ replacement, because this is the harder refusal to act on: without them, a reade
 looking at what reads as an ordinary edit has to work out for themselves why it
 became a replacement.
 
-## 38.2 `lifecycle.create_before_destroy` — ROADMAP, not yet built
+## 38.2 `lifecycle.create_before_destroy`
 
-**Decided 2026-09-18: we will build this, and not yet.** §53 lists "resource
-replacement strategies"; `prevent_replace` is the half that refuses one, and this is
-the half that reorders one. A replacement is destroy-then-create today, which means
-a window where the resource does not exist, and a failed create leaves nothing
-behind. `create_before_destroy: true` flips the pair for one resource.
+**SHIPPED 2026-09-18.** Reverses the two halves of a replacement, so there is no
+moment when the resource does not exist:
 
-**It is table stakes rather than a nicety.** Terraform has had it as a `lifecycle`
-meta-argument for years, alongside `prevent_destroy` and `ignore_changes`, and it is
-the documented answer to replacing anything that serves traffic. Its absence is
-discovered at the worst possible moment — during an outage somebody did not expect a
-plan to cause — so shipping without it is a gap, not a scope choice.
+```yaml
+db:
+  type: aws.rds
+  lifecycle:
+    create_before_destroy: true
+```
 
-**Five things must be decided before any code.**
+A replacement is destroy-then-create by default, which leaves a window with
+nothing there — an outage for anything serving traffic — and means a failed
+create leaves nothing at all, the old object already gone.
 
-1. **State cannot represent the window.** `state.State.Resources` is one record per
-   address, and the executor persists after EVERY node, so "old and new both real"
-   has to survive to disk rather than living in memory. A deposed list on the record
-   (Terraform's shape) or a second key; either is a `state.CurrentVersion` bump.
+**OPT-IN PER RESOURCE, and it cannot become the default.** A great many resources
+cannot exist twice: a unique name, a fixed port, a key that IS the identity. For
+those, reversing the order turns a clean replacement into a create that collides.
 
-2. **The flip is contagious, and this is the hard one.** Everything referencing the
-   old object must be moved onto the new one before the old one dies, so the
-   inversion propagates through dependents. HashiCorp's own documentation says
-   `create_before_destroy` "automatically propagates to all dependent resources" —
-   which means a flag on one resource silently changes the replacement behaviour of
-   resources that never mention it. **We should not copy that.** Either the plan
-   NAMES every resource the flag reaches, or a dependent that cannot take it is a
-   refusal. A plan that tells the truth is the entire pitch; a meta-argument with
-   invisible reach at a distance contradicts it.
+### The five questions this was roadmapped against, and how each resolved
 
-3. **Nothing knows whether two can coexist.** Unique names, ports and keys are
-   exactly why replacement is destroy-first by default. `pluginproto` has no way for
-   a type to say "two of me is legal". Options: the user's problem since they opted
-   in; a per-type declaration (a protocol bump); or attempt and let the create fail
-   on a collision. Only the second produces a good diagnostic, and it is work for
-   every provider author.
+1. **State could not represent the window.** Solved with `Deposed []*ResourceState`
+   on the record. The create phase moves the old object there BEFORE writing the
+   new one, because writing the new one is what would lose the old object's
+   `ProviderID` — the only handle anything has on a resource that is still
+   running. `omitempty`, so state written before this existed decodes unchanged
+   and no migration is needed.
 
-4. **A half-failure leaks a live object.** Today destroy-then-create fails with the
-   address absent and says so. Inverted, a successful create followed by a failed
-   destroy leaves TWO real objects and state able to name one — a leak that bills
-   monthly until somebody notices. The behaviour has to be decided up front: keep
-   the deposed record and retry its destroy next apply, or do not ship the flag.
+2. **"The flip is contagious" — THE GATING QUESTION, AND IT DID NOT ARISE.** The
+   fear was Terraform's: HashiCorp's own documentation says
+   `create_before_destroy` "automatically propagates to all dependent resources",
+   which would mean a flag on one resource silently changing what happens to
+   resources that never mention it. **Ours does not, because our planner already
+   proposes an UPDATE for the dependent** — its reference to the target's id
+   changed, so it is updated in place to follow the new object. Measured, not
+   assumed: a `fake.database` pointing at a replaced `fake.network` plans as
+   `1 to update, 1 to replace` and ends up holding the new id.
 
-5. **`executor.tracker` assumes the current order.** `applied` is keyed by address
-   and `isolation.go` says outright that last-write-wins is correct BECAUSE the
-   create phase runs second. Inverted, a completed replacement records
-   `removal: true` and the run reports the resource as removed. Small fix, invisible
-   to the suite.
+   What the flag adds is one edge: **the dependent's own work must finish before
+   the old object is destroyed.** Without it the old one could be torn down the
+   instant the new one existed, with everything still pointing at it — the outage
+   the flag was set to avoid, arriving one step later. The "tear the dependent
+   down before rebuilding the target" edge is correspondingly NOT added, because
+   it says the opposite and, with the new edge, is a cycle.
 
-`retain` composes fine (the destroy phase becomes a forget, so it is create-then-
-forget) and `prevent_replace` does not interact at all, but both should be stated
-rather than discovered.
+   **No refusal was added.** The recorded recommendation was to refuse a dependent
+   that could not take the flag rather than propagate silently; testing showed
+   there is nothing to propagate, so a refusal would have been a restriction
+   invented to match another tool's design.
+
+3. **Nothing knows whether two can coexist.** Left with the user, deliberately,
+   and no protocol change was made. A per-type declaration would be `pluginproto`
+   work for every provider author to describe a property only a handful of types
+   have; the flag is opt-in, so the person setting it is the person who knows.
+   A collision surfaces as the create failing, with the old object untouched —
+   which is the safe direction and better than the default's failure mode.
+
+4. **A half-failure leaks a live object.** Closed by `OpDestroyDeposed`. If the
+   delete fails, the deposed record SURVIVES in state — which is the whole reason
+   it is written to disk rather than held in memory — and every subsequent plan
+   proposes the cleanup until it succeeds. It is a separate operation kind rather
+   than an `OpDestroy` because the ADDRESS is not going anywhere: reporting it as
+   a destroy would tell a reader their database is about to be deleted. It takes
+   part in no dependency edges, because nothing refers to an object that left
+   configuration when its replacement was created.
+
+5. **`executor.tracker` assumed the order.** Its `applied` map is keyed by
+   address and relied on the create phase running second so its `removal: false`
+   survived. It rests on `isRemoval` now: under this flag the destroy phase is
+   not a removal of the address at all, so whichever phase lands last says
+   present.
+
+### What it does not change
+
+`retain` composes — the destroy phase becomes a forget, so it is create-then-forget.
+`prevent_replace` does not interact: it refuses the replacement before any of this
+is reached. An ordinary replacement is byte-for-byte what it was, which is pinned
+by a test, because the flag is opt-in and every resource without it must keep
+destroying first.
 
 ---
 

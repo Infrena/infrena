@@ -49,14 +49,18 @@ type trackedApply struct {
 // same goroutine, never from a worker.
 type tracker struct {
 	// applied is keyed by address string, not appended to as a slice — an
-	// OpReplace is two OpNodes at ONE address (destroy phase, then create
-	// phase), and both call recordSuccess. Keying on address, exactly like
-	// the appliedSet map this tracker replaced, is what collapses those two
-	// completions into Result.Applied's single documented entry per
-	// address; a plain slice would report a replace twice. The later write
-	// wins, which for a replace means the create phase's entry (removal:
-	// false) is what survives — correct, because a completed replace
-	// leaves the address PRESENT in state, not absent.
+	// OpReplace is two OpNodes at ONE address, and both call recordSuccess.
+	// Keying on address, exactly like the appliedSet map this tracker
+	// replaced, is what collapses those two completions into Result.Applied's
+	// single documented entry per address; a plain slice would report a
+	// replace twice.
+	//
+	// The later write wins, and a completed replace must leave the address
+	// recorded as PRESENT. That used to rest on the ORDER — the create phase
+	// ran second, so its removal:false survived — which create_before_destroy
+	// reverses. It rests on isRemoval instead now: under that flag the destroy
+	// phase is not a removal of the address at all, so whichever of the two
+	// lands last says present.
 	applied map[string]trackedApply
 	failed  map[string]error
 	skipped map[string]bool
@@ -83,8 +87,16 @@ func newTracker(emit func(Event), now func() time.Time) *tracker {
 // isRemoval reports whether node's completion means the address is gone
 // rather than present — see trackedApply.removal.
 func isRemoval(node planner.OpNode) bool {
-	return node.Kind == planner.OpForget || node.Kind == planner.OpDestroy ||
-		(node.Kind == planner.OpReplace && node.Phase == planner.PhaseDestroy)
+	if node.Kind == planner.OpReplace && node.Phase == planner.PhaseDestroy {
+		// A create_before_destroy replacement's destroy phase removes the
+		// DEPOSED object, not the address: the new one is already there and
+		// already in state. Saying otherwise would delete a live resource's
+		// record, and — because this phase runs LAST under that flag — the
+		// tracker's last-write-wins would then report a completed replacement
+		// as a removal.
+		return !node.CreateBeforeDestroy
+	}
+	return node.Kind == planner.OpForget || node.Kind == planner.OpDestroy
 }
 
 // recordSuccess records that node completed and advances the walk exactly

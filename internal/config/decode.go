@@ -692,6 +692,11 @@ func decodeLifecycle(path string, node *yaml.Node, r *ResourceDecl, ds *diag.Dia
 				r.Lifecycle.PreventReplace = b
 				r.Lifecycle.PreventReplaceSet = true
 			}
+		case "create_before_destroy":
+			if b, ok := decodeLifecycleBool(path, key, val, ds); ok {
+				r.Lifecycle.CreateBeforeDestroy = b
+				r.Lifecycle.CreateBeforeDestroySet = true
+			}
 		case "retain":
 			if b, ok := decodeLifecycleBool(path, key, val, ds); ok {
 				r.Lifecycle.Retain = b
@@ -703,7 +708,7 @@ func decodeLifecycle(path string, node *yaml.Node, r *ResourceDecl, ds *diag.Dia
 			ds.Add(diag.Diagnostic{
 				Severity: diag.SeverityError,
 				Summary:  "unknown lifecycle option " + strconv.Quote(key.Value),
-				Detail:   "Supported options are `prevent_destroy`, `prevent_replace`, `retain` and `ignore_changes`.",
+				Detail:   "Supported options are `prevent_destroy`, `prevent_replace`, `create_before_destroy`, `retain` and `ignore_changes`.",
 				Origin:   originOf(path, key),
 			})
 		}

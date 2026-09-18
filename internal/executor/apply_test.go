@@ -2,6 +2,7 @@ package executor
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"reflect"
 	"sync"
@@ -817,11 +818,20 @@ func TestApplyRespectsCancellationDuringRetryBackoff(t *testing.T) {
 // complete end to end.
 type lifecycleProvider struct {
 	resourceType string
+	// failDelete makes Delete fail, for the create_before_destroy case where
+	// the new object exists and the old one could not be removed.
+	failDelete bool
 
 	mu      sync.Mutex
 	created []string
 	deleted []string
-	order   []string
+	// deletedIDs records WHICH OBJECT was deleted, by ProviderID, where
+	// `deleted` records only the address. Under create_before_destroy both
+	// objects share one address, so the address alone cannot tell "deleted the
+	// old one" from "deleted the one we just built" — which is exactly the
+	// mistake worth catching, since both calls succeed either way.
+	deletedIDs []string
+	order      []string
 }
 
 func (p *lifecycleProvider) Name() string { return "lifecycle" }
@@ -844,8 +854,12 @@ func (p *lifecycleProvider) Update(context.Context, *resource.ResourceState, *re
 func (p *lifecycleProvider) Delete(ctx context.Context, current *resource.ResourceState) error {
 	p.mu.Lock()
 	p.deleted = append(p.deleted, current.Address.String())
+	p.deletedIDs = append(p.deletedIDs, current.ProviderID)
 	p.order = append(p.order, "delete:"+current.Address.String())
 	p.mu.Unlock()
+	if p.failDelete {
+		return errors.New("the store refused the delete")
+	}
 	return nil
 }
 func (p *lifecycleProvider) Discover(context.Context, provider.DiscoverRequest) ([]provider.DiscoveredResource, error) {
@@ -1410,5 +1424,199 @@ func TestApplyChainsCallerSuppliedOnRetryAlongsideEventRetrying(t *testing.T) {
 	}
 	if gotRetrying != 2 {
 		t.Fatalf("EventRetrying count = %d, want 2 — must fire alongside the caller's own OnRetry, not instead of it", gotRetrying)
+	}
+}
+
+// TestApplyCreateBeforeDestroyCreatesThenDeletesTheDeposedObject.
+//
+// The mirror of TestApplyReplaceDestroysThenCreatesSharingOneOperation, and the
+// three things it asserts are the three that make the flag mean anything:
+//
+//   - the CREATE happens first, so there is no moment when nothing exists;
+//   - the DELETE is handed the OLD object, not the new one — getting this wrong
+//     destroys what was just built and leaves the original running, and both
+//     calls succeed, so nothing reports it;
+//   - the address is left present, holding the new object, with no deposed
+//     record outstanding.
+func TestApplyCreateBeforeDestroyCreatesThenDeletesTheDeposedObject(t *testing.T) {
+	backend := newLockedBackend(t, "dev")
+	prov := &lifecycleProvider{resourceType: "test.thing"}
+	reg := registry.New()
+	if err := reg.Register("test", prov); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	a := addr("swap")
+	plan := planWith(planner.Operation{
+		Provider:  "test",
+		Address:   a,
+		Type:      "test.thing",
+		Kind:      planner.OpReplace,
+		Before:    map[string]value.Value{"x": value.String("old", value.SourceExplicit)},
+		After:     map[string]value.Value{"x": value.String("new", value.SourceExplicit)},
+		Lifecycle: resource.Lifecycle{CreateBeforeDestroy: true},
+	})
+	g, err := planner.BuildExecution(plan, noDeps)
+	if err != nil {
+		t.Fatalf("BuildExecution: %v", err)
+	}
+	st := state.New("proj", "dev")
+	st.Set(&resource.ResourceState{Address: a, Type: "test.thing", Provider: "lifecycle", ProviderID: "swap-old"})
+
+	result, ds := Apply(context.Background(), plan, g, st, Options{
+		Parallelism: 2, PerProvider: 2, Registry: reg, Backend: backend, Environment: "dev",
+	})
+	if ds.HasErrors() {
+		t.Fatalf("unexpected diagnostics: %+v", ds)
+	}
+	if len(result.Failed) != 0 {
+		t.Fatalf("Failed = %v", result.Failed)
+	}
+
+	prov.mu.Lock()
+	order := append([]string(nil), prov.order...)
+	deleted := append([]string(nil), prov.deleted...)
+	deletedIDs := append([]string(nil), prov.deletedIDs...)
+	prov.mu.Unlock()
+
+	wantOrder := []string{"create:swap", "delete:swap"}
+	if !reflect.DeepEqual(order, wantOrder) {
+		t.Errorf("call order = %v, want %v — the new object must exist before the old one is removed", order, wantOrder)
+	}
+	if len(deleted) != 1 {
+		t.Fatalf("Delete calls = %v, want exactly one", deleted)
+	}
+	// BY PROVIDER ID, because both objects share the address: this is what
+	// distinguishes removing the old one from removing the one just built.
+	if len(deletedIDs) != 1 || deletedIDs[0] != "swap-old" {
+		t.Errorf("deleted object = %v, want [swap-old] — deleting the NEW object would destroy what was just built and leave the original running", deletedIDs)
+	}
+
+	got, ok := st.Get(a)
+	if !ok {
+		t.Fatal("state has no entry after a create_before_destroy replace")
+	}
+	if got.ProviderID != "swap" {
+		t.Errorf("ProviderID = %q, want the new object %q", got.ProviderID, "swap")
+	}
+	if len(got.Deposed) != 0 {
+		t.Errorf("Deposed = %+v, want empty — the old object was deleted, so nothing is outstanding", got.Deposed)
+	}
+	if want := []address.Address{a}; !reflect.DeepEqual(result.Applied, want) {
+		t.Errorf("Applied = %v, want %v — a completed replacement leaves the address PRESENT", result.Applied, want)
+	}
+}
+
+// TestCreateBeforeDestroyKeepsTheOldObjectWhenItsDeleteFails.
+//
+// The failure that makes the deposed record worth writing to disk. The new
+// object exists and is recorded; the old one is still real. Without the record,
+// its ProviderID is gone the instant the create phase writes state, and a live
+// resource nothing can name bills monthly until a human notices.
+func TestCreateBeforeDestroyKeepsTheOldObjectWhenItsDeleteFails(t *testing.T) {
+	backend := newLockedBackend(t, "dev")
+	prov := &lifecycleProvider{resourceType: "test.thing", failDelete: true}
+	reg := registry.New()
+	if err := reg.Register("test", prov); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	a := addr("swap")
+	plan := planWith(planner.Operation{
+		Provider:  "test",
+		Address:   a,
+		Type:      "test.thing",
+		Kind:      planner.OpReplace,
+		After:     map[string]value.Value{"x": value.String("new", value.SourceExplicit)},
+		Lifecycle: resource.Lifecycle{CreateBeforeDestroy: true},
+	})
+	g, err := planner.BuildExecution(plan, noDeps)
+	if err != nil {
+		t.Fatalf("BuildExecution: %v", err)
+	}
+	st := state.New("proj", "dev")
+	st.Set(&resource.ResourceState{Address: a, Type: "test.thing", Provider: "lifecycle", ProviderID: "swap-old"})
+
+	Apply(context.Background(), plan, g, st, Options{
+		Parallelism: 1, PerProvider: 1, Registry: reg, Backend: backend, Environment: "dev",
+	})
+
+	got, ok := st.Get(a)
+	if !ok {
+		t.Fatal("state lost the address when the deposed delete failed")
+	}
+	if got.ProviderID != "swap" {
+		t.Errorf("ProviderID = %q, want the new object %q — it was created successfully", got.ProviderID, "swap")
+	}
+	if len(got.Deposed) != 1 {
+		t.Fatalf("Deposed = %+v, want the old object kept so something can still name it", got.Deposed)
+	}
+	if got.Deposed[0].ProviderID != "swap-old" {
+		t.Errorf("deposed ProviderID = %q, want %q", got.Deposed[0].ProviderID, "swap-old")
+	}
+}
+
+// TestADeposedObjectIsCleanedUpByTheNextPlan.
+//
+// The other half of keeping the old object when its delete failed: keeping it
+// is only useful if something later removes it. Without this, a deposed record
+// is where leaks accumulate — real, billed, and named by nothing anybody runs.
+//
+// The address itself is untouched: the resource is present, healthy and
+// described by configuration, and only a previous incarnation of it is deleted.
+func TestADeposedObjectIsCleanedUpByTheNextPlan(t *testing.T) {
+	backend := newLockedBackend(t, "dev")
+	prov := &lifecycleProvider{resourceType: "test.thing"}
+	reg := registry.New()
+	if err := reg.Register("test", prov); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	a := addr("swap")
+	plan := planWith(planner.Operation{
+		Provider: "test",
+		Address:  a,
+		Type:     "test.thing",
+		Kind:     planner.OpDestroyDeposed,
+	})
+	g, err := planner.BuildExecution(plan, noDeps)
+	if err != nil {
+		t.Fatalf("BuildExecution: %v", err)
+	}
+
+	st := state.New("proj", "dev")
+	st.Set(&resource.ResourceState{
+		Address: a, Type: "test.thing", Provider: "lifecycle", ProviderID: "swap-new",
+		Deposed: []*resource.ResourceState{
+			{Address: a, Type: "test.thing", Provider: "lifecycle", ProviderID: "swap-old"},
+		},
+	})
+
+	result, ds := Apply(context.Background(), plan, g, st, Options{
+		Parallelism: 1, PerProvider: 1, Registry: reg, Backend: backend, Environment: "dev",
+	})
+	if ds.HasErrors() {
+		t.Fatalf("unexpected diagnostics: %+v", ds)
+	}
+	if len(result.Failed) != 0 {
+		t.Fatalf("Failed = %v", result.Failed)
+	}
+
+	prov.mu.Lock()
+	deletedIDs := append([]string(nil), prov.deletedIDs...)
+	prov.mu.Unlock()
+	if len(deletedIDs) != 1 || deletedIDs[0] != "swap-old" {
+		t.Errorf("deleted object = %v, want [swap-old] — the LIVE resource must not be touched", deletedIDs)
+	}
+
+	got, ok := st.Get(a)
+	if !ok {
+		t.Fatal("cleaning up a deposed object removed the live resource's state entry")
+	}
+	if got.ProviderID != "swap-new" {
+		t.Errorf("ProviderID = %q, want the live object %q", got.ProviderID, "swap-new")
+	}
+	if len(got.Deposed) != 0 {
+		t.Errorf("Deposed = %+v, want empty once the old object is gone", got.Deposed)
 	}
 }

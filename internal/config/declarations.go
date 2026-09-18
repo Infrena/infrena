@@ -87,7 +87,12 @@ type LifecycleDecl struct {
 	// direction that REFUSES a destroy the user asked for.
 	PreventDestroySet bool
 	PreventReplaceSet bool
-	RetainSet         bool
+	// CreateBeforeDestroy reverses a replacement's two halves (§38.2).
+	CreateBeforeDestroy bool
+	// CreateBeforeDestroySet distinguishes "written false" from "not written",
+	// so a provider default can supply it and an explicit false can refuse one.
+	CreateBeforeDestroySet bool
+	RetainSet              bool
 
 	// IgnoreChanges names attributes whose drift this resource does not want reverted,
 	// as WRITTEN — aliases and casing are resolved against the schema later, at the
