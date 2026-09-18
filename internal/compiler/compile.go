@@ -202,6 +202,12 @@ func Compile(files []config.File, reg *registry.Registry, opts Options) (Resolve
 	}
 
 	cfg, bindDiags := bindReferences(expansion, opts, reg, table)
+	cfg.Protections = Protections{
+		RequireApproval:     chain.RequireApproval,
+		RequireApprovalFrom: chain.RequireApprovalFrom,
+		PreventDestroy:      chain.PreventDestroy,
+		PreventDestroyFrom:  chain.PreventDestroyFrom,
+	}
 	ds.Extend(bindDiags)
 	if bindDiags.HasErrors() {
 		return cfg, ds

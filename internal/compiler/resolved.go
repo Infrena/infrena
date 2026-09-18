@@ -21,6 +21,27 @@ type ResolvedConfig struct {
 	Project     string
 	Environment string
 	Resources   map[string]*resource.ResolvedResource // keyed by Address.String()
+
+	// Protections are §38's environment protections, already resolved down the
+	// `extends` chain. Carried on the compiled result so that `apply` reads the
+	// same answer the planner does — `destroy` never compiles at all and takes
+	// them from the chain directly, which is the same resolution because
+	// environments.Resolve is the one place that does it.
+	Protections Protections
+}
+
+// Protections is what an environment declares about how carefully it must be
+// handled (§38).
+//
+// The `...From` fields name the environment each was DECLARED on, which is not
+// always the one being applied: protections inherit down `extends`, and a
+// refusal that says "production prevents this" to somebody running
+// `apply prod-eu` sends them to the wrong file to change it.
+type Protections struct {
+	RequireApproval     bool
+	RequireApprovalFrom string
+	PreventDestroy      bool
+	PreventDestroyFrom  string
 }
 
 // Options carries what compilation needs beyond the files themselves.

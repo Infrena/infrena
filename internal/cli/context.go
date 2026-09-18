@@ -15,6 +15,7 @@ import (
 	"github.com/infrena/infrena/internal/compiler"
 	"github.com/infrena/infrena/internal/config"
 	"github.com/infrena/infrena/internal/diag"
+	"github.com/infrena/infrena/internal/environments"
 	"github.com/infrena/infrena/internal/pluginhost"
 	"github.com/infrena/infrena/internal/providers"
 	"github.com/infrena/infrena/internal/registry"
@@ -312,6 +313,47 @@ func refuseUnresolvedInstances(table providers.Table, environment string, usesDe
 		}
 	}
 	return ds
+}
+
+// environmentProtections resolves §38's protections for an environment, for the
+// commands that never compile.
+//
+// `destroy` is the reason it exists. It synthesises an EMPTY configuration —
+// that is its premise, that nothing is configured — so it never reaches the
+// compiler and would otherwise carry no protections at all, which is precisely
+// backwards: the command that destroys everything in an environment is the one
+// that most needs to know the environment refuses to be destroyed.
+//
+// Resolution goes through environments.Resolve, the same call the compiler
+// makes, so a protection means one thing regardless of which command asked.
+//
+// No configuration at all yields no protections, and that is correct rather
+// than lenient: a protection is something an environment DECLARES, and an
+// environment whose files are gone has declared nothing. `destroy` is
+// explicitly allowed to run against a project whose configuration was deleted
+// (that is half of what it is for), so refusing there would make a wiped
+// project permanently undestroyable.
+func environmentProtections(opts *GlobalOptions, environment string) compiler.Protections {
+	files, err := config.Load(opts.Dir)
+	if err != nil {
+		return compiler.Protections{}
+	}
+	decl, decodeDS := config.Decode(files)
+	if decodeDS.HasErrors() {
+		// Reported by the caller's own decode. A protection read out of a
+		// document that did not parse is not one to act on.
+		return compiler.Protections{}
+	}
+	chain, chainDS := environments.Resolve(decl.Environments, environment)
+	if chainDS.HasErrors() {
+		return compiler.Protections{}
+	}
+	return compiler.Protections{
+		RequireApproval:     chain.RequireApproval,
+		RequireApprovalFrom: chain.RequireApprovalFrom,
+		PreventDestroy:      chain.PreventDestroy,
+		PreventDestroyFrom:  chain.PreventDestroyFrom,
+	}
 }
 
 // backendFor opens the state backend a project asks for, and the closer that

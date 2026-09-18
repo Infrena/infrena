@@ -226,7 +226,7 @@ func operationFor(
 	}
 
 	if !inConfig {
-		op, removalDS := removalOperation(addr, rs, actual)
+		op, removalDS := removalOperation(addr, rs, actual, cfg.Protections, cfg.Environment)
 		ds.Extend(removalDS)
 		return op, ds
 	}
@@ -349,7 +349,10 @@ func operationFor(
 // up already treats the observation as the source of truth for the same
 // reason — Before must not show the plan a value the provider has already
 // moved past.
-func removalOperation(addr address.Address, rs *resource.ResourceState, actual *resource.ResourceState) (*Operation, diag.Diagnostics) {
+func removalOperation(
+	addr address.Address, rs *resource.ResourceState, actual *resource.ResourceState,
+	protections compiler.Protections, environment string,
+) (*Operation, diag.Diagnostics) {
 	var ds diag.Diagnostics
 	if rs == nil {
 		return nil, ds
@@ -389,6 +392,40 @@ func removalOperation(addr address.Address, rs *resource.ResourceState, actual *
 			Before:   before,
 			Reasons:  []ChangeReason{{Note: "retained; removed from state without calling the provider"}},
 		}, ds
+	}
+
+	if protections.PreventDestroy {
+		// THE ENVIRONMENT'S prevent_destroy, §38, and it means the same thing
+		// its resource-level namesake does: you may not destroy something by
+		// deleting it from configuration. It deliberately does NOT refuse a
+		// REPLACE, even though a replace destroys and recreates — refusing
+		// those would make any immutable attribute unchangeable in a protected
+		// environment, which is a far larger restriction than anyone asking for
+		// destroy protection has in mind, and it would be discovered the first
+		// time production needed a real change.
+		where := "environment " + strconv.Quote(environment)
+		if protections.PreventDestroyFrom != "" && protections.PreventDestroyFrom != environment {
+			where += " (inherited from " + strconv.Quote(protections.PreventDestroyFrom) + ")"
+		}
+		ds.Add(diag.Diagnostic{
+			Severity: diag.SeverityError,
+			Summary:  addr.String() + " would be destroyed, and " + where + " sets `prevent_destroy`",
+			Detail: "It is recorded in state and is no longer in configuration, so applying this would " +
+				"destroy it. Refused at plan time rather than at apply time so the refusal arrives " +
+				"before the approval, not after.",
+			// THE ENVIRONMENT-LEVEL FIX LEADS, because it is the only one that
+			// is right whichever command arrived here. `apply` reaches this by a
+			// resource being deleted from configuration, where "put it back" is
+			// the likely fix; `destroy` reaches it with an empty configuration by
+			// premise, where "put it back" is advice about a state of affairs
+			// that does not exist. Ordering them this way means neither reader
+			// is told to do something impossible first.
+			Action: "Clear `prevent_destroy` on " + where + " if you really mean to destroy things " +
+				"there. If instead " + addr.String() + " left configuration by accident, put it back; " +
+				"or set lifecycle.retain on it to drop it from state without destroying it.",
+			Related: []address.Address{addr},
+		})
+		return nil, ds
 	}
 
 	if rs.Lifecycle.PreventDestroy {

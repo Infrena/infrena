@@ -4400,9 +4400,48 @@ this section wrote `type: production` and let the protections follow from it.
 gone, and a protection you can read on the environment beats one inferred from
 what it is called. `prod-eu` protects itself by saying so.
 
-Neither key is implemented yet. `lifecycle.prevent_destroy` on a RESOURCE is
-built and works; this is its environment-wide sibling, and `require_approval`
-has no implementation at all.
+**Both keys SHIPPED 2026-09-18.** What each means, and the decisions that are not
+obvious from the YAML:
+
+**`require_approval: true` makes `--auto-approve` refuse, with exit 77.** That is the
+whole mechanism: a protection a flag can switch off is not one, because the flag is a
+line in the pipeline that was going to run anyway. Two approvals are accepted, and both
+involve a person — somebody confirming at a terminal, or a SAVED PLAN applied with
+`--plan`. The second is stronger than typing "yes", not weaker: it is applied without
+recompiling and refused outright if state moved since it was made, so what runs is what
+was read. `apply --plan` therefore bypasses the gate by construction rather than by a
+special case, and that is the route CI takes.
+
+**`--approved-by` is a record, not a permission.** It takes free text — a pull request
+URL, a name, a ticket — and writes it to the run's report line. It permits nothing:
+infrena cannot tell a real pull-request URL from an invented one, and a protection
+resting on an unverifiable string is a protection in name. Verified approvals need to
+read the forge, which is one forge at a time and is the platform's job (docs/open-core.md).
+What core can honestly do is require that an approval was obtained and record what was
+claimed.
+
+**`prevent_destroy: true` refuses a destroy at PLAN time**, the same timing its
+resource-level namesake uses and for the reason that one gives: the refusal must arrive
+before the approval, not after. It covers `infrena destroy` and a resource removed from
+configuration. **It deliberately does NOT refuse a REPLACE.** A replace destroys and
+recreates, so refusing one is defensible — and it would make any ForceNew attribute
+unchangeable in a protected environment, which is a far larger restriction than anyone
+asking for destroy protection has in mind, discovered the first time production needed a
+real change.
+
+**Both inherit down `extends`, nearest declaration winning**, so a child inherits by
+saying nothing and drops a guard by writing `false`. Inheriting is the safe direction:
+the mistake nobody can see is a child that silently lost its parent's protection. The
+chain records WHICH environment declared each, because a refusal that says "production
+prevents this" to somebody running `apply prod-eu` sends them to the wrong file.
+
+**The keys are recognised before the variable-override fallback**, and that ordering is
+the whole risk: every unrecognised key in an `environments:` block becomes a variable, so
+`require_approval: true` falling through would silently declare a VARIABLE of that name
+and protect nothing — precisely what `type:` did for seven milestones. Setting either
+twice is refused rather than last-wins, because an environment can be declared in both
+`infra.yml` and `environments/<name>.yml`, and a silent last-wins resolving to `false`
+would disable a guard its author believes is on.
 
 Desired behavior:
 

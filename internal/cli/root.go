@@ -60,7 +60,10 @@ type GlobalOptions struct {
 	Output      string
 	Parallelism int
 	AutoApprove bool
-	Dir         string
+	// ApprovedBy records who or what approved this run, for the report. It is
+	// annotation, NOT an approval: see requireApprovalRefusal.
+	ApprovedBy string
+	Dir        string
 	// PluginDirs is --plugin-dir: where to look for provider plugin binaries,
 	// before every other location. Repeatable, highest precedence, so a plugin
 	// author can point at a freshly built binary without installing it.
@@ -89,6 +92,8 @@ func NewRootCommand() *cobra.Command {
 	f.StringVar(&opts.Output, "output", "", "write machine-readable output to this path")
 	f.IntVar(&opts.Parallelism, "parallelism", 10, "maximum concurrent operations")
 	f.BoolVar(&opts.AutoApprove, "auto-approve", false, "skip interactive approval")
+	f.StringVar(&opts.ApprovedBy, "approved-by", "",
+		"record who or what approved this run (a pull request URL, a name) in the report")
 	f.StringVar(&opts.Dir, "chdir", ".", "run as if infra had been started in this directory")
 
 	// One place, so a command added later inherits the check rather than

@@ -202,6 +202,23 @@ type EnvironmentDecl struct {
 	// undoing map iteration. Sorting once, here, is what stops the twelfth.
 	Overrides []OverrideDecl
 	Origin    value.Origin
+
+	// RequireApproval and PreventDestroy are §38's production protections,
+	// declared on the environment rather than implied by its name (§13).
+	//
+	// The `...Set` fields exist for the reason the resource lifecycle's do: an
+	// unset protection and one explicitly written `false` are different things
+	// once inheritance is involved. A child environment that extends a protected
+	// parent inherits the protection when it says nothing, and a child that
+	// writes `prevent_destroy: false` has deliberately dropped it. Without the
+	// distinction those two are the same zero value and the deliberate one
+	// cannot be expressed.
+	RequireApproval       bool
+	RequireApprovalSet    bool
+	RequireApprovalOrigin value.Origin
+	PreventDestroy        bool
+	PreventDestroySet     bool
+	PreventDestroyOrigin  value.Origin
 }
 
 // ModuleLoadDecl is one entry in `modules:` (PLAN.md §11.1).

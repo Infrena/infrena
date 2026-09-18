@@ -70,6 +70,19 @@ func Format(v value.Value) string {
 type Writer struct {
 	mu sync.Mutex
 	w  io.Writer
+	// approvedBy is stamped onto the result line, so the value is set once for
+	// a run rather than carried to each of finishApply's ten call sites — where
+	// the one that forgot it would be the failure path, and a run that failed
+	// after somebody approved it is exactly the one an audit asks about.
+	approvedBy string
+}
+
+// SetApprovedBy records who or what approved this run. See ApplyResult.ApprovedBy:
+// it is a record, not a permission.
+func (w *Writer) SetApprovedBy(s string) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.approvedBy = s
 }
 
 // NewWriter wraps w. Nothing here opens or closes files — that is the
@@ -249,17 +262,39 @@ func (w *Writer) WriteDiagnostic(d Diagnostic) error {
 // failure, and a report consumer must be able to tell the two apart from
 // this field alone.
 type ApplyResult struct {
-	Type      string            `json:"type"`
-	Applied   []string          `json:"applied,omitempty"`
-	Forgotten []string          `json:"forgotten,omitempty"`
-	Failed    map[string]string `json:"failed,omitempty"`
-	Skipped   []string          `json:"skipped,omitempty"`
-	Error     string            `json:"error,omitempty"`
+	Type string `json:"type"`
+	// ApprovedBy is what `--approved-by` recorded: who or what approved this
+	// run, as the operator spelled it — a pull request URL, a name, a change
+	// ticket. Free text, written verbatim, and absent when the flag was not
+	// passed.
+	//
+	// IT IS A RECORD, NOT A PERMISSION. infrena cannot tell a real pull-request
+	// URL from an invented one, so nothing is allowed on the strength of it —
+	// §38's `require_approval` is satisfied by a person confirming or by a
+	// saved plan, never by this string. What it buys is that a run can say
+	// under whose authority it happened, which is the part of an audit trail
+	// that belongs in the free CLI.
+	//
+	// NO VERSION BUMP. Versions 2 and 3 marked new LINE KINDS, which a consumer
+	// could not have anticipated; an optional field on a line it already
+	// decodes is ignored by any consumer that does not know it and read by one
+	// that does.
+	ApprovedBy string            `json:"approved_by,omitempty"`
+	Applied    []string          `json:"applied,omitempty"`
+	Forgotten  []string          `json:"forgotten,omitempty"`
+	Failed     map[string]string `json:"failed,omitempty"`
+	Skipped    []string          `json:"skipped,omitempty"`
+	Error      string            `json:"error,omitempty"`
 }
 
 // WriteApplyResult writes apply's final line.
 func (w *Writer) WriteApplyResult(r ApplyResult) error {
 	r.Type = "result"
+	if r.ApprovedBy == "" {
+		w.mu.Lock()
+		r.ApprovedBy = w.approvedBy
+		w.mu.Unlock()
+	}
 	return w.writeLine(r)
 }
 

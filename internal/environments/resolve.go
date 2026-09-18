@@ -40,6 +40,25 @@ type Chain struct {
 	Name     string
 	Selected bool
 	Layers   []Layer
+
+	// RequireApproval and PreventDestroy are §38's protections, resolved down
+	// the chain: the NEAREST declaration wins, so an environment inherits its
+	// parent's protection by saying nothing and drops it by writing `false`.
+	//
+	// Inheriting is the safe direction. The mistake nobody can see is a child
+	// that silently lost its parent's guard; a child that gives it up says so
+	// in its own file, where a reviewer reads it.
+	//
+	// Resolved HERE rather than by each caller, because there are several
+	// callers (apply, destroy, the planner) and a protection computed three
+	// times is a protection that can disagree with itself twice.
+	RequireApproval bool
+	PreventDestroy  bool
+	// ProtectedBy names the environment each protection was declared on, which
+	// is not always Name — a diagnostic that says "production prevents this"
+	// when the user ran `apply prod-eu` sends them to the wrong file.
+	RequireApprovalFrom string
+	PreventDestroyFrom  string
 }
 
 // Resolve walks name's extends chain.
@@ -125,7 +144,18 @@ func Resolve(decls []config.EnvironmentDecl, name string) (Chain, diag.Diagnosti
 		layers = append(layers, Layer{Name: d.Name, Overrides: d.Overrides, Scope: scope, Origin: d.Origin})
 	}
 
-	return Chain{Name: name, Selected: true, Layers: layers}, ds
+	chain := Chain{Name: name, Selected: true, Layers: layers}
+	// order is leaf-first, so the first declaration met walking it is the
+	// nearest one and wins.
+	for _, d := range order {
+		if d.RequireApprovalSet && chain.RequireApprovalFrom == "" {
+			chain.RequireApproval, chain.RequireApprovalFrom = d.RequireApproval, d.Name
+		}
+		if d.PreventDestroySet && chain.PreventDestroyFrom == "" {
+			chain.PreventDestroy, chain.PreventDestroyFrom = d.PreventDestroy, d.Name
+		}
+	}
+	return chain, ds
 }
 
 // cycleDiagnostic renders a cycle in participation order with the wrap

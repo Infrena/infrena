@@ -40,6 +40,10 @@ func openReport(opts *GlobalOptions, command, environment string, errOut io.Writ
 		return nil, func() {}, fmt.Errorf("opening --output %q: %w", opts.Output, err)
 	}
 	rw := report.NewWriter(f)
+	// Set once for the run, before anything can fail: a run that failed AFTER
+	// somebody approved it is exactly the one an audit asks about, so the
+	// record must not depend on reaching a success path.
+	rw.SetApprovedBy(opts.ApprovedBy)
 	if err := rw.Meta(command, environment, time.Now()); err != nil {
 		f.Close()
 		return nil, func() {}, fmt.Errorf("writing --output meta line: %w", err)

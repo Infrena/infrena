@@ -81,7 +81,15 @@ func newDestroyCommand(opts *GlobalOptions) *cobra.Command {
 			// state falls into planner.Compute's "in state, not in
 			// config" row, which is already Destroy/Forget/prevent_destroy
 			// (spec §11) — see this command's doc comment above.
-			emptyCfg := compiler.ResolvedConfig{Project: st0.Project, Environment: environment}
+			// PROTECTIONS ARE CARRIED ONTO THE EMPTY CONFIGURATION, which is
+			// what makes `prevent_destroy` mean anything here. Every resource in
+			// state falls into planner.Compute's "in state, not in config" row,
+			// so a protected environment refuses each of them at plan time —
+			// before the confirmation prompt, not after it.
+			protections := environmentProtections(opts, environment)
+			emptyCfg := compiler.ResolvedConfig{
+				Project: st0.Project, Environment: environment, Protections: protections,
+			}
 
 			// Unlocked preview — identical in spirit to `infra plan`.
 			p, _, _, err := computePlan(cmd.Context(), cmd, backend, reg, emptyCfg, environment, opts, ro)
@@ -95,6 +103,14 @@ func newDestroyCommand(opts *GlobalOptions) *cobra.Command {
 				return finishApply(cmd.ErrOrStderr(), rw, report.ApplyResult{}, nil)
 			}
 
+			// `require_approval` gates destroy exactly as it gates apply, and
+			// with more reason: destroy is the more dangerous of the two. There
+			// is no `--plan` escape here — destroy takes no saved plan — so on a
+			// protected environment a person must type the environment name.
+			if err := requireApprovalRefusal(opts, protections, environment, false); err != nil {
+				return finishApply(cmd.ErrOrStderr(), rw, report.ApplyResult{}, err)
+			}
+
 			if !opts.AutoApprove {
 				// The identical rule apply applies, and for the identical
 				// reason: a higher confirmation bar does not make the answer
@@ -103,7 +119,11 @@ func newDestroyCommand(opts *GlobalOptions) *cobra.Command {
 				// and unlocked — and so does the end-of-input case confirm
 				// reports below, which is refused on the same terms.
 				if approvalUnobtainable(opts) {
-					return finishApply(cmd.ErrOrStderr(), rw, report.ApplyResult{}, errNoApproval)
+					err := errNoApproval
+					if protections.RequireApproval {
+						err = &noApprovalError{msg: requireApprovalMessage(protections, environment, false)}
+					}
+					return finishApply(cmd.ErrOrStderr(), rw, report.ApplyResult{}, err)
 				}
 
 				prompt := fmt.Sprintf("\nDestroying environment %q will delete every resource infra "+

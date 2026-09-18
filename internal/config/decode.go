@@ -743,11 +743,20 @@ func decodeIgnoreChanges(path string, key, node *yaml.Node, r *ResourceDecl, ds 
 // disables a destruction guard the user believed they had enabled. A quoted
 // "true" is a string and is rejected loudly rather than silently accepted.
 func decodeLifecycleBool(path string, key, val *yaml.Node, ds *diag.Diagnostics) (bool, bool) {
+	return decodeStrictBool(path, "lifecycle option", key, val, ds)
+}
+
+// decodeStrictBool is decodeLifecycleBool's general form: `what` names the kind
+// of setting so an environment protection does not report itself as a lifecycle
+// option. The hazard it guards is described above and is the same either way —
+// arguably more so here, since the settings it reads are the ones that stop
+// production being destroyed.
+func decodeStrictBool(path, what string, key, val *yaml.Node, ds *diag.Diagnostics) (bool, bool) {
 	var b bool
 	if err := val.Decode(&b); err != nil {
 		ds.Add(diag.Diagnostic{
 			Severity: diag.SeverityError,
-			Summary:  "lifecycle option " + strconv.Quote(key.Value) + " must be true or false",
+			Summary:  what + " " + strconv.Quote(key.Value) + " must be true or false",
 			Detail:   "Got " + strconv.Quote(val.Value) + ", which is not a boolean. Note a quoted value is a string.",
 			Action:   "Write " + key.Value + ": true (unquoted).",
 			Origin:   originOf(path, val),
@@ -1503,6 +1512,46 @@ func decodeEnvironmentBody(path, name string, body *yaml.Node, out *ProjectDecl,
 			}
 			for j := 0; j+1 < len(val.Content); j += 2 {
 				addOverride(path, env, val.Content[j], val.Content[j+1], ds)
+			}
+
+		case "require_approval", "prevent_destroy":
+			// PLAN.md §38. RECOGNISED HERE RATHER THAN FALLING THROUGH, which is
+			// the whole reason this case exists: the `default` arm below turns any
+			// unrecognised key into a variable override, so without this
+			// `require_approval: true` would silently declare a VARIABLE called
+			// "require_approval" and protect nothing at all. That is exactly what
+			// `type:` did for seven milestones, and it is why `type:` is refused
+			// three cases down rather than ignored. A protection that silently
+			// does nothing is worse than no protection, because it is believed.
+			b, ok := decodeStrictBool(path, "environment protection", key, val, ds)
+			if !ok {
+				continue
+			}
+			set, origin := env.RequireApprovalSet, env.RequireApprovalOrigin
+			if key.Value == "prevent_destroy" {
+				set, origin = env.PreventDestroySet, env.PreventDestroyOrigin
+			}
+			if set {
+				// Refused rather than last-wins, as `extends` is. An environment
+				// can be declared in both infra.yml and environments/<name>.yml
+				// and the two MERGE, so a second assignment is reachable without
+				// anyone writing the key twice in one file — and a silent
+				// last-wins that resolved to false would disable a guard its
+				// author believes is on.
+				ds.Add(diag.Diagnostic{
+					Severity: diag.SeverityError,
+					Summary:  "`" + key.Value + "` is set more than once on environment " + strconv.Quote(name),
+					Detail: "The last assignment would silently win, and if it is `false` the protection its " +
+						"author believes is on would be off. It is also set at " + describeOrigin(origin) + ".",
+					Action: "Remove one of the two assignments.",
+					Origin: keyOrigin,
+				})
+				continue
+			}
+			if key.Value == "require_approval" {
+				env.RequireApproval, env.RequireApprovalSet, env.RequireApprovalOrigin = b, true, keyOrigin
+			} else {
+				env.PreventDestroy, env.PreventDestroySet, env.PreventDestroyOrigin = b, true, keyOrigin
 			}
 
 		case "type":

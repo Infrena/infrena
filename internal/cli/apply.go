@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"math/rand"
+	"strconv"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -48,6 +49,91 @@ var errNoApproval = errors.New(
 		"is reading stdout, and with stdin at end of input nothing is there to type.\n" +
 		"Pass --auto-approve to approve without being asked, or review a saved plan " +
 		"(`infrena plan --output FILE`) and apply it with --plan")
+
+// requireApprovalRefusal reports why an environment declaring `require_approval`
+// will not accept this run's approval, or nil when it will (§38).
+//
+// **`--auto-approve` IS REFUSED, AND THAT IS THE ENTIRE POINT.** A protection
+// that a flag can switch off protects nothing, because the flag is one line in
+// the pipeline that was going to run anyway. So on a protected environment
+// there are exactly two ways through, and both involve a person:
+//
+//   - somebody confirms at a terminal, or
+//   - somebody reviewed a plan and it is applied with `--plan`.
+//
+// **A saved plan is a stronger approval than typing "yes", not a weaker one.**
+// It is the artifact that was reviewed, applied without recompiling, and
+// refused outright if state moved since — so what runs is what was read. That
+// is why `apply --plan` does not come through here at all.
+//
+// `--approved-by` is deliberately NOT a third way. It cannot be verified —
+// infrena cannot tell a real pull-request URL from an invented one — and a
+// protection resting on an unverifiable string is a protection in name. It is
+// recorded in the report because saying under whose authority a run happened is
+// worth doing; it is not what permits the run.
+func requireApprovalRefusal(opts *GlobalOptions, p compiler.Protections, environment string, savedPlanAccepted bool) error {
+	if !p.RequireApproval || !opts.AutoApprove {
+		return nil
+	}
+	return &noApprovalError{msg: requireApprovalMessage(p, environment, savedPlanAccepted)}
+}
+
+// noApprovalError is an errNoApproval that carries its own wording.
+//
+// Unwrap rather than %w: root.go decides the exit code with
+// errors.Is(err, errNoApproval), so this has to BE that error for 77's
+// purposes, while saying something errNoApproval cannot say — which of the
+// approvals this environment refuses, and why. %w would have printed both
+// messages, and errNoApproval's names `--auto-approve` as the way out.
+type noApprovalError struct{ msg string }
+
+func (e *noApprovalError) Error() string { return e.msg }
+func (e *noApprovalError) Unwrap() error { return errNoApproval }
+
+// requireApprovalMessage is the wording for an environment that will not take
+// this run's approval. Shared by the --auto-approve refusal and by the
+// "nobody could answer" path, because on a protected environment those two are
+// the same problem: the advice errNoApproval gives by default — pass
+// --auto-approve — is the one thing that cannot work here, and a refusal whose
+// suggested action is refused in turn is worse than no suggestion (§44).
+// savedPlanAccepted says whether the COMMAND being refused can take a saved
+// plan. `apply` can; `destroy` cannot, and offering it `--plan` would name an
+// escape that does not exist — a suggested action the reader cannot take, which
+// §44 treats as worse than none.
+func requireApprovalMessage(p compiler.Protections, environment string, savedPlanAccepted bool) string {
+	where := "environment " + strconv.Quote(environment)
+	if p.RequireApprovalFrom != "" && p.RequireApprovalFrom != environment {
+		// Inherited. Naming the environment being applied would send the reader
+		// to a file that does not contain the setting.
+		where += " (inherited from " + strconv.Quote(p.RequireApprovalFrom) + ")"
+	}
+	if !savedPlanAccepted {
+		return fmt.Sprintf(
+			"%s sets `require_approval`, so --auto-approve is refused: a protection a flag can "+
+				"switch off is not one.\n"+
+				"Run this without --auto-approve and confirm at the terminal. There is no saved-plan "+
+				"route here, because destroy takes no plan — which is the point: an environment that "+
+				"asks to be approved before it changes is not one a pipeline should be able to empty "+
+				"unattended.\n"+
+				"To tear it down from CI, remove its resources from configuration and apply that: the "+
+				"change is then reviewable, and `infrena apply %s --plan plan.json --auto-approve` "+
+				"carries the approval.",
+			where, environment)
+	}
+	return fmt.Sprintf(
+		"%s sets `require_approval`, so --auto-approve is refused: a protection a flag can "+
+			"switch off is not one.\n"+
+			"Approve it one of these two ways, both of which involve a person:\n"+
+			"  - run this without --auto-approve and confirm at the terminal\n"+
+			"  - review a plan and apply that:\n"+
+			"      infrena plan %s --output plan.json\n"+
+			"      infrena apply %s --plan plan.json --auto-approve\n"+
+			"The second is what CI wants, and --auto-approve is accepted there because the plan "+
+			"is the approval: it is applied without recompiling and is refused outright if state "+
+			"moved since it was made, so what runs is what was reviewed. Add --approved-by to "+
+			"record who reviewed it.",
+		where, environment, environment)
+}
 
 // approvalUnobtainable reports whether asking for approval would be pointless
 // because nobody could see the question. --output silences stdout for the
@@ -204,13 +290,28 @@ func newApplyCommand(opts *GlobalOptions) *cobra.Command {
 				return finishApply(cmd.ErrOrStderr(), rw, report.ApplyResult{}, nil)
 			}
 
+			// BEFORE the --auto-approve branch, because it is that flag this
+			// refuses. Also before withLockedEnvironment, on the same terms as
+			// everything else here: a run that cannot be approved leaves the
+			// environment exactly as it found it.
+			if err := requireApprovalRefusal(opts, cfg.Protections, environment, true); err != nil {
+				return finishApply(cmd.ErrOrStderr(), rw, report.ApplyResult{}, err)
+			}
+
 			if !opts.AutoApprove {
 				// BEFORE withLockedEnvironment, and before anything is asked
 				// of a provider: a run that cannot be approved must leave the
 				// environment exactly as it found it, unlocked and unchanged,
 				// rather than discovering the problem at the prompt.
 				if approvalUnobtainable(opts) {
-					return finishApply(cmd.ErrOrStderr(), rw, report.ApplyResult{}, errNoApproval)
+					// On a protected environment the default wording is wrong
+					// rather than merely unhelpful: it offers --auto-approve,
+					// which requireApprovalRefusal above would then refuse.
+					err := errNoApproval
+					if cfg.Protections.RequireApproval {
+						err = &noApprovalError{msg: requireApprovalMessage(cfg.Protections, environment, true)}
+					}
+					return finishApply(cmd.ErrOrStderr(), rw, report.ApplyResult{}, err)
 				}
 
 				// A teardown apply deletes everything in the environment, so it
