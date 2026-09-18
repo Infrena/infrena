@@ -3195,12 +3195,42 @@ reader who goes looking finds nothing. `AGENT.md` has the same problem in the ot
 it lives in the reference plugin's repository, and §31.1 above refers to it as though it were
 here. A pointer to a document nobody can open is worse than no pointer.
 
-**PLAN.md itself is the biggest single question**, and it is deliberately left open here rather
-than answered. It is the design record, it is enormous, and it is written in the vocabulary of
-the people building it — milestones, amendments, rulings, "withdrawn", "the fake-plugin
-session". It is also where every decision's REASONING lives, which is the thing most worth
-keeping. Whether it ships as-is, ships rewritten, or stays behind as a working document is a
-decision for the day, and one that should be made on purpose.
+**PLAN.md does not ship.** Ruled by the owner, 2026-09-17: it moves into the notes vault and is
+kept there. It is the design record rather than product documentation — enormous, and written in
+the vocabulary of the people building it. Every decision's reasoning stays available to whoever
+needs it; none of it is a thing a user of the tool should have to read past. What the public
+repository documents is how to USE infrena and how to EXTEND it, which is README, `docs/` and the
+provider guide.
+
+**Tags, assets and releases are all destroyed, and one fresh release is cut at the current
+version — here and in every plugin repository.** Ruled by the owner, 2026-09-17, which settles
+the question the previous section left open: the release history does not survive and is not
+re-tagged commit by commit. v0.11.1 is republished against the new single commit, and each
+plugin republishes at whatever version it is on. Consequences that follow from that, rather than
+needing separate decisions:
+
+- The three consumer repositories require infrena by VERSION, so they keep working untouched as
+  long as the fresh tag carries the same number. It must.
+- `plugins.lock` in any existing project records a CHECKSUM of a release asset. Rebuilt assets
+  are not byte-identical, so a lockfile written before the rebuild will not verify against one
+  written after. Nobody has such a project — infrena is pre-release and nobody but the owner has
+  used it — which is precisely why doing this now costs nothing and doing it later would not.
+- Anyone who downloaded a binary keeps it; only the source history behind it is gone.
+
+**`AGENT.md` is not moved, it is replaced.** Ruled by the owner, 2026-09-17: AI use is documented
+as a policy rather than as a guide. Measured before acting, because the instruction assumed one
+file and there are two: `infrena-provider-fake` carries BOTH a 699-line `AGENT.md` and a
+2,346-line `docs/writing-a-provider.md`, covering the same subject at different depths. They have
+already drifted — the same wrong sentence had to be corrected in both on 2026-09-17. So:
+
+- `docs/writing-a-provider.md` is the provider guide and stays. It already covers everything
+  `AGENT.md` does, plus requirements, cancellation and more depth.
+- `AGENT.md`'s one unique section, its closing "checklist before calling a plugin done", folds
+  into that guide. The rest is duplication and goes.
+- `docs/using-ai.md` is the new, separate document, and it is SHORT. It says AI may be used with
+  no disclosure requirement, and that what does not change is authorship, understanding and the
+  CLA's representation about your own original work. Written 2026-09-17 and already in this
+  repository; it did not need to wait for the day.
 
 #### What does NOT flip, checked 2026-09-17
 

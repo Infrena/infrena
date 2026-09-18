@@ -48,6 +48,14 @@ Plain English, present tense, and explain **why** rather than what — the diff 
 what. No em-dashes. If a commit fixes something subtle, the message is the right place to
 record how it was found.
 
+## Using AI
+
+You can. There is no disclosure requirement and no separate review queue — a good patch is a
+good patch. What does not change is that you are the author of what you submit and are expected
+to understand it, and that the CLA's representation about your own original work still applies.
+[docs/using-ai.md](docs/using-ai.md) says the rest, including the one habit this project has
+learned to insist on: break something on purpose and watch the test fail.
+
 ## Why there is a CLA
 
 Most projects this size use a lightweight sign-off instead. Infrena asks for a
