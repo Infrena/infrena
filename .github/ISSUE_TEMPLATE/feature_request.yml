@@ -1,0 +1,28 @@
+name: Feature request
+description: Something infrena should do and does not
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do
+      description: |
+        The problem, not the solution. What does your project need that you cannot
+        express today, and what do you do instead?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you have in mind
+      description: If you have a shape in mind, sketch it. Configuration is welcome.
+      render: yaml
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What you considered and rejected
+      description: |
+        Optional, and genuinely useful. Knowing which shapes do not work is half
+        the design.

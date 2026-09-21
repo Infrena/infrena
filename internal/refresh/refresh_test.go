@@ -1,0 +1,921 @@
+package refresh
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/infrena/infrena/internal/registry"
+	"github.com/infrena/infrena/internal/retry"
+	"github.com/infrena/infrena/internal/state"
+	"github.com/infrena/infrena/pkg/address"
+	"github.com/infrena/infrena/pkg/provider"
+	"github.com/infrena/infrena/pkg/resource"
+	"github.com/infrena/infrena/pkg/schema"
+	"github.com/infrena/infrena/pkg/value"
+	testprovider "github.com/infrena/infrena/providers/test"
+)
+
+func newTestRegistry(t *testing.T, cloudPath string) (*registry.Registry, *testprovider.Provider) {
+	t.Helper()
+	reg := registry.New()
+	prov := testprovider.New(cloudPath)
+	if err := reg.Register("fake", prov); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	return reg, prov
+}
+
+func createNetwork(t *testing.T, prov *testprovider.Provider, name string) *resource.ResourceState {
+	t.Helper()
+	st, err := prov.Create(context.Background(), &resource.DesiredResource{
+		Address: address.Address{Name: name},
+		Type:    "fake.network",
+		Attrs: map[string]value.Value{
+			"cidr": value.String("10.0.0.0/16", value.SourceExplicit),
+		},
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	return st
+}
+
+func TestRefreshReadsCurrentProviderState(t *testing.T) {
+	dir := t.TempDir()
+	reg, prov := newTestRegistry(t, filepath.Join(dir, "cloud.json"))
+
+	created := createNetwork(t, prov, "net")
+	st := state.New("myapp", "dev")
+	st.Set(created)
+
+	obs, ds := Refresh(context.Background(), st, reg, 4, 4, retry.Policy{}, nil)
+	if ds.HasErrors() {
+		t.Fatalf("unexpected diagnostics: %+v", ds)
+	}
+
+	o, ok := obs[created.Address.String()]
+	if !ok {
+		t.Fatal("missing observation for net")
+	}
+	if o.Err != nil {
+		t.Fatalf("unexpected error: %v", o.Err)
+	}
+	if o.State == nil {
+		t.Fatal("resource exists at the provider; State must not be nil")
+	}
+	if cidr, _ := o.State.Attributes["cidr"].AsString(); cidr != "10.0.0.0/16" {
+		t.Errorf("cidr = %q", cidr)
+	}
+}
+
+// TestRefreshCallsOnObservationOncePerResource pins the OnObservation hook's
+// contract: called exactly once per resource in st, concurrently, each call
+// carrying the same Observation the function's own return value holds for
+// that address. The `infrena refresh` command's streaming output depends on
+// it, and a hook called zero times, fired twice, or handed a stale
+// Observation would each produce a silently wrong report that asserting on
+// the returned map alone cannot see.
+func TestRefreshCallsOnObservationOncePerResource(t *testing.T) {
+	dir := t.TempDir()
+	reg, prov := newTestRegistry(t, filepath.Join(dir, "cloud.json"))
+
+	present := createNetwork(t, prov, "present")
+	deleted := createNetwork(t, prov, "deleted")
+
+	cloud, err := testprovider.LoadCloud(filepath.Join(dir, "cloud.json"))
+	if err != nil {
+		t.Fatalf("loading fake cloud: %v", err)
+	}
+	delete(cloud.Resources, deleted.ProviderID)
+	if err := cloud.Save(filepath.Join(dir, "cloud.json")); err != nil {
+		t.Fatalf("saving fake cloud: %v", err)
+	}
+
+	st := state.New("myapp", "dev")
+	st.Set(present)
+	st.Set(deleted)
+
+	var mu sync.Mutex
+	seen := map[string]Observation{}
+	hook := func(o Observation) {
+		mu.Lock()
+		defer mu.Unlock()
+		seen[o.Address.String()] = o
+	}
+
+	obs, ds := Refresh(context.Background(), st, reg, 4, 4, retry.Policy{}, hook)
+	if ds.HasErrors() {
+		t.Fatalf("unexpected diagnostics: %+v", ds)
+	}
+
+	if len(seen) != 2 {
+		t.Fatalf("OnObservation fired %d times, want 2 (one per resource)", len(seen))
+	}
+	for _, addr := range []address.Address{present.Address, deleted.Address} {
+		hookObs, ok := seen[addr.String()]
+		if !ok {
+			t.Fatalf("OnObservation was never called for %s", addr)
+		}
+		returnedObs := obs[addr.String()]
+		if hookObs.Err != returnedObs.Err {
+			t.Errorf("%s: hook saw Err=%v, Refresh returned Err=%v", addr, hookObs.Err, returnedObs.Err)
+		}
+		gotNil, wantNil := hookObs.State == nil, returnedObs.State == nil
+		if gotNil != wantNil {
+			t.Errorf("%s: hook saw State-is-nil=%v, Refresh returned State-is-nil=%v", addr, gotNil, wantNil)
+		}
+	}
+	if seen[present.Address.String()].State == nil {
+		t.Error("present's hook observation reports it gone; it was never deleted")
+	}
+	if seen[deleted.Address.String()].State != nil {
+		t.Error("deleted's hook observation reports it present; it was removed from the fake cloud")
+	}
+}
+
+func TestRefreshDetectsDeletionOutsideInfrena(t *testing.T) {
+	dir := t.TempDir()
+	reg, prov := newTestRegistry(t, filepath.Join(dir, "cloud.json"))
+
+	created := createNetwork(t, prov, "net")
+	st := state.New("myapp", "dev")
+	st.Set(created)
+
+	// Deleted by something other than infrena: the same path a person
+	// hand-editing the cloud file, or another tool, would take.
+	if err := prov.Delete(context.Background(), created); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+
+	obs, ds := Refresh(context.Background(), st, reg, 4, 4, retry.Policy{}, nil)
+	if ds.HasErrors() {
+		t.Fatalf("a deletion outside infrena is not a planning error: %+v", ds)
+	}
+	o := obs[created.Address.String()]
+	if o.State != nil {
+		t.Error("State must be nil — the provider reported (nil, nil)")
+	}
+	if o.Err != nil {
+		t.Errorf("Err must be nil — deletion is not a failure: %v", o.Err)
+	}
+}
+
+func TestRefreshReadErrorIsADiagnosticAndNeverADeletion(t *testing.T) {
+	cloudPath := filepath.Join(t.TempDir(), "cloud.json")
+	reg, prov := newTestRegistry(t, cloudPath)
+
+	created := createNetwork(t, prov, "net")
+	st := state.New("myapp", "dev")
+	st.Set(created)
+
+	// A FailureRule in the cloud file is how providers/test injects a
+	// failure: keyed by op and address, firing once and then never again.
+	cloud, err := testprovider.LoadCloud(cloudPath)
+	if err != nil {
+		t.Fatalf("LoadCloud: %v", err)
+	}
+	cloud.Failures = append(cloud.Failures, testprovider.FailureRule{
+		Op:      "read",
+		Address: created.Address.String(),
+		Nth:     1,
+		Message: "simulated provider outage",
+	})
+	if err := cloud.Save(cloudPath); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	obs, ds := Refresh(context.Background(), st, reg, 4, 4, retry.Policy{}, nil)
+	if !ds.HasErrors() {
+		t.Fatal("a read failure must fail planning for that resource")
+	}
+	o := obs[created.Address.String()]
+	if o.Err == nil {
+		t.Fatal("Observation.Err must be set")
+	}
+	if o.State != nil {
+		t.Error("State must not be populated when the read failed")
+	}
+
+	// The critical distinction: this resource was never deleted. The
+	// injected rule is one-shot, so a second refresh must find the resource
+	// exactly where it was — proving the first error was a transient read
+	// failure, not the resource going away. Mistaking the first result for
+	// absence would have proposed destroying live infrastructure.
+	obs2, ds2 := Refresh(context.Background(), st, reg, 4, 4, retry.Policy{}, nil)
+	if ds2.HasErrors() {
+		t.Fatalf("the injected rule is one-shot; the second refresh must succeed: %+v", ds2)
+	}
+	o2 := obs2[created.Address.String()]
+	if o2.State == nil {
+		t.Fatal("the resource still exists; a transient read error must never be mistaken for deletion")
+	}
+}
+
+func TestRefreshNeverWritesState(t *testing.T) {
+	root := t.TempDir()
+	cloudPath := filepath.Join(t.TempDir(), "cloud.json")
+	reg, prov := newTestRegistry(t, cloudPath)
+	created := createNetwork(t, prov, "net")
+
+	backend := state.NewLocal(root)
+	if _, err := backend.Lock(context.Background(), "dev"); err != nil {
+		t.Fatalf("Lock: %v", err)
+	}
+	st := state.New("myapp", "dev")
+	st.Set(created)
+	if err := backend.Put(context.Background(), "dev", st); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+
+	statePath := filepath.Join(root, "state", "dev.json")
+	before, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+
+	// Run Refresh against the state Get returns — never against backend —
+	// which is the point: Refresh has no way to write state even if it
+	// wanted to.
+	loaded, err := backend.Get(context.Background(), "dev")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if _, ds := Refresh(context.Background(), loaded, reg, 4, 4, retry.Policy{}, nil); ds.HasErrors() {
+		t.Fatalf("unexpected diagnostics: %+v", ds)
+	}
+
+	after, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if string(before) != string(after) {
+		t.Error("the state file changed — Refresh must never write state; only the refresh command persists observations")
+	}
+}
+
+func TestRefreshUnregisteredTypeIsADiagnostic(t *testing.T) {
+	reg := registry.New() // nothing registered
+
+	st := state.New("myapp", "dev")
+	st.Set(&resource.ResourceState{
+		Provider:   "fake",
+		Address:    address.Address{Name: "ghost"},
+		Type:       "ghost.thing",
+		ProviderID: "ghost-1",
+	})
+
+	obs, ds := Refresh(context.Background(), st, reg, 4, 4, retry.Policy{}, nil)
+	if !ds.HasErrors() {
+		t.Fatal("a resource whose type is no longer registered must be a diagnostic, not silently skipped or treated as deleted")
+	}
+	o := obs["ghost"]
+	if o.Err == nil {
+		t.Error("Observation.Err must be set")
+	}
+	if o.State != nil {
+		t.Error("State must be nil — nothing could be read")
+	}
+}
+
+func TestRefreshEmptyStateReturnsEmptyObservations(t *testing.T) {
+	reg := registry.New()
+	st := state.New("myapp", "dev")
+
+	obs, ds := Refresh(context.Background(), st, reg, 4, 4, retry.Policy{}, nil)
+	if ds.HasErrors() {
+		t.Fatalf("unexpected diagnostics: %+v", ds)
+	}
+	if len(obs) != 0 {
+		t.Errorf("Observations = %v, want none", obs)
+	}
+}
+
+func TestRefreshTreatsParallelismBelowOneAsOne(t *testing.T) {
+	dir := t.TempDir()
+	reg, prov := newTestRegistry(t, filepath.Join(dir, "cloud.json"))
+	created := createNetwork(t, prov, "net")
+	st := state.New("myapp", "dev")
+	st.Set(created)
+
+	// Both bounds, since both clamp: a zero-capacity channel would deadlock
+	// on its first send, so "below 1 means 1" is the difference between a
+	// misconfigured flag and a hang.
+	for _, p := range []int{0, -1} {
+		obs, ds := Refresh(context.Background(), st, reg, p, p, retry.Policy{}, nil)
+		if ds.HasErrors() {
+			t.Fatalf("parallelism %d: unexpected diagnostics: %+v", p, ds)
+		}
+		if len(obs) != 1 {
+			t.Fatalf("parallelism %d: Observations = %v, want one entry", p, obs)
+		}
+	}
+}
+
+// delayedProvider is a minimal Provider double used to control read timing
+// directly. The real fake provider (providers/test) holds one mutex across
+// its entire Read call, which would serialize every read regardless of the
+// bound Refresh itself applies — so it cannot prove Refresh's own
+// parallelism bound is what is doing the limiting. This double has no such
+// lock: only Refresh's semaphore governs how many of its Reads run at once.
+type delayedProvider struct {
+	resourceType string
+	delay        time.Duration
+	delays       map[string]time.Duration
+	fail         map[string]bool
+
+	mu            sync.Mutex
+	concurrent    int
+	maxConcurrent int
+	completed     int
+	started       int
+}
+
+func (p *delayedProvider) Name() string { return "delayed" }
+
+func (p *delayedProvider) Definitions() []*schema.ResourceDefinition {
+	return []*schema.ResourceDefinition{{Type: p.resourceType}}
+}
+
+func (p *delayedProvider) Read(ctx context.Context, current *resource.ResourceState) (*resource.ResourceState, error) {
+	p.mu.Lock()
+	p.started++
+	p.concurrent++
+	if p.concurrent > p.maxConcurrent {
+		p.maxConcurrent = p.concurrent
+	}
+	p.mu.Unlock()
+
+	d := p.delay
+	if p.delays != nil {
+		if perAddr, ok := p.delays[current.Address.String()]; ok {
+			d = perAddr
+		}
+	}
+	if d > 0 {
+		time.Sleep(d)
+	}
+
+	p.mu.Lock()
+	p.concurrent--
+	p.completed++
+	p.mu.Unlock()
+
+	if p.fail[current.Address.String()] {
+		return nil, fmt.Errorf("delayed provider: simulated failure for %s", current.Address)
+	}
+	return current.Clone(), nil
+}
+
+func (p *delayedProvider) Create(context.Context, *resource.DesiredResource) (*resource.ResourceState, error) {
+	return nil, provider.ErrNotImplemented
+}
+
+func (p *delayedProvider) Update(context.Context, *resource.ResourceState, *resource.DesiredResource) (*resource.ResourceState, error) {
+	return nil, provider.ErrNotImplemented
+}
+
+func (p *delayedProvider) Delete(context.Context, *resource.ResourceState) error {
+	return provider.ErrNotImplemented
+}
+
+func (p *delayedProvider) Discover(context.Context, provider.DiscoverRequest) ([]provider.DiscoveredResource, error) {
+	return nil, provider.ErrNotImplemented
+}
+
+func (p *delayedProvider) Import(context.Context, string, string) (*resource.ResourceState, error) {
+	return nil, provider.ErrNotImplemented
+}
+
+func (p *delayedProvider) ClassifyError(error) provider.Retryability {
+	return provider.NotSafeToRetry
+}
+
+var _ provider.Provider = (*delayedProvider)(nil)
+
+func TestRefreshBoundsConcurrentReads(t *testing.T) {
+	const resourceType = "delayed.thing"
+	prov := &delayedProvider{resourceType: resourceType, delay: 50 * time.Millisecond}
+	reg := registry.New()
+	if err := reg.Register("fake", prov); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	st := state.New("myapp", "dev")
+	for i := range 8 {
+		name := fmt.Sprintf("r%d", i)
+		st.Set(&resource.ResourceState{
+			Provider:   "fake",
+			Address:    address.Address{Name: name},
+			Type:       resourceType,
+			ProviderID: name,
+		})
+	}
+
+	obs, ds := Refresh(context.Background(), st, reg, 3, 3, retry.Policy{}, nil)
+	if ds.HasErrors() {
+		t.Fatalf("unexpected diagnostics: %+v", ds)
+	}
+	if len(obs) != 8 {
+		t.Fatalf("Observations = %d, want 8", len(obs))
+	}
+
+	prov.mu.Lock()
+	max := prov.maxConcurrent
+	prov.mu.Unlock()
+	if max > 3 {
+		t.Errorf("max concurrent reads = %d, want at most the parallelism bound of 3", max)
+	}
+	if max < 2 {
+		t.Errorf("max concurrent reads = %d, want at least 2 — reads should overlap, not run one at a time", max)
+	}
+}
+
+// TestRefreshBoundsReadsPerProviderIndependentlyOfGlobalParallelism pins the
+// second of refresh's two bounds: the per-provider semaphore the executor
+// also uses.
+//
+// The bounds are set far apart (global 8, per-provider 2) on purpose. With
+// them equal the global semaphore admits at most `parallelism` reads anyway,
+// so the per-provider one can never fire and deleting it would change
+// nothing observable. Only a per-provider bound strictly below the global
+// one measures anything.
+//
+// Refresh is the widest fan-out in the product — it reads every resource in
+// state — so it is the operation throttling protection exists for.
+func TestRefreshBoundsReadsPerProviderIndependentlyOfGlobalParallelism(t *testing.T) {
+	const resourceType = "delayed.thing"
+	prov := &delayedProvider{resourceType: resourceType, delay: 50 * time.Millisecond}
+	reg := registry.New()
+	if err := reg.Register("fake", prov); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	st := state.New("myapp", "dev")
+	for i := range 8 {
+		name := fmt.Sprintf("r%d", i)
+		st.Set(&resource.ResourceState{
+			Provider:   "fake",
+			Address:    address.Address{Name: name},
+			Type:       resourceType,
+			ProviderID: name,
+		})
+	}
+
+	obs, ds := Refresh(context.Background(), st, reg, 8, 2, retry.Policy{}, nil)
+	if ds.HasErrors() {
+		t.Fatalf("unexpected diagnostics: %+v", ds)
+	}
+	if len(obs) != 8 {
+		t.Fatalf("Observations = %d, want 8 — the per-provider bound must throttle reads, never drop them", len(obs))
+	}
+
+	prov.mu.Lock()
+	max := prov.maxConcurrent
+	prov.mu.Unlock()
+	if max > 2 {
+		t.Errorf("max concurrent reads against one provider = %d, want at most the per-provider bound of 2 (global was 8)", max)
+	}
+	if max < 2 {
+		t.Errorf("max concurrent reads = %d, want 2 — the bound must throttle, not serialize", max)
+	}
+}
+
+func TestRefreshDiagnosticsAreSortedByAddressNotCompletionOrder(t *testing.T) {
+	const resourceType = "delayed.thing"
+	prov := &delayedProvider{
+		resourceType: resourceType,
+		delays: map[string]time.Duration{
+			"zzz": 0,
+			"aaa": 40 * time.Millisecond,
+		},
+		fail: map[string]bool{"zzz": true, "aaa": true},
+	}
+	reg := registry.New()
+	if err := reg.Register("fake", prov); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	st := state.New("myapp", "dev")
+	for _, name := range []string{"zzz", "aaa"} {
+		st.Set(&resource.ResourceState{Address: address.Address{Name: name}, Type: resourceType, Provider: "fake", ProviderID: name})
+	}
+
+	// zzz has no delay and fails almost immediately; aaa is deliberately
+	// slower. If diagnostics reflected completion order, zzz would come
+	// first despite sorting after aaa alphabetically.
+	_, ds := Refresh(context.Background(), st, reg, 2, 2, retry.Policy{}, nil)
+	if len(ds) != 2 {
+		t.Fatalf("got %d diagnostics, want 2", len(ds))
+	}
+	if !strings.Contains(ds[0].Summary, "aaa") || !strings.Contains(ds[1].Summary, "zzz") {
+		t.Errorf("diagnostics = %+v, want aaa before zzz — sorted by address, not by which read finished first", ds)
+	}
+}
+
+// mutatingReadProvider is a Provider double whose Read mutates the
+// *resource.ResourceState it is handed instead of treating it as read-only.
+// It proves Refresh clones state before handing it to a provider: if Refresh
+// ever passes the live pointer state.State holds, a provider like this one
+// corrupts loaded state in memory with no write call anywhere in the trace.
+type mutatingReadProvider struct {
+	resourceType string
+}
+
+func (p *mutatingReadProvider) Name() string { return "mutating" }
+
+func (p *mutatingReadProvider) Definitions() []*schema.ResourceDefinition {
+	return []*schema.ResourceDefinition{{Type: p.resourceType}}
+}
+
+func (p *mutatingReadProvider) Read(ctx context.Context, current *resource.ResourceState) (*resource.ResourceState, error) {
+	current.ProviderID = "mutated-in-place"
+	current.Attributes["injected"] = value.String("hacked", value.SourceProvider)
+	return current.Clone(), nil
+}
+
+func (p *mutatingReadProvider) Create(context.Context, *resource.DesiredResource) (*resource.ResourceState, error) {
+	return nil, provider.ErrNotImplemented
+}
+
+func (p *mutatingReadProvider) Update(context.Context, *resource.ResourceState, *resource.DesiredResource) (*resource.ResourceState, error) {
+	return nil, provider.ErrNotImplemented
+}
+
+func (p *mutatingReadProvider) Delete(context.Context, *resource.ResourceState) error {
+	return provider.ErrNotImplemented
+}
+
+func (p *mutatingReadProvider) Discover(context.Context, provider.DiscoverRequest) ([]provider.DiscoveredResource, error) {
+	return nil, provider.ErrNotImplemented
+}
+
+func (p *mutatingReadProvider) Import(context.Context, string, string) (*resource.ResourceState, error) {
+	return nil, provider.ErrNotImplemented
+}
+
+func (p *mutatingReadProvider) ClassifyError(error) provider.Retryability {
+	return provider.NotSafeToRetry
+}
+
+var _ provider.Provider = (*mutatingReadProvider)(nil)
+
+func TestRefreshDoesNotExposeLiveStateToProviderRead(t *testing.T) {
+	const resourceType = "mutating.thing"
+	prov := &mutatingReadProvider{resourceType: resourceType}
+	reg := registry.New()
+	if err := reg.Register("fake", prov); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	addr := address.Address{Name: "net"}
+	st := state.New("myapp", "dev")
+	st.Set(&resource.ResourceState{
+		Provider:   "fake",
+		Address:    addr,
+		Type:       resourceType,
+		ProviderID: "orig-id",
+		Attributes: map[string]value.Value{
+			"cidr": value.String("10.0.0.0/16", value.SourceProvider),
+		},
+	})
+
+	if _, ds := Refresh(context.Background(), st, reg, 1, 1, retry.Policy{}, nil); ds.HasErrors() {
+		t.Fatalf("unexpected diagnostics: %+v", ds)
+	}
+
+	// The state Refresh was handed must be exactly as it was before: a
+	// provider that mutates the *resource.ResourceState it receives must
+	// not be able to corrupt it.
+	after, ok := st.Get(addr)
+	if !ok {
+		t.Fatal("resource vanished from state — Refresh must never mutate st")
+	}
+	if after.ProviderID != "orig-id" {
+		t.Errorf("ProviderID = %q, want unchanged %q — the provider's Read mutated the live state pointer", after.ProviderID, "orig-id")
+	}
+	if _, injected := after.Attributes["injected"]; injected {
+		t.Error("state gained an attribute the provider injected by mutating the live pointer in place")
+	}
+	if cidr, _ := after.Attributes["cidr"].AsString(); cidr != "10.0.0.0/16" {
+		t.Errorf("cidr = %q, state was mutated", cidr)
+	}
+}
+
+// countingReadProvider counts how many times Read is invoked, to prove
+// Refresh skips calling a provider's Read entirely once its context is
+// already cancelled, rather than depending on the provider to notice.
+type countingReadProvider struct {
+	resourceType string
+	calls        atomic.Int32
+}
+
+func (p *countingReadProvider) Name() string { return "counting" }
+
+func (p *countingReadProvider) Definitions() []*schema.ResourceDefinition {
+	return []*schema.ResourceDefinition{{Type: p.resourceType}}
+}
+
+func (p *countingReadProvider) Read(ctx context.Context, current *resource.ResourceState) (*resource.ResourceState, error) {
+	p.calls.Add(1)
+	return current.Clone(), nil
+}
+
+func (p *countingReadProvider) Create(context.Context, *resource.DesiredResource) (*resource.ResourceState, error) {
+	return nil, provider.ErrNotImplemented
+}
+
+func (p *countingReadProvider) Update(context.Context, *resource.ResourceState, *resource.DesiredResource) (*resource.ResourceState, error) {
+	return nil, provider.ErrNotImplemented
+}
+
+func (p *countingReadProvider) Delete(context.Context, *resource.ResourceState) error {
+	return provider.ErrNotImplemented
+}
+
+func (p *countingReadProvider) Discover(context.Context, provider.DiscoverRequest) ([]provider.DiscoveredResource, error) {
+	return nil, provider.ErrNotImplemented
+}
+
+func (p *countingReadProvider) Import(context.Context, string, string) (*resource.ResourceState, error) {
+	return nil, provider.ErrNotImplemented
+}
+
+func (p *countingReadProvider) ClassifyError(error) provider.Retryability {
+	return provider.NotSafeToRetry
+}
+
+var _ provider.Provider = (*countingReadProvider)(nil)
+
+func TestRefreshSkipsProviderReadWhenContextAlreadyCancelled(t *testing.T) {
+	const resourceType = "counting.thing"
+	prov := &countingReadProvider{resourceType: resourceType}
+	reg := registry.New()
+	if err := reg.Register("fake", prov); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	st := state.New("myapp", "dev")
+	for i := range 4 {
+		name := fmt.Sprintf("r%d", i)
+		st.Set(&resource.ResourceState{Address: address.Address{Name: name}, Type: resourceType, Provider: "fake", ProviderID: name})
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	obs, ds := Refresh(ctx, st, reg, 4, 4, retry.Policy{}, nil)
+	if !ds.HasErrors() {
+		t.Fatal("a cancelled refresh must surface as diagnostics, not silently succeed")
+	}
+	if len(obs) != 4 {
+		t.Fatalf("Observations = %d, want 4", len(obs))
+	}
+	for addr, o := range obs {
+		if o.Err == nil {
+			t.Errorf("%s: Err must be set when the context was already cancelled", addr)
+		}
+		if o.State != nil {
+			t.Errorf("%s: State must be nil — cancellation is never treated as deletion", addr)
+		}
+	}
+	if calls := prov.calls.Load(); calls != 0 {
+		t.Errorf("provider Read was called %d times; want 0 — Refresh must check ctx before dispatching, not rely on the provider to notice", calls)
+	}
+}
+
+// TestOneProvidersQueueDoesNotStallAnother pins where the per-provider semaphore
+// is taken. Taking it on the dispatch goroutine, beside the global one, stops the
+// loop handing out work whenever one provider's bound is full, so a resource
+// belonging to an unrelated provider with an idle semaphore never starts. It must
+// be taken inside the worker instead.
+//
+// `slow` is bounded to one concurrent read and given four resources, so its queue
+// is saturated for the whole run. `quick` has a single resource, sorted last, so
+// it sits at the back of the dispatch queue.
+//
+// The assertion is not a duration: it asks how many of slow's four reads had been
+// STARTED at the moment the quick read ran, which measures how far the dispatch
+// loop got before reaching the quick resource. Dispatch-side semaphores give 4,
+// worker-side give 1. Counting finished reads instead does not discriminate — the
+// loop releases slow's semaphore as each read completes, so a broken run can still
+// show four finished. Starts, not finishes, and not elapsed time, which measures
+// the machine rather than the code.
+func TestOneProvidersQueueDoesNotStallAnother(t *testing.T) {
+	slow := &delayedProvider{resourceType: "slow.thing", delay: 40 * time.Millisecond}
+
+	var mu sync.Mutex
+	slowStartedWhenQuickRan := -1
+	quick := &probeProvider{resourceType: "quick.thing", onRead: func() {
+		slow.mu.Lock()
+		started := slow.started
+		slow.mu.Unlock()
+		mu.Lock()
+		slowStartedWhenQuickRan = started
+		mu.Unlock()
+	}}
+
+	reg := registry.New()
+	if err := reg.Register("slow", slow); err != nil {
+		t.Fatalf("Register slow: %v", err)
+	}
+	if err := reg.Register("quick", quick); err != nil {
+		t.Fatalf("Register quick: %v", err)
+	}
+
+	st := state.New("myapp", "dev")
+	// Names sort the slow resources BEFORE the quick one: Refresh walks addresses
+	// in sorted order, so this puts the quick read at the back of the queue.
+	const slowCount = 4
+	for i := range slowCount {
+		name := fmt.Sprintf("a-slow-%d", i)
+		st.Set(&resource.ResourceState{
+			Provider: "slow", Address: address.Address{Name: name},
+			Type: "slow.thing", ProviderID: name,
+		})
+	}
+	st.Set(&resource.ResourceState{
+		Provider: "quick", Address: address.Address{Name: "z-quick"},
+		Type: "quick.thing", ProviderID: "z-quick",
+	})
+
+	// perProvider 1 so slow's reads are strictly one at a time and its queue is
+	// genuinely saturated; global parallelism 8 so nothing global is the
+	// constraint. If the quick read waits, only the per-provider bound explains it.
+	if _, ds := Refresh(context.Background(), st, reg, 8, 1, retry.Policy{}, nil); ds.HasErrors() {
+		t.Fatalf("unexpected diagnostics: %+v", ds)
+	}
+
+	mu.Lock()
+	started := slowStartedWhenQuickRan
+	mu.Unlock()
+	if started < 0 {
+		t.Fatal("the quick provider's resource was never read")
+	}
+	// Half the queue is the line. Working dispatch gives 1 and a stalled one gives
+	// all four, so nothing sensible lands in between; the margin is there so a
+	// scheduling hiccup cannot fail an otherwise correct run.
+	if started > slowCount/2 {
+		t.Errorf("%d of %d slow reads had been dispatched before the quick read ran — it waited "+
+			"on the slow provider's queue, so one provider's bound is still stalling another",
+			started, slowCount)
+	}
+	t.Logf("%d of %d slow reads had been dispatched when the quick read ran", started, slowCount)
+}
+
+// probeProvider is a Provider double that reports the instant its Read runs and
+// returns immediately. It exists so a test can ask WHEN a read happened relative
+// to another provider's progress rather than relative to the clock.
+type probeProvider struct {
+	resourceType string
+	onRead       func()
+}
+
+func (p *probeProvider) Name() string { return "quick" }
+
+func (p *probeProvider) Definitions() []*schema.ResourceDefinition {
+	return []*schema.ResourceDefinition{{Type: p.resourceType}}
+}
+
+func (p *probeProvider) Read(_ context.Context, current *resource.ResourceState) (*resource.ResourceState, error) {
+	if p.onRead != nil {
+		p.onRead()
+	}
+	return current.Clone(), nil
+}
+
+func (p *probeProvider) Create(context.Context, *resource.DesiredResource) (*resource.ResourceState, error) {
+	return nil, provider.ErrNotImplemented
+}
+
+func (p *probeProvider) Update(context.Context, *resource.ResourceState, *resource.DesiredResource) (*resource.ResourceState, error) {
+	return nil, provider.ErrNotImplemented
+}
+
+func (p *probeProvider) Delete(context.Context, *resource.ResourceState) error {
+	return provider.ErrNotImplemented
+}
+
+func (p *probeProvider) Discover(context.Context, provider.DiscoverRequest) ([]provider.DiscoveredResource, error) {
+	return nil, provider.ErrNotImplemented
+}
+
+func (p *probeProvider) Import(context.Context, string, string) (*resource.ResourceState, error) {
+	return nil, provider.ErrNotImplemented
+}
+
+func (p *probeProvider) ClassifyError(error) provider.Retryability {
+	return provider.NotSafeToRetry
+}
+
+var _ provider.Provider = (*probeProvider)(nil)
+
+// throttledReadProvider fails Read a fixed number of times with an error it
+// classifies as SafeToRetry, then succeeds — a throttled account, which is
+// what a real refresh of a large environment meets.
+type throttledReadProvider struct {
+	resourceType string
+	failures     int32
+	calls        atomic.Int32
+}
+
+func (p *throttledReadProvider) Name() string { return "throttled" }
+
+func (p *throttledReadProvider) Definitions() []*schema.ResourceDefinition {
+	return []*schema.ResourceDefinition{{Type: p.resourceType}}
+}
+
+func (p *throttledReadProvider) Read(ctx context.Context, current *resource.ResourceState) (*resource.ResourceState, error) {
+	if p.calls.Add(1) <= p.failures {
+		return nil, errors.New("ThrottlingException: Rate exceeded")
+	}
+	return current.Clone(), nil
+}
+
+func (p *throttledReadProvider) Create(context.Context, *resource.DesiredResource) (*resource.ResourceState, error) {
+	return nil, provider.ErrNotImplemented
+}
+
+func (p *throttledReadProvider) Update(context.Context, *resource.ResourceState, *resource.DesiredResource) (*resource.ResourceState, error) {
+	return nil, provider.ErrNotImplemented
+}
+
+func (p *throttledReadProvider) Delete(context.Context, *resource.ResourceState) error {
+	return provider.ErrNotImplemented
+}
+
+func (p *throttledReadProvider) Discover(context.Context, provider.DiscoverRequest) ([]provider.DiscoveredResource, error) {
+	return nil, provider.ErrNotImplemented
+}
+
+func (p *throttledReadProvider) Import(context.Context, string, string) (*resource.ResourceState, error) {
+	return nil, provider.ErrNotImplemented
+}
+
+// The provider's own judgement, which is the only thing that decides this:
+// a throttle is refused before anything happened, so another attempt is safe.
+func (p *throttledReadProvider) ClassifyError(error) provider.Retryability {
+	return provider.SafeToRetry
+}
+
+var _ provider.Provider = (*throttledReadProvider)(nil)
+
+// A throttle must not fail a refresh. The classification already said the
+// call was refused before it acted; the only thing missing was somebody
+// waiting and asking again.
+func TestRefreshRetriesAReadTheProviderCallsSafeToRetry(t *testing.T) {
+	const resourceType = "throttled.thing"
+	prov := &throttledReadProvider{resourceType: resourceType, failures: 2}
+	reg := registry.New()
+	if err := reg.Register("fake", prov); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	addr := address.Address{Name: "vpc"}
+	st := state.New("myapp", "dev")
+	st.Set(&resource.ResourceState{Address: addr, Type: resourceType, Provider: "fake", ProviderID: "vpc-0c833f25abd76f95e"})
+
+	policy := retry.Policy{MaxAttempts: 5, Sleep: func(context.Context, time.Duration) error { return nil }}
+	obs, ds := Refresh(context.Background(), st, reg, 4, 4, policy, nil)
+
+	if ds.HasErrors() {
+		t.Fatalf("a retryable throttle failed the refresh: %+v", ds)
+	}
+	if got := prov.calls.Load(); got != 3 {
+		t.Errorf("Read called %d times, want 3 — two throttles then a success", got)
+	}
+	if o, ok := obs[addr.String()]; !ok || o.Err != nil {
+		t.Fatalf("observation is not a clean read: %+v", obs)
+	}
+}
+
+// The other half: attempts are finite. A throttle that never clears still
+// ends as a diagnostic rather than an infinite wait.
+func TestRefreshGivesUpOnAThrottleThatNeverClears(t *testing.T) {
+	const resourceType = "throttled.thing"
+	prov := &throttledReadProvider{resourceType: resourceType, failures: 99}
+	reg := registry.New()
+	if err := reg.Register("fake", prov); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	st := state.New("myapp", "dev")
+	st.Set(&resource.ResourceState{Address: address.Address{Name: "vpc"}, Type: resourceType, Provider: "fake", ProviderID: "vpc-1"})
+
+	policy := retry.Policy{MaxAttempts: 4, Sleep: func(context.Context, time.Duration) error { return nil }}
+	_, ds := Refresh(context.Background(), st, reg, 4, 4, policy, nil)
+
+	if !ds.HasErrors() {
+		t.Fatal("a read that never succeeds must still be reported")
+	}
+	if got := prov.calls.Load(); got != 4 {
+		t.Errorf("Read called %d times, want exactly the 4 attempts the policy allows", got)
+	}
+}

@@ -1,0 +1,52 @@
+name: Bug report
+description: Something behaves differently from how it is documented
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        If this is a security problem, do not open an issue.
+        Use [private vulnerability reporting](../../security/advisories/new) instead.
+
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: The output of `infrena version`.
+      placeholder: infrena 0.14.0 (abc1234, go1.27.1, linux/amd64)
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you ran, and what it did.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected instead
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: A configuration that reproduces it
+      description: |
+        The smallest `infrena.yml` that shows the problem, and the command you ran.
+        A small one that reproduces it is worth more than a large one that might.
+        Redact anything sensitive.
+      render: yaml
+
+  - type: textarea
+    id: output
+    attributes:
+      label: Output
+      description: |
+        The plan, the error, or the apply output. `--output <file>` writes a
+        machine-readable record if that is easier to share.
+      render: shell

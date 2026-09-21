@@ -1,0 +1,12 @@
+project: shop
+
+variables:
+  db_password:
+    type: string
+
+environments:
+  dev: {}
+  production: {}
+
+modules:
+  - ./modules/app-stack

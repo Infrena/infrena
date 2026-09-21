@@ -1,0 +1,162 @@
+name: Release
+
+# Triggered by a version tag. Builds every platform from ONE runner, because this is
+# pure Go with no cgo anywhere — cross-compilation needs no native runner, so a matrix
+# of operating systems would buy nothing but minutes.
+#
+# The version is stamped HERE and nowhere else: there is no version constant in the
+# source, so a binary built without this reports 0.0.0-dev. That is
+# deliberate — a development build claiming to be a release is what turns a bug report
+# into an afternoon — and it means a broken ldflags path would ship binaries that do
+# not know what they are. The verify step below is what catches that.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  # The same checks main gets. A release cut from untested code is the one case where
+  # "the tests were green last week" is not good enough.
+  check:
+    uses: ./.github/workflows/ci.yml
+
+  build:
+    needs: check
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # to create the release
+    env:
+      GOTOOLCHAIN: local
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.27"
+
+      - name: Derive the version from the tag
+        id: v
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          version="${tag#v}"
+          echo "tag=$tag"         >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Releasing $tag as version $version"
+
+      - name: Build every platform
+        env:
+          VERSION: ${{ steps.v.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+
+          # CGO_ENABLED=0 makes each binary static, so it runs on a machine without a
+          # matching libc — which is most of the point of shipping a Go CLI.
+          #
+          # -trimpath keeps build-machine paths out of the binary.
+          #
+          # NOT -s -w. Stripping saves a couple of megabytes and removes the symbol
+          # table that makes a panic readable, and this engine deliberately lets an
+          # unrecovered panic crash the process rather than recover mid-apply (see
+          # internal/executor/apply.go). A stack trace is the whole diagnostic in that
+          # case; trading it for disk is the wrong way round.
+          build() {
+            local goos="$1" goarch="$2" goarm="${3:-}"
+            local name="infrena"
+            local suffix=""
+            if [ "$goos" = "windows" ]; then name="infrena.exe"; fi
+            if [ -n "$goarm" ]; then suffix="v$goarm"; fi
+
+            local dir="dist/infrena_${VERSION}_${goos}_${goarch}${suffix}"
+            mkdir -p "$dir"
+
+            echo "==> $goos/$goarch$suffix"
+            CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" GOARM="$goarm" \
+              go build -trimpath \
+                -ldflags "-X github.com/infrena/infrena/internal/version.version=${VERSION}" \
+                -o "$dir/$name" ./cmd/infrena
+
+            cp README.md "$dir/" 2>/dev/null || true
+
+            if [ "$goos" = "windows" ]; then
+              (cd dist && zip -qr "$(basename "$dir").zip" "$(basename "$dir")")
+            else
+              tar -czf "$dir.tar.gz" -C dist "$(basename "$dir")"
+            fi
+            rm -rf "$dir"
+          }
+
+          # The platform list lives in .github/platforms, read here and by ci.yml,
+          # so every target a release publishes is also a target CI compiles on
+          # every push. Two copies would drift, and the copy that drifts is this
+          # one — the one guarding what people download.
+          while read -r goos goarch goarm; do
+            [ -z "${goos:-}" ] && continue
+            case "$goos" in \#*) continue;; esac
+            build "$goos" "$goarch" "${goarm:-}"
+          done < <(sed 's/#.*//' .github/platforms)
+
+          ls -la dist
+
+      - name: Verify the binary knows its own version
+        env:
+          VERSION: ${{ steps.v.outputs.version }}
+        run: |
+          set -euo pipefail
+          # Rebuilt for the host so it can actually run. The point is the ldflags PATH,
+          # which is shared with every archive above: if the linker flag stopped
+          # matching internal/version's variable, every binary would silently report
+          # 0.0.0-dev and nothing else in this workflow would notice.
+          CGO_ENABLED=0 go build -trimpath \
+            -ldflags "-X github.com/infrena/infrena/internal/version.version=${VERSION}" \
+            -o /tmp/infrena ./cmd/infrena
+
+          # Captured whole, then the first line taken by parameter expansion — NOT
+          # `| head -1`. `version` prints several lines in separate writes; head exits
+          # after the first, and on a loaded runner the remaining writes land on a
+          # closed pipe, so the binary dies of SIGPIPE and `set -o pipefail` fails the
+          # step with 141. Nothing is wrong with the binary when that happens: it is a
+          # race between head exiting and the writer continuing, which is why three
+          # releases passed before v0.6.2's did not.
+          #
+          # The binary no longer dies that way — cmd/infrena ignores SIGPIPE so its
+          # exit code survives a reader that leaves. This stays as it
+          # is anyway: capturing whole depends on nothing about the binary, and this
+          # step is the one place that would rather not.
+          all="$(/tmp/infrena version)"
+          reported="${all%%$'\n'*}"
+          echo "$reported"
+          case "$reported" in
+            "infrena ${VERSION} "*) echo "version stamped correctly" ;;
+            *)
+              echo "::error::The release binary reports '$reported', not version ${VERSION}."
+              echo "The -ldflags path and internal/version's variable have diverged;"
+              echo "every archive in this release would report 0.0.0-dev."
+              exit 1
+              ;;
+          esac
+
+      - name: Checksums
+        run: |
+          set -euo pipefail
+          # One file over all archives, which is the form `infrena plugins install`
+          # will verify against.
+          cd dist && sha256sum ./* > SHA256SUMS && cat SHA256SUMS
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.v.outputs.tag }}
+        run: |
+          set -euo pipefail
+          # --verify-tag: refuse to invent a tag that does not exist. --generate-notes
+          # writes the changelog from the commits since the last release.
+          gh release create "$TAG" \
+            --title "$TAG" \
+            --generate-notes \
+            --verify-tag \
+            dist/*

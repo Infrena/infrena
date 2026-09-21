@@ -1,0 +1,7 @@
+Plan for project "myapp", environment "dev":
+
+  + fake.network.network
+      cidr: "10.20.0.0/16"
+      id: (known after apply)
+
+Plan: 1 to create, 0 to update, 0 to replace, 0 to destroy, 0 to forget.

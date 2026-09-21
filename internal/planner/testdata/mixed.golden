@@ -1,0 +1,20 @@
+Plan for project "myapp", environment "dev":
+
+  - fake.application.app
+    ⚠ This resource has 2 dependent resources.
+      password: <sensitive>
+
+  = test.cache.cache
+      id: "cache-1"
+
+  -/+ fake.database.database  (replacement forced by: engine)
+    ⚠ This resource has 1 dependent resource.
+      engine: "postgres" -> "mysql"
+
+  ~ test.loadbalancer.loadbalancer
+      size: 10 [default] -> 50
+
+  + fake.network.network
+      cidr: "10.0.0.0/16"
+
+Plan: 1 to create, 1 to update, 1 to replace, 1 to destroy, 1 to forget.

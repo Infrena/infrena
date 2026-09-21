@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/infrena/infrena/security/advisories/new
+    about: Report privately. Do not open a public issue for a security problem.
+  - name: A change that cuts across a design decision
+    url: https://github.com/infrena/infrena/issues/new
+    about: Open a plain issue first. CONTRIBUTING explains why that is cheaper than a pull request.

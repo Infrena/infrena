@@ -1,0 +1,3 @@
+# Applies to every environment. An environment-named file beside this one
+# overrides it VALUE BY VALUE, not file by file.
+db_password: dev-secret

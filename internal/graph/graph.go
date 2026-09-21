@@ -1,0 +1,203 @@
+// Package graph implements a generic directed graph used to order work: the
+// planner orders plan operations with it, the executor orders tasks.
+//
+// Determinism is the point. Cycle, Layers and Roots all sort before
+// returning, because Go map iteration is randomised and two runs over
+// identical nodes and edges must produce identical output.
+package graph
+
+import (
+	"fmt"
+	"sort"
+	"strings"
+)
+
+// Node is anything a Graph can hold: a stable, caller-assigned identifier
+// that Add and Edge key on.
+type Node interface {
+	// ID returns the node's identifier, unique within one Graph.
+	ID() string
+}
+
+// Graph is a generic directed graph over nodes with unique IDs.
+type Graph[T Node] struct {
+	nodes map[string]T
+	out   map[string]map[string]bool // fromID -> set of toID
+	in    map[string]map[string]bool // toID -> set of fromID
+}
+
+// New returns an empty graph.
+func New[T Node]() *Graph[T] {
+	return &Graph[T]{
+		nodes: map[string]T{},
+		out:   map[string]map[string]bool{},
+		in:    map[string]map[string]bool{},
+	}
+}
+
+// Add registers a node, keyed by its ID. Adding a node whose ID is already
+// present replaces it, the same as an ordinary map assignment.
+func (g *Graph[T]) Add(node T) {
+	g.nodes[node.ID()] = node
+}
+
+// Edge records that fromID must run before toID.
+//
+// Edge panics if either ID was never added. Graphs here are built from
+// addresses another package has already validated, never from user input, so
+// an unknown ID is a programming error and belongs at the call site rather
+// than silently leaving the graph one edge short.
+//
+// Consequently every node an edge names must be added first. A caller
+// building a graph from unordered data must Add all nodes in one pass and
+// record edges in a second.
+func (g *Graph[T]) Edge(fromID, toID string) {
+	if _, ok := g.nodes[fromID]; !ok {
+		panic("graph: Edge(" + fromID + ", " + toID + "): " + fromID + " was never added")
+	}
+	if _, ok := g.nodes[toID]; !ok {
+		panic("graph: Edge(" + fromID + ", " + toID + "): " + toID + " was never added")
+	}
+	if g.out[fromID] == nil {
+		g.out[fromID] = map[string]bool{}
+	}
+	g.out[fromID][toID] = true
+	if g.in[toID] == nil {
+		g.in[toID] = map[string]bool{}
+	}
+	g.in[toID][fromID] = true
+}
+
+// sortedIDs returns every node ID, sorted.
+func (g *Graph[T]) sortedIDs() []string {
+	ids := make([]string, 0, len(g.nodes))
+	for id := range g.nodes {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	return ids
+}
+
+// sortedOut returns the IDs fromID points to, sorted.
+func (g *Graph[T]) sortedOut(fromID string) []string {
+	next := g.out[fromID]
+	out := make([]string, 0, len(next))
+	for id := range next {
+		out = append(out, id)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// Cycle returns the first cycle found, as the node IDs in participation
+// order — each consecutive pair, including the wrap from the last ID back
+// to the first, is a real edge — or nil when the graph is acyclic. Nodes
+// and their outgoing edges are both visited in sorted order, so the result
+// is identical on every run.
+func (g *Graph[T]) Cycle() []string {
+	const (
+		unvisited = iota
+		visiting
+		done
+	)
+	state := make(map[string]int, len(g.nodes))
+	var stack []string
+
+	var visit func(id string) []string
+	visit = func(id string) []string {
+		state[id] = visiting
+		stack = append(stack, id)
+
+		for _, next := range g.sortedOut(id) {
+			switch state[next] {
+			case visiting:
+				// next is still on the stack: the cycle is the suffix of
+				// stack starting at next.
+				for i, s := range stack {
+					if s == next {
+						return append([]string(nil), stack[i:]...)
+					}
+				}
+			case unvisited:
+				if cycle := visit(next); cycle != nil {
+					return cycle
+				}
+			}
+		}
+
+		stack = stack[:len(stack)-1]
+		state[id] = done
+		return nil
+	}
+
+	for _, id := range g.sortedIDs() {
+		if state[id] == unvisited {
+			if cycle := visit(id); cycle != nil {
+				return cycle
+			}
+		}
+	}
+	return nil
+}
+
+// Layers returns the graph's nodes grouped into topological layers: layer 0
+// holds every node with no incoming edge, layer 1 every node whose
+// predecessors are all in layer 0, and so on. Each layer is sorted by ID,
+// so two runs over the same graph produce identical output.
+//
+// It returns an error naming the cycle when the graph is not a DAG.
+func (g *Graph[T]) Layers() ([][]T, error) {
+	if cycle := g.Cycle(); cycle != nil {
+		full := append(append([]string(nil), cycle...), cycle[0])
+		return nil, fmt.Errorf("graph: cycle detected: %s", strings.Join(full, " -> "))
+	}
+
+	remaining := make(map[string]int, len(g.nodes))
+	for id := range g.nodes {
+		remaining[id] = len(g.in[id])
+	}
+
+	var layers [][]T
+	for len(remaining) > 0 {
+		var ready []string
+		for id, degree := range remaining {
+			if degree == 0 {
+				ready = append(ready, id)
+			}
+		}
+		sort.Strings(ready)
+
+		layer := make([]T, 0, len(ready))
+		for _, id := range ready {
+			layer = append(layer, g.nodes[id])
+			delete(remaining, id)
+		}
+		for _, id := range ready {
+			for _, next := range g.sortedOut(id) {
+				if _, ok := remaining[next]; ok {
+					remaining[next]--
+				}
+			}
+		}
+		layers = append(layers, layer)
+	}
+	return layers, nil
+}
+
+// Roots returns every node with no incoming edge — the nodes with no
+// prerequisite, which can run first — sorted by ID.
+func (g *Graph[T]) Roots() []T {
+	var ids []string
+	for id := range g.nodes {
+		if len(g.in[id]) == 0 {
+			ids = append(ids, id)
+		}
+	}
+	sort.Strings(ids)
+
+	out := make([]T, 0, len(ids))
+	for _, id := range ids {
+		out = append(out, g.nodes[id])
+	}
+	return out
+}

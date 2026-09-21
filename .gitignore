@@ -1,0 +1,22 @@
+# Compiled binary
+/infra
+/bin/
+
+# Go test artifacts
+*.test
+*.out
+coverage.*
+
+# Local tool state produced by running infra in a project
+.infrena/
+
+# Editor / OS
+.DS_Store
+*.swp
+
+# SDD scratch workspace
+.superpowers/
+.claude/
+
+# Release archives built by .github/workflows/release.yml, or a local dry run of it
+dist/

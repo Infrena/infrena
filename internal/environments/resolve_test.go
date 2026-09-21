@@ -1,0 +1,228 @@
+package environments
+
+import (
+	"strings"
+	"testing"
+
+	"github.com/infrena/infrena/internal/config"
+	"github.com/infrena/infrena/pkg/value"
+)
+
+func override(name string, n int64) config.OverrideDecl {
+	return config.OverrideDecl{
+		Name:   name,
+		Value:  value.Int(n, value.SourceEnvironment),
+		Origin: value.Origin{File: "infrena.yml", Line: 4, Column: 5},
+	}
+}
+
+func env(name, extends string, overrides ...config.OverrideDecl) config.EnvironmentDecl {
+	return config.EnvironmentDecl{
+		Name:          name,
+		Extends:       extends,
+		ExtendsOrigin: value.Origin{File: "infrena.yml", Line: 3, Column: 5},
+		Overrides:     overrides,
+		Origin:        value.Origin{File: "infrena.yml", Line: 2, Column: 3},
+	}
+}
+
+// fourLayerChain returns a four-deep extends chain — root <- base <- middle
+// <- leaf — declared in an order that agrees with neither the resolved order
+// nor its reverse. Both properties matter: a fixture already reading
+// "ancestors first" in source order cannot tell a resolver that walks Extends
+// from one that echoes decls back, and three layers leaves room for an
+// off-by-one that only shows up at the fourth.
+func fourLayerChain() []config.EnvironmentDecl {
+	return []config.EnvironmentDecl{
+		env("leaf", "middle", override("replicas", 10)),
+		env("root", "", override("replicas", 40)),
+		env("middle", "base", override("replicas", 20)),
+		env("base", "root", override("replicas", 30)),
+	}
+}
+
+func TestResolveOrdersAncestorsFirst(t *testing.T) {
+	decls := fourLayerChain()
+
+	chain, ds := Resolve(decls, "leaf")
+	if ds.HasErrors() {
+		t.Fatalf("unexpected diagnostics: %+v", ds)
+	}
+	if !chain.Selected || chain.Name != "leaf" {
+		t.Fatalf("Chain = {Name:%q Selected:%v}, want {leaf true}", chain.Name, chain.Selected)
+	}
+
+	var got []string
+	for _, l := range chain.Layers {
+		got = append(got, l.Name)
+	}
+	want := []string{"root", "base", "middle", "leaf"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("layers = %v, want %v (ancestors first, so a single forward loop applies precedence)", got, want)
+	}
+}
+
+func TestResolveMarksInheritedLayersDifferentlyFromTheSelectedOne(t *testing.T) {
+	decls := fourLayerChain()
+	chain, _ := Resolve(decls, "leaf")
+
+	// want pairs each position with the name that must be there, not just a
+	// scope value at that index. A scope-only check passes for any chain of
+	// the right length whoever its layers belong to, and passes vacuously if
+	// Resolve wrongly returns an empty chain. Checking length and name first
+	// closes both holes.
+	want := []string{"root", "base", "middle", "leaf"}
+	if len(chain.Layers) != len(want) {
+		t.Fatalf("chain.Layers = %+v, want %d layers matching %v", chain.Layers, len(want), want)
+	}
+	for i, l := range chain.Layers {
+		if l.Name != want[i] {
+			t.Fatalf("layer %d = %q, want %q (ancestors first)", i, l.Name, want[i])
+		}
+		wantScope := value.ScopeEnvironmentInherit
+		if i == len(chain.Layers)-1 {
+			wantScope = value.ScopeEnvironmentVar
+		}
+		if l.Scope != wantScope {
+			t.Errorf("layer %q scope = %v, want %v (the precedence chain separates environment inheritance from environment variables; the named environment is the latter)", l.Name, l.Scope, wantScope)
+		}
+	}
+}
+
+func TestResolveKeepsOverridesInStageTwosOrder(t *testing.T) {
+	// Decoding already sorted these and gave each its own Origin. Re-sorting
+	// here, or routing them through a map and sorting on the way out, is
+	// redundant and loses the origins.
+	decls := []config.EnvironmentDecl{
+		env("dev", "", override("alpha", 1), override("beta", 2)),
+	}
+	chain, _ := Resolve(decls, "dev")
+	got := chain.Layers[0].Overrides
+	if len(got) != 2 || got[0].Name != "alpha" || got[1].Name != "beta" {
+		t.Fatalf("overrides = %+v, want alpha then beta, unchanged", got)
+	}
+	if got[0].Origin.Line == 0 {
+		t.Error("each override must keep its own origin, or a diagnostic cannot point at the offending line")
+	}
+}
+
+func TestResolveRejectsSelfExtends(t *testing.T) {
+	chain, ds := Resolve([]config.EnvironmentDecl{env("dev", "dev")}, "dev")
+	if !ds.HasErrors() {
+		t.Fatal("`dev: {extends: dev}` is a one-node cycle and must be reported, not walked forever")
+	}
+	if chain.Selected || len(chain.Layers) != 0 {
+		t.Errorf("a failed Resolve must return an EMPTY chain, not a partial one: %+v", chain)
+	}
+	var sb strings.Builder
+	ds.Render(&sb)
+	if !strings.Contains(sb.String(), "dev -> dev") {
+		t.Errorf("the diagnostic must render the full cycle including the wrap:\n%s", sb.String())
+	}
+}
+
+func TestResolveRejectsATwoCycle(t *testing.T) {
+	decls := []config.EnvironmentDecl{env("a", "b"), env("b", "a")}
+	_, ds := Resolve(decls, "a")
+	if !ds.HasErrors() {
+		t.Fatal("a extends b extends a must be reported")
+	}
+	var sb strings.Builder
+	ds.Render(&sb)
+	if !strings.Contains(sb.String(), "a -> b -> a") {
+		t.Errorf("the diagnostic must name every participant in order:\n%s", sb.String())
+	}
+}
+
+func TestResolveRejectsExtendsOfAnUndeclaredEnvironment(t *testing.T) {
+	decls := []config.EnvironmentDecl{env("dev", "shared"), env("production", "")}
+	_, ds := Resolve(decls, "dev")
+	if !ds.HasErrors() {
+		t.Fatal("`extends: shared` with no `shared` declared must be reported")
+	}
+	var sb strings.Builder
+	ds.Render(&sb)
+	for _, want := range []string{"shared", "production", "infrena.yml:3:5"} {
+		if !strings.Contains(sb.String(), want) {
+			t.Errorf("the diagnostic must name the missing environment, list the ones that exist, and point at the `extends` line; %q missing:\n%s", want, sb.String())
+		}
+	}
+}
+
+func TestResolveRejectsAnUnknownEnvironmentName(t *testing.T) {
+	_, ds := Resolve([]config.EnvironmentDecl{env("production", "")}, "prod")
+	if !ds.HasErrors() {
+		t.Fatal("`infrena plan prod` against a project declaring only `production` must be reported")
+	}
+	var sb strings.Builder
+	ds.Render(&sb)
+	if !strings.Contains(sb.String(), "production") {
+		t.Errorf("the diagnostic must list the environments that DO exist, so the typo is visible:\n%s", sb.String())
+	}
+}
+
+func TestResolveAcceptsAnyNameWhenNoEnvironmentsAreDeclared(t *testing.T) {
+	// A project with no environments block at all must still plan, and the
+	// integration suite depends on it. Adopting environments is what turns a
+	// name into a checkable claim.
+	chain, ds := Resolve(nil, "dev")
+	if ds.HasErrors() {
+		t.Fatalf("a project with no environments must still plan: %+v", ds)
+	}
+	if !chain.Selected || len(chain.Layers) != 1 || chain.Layers[0].Name != "dev" {
+		t.Fatalf("chain = %+v, want one synthetic layer named dev", chain)
+	}
+}
+
+func TestDeclaredNamesPreservesDeclOrderNotSorted(t *testing.T) {
+	// declaredNames must reproduce the decls slice's order exactly: no
+	// re-sort, and no detour through a map (whose iteration order is
+	// randomised per run). Decoding already sorts alphabetically once, in
+	// internal/config/decode.go; an already-alphabetical fixture could not
+	// tell "preserved" from "resorted", so this one is deliberately neither
+	// ascending nor descending.
+	decls := []config.EnvironmentDecl{
+		env("zulu", ""),
+		env("alpha", "missing"),
+		env("mike", ""),
+	}
+
+	// Looped rather than called once: Go randomises a map's range start
+	// offset on every execution of the range statement, and for three keys
+	// that is only three rotations, heavily skewed toward the one matching
+	// insertion order. A single call against a map-based declaredNames would
+	// often pass by luck; repeating it makes that vanishingly unlikely.
+	for i := range 30 {
+		_, ds := Resolve(decls, "alpha")
+		if !ds.HasErrors() {
+			t.Fatalf("iteration %d: `alpha` extends undeclared `missing` and must be reported", i)
+		}
+		if len(ds) != 1 {
+			t.Fatalf("iteration %d: want exactly one diagnostic, got %d: %+v", i, len(ds), ds)
+		}
+		// Read Detail directly rather than the rendered string: the Summary
+		// line already contains "alpha", so scanning the full render for
+		// substring order would find that occurrence first and the assertion
+		// would prove nothing. Do not "simplify" this into a check over
+		// ds.Render's output.
+		detail := ds[0].Detail
+		zi, ai, mi := strings.Index(detail, "zulu"), strings.Index(detail, "alpha"), strings.Index(detail, "mike")
+		if zi < 0 || ai < 0 || mi < 0 {
+			t.Fatalf("iteration %d: Detail must list all three declared environments, got:\n%s", i, detail)
+		}
+		if !(zi < ai && ai < mi) {
+			t.Fatalf("iteration %d: Detail must list environments in decl order (zulu, alpha, mike), got:\n%s", i, detail)
+		}
+	}
+}
+
+func TestResolveWithNoEnvironmentNameSelectsNothing(t *testing.T) {
+	// `infrena validate` compiles with the environment left empty.
+	chain, ds := Resolve([]config.EnvironmentDecl{env("production", "")}, "")
+	if ds.HasErrors() {
+		t.Fatalf("`infrena validate` has no environment argument and must not fail here: %+v", ds)
+	}
+	if chain.Selected || len(chain.Layers) != 0 {
+		t.Fatalf("chain = %+v, want an unselected, empty chain", chain)
+	}
+}

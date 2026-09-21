@@ -1,0 +1,22 @@
+inputs:
+  network:
+    type: string
+  size:
+    type: integer
+    default: 10
+  password:
+    type: string
+  tags:
+    type: map
+    default: {}
+resources:
+  db:
+    type: fake.database
+    engine: postgres
+    network: ${var.network}
+    size: ${var.size}
+    password: ${var.password}
+    tags: ${var.tags}
+outputs:
+  endpoint:
+    value: ${db.endpoint}

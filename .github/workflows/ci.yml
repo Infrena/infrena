@@ -1,0 +1,182 @@
+name: CI
+
+# Two things this exists to catch that local development cannot.
+#
+# THE DECLARED FLOOR. go.mod's `go` line is a promise to every plugin author about
+# which Go they need, and nothing on a developer's machine tests
+# it. It currently MATCHES mise.toml's pin, so there is one meaningful toolchain and the
+# matrix has one entry — the floor step below still asserts go.mod has not drifted ABOVE
+# it, which is the failure that would otherwise be masked by Go silently downloading a
+# newer toolchain.
+#
+# The moment go.mod declares something older than mise.toml pins, add that version as a
+# second matrix entry: two toolchains is the only way the older promise is ever tested.
+#
+# THE RACE DETECTOR, which is slow enough that it is easy to stop running by hand, on a
+# codebase whose executor is concurrent by design.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  # A merge queue tests the combined result, which is the only thing that is
+  # actually about to become main. Harmless if no queue is configured.
+  merge_group:
+  # Called by release.yml, so a release cannot skip the checks. Sharing the job
+  # rather than copying its steps is the point: a duplicated check drifts, and the
+  # copy that drifts is the one guarding the artefacts people download.
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: check (${{ matrix.go }})
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        # Everything below runs in this repository; the plugin is checked out beside it,
+        # which is where tests/integration looks for a sibling.
+        working-directory: infrena
+
+    env:
+      # A CI RUN THAT SKIPS ITS INTEGRATION SUITE REPORTS GREEN FOR TESTS THAT NEVER RAN.
+      # tests/integration skips when infrena-plugin-fake is unavailable, which is right for
+      # a contributor who has not cloned it and wrong here. This turns that skip into a
+      # failure.
+      INFRENA_REQUIRE_PLUGIN: "1"
+
+      # NO SILENT TOOLCHAIN UPGRADES. Go 1.21+ downloads a newer toolchain on its own
+      # when go.mod asks for one, which would make the floor job pass by fetching
+      # exactly the version it exists to prove is unnecessary. `local` makes the
+      # matrix test what it says it tests.
+      GOTOOLCHAIN: local
+
+    strategy:
+      # Both versions always run. fail-fast would hide a floor break behind an
+      # unrelated failure on the newer toolchain, which is the case most worth seeing.
+      fail-fast: false
+      matrix:
+        include:
+          # What mise.toml pins AND what go.mod declares — currently the same version,
+          # so one entry. See the note at the top before adding another.
+          - go: "1.27"
+            name: current
+    steps:
+      # The path is explicit and load-bearing: the two checkouts must be SIBLINGS, because
+      # tests/integration builds the fake plugin inside a go.work joining it to this one
+      # (see buildFakePlugin) and finds this checkout by walking up from the test's own
+      # directory.
+      #
+      # It used to be load-bearing for a different reason — infrena-provider-fake's go.mod
+      # carried `replace github.com/infrena/infrena => ../infrena`, so the sibling
+      # directory had to be named exactly that. CI is where a disagreement showed up: it
+      # failed once when that replace still named `../ilan`, a local directory no clone
+      # produces, and again on 2026-09-17 when the replace was REMOVED and this job began
+      # trying to fetch the infrena module with no credentials on the step. The
+      # workspace is the durable answer, because it makes this repository state which
+      # infrena the plugin is built against rather than inherit it from a go.mod that
+      # nobody here reviews.
+      - uses: actions/checkout@v7
+        with:
+          path: infrena
+
+      # THE FAKE PROVIDER IS A SEPARATE REPOSITORY, and tests/integration builds
+      # it: a shipped infrena carries no provider, so the integration suite runs the same
+      # binary a user installs. That makes this checkout load-bearing rather than
+      # convenient.
+      - uses: actions/checkout@v7
+        with:
+          repository: infrena/infrena-provider-fake
+          path: infrena-provider-fake
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ matrix.go }}
+          # go.sum is no longer at the workspace root, since both repositories are
+          # checked out into subdirectories. Without this the cache step warns and
+          # caches nothing.
+          cache-dependency-path: infrena/go.sum
+          # Do NOT let the toolchain silently download a newer Go to satisfy go.mod.
+          # That would defeat the floor job entirely: it would pass by fetching 1.27.
+          # setup-go v6 began setting GOTOOLCHAIN=local itself, for this exact reason, so
+          # this agrees with the action rather than fighting it. The job-level GOTOOLCHAIN
+          # stays anyway: the guarantee must not rest on the action's default.
+          check-latest: false
+
+      - name: go.mod floor is not above this toolchain
+        # GOTOOLCHAIN=local (job env) already makes every later step fail if the floor
+        # rose. This runs FIRST so the failure carries the reason rather than Go's own
+        # "requires go >= …", which does not say who it breaks.
+        run: |
+          declared=$(go mod edit -json | sed -n 's/.*"Go": "\([^"]*\)".*/\1/p')
+          echo "go.mod declares $declared; this runner has $(go env GOVERSION)"
+          go build ./... || {
+            echo "::error::go.mod's floor ($declared) is above Go ${{ matrix.go }}."
+            echo "Either lower the floor, or raise this matrix entry deliberately —"
+            echo "raising it breaks every plugin author still on ${{ matrix.go }}."
+            exit 1
+          }
+
+      - name: gofmt
+        run: make fmt
+
+      - name: vet
+        run: make vet
+
+      - name: test
+        # -count=1 is not a preference: it disables the test cache, without which
+        # tests/integration can be skipped entirely because it shells out to `go build`
+        # rather than importing anything. See the Makefile.
+        run: make test
+
+      - name: test -race
+        # The executor is concurrent by design, and a data race there corrupts state.
+        run: go test -count=1 -race ./...
+
+  # EVERY PLATFORM A RELEASE PUBLISHES, COMPILED ON EVERY PUSH.
+  #
+  # release.yml cross-compiles eight targets, two of them Windows. Nothing built
+  # them until release day, so a break on any non-Linux target stayed invisible
+  # until the one day it is worst to find — and the check job above runs on
+  # ubuntu-latest only, so a developer's machine cannot catch it either.
+  #
+  # Its own job rather than steps on `check`: this needs no plugin checkout, no
+  # secret and no test run, so it starts immediately, finishes in a minute or
+  # two, and still reports when the integration suite is what failed.
+  #
+  # `vet` rather than `build`, deliberately: `go build` skips _test.go files, and
+  # a test that names a platform-specific symbol is exactly the shape of breakage
+  # this is here for. vet typechecks tests too.
+  platforms:
+    name: platforms
+    runs-on: ubuntu-latest
+
+    env:
+      GOTOOLCHAIN: local
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.27"
+          check-latest: false
+
+      - name: cross-compile every published platform
+        run: |
+          set -euo pipefail
+          failed=0
+          while read -r goos goarch goarm; do
+            [ -z "${goos:-}" ] && continue
+            case "$goos" in \#*) continue;; esac
+            echo "==> $goos/$goarch${goarm:+ v$goarm}"
+            if ! CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" GOARM="${goarm:-}" \
+                 go vet ./...; then
+              echo "::error::$goos/$goarch does not build, and a release publishes it."
+              failed=1
+            fi
+          done < <(sed 's/#.*//' .github/platforms)
+          exit $failed

@@ -1,0 +1,498 @@
+package compiler
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/infrena/infrena/internal/config"
+	"github.com/infrena/infrena/pkg/address"
+	"github.com/infrena/infrena/pkg/value"
+)
+
+func loadFiles(t *testing.T, body string) []config.File {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "infrena.yml"), []byte(body), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	files, err := config.Load(dir)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	return files
+}
+
+// loadFilesWithVariablesYml is loadFiles plus a variables.yml, for the tests
+// that exercise Options.FileVars against config.ProjectDecl.VariableValues —
+// the one rung of the precedence chain the two share.
+func loadFilesWithVariablesYml(t *testing.T, infraBody, variablesBody string) []config.File {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "infrena.yml"), []byte(infraBody), 0o644); err != nil {
+		t.Fatalf("write infrena.yml: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "variables.yml"), []byte(variablesBody), 0o644); err != nil {
+		t.Fatalf("write variables.yml: %v", err)
+	}
+	files, err := config.Load(dir)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	return files
+}
+
+func TestCompileRunsTheFullPipelineOnAValidProject(t *testing.T) {
+	files := loadFiles(t, `
+project: myapp
+resources:
+  network:
+    type: fake.network
+    cidr: 10.0.0.0/16
+  database:
+    type: fake.database
+    engine: postgres
+    network: ${network.id}
+`)
+	resolved, ds := Compile(files, testRegistry(t), Options{Environment: "dev"})
+	if ds.HasErrors() {
+		t.Fatalf("unexpected diagnostics: %+v", ds)
+	}
+	if resolved.Project != "myapp" || resolved.Environment != "dev" {
+		t.Errorf("Project/Environment = %q/%q, want myapp/dev", resolved.Project, resolved.Environment)
+	}
+
+	db, ok := resolved.Get(address.Address{Name: "database"})
+	if !ok {
+		t.Fatal("database resource missing from the resolved config")
+	}
+	size, ok := db.Attrs["size"]
+	if !ok || size.Source != value.SourceDefault {
+		t.Fatalf("stage 7's default for size was not filled in: %+v", size)
+	}
+	if n, _ := size.AsInt(); n != 10 {
+		t.Errorf("size = %d, want the dev default of 10", n)
+	}
+}
+
+func TestCompileStopsAfterDecodeErrors(t *testing.T) {
+	// A duplicate definition leaves the decoder unable to build a complete
+	// config. If later stages ran anyway, this lone database — which has no
+	// network anywhere in the file — would also trip stage 8's missing-
+	// requirement check, burying the real problem: the duplicate itself.
+	files := loadFiles(t, `
+project: myapp
+resources:
+  database:
+    type: fake.database
+    engine: postgres
+  database:
+    type: fake.database
+    engine: postgres
+`)
+	_, ds := Compile(files, testRegistry(t), Options{Environment: "dev"})
+	if !ds.HasErrors() {
+		t.Fatal("a duplicate resource definition must be an error")
+	}
+
+	var out strings.Builder
+	ds.Render(&out)
+	if !strings.Contains(out.String(), "defined more than once") {
+		t.Errorf("expected the duplicate-definition diagnostic:\n%s", out.String())
+	}
+	if strings.Contains(out.String(), "network") {
+		t.Errorf("stage 8 must not run against a config the decoder could not build; got noise:\n%s", out.String())
+	}
+}
+
+func TestCompileStopsAfterSchemaErrorsBeforeGraphValidation(t *testing.T) {
+	// bogus's unresolved type keeps stage 7 from finishing cleanly. guarded's
+	// contradictory lifecycle would be caught by stage 8 — if stage 8 ran. It
+	// must not: a resource whose type never resolved is exactly the config
+	// later stages cannot build on.
+	files := loadFiles(t, `
+project: myapp
+resources:
+  bogus:
+    type: fake.not_a_real_type
+  guarded:
+    type: fake.network
+    cidr: 10.0.0.0/16
+    lifecycle:
+      prevent_destroy: true
+      retain: true
+`)
+	_, ds := Compile(files, testRegistry(t), Options{Environment: "dev"})
+	if !ds.HasErrors() {
+		t.Fatal("an unregistered type must be an error")
+	}
+
+	var out strings.Builder
+	ds.Render(&out)
+	if !strings.Contains(out.String(), "unknown resource type") {
+		t.Errorf("expected stage 7's unknown-type diagnostic:\n%s", out.String())
+	}
+	if strings.Contains(out.String(), "prevent_destroy") {
+		t.Errorf("stage 8 must not run once stage 7 has errors; got its lifecycle diagnostic anyway:\n%s", out.String())
+	}
+}
+
+// TestCompileAccumulatesDiagnosticsWithinAStage. Both types share one plugin prefix
+// deliberately: a type whose prefix names no PLUGIN is reported once at stage 4.5
+// instead, which is a different diagnostic from the one this test is about.
+func TestCompileAccumulatesDiagnosticsWithinAStage(t *testing.T) {
+	files := loadFiles(t, `
+project: myapp
+resources:
+  a:
+    type: fake.nope_one
+  b:
+    type: fake.nope_two
+`)
+	_, ds := Compile(files, testRegistry(t), Options{Environment: "dev"})
+	if len(ds) < 2 {
+		t.Errorf("got %d diagnostics, want at least 2 — one bad type must not mask the other", len(ds))
+	}
+}
+
+// TestCompileAlwaysDefinesEnvironmentAndProject.
+//
+// TWO process variables, not four: region and account are ordinary variable names, not
+// engine-supplied ones. Asserting more than the engine actually seeds proves only that
+// the mechanism works when driven by the test itself.
+func TestCompileAlwaysDefinesEnvironmentAndProject(t *testing.T) {
+	files := loadFiles(t, `
+project: myapp
+resources:
+  network:
+    type: fake.network
+    cidr: ${var.environment}/${var.project}
+`)
+	cfg, ds := Compile(files, testRegistry(t), Options{Environment: "production"})
+	if ds.HasErrors() {
+		t.Fatalf("unexpected diagnostics: %+v", ds)
+	}
+	got, _ := cfg.Resources["network"].Attrs["cidr"].AsString()
+	if got != "production/myapp" {
+		t.Errorf("cidr = %q, want %q — configuration must be able to name its own environment and project", got, "production/myapp")
+	}
+}
+
+// TestAnUndeclaredNameTheEngineDoesNotSupplyIsUndefined.
+//
+// The other direction of the predicate, and the half that keeps `region` honest:
+// interpolating an empty string would silently name a resource after nothing, while an
+// undefined variable is a diagnostic the user can act on. `region` is the case worth
+// naming, because it is the likeliest name an AWS project reaches for.
+func TestAnUndeclaredNameTheEngineDoesNotSupplyIsUndefined(t *testing.T) {
+	for _, name := range []string{"region", "account", "nosuchthing"} {
+		files := loadFiles(t, `
+project: myapp
+resources:
+  network:
+    type: fake.network
+    cidr: ${`+name+`}
+`)
+		if _, ds := Compile(files, testRegistry(t), Options{Environment: "dev"}); !ds.HasErrors() {
+			t.Errorf("${%s} with nothing declaring or supplying it must be reported as undefined, "+
+				"not resolved to an empty string", name)
+		}
+	}
+}
+
+// TestCompileWillNotLetAVarFlagRedefineTheEnvironment. seedProcessVariables stays
+// authoritative, but silently discarding the flag is not good enough: it used to
+// vanish with no error and render as `[environment, from --var]`, which a user reads
+// as confirmation the flag WAS honoured.
+func TestCompileWillNotLetAVarFlagRedefineTheEnvironment(t *testing.T) {
+	files := loadFiles(t, `
+project: myapp
+resources:
+  network:
+    type: fake.network
+    cidr: ${var.environment}
+`)
+	_, ds := Compile(files, testRegistry(t), Options{
+		Environment: "production",
+		Vars:        map[string]string{"environment": "staging"},
+	})
+	if !ds.HasErrors() {
+		t.Fatal("--var environment=staging must be refused, not silently discarded — " +
+			"the environment argument decides which state file is written, and a flag " +
+			"that cannot change that must say so rather than vanish")
+	}
+	var sb strings.Builder
+	ds.Render(&sb)
+	if !strings.Contains(sb.String(), "environment") {
+		t.Errorf("the diagnostic must name \"environment\" as the refused variable:\n%s", sb.String())
+	}
+}
+
+// TestCompileAllowsEnvironmentDeclaredAsAVariable. "environment" is unconditionally
+// seeded by seedProcessVariables, which runs strictly AFTER variables.Resolve — so a
+// project that also declares "environment" under `variables:` can trip Resolve's unset
+// check for a variable that is always about to be supplied. A project has no reason to
+// know that "environment" is process-reserved rather than an ordinary identifier.
+func TestCompileAllowsEnvironmentDeclaredAsAVariable(t *testing.T) {
+	files := loadFiles(t, `
+project: myapp
+variables:
+  environment:
+    type: string
+resources:
+  network:
+    type: fake.network
+    cidr: ${var.environment}
+`)
+	cfg, ds := Compile(files, testRegistry(t), Options{Environment: "production"})
+	if ds.HasErrors() {
+		t.Fatalf("unexpected diagnostics: %+v", ds)
+	}
+	if got, _ := cfg.Resources["network"].Attrs["cidr"].AsString(); got != "production" {
+		t.Errorf("cidr = %q, want production — the process-supplied environment must still win even when the project also declares \"environment\" as its own variable", got)
+	}
+}
+
+// TestSeededEnvironmentDoesNotCreditDashDashVar. If seedProcessVariables stamps
+// ScopeCLIOverride without a SuppliedBy, the label falls back to the scope's generic
+// one — "--var" — and a bare `infrena plan dev` with no flags renders
+// `cidr: "dev" [environment, from --var]`, which contradicts the rule that a --var
+// cannot set "environment" at all.
+func TestSeededEnvironmentDoesNotCreditDashDashVar(t *testing.T) {
+	files := loadFiles(t, `
+project: myapp
+resources:
+  network:
+    type: fake.network
+    cidr: ${var.environment}
+`)
+	cfg, ds := Compile(files, testRegistry(t), Options{Environment: "dev"})
+	if ds.HasErrors() {
+		t.Fatalf("unexpected diagnostics: %+v", ds)
+	}
+	got := cfg.Resources["network"].Attrs["cidr"]
+	if got.SuppliedBy == "--var" {
+		t.Error("a bare `infrena plan dev` with no --var must not credit --var for the seeded environment")
+	}
+	if annotated := value.Annotate(got, value.FormatOptions{Unknown: "(unknown)", QuoteStrings: true}); strings.Contains(annotated, "from --var") {
+		t.Errorf("the rendered annotation must not name --var when none was passed: %s", annotated)
+	}
+}
+
+func TestCompileResolvesVariablesThroughTheEnvironmentChain(t *testing.T) {
+	files := loadFiles(t, `
+project: myapp
+variables:
+  replicas:
+    type: integer
+    default: 50
+    min: 1
+    max: 100
+environments:
+  base:
+    replicas: 30
+  production:
+    extends: base
+    replicas: 20
+resources:
+  network:
+    type: fake.network
+    cidr: 10.0.0.0/16
+  database:
+    type: fake.database
+    engine: postgres
+    network: ${network.id}
+    size: ${var.replicas}
+`)
+	cfg, ds := Compile(files, testRegistry(t), Options{Environment: "production"})
+	if ds.HasErrors() {
+		t.Fatalf("unexpected diagnostics: %+v", ds)
+	}
+	size := cfg.Resources["database"].Attrs["size"]
+	if n, _ := size.AsInt(); n != 20 {
+		t.Errorf("size = %d, want 20 — production's own value beats the one it inherits and the declared default", n)
+	}
+	if size.Scope != value.ScopeEnvironmentVar {
+		t.Errorf("Scope = %v, want ScopeEnvironmentVar", size.Scope)
+	}
+}
+
+func TestCompileReportsAnUnknownEnvironment(t *testing.T) {
+	files := loadFiles(t, `
+project: myapp
+environments:
+  production: {}
+resources:
+  network:
+    type: fake.network
+    cidr: 10.0.0.0/16
+`)
+	_, ds := Compile(files, testRegistry(t), Options{Environment: "prod"})
+	if !ds.HasErrors() {
+		t.Fatal("`infrena plan prod` against a project declaring only `production` must be reported by stage 3")
+	}
+}
+
+func TestCompileStopsAfterEnvironmentErrors(t *testing.T) {
+	// A failed chain does NOT by itself make stage 4 report every
+	// environment-scoped variable as unset: a Chain that failed to resolve
+	// carries Selected: false, and stage 4 already treats an unselected
+	// chain as "nothing to check" (see Compile's doc comment) — `domain`
+	// here resolves to an unknown, not an error. This fixture pins that
+	// specifically: it has one declared variable and no default, the exact
+	// shape that WOULD add a second diagnostic if stage 4's unset check
+	// misfired here.
+	files := loadFiles(t, `
+project: myapp
+variables:
+  domain:
+    type: string
+environments:
+  a:
+    extends: b
+  b:
+    extends: a
+resources:
+  network:
+    type: fake.network
+    cidr: ${var.domain}
+`)
+	_, ds := Compile(files, testRegistry(t), Options{Environment: "a"})
+	if len(ds) != 1 {
+		t.Fatalf("want exactly the cycle diagnostic, got %d:\n%+v", len(ds), ds)
+	}
+}
+
+// TestCompileStopsAfterEnvironmentErrorsSuppressesChainIndependentVariableErrors
+// is what the halt after stage 3 actually guards, proven by a fixture the
+// sibling test above cannot exercise. A malformed variable DECLARATION
+// (variables.Schemas validating `default: not-a-number` against `type:
+// integer`) is chain-independent — Schemas runs before the chain is ever
+// consulted — so it fires whether or not the chain resolves. Without the
+// halt, this fixture's cycle diagnostic and the bad-default diagnostic both
+// reach the caller; with it, only the cycle does, because a report about a
+// declaration failure "while resolving environment a" is judged less useful
+// than letting the user fix the chain first and re-run (see Compile's doc comment).
+func TestCompileStopsAfterEnvironmentErrorsSuppressesChainIndependentVariableErrors(t *testing.T) {
+	files := loadFiles(t, `
+project: myapp
+variables:
+  port:
+    type: integer
+    default: not-a-number
+environments:
+  a:
+    extends: b
+  b:
+    extends: a
+resources:
+  network:
+    type: fake.network
+    cidr: 10.0.0.0/16
+`)
+	_, ds := Compile(files, testRegistry(t), Options{Environment: "a"})
+	if len(ds) != 1 {
+		t.Fatalf("want exactly the cycle diagnostic — the halt after stage 3 exists to suppress stage 4's chain-independent declaration errors until the chain itself is fixed, got %d:\n%+v", len(ds), ds)
+	}
+}
+
+// TestCompileStopsAfterVariableErrors is the stage-4-only sibling of
+// TestCompileStopsAfterEnvironmentErrors. That test's cycle makes
+// environments.Resolve fail, which returns a Chain with Selected false —
+// stage 4 already treats an unselected chain as "nothing to check" (an
+// unset variable becomes an unknown, not an error), so it produces no
+// diagnostics of its own either way and does not by itself prove the halt
+// after stage 4 does anything. This fixture resolves its environment
+// chain cleanly and fails only because a declared variable has no default
+// and nothing sets it: without the halt, stage 6 additionally reports
+// `undefined variable "domain"` at ${var.domain}'s use site — the same
+// problem told twice, exactly what the halt exists to prevent.
+func TestCompileStopsAfterVariableErrors(t *testing.T) {
+	files := loadFiles(t, `
+project: myapp
+variables:
+  domain:
+    type: string
+resources:
+  network:
+    type: fake.network
+    cidr: ${var.domain}
+`)
+	_, ds := Compile(files, testRegistry(t), Options{Environment: "dev"})
+	if len(ds) != 1 {
+		t.Fatalf("want exactly the unset-variable diagnostic, got %d:\n%+v", len(ds), ds)
+	}
+}
+
+// TestCompileFileVarWinsOverVariablesYml exercises fileVars' merge order: the file
+// named on the command line beats variables.yml. That distinction is why
+// Options.FileVars and ProjectDecl.VariableValues are two fields rather than one.
+func TestCompileFileVarWinsOverVariablesYml(t *testing.T) {
+	files := loadFilesWithVariablesYml(t, `
+project: myapp
+variables:
+  name:
+    type: string
+    default: from-schema-default
+resources:
+  network:
+    type: fake.network
+    cidr: ${var.name}
+`, "name: from-variables-yml\n")
+
+	cfg, ds := Compile(files, testRegistry(t), Options{
+		Environment: "dev",
+		FileVars:    map[string]value.Value{"name": value.String("from-var-file", value.SourceVariable)},
+	})
+	if ds.HasErrors() {
+		t.Fatalf("unexpected diagnostics: %+v", ds)
+	}
+	if got, _ := cfg.Resources["network"].Attrs["cidr"].AsString(); got != "from-var-file" {
+		t.Errorf("cidr = %q, want from-var-file — --var-file is more specific than variables.yml and must win", got)
+	}
+}
+
+// TestCompileVariablesYmlWinsWhenNoFileVarIsSupplied is the other direction:
+// absent Options.FileVars, variables.yml still beats the declared default.
+func TestCompileVariablesYmlWinsWhenNoFileVarIsSupplied(t *testing.T) {
+	files := loadFilesWithVariablesYml(t, `
+project: myapp
+variables:
+  name:
+    type: string
+    default: from-schema-default
+resources:
+  network:
+    type: fake.network
+    cidr: ${var.name}
+`, "name: from-variables-yml\n")
+
+	cfg, ds := Compile(files, testRegistry(t), Options{Environment: "dev"})
+	if ds.HasErrors() {
+		t.Fatalf("unexpected diagnostics: %+v", ds)
+	}
+	if got, _ := cfg.Resources["network"].Attrs["cidr"].AsString(); got != "from-variables-yml" {
+		t.Errorf("cidr = %q, want from-variables-yml", got)
+	}
+}
+
+func TestCompileReportsStage8Diagnostics(t *testing.T) {
+	files := loadFiles(t, `
+project: myapp
+resources:
+  database:
+    type: fake.database
+    engine: postgres
+`)
+	_, ds := Compile(files, testRegistry(t), Options{Environment: "dev"})
+	if !ds.HasErrors() {
+		t.Fatal("a database with no network anywhere in the project must be caught before any provider call")
+	}
+
+	var out strings.Builder
+	ds.Render(&out)
+	if !strings.Contains(out.String(), "network") {
+		t.Errorf("expected stage 8's missing-requirement diagnostic:\n%s", out.String())
+	}
+}

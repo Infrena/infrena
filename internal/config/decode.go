@@ -1,0 +1,1561 @@
+package config
+
+import (
+	"maps"
+	"sort"
+	"strconv"
+	"strings"
+
+	"gopkg.in/yaml.v3"
+
+	"github.com/infrena/infrena/internal/diag"
+	"github.com/infrena/infrena/internal/plugins"
+	"github.com/infrena/infrena/pkg/semver"
+	"github.com/infrena/infrena/pkg/value"
+)
+
+// Decode converts parsed YAML into typed declarations, collecting every problem
+// rather than stopping at the first.
+func Decode(files []File) (*ProjectDecl, diag.Diagnostics) {
+	var ds diag.Diagnostics
+	out := &ProjectDecl{VariableValues: map[string]value.Value{}, ScopedValues: map[string]map[string]value.Value{}}
+
+	// Uniqueness is tracked across the whole decode rather than per file,
+	// because several files contribute to one root module.
+	//
+	// Variables, environments and resources get separate sets: they are
+	// separate namespaces, since `${var.db}` is a variable reference and
+	// `${db.host}` a resource reference.
+	seenResources := map[string]value.Origin{}
+	seenVariables := map[string]value.Origin{}
+	// seenEnvironments maps an environment name to its index in
+	// out.Environments, because the block and the file merge into one decl.
+	seenEnvironments := map[string]int{}
+	// seenModules maps a module's name to the entry that claimed it, so a
+	// collision names both sources. Separate from seenResources: a module name
+	// is only ever half of a resource type (`module.app`), never a bare name,
+	// so a module called `app` and a resource called `app` do not collide.
+	seenModules := map[string]loadedName{}
+
+	for _, f := range files {
+		doc := documentRoot(f.Root)
+		if doc == nil {
+			// Only the project file must have content. An empty variables.yml
+			// or an empty environment file declares nothing, which is a
+			// perfectly ordinary state for a file a user has just created.
+			if f.Kind != FileProject {
+				continue
+			}
+			ds.Add(diag.Diagnostic{
+				Severity: diag.SeverityError,
+				Summary:  "configuration file is empty",
+				Origin:   value.Origin{File: f.Path},
+				Action:   "Add a `project` name and a `resources` block.",
+			})
+			continue
+		}
+		if doc.Kind != yaml.MappingNode {
+			ds.Add(diag.Diagnostic{
+				Severity: diag.SeverityError,
+				Summary:  f.Kind.String() + " must be a mapping",
+				Detail:   topLevelShapeDetail(f),
+				Origin:   originOf(f.Path, doc),
+			})
+			continue
+		}
+
+		switch f.Kind {
+		case FileProject:
+			// Assigned only here. Assigning it for every file in the loop
+			// would leave ProjectDecl.Origin pointing at the last environment
+			// file, so every diagnostic about "the project" would point at
+			// environments/zulu.yml.
+			out.Origin = originOf(f.Path, doc)
+			decodeDocument(f.Path, doc, out, &ds, seenResources, seenVariables, seenEnvironments, seenModules)
+		case FileVariables:
+			decodeVariableValues(f, out, &ds)
+		case FileEnvironment:
+			decodeEnvironmentBody(f.Path, f.Environment, doc, out, &ds, seenEnvironments)
+		case FileVars:
+			decodeVarsFile(f, doc, out, &ds, seenEnvironments)
+		case FileResources:
+			// A file under resources/** or discovered/** carries a `resources:`
+			// block and means exactly what the same block in infrena.yml means.
+			// It shares the seen map, so a name declared in two files collides
+			// exactly as two in one file would — globbing makes that easy to do
+			// by accident.
+			decodeResourcesFile(f.Path, f.Dir, doc, out, &ds, seenResources)
+		}
+	}
+
+	sort.Slice(out.Resources, func(i, j int) bool { return out.Resources[i].Name < out.Resources[j].Name })
+	sort.Slice(out.Variables, func(i, j int) bool { return out.Variables[i].Name < out.Variables[j].Name })
+	sort.Slice(out.Environments, func(i, j int) bool { return out.Environments[i].Name < out.Environments[j].Name })
+	sort.Slice(out.Modules, func(i, j int) bool { return out.Modules[i].Name < out.Modules[j].Name })
+	// Sorted once, here, so no consumer has to. Overrides are built by
+	// appending in file order, which across the block and the file is the
+	// filesystem's order rather than the user's.
+	for i := range out.Environments {
+		o := out.Environments[i].Overrides
+		sort.Slice(o, func(a, b int) bool { return o[a].Name < o[b].Name })
+	}
+	return out, ds
+}
+
+// topLevelShapeDetail explains what the top level of each file kind holds. A
+// generic "must be a mapping" is true of them all and actionable for none.
+func topLevelShapeDetail(f File) string {
+	switch f.Kind {
+	case FileVariables:
+		return "The top level of " + VariablesFileName + " is a flat mapping of variable name to value, for example `region: us-east-1`."
+	case FileEnvironment:
+		return "The top level of an environment file is a mapping of variable name to value, for example `replicas: 10`."
+	case FileModule:
+		return "The top level of " + ModuleFileName + " must be a set of keys such as `inputs`, `resources` and `outputs`."
+	default:
+		return "The top level of " + ProjectFileName + " must be a set of keys such as `project` and `resources`."
+	}
+}
+
+// decodeVarsFile decodes one file from vars/**.
+//
+// Three shapes, and the filename chooses between them:
+//
+//   - default.yml            every environment; base configuration
+//   - <declared-env>.yml     that environment only
+//   - anything else          bare keys are defaults, keys naming an
+//     environment are that environment's overrides
+//
+// A file naming an environment is a set of differences, not a replacement:
+// default.yml setting size and region while production.yml sets only size
+// leaves production with default's region. That falls out of routing the two
+// into the existing base-config and environment rungs, which is why this
+// function chooses a destination rather than computing a result.
+func decodeVarsFile(f File, doc *yaml.Node, out *ProjectDecl, ds *diag.Diagnostics, seenEnv map[string]int) {
+	if f.ScopeDir != "" {
+		// Scoped to one resources directory. No environment convention applies
+		// here — the directory already says who the values are for, and a
+		// filename convention on top would make
+		// resources/db/vars/production.yml ambiguous between "production's
+		// values for db" and "a file named production".
+		if _, ok := out.ScopedValues[f.ScopeDir]; !ok {
+			out.ScopedValues[f.ScopeDir] = map[string]value.Value{}
+		}
+		for i := 0; i+1 < len(doc.Content); i += 2 {
+			key, val := doc.Content[i], doc.Content[i+1]
+			v, _ := decodeValue(f.Path, "variable "+strconv.Quote(key.Value), val, ds)
+			out.ScopedValues[f.ScopeDir][key.Value] = retagSource(v, value.SourceVariable, value.ScopeUnset, "")
+		}
+		return
+	}
+
+	switch {
+	case f.Environment == "default":
+		decodeVariableValues(File{Path: f.Path, Kind: FileVariables, Root: f.Root}, out, ds)
+		return
+	case f.Environment != "" && declaresEnvironment(out, f.Environment):
+		decodeEnvironmentBody(f.Path, f.Environment, doc, out, ds, seenEnv)
+		return
+	}
+
+	// The in-file form. A top-level key is an environment block only if it
+	// names a declared environment; anything else is a variable, whatever shape
+	// its value has. Reinterpreting a map-valued variable as a block would make
+	// a file's meaning depend on its value's shape, and a map is an ordinary
+	// variable value here.
+	for i := 0; i+1 < len(doc.Content); i += 2 {
+		key, val := doc.Content[i], doc.Content[i+1]
+		if !declaresEnvironment(out, key.Value) {
+			v, _ := decodeValue(f.Path, "variable "+strconv.Quote(key.Value), val, ds)
+			out.VariableValues[key.Value] = retagSource(v, value.SourceVariable, value.ScopeUnset, "")
+			continue
+		}
+		if val.Kind != yaml.MappingNode {
+			// A variable that happens to share a name with an environment. An
+			// error rather than a guess, because the alternative is that adding
+			// an environment months later silently changes what this file means
+			// without anyone touching it.
+			ds.Add(diag.Diagnostic{
+				Severity: diag.SeverityError,
+				Summary:  "variable " + strconv.Quote(key.Value) + " collides with the environment of that name",
+				Detail: "A top-level key naming a declared environment is that environment's overrides, so " +
+					strconv.Quote(key.Value) + " cannot also be a variable here.",
+				Action: "Rename the variable, or set it under an environment block.",
+				Origin: originOf(f.Path, key),
+			})
+			continue
+		}
+		decodeEnvironmentBody(f.Path, key.Value, val, out, ds, seenEnv)
+	}
+}
+
+// declaresEnvironment reports whether name is an environment the project
+// declares. Vars files are decoded after infrena.yml and environments/, so the
+// set is complete by the time this is asked.
+func declaresEnvironment(out *ProjectDecl, name string) bool {
+	for i := range out.Environments {
+		if out.Environments[i].Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+// decodeResourcesFile decodes one file from resources/** or discovered/**.
+//
+// Its top level holds `resources:` and nothing else. A `project:` key or an
+// environments block in such a file is a mistake worth naming rather than
+// ignoring: it reads as though it would work, and silently doing nothing is how
+// a user spends an afternoon wondering why their environment has no effect.
+func decodeResourcesFile(path, dir string, doc *yaml.Node, out *ProjectDecl, ds *diag.Diagnostics,
+	seenResources map[string]value.Origin) {
+	for i := 0; i+1 < len(doc.Content); i += 2 {
+		key, val := doc.Content[i], doc.Content[i+1]
+		if key.Value == "resources" {
+			before := len(out.Resources)
+			decodeResources(path, val, &out.Resources, ds, seenResources)
+			// Stamped here rather than inside decodeResources, which is shared
+			// with infrena.yml and with module files and has no directory to
+			// speak of.
+			for i := before; i < len(out.Resources); i++ {
+				out.Resources[i].Dir = dir
+			}
+			continue
+		}
+		ds.Add(diag.Diagnostic{
+			Severity: diag.SeverityError,
+			Summary:  "unexpected key " + strconv.Quote(key.Value) + " in a resources file",
+			Detail: "A file under " + ResourcesDirName + "/ or " + DiscoveredDirName +
+				"/ holds `resources:` and nothing else. Variables belong in " + VarsDirName +
+				"/, and environments in " + EnvironmentsDirName + "/.",
+			Action: "Move " + strconv.Quote(key.Value) + " to the file that owns it, or remove it.",
+			Origin: originOf(path, key),
+		})
+	}
+}
+
+func decodeDocument(path string, doc *yaml.Node, out *ProjectDecl, ds *diag.Diagnostics,
+	seenResources, seenVariables map[string]value.Origin, seenEnvironments map[string]int,
+	seenModules map[string]loadedName) {
+	for i := 0; i+1 < len(doc.Content); i += 2 {
+		key, val := doc.Content[i], doc.Content[i+1]
+		switch key.Value {
+		case "project":
+			if text, ok := requireScalar(path, "`project`", val, ds); ok {
+				out.Project = text
+			}
+		case "resources":
+			decodeResources(path, val, &out.Resources, ds, seenResources)
+		case "variables":
+			decodeVariables(path, val, out, ds, seenVariables)
+		case "environments":
+			decodeEnvironments(path, val, out, ds, seenEnvironments)
+		case "providers":
+			decodeProviders(path, val, out, ds)
+		case "modules":
+			decodeModuleLoads(path, val, &out.Modules, ds, seenModules)
+		case "infrena":
+			decodeRequiredVersion(path, key, val, out, ds)
+		case "plugins":
+			decodePluginConstraints(path, val, out, ds)
+		case "backend":
+			decodeBackend(path, key, val, out, ds)
+		case "migrate_from":
+			decodeMigrateFrom(path, key, val, out, ds)
+		default:
+			ds.Add(diag.Diagnostic{
+				Severity: diag.SeverityWarning,
+				Summary:  "unrecognised top-level key " + strconv.Quote(key.Value),
+				Detail: ProjectFileName + " understands `project`, `infrena`, `plugins`, " +
+					"`resources`, `variables`, `environments`, `providers`, `modules`, " +
+					"`backend` and `migrate_from`.",
+				Origin: originOf(path, key),
+			})
+		}
+	}
+}
+
+// decodeRequiredVersion reads `infrena: ">= 0.4"`, the optional floor a project
+// may state on the tool itself.
+//
+// A constraint, not a format version: the language is additive and already
+// fails closed on syntax it does not know, so this exists to turn "unknown key
+// `foo`" into "this project needs infrena >= 0.4".
+//
+// Declared twice is an error naming both lines. Two floors could contradict
+// each other, and taking the last one read makes which file wins depend on
+// directory order.
+func decodeRequiredVersion(path string, key, node *yaml.Node, out *ProjectDecl, ds *diag.Diagnostics) {
+	origin := originOf(path, key)
+	if out.RequiredVersionOrigin.File != "" {
+		ds.Add(diag.Diagnostic{
+			Severity: diag.SeverityError,
+			Summary:  "`infrena` is declared twice",
+			Detail: "The first is at " + describeOrigin(out.RequiredVersionOrigin) +
+				". Two version floors could contradict each other, and taking whichever " +
+				"was read last would make the answer depend on the order files are loaded.",
+			Action: "Keep one `infrena:` constraint for the project.",
+			Origin: origin,
+		})
+		return
+	}
+
+	text, ok := requireScalar(path, "`infrena`", node, ds)
+	if !ok {
+		return
+	}
+	constraint, err := semver.ParseConstraint(text)
+	if err != nil {
+		ds.Add(diag.Diagnostic{
+			Severity: diag.SeverityError,
+			Summary:  "`infrena` is not a version constraint: " + err.Error(),
+			Detail: "A constraint is comparison operators on MAJOR.MINOR.PATCH, with a comma " +
+				"meaning AND — `>= 0.4`, or `>= 0.4, < 1.0`.",
+			Origin: origin,
+		})
+		return
+	}
+	out.RequiredVersion = constraint
+	out.RequiredVersionOrigin = origin
+}
+
+// decodePluginConstraints reads `plugins:`, a map of plugin name to version
+// constraint, or to a mapping of `version` and `source`.
+//
+//	plugins:
+//	  aws: ">= 0.3.0, < 0.4.0"
+//	  hetzner:
+//	    version: ">= 1.2"
+//	    source: github.com/someone/infrena-provider-hetzner
+//
+// A mapping, unlike `providers:`, and for the opposite reason: `providers:` is
+// a list because a project may declare two instances of one plugin, while a
+// plugin has exactly one version however many instances use it — they share one
+// process.
+//
+// The mapping form is additive: the scalar form still means what it meant
+// before this key learned about sources, so projects already written keep
+// decoding unchanged.
+func decodePluginConstraints(path string, node *yaml.Node, out *ProjectDecl, ds *diag.Diagnostics) {
+	if node.Kind != yaml.MappingNode {
+		ds.Add(diag.Diagnostic{
+			Severity: diag.SeverityError,
+			Summary:  "`plugins` must be a mapping of plugin name to version constraint",
+			Detail:   "For example:\n  plugins:\n    aws: \">= 0.3.0, < 0.4.0\"",
+			Origin:   originOf(path, node),
+		})
+		return
+	}
+
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		key, val := node.Content[i], node.Content[i+1]
+		origin := originOf(path, key)
+
+		if existing, declared := out.Plugins[key.Value]; declared {
+			ds.Add(diag.Diagnostic{
+				Severity: diag.SeverityError,
+				Summary:  "plugin " + strconv.Quote(key.Value) + " is constrained twice",
+				Detail: "The first is at " + describeOrigin(existing.Origin) +
+					". Two constraints on one plugin could contradict each other, and taking " +
+					"whichever was read last would make the answer depend on the order files " +
+					"are loaded.",
+				Action: "Keep one constraint per plugin.",
+				Origin: origin,
+			})
+			continue
+		}
+
+		entry, ok := decodePluginEntry(path, key.Value, val, origin, ds)
+		if !ok {
+			continue
+		}
+		if out.Plugins == nil {
+			out.Plugins = make(map[string]PluginConstraint)
+		}
+		out.Plugins[key.Value] = entry
+	}
+}
+
+// decodePluginEntry reads one `plugins:` value in either of its two forms.
+func decodePluginEntry(path, name string, val *yaml.Node, origin value.Origin, ds *diag.Diagnostics) (PluginConstraint, bool) {
+	if val.Kind == yaml.MappingNode {
+		return decodePluginMapping(path, name, val, origin, ds)
+	}
+
+	text, ok := requireScalar(path, "the constraint for plugin "+strconv.Quote(name), val, ds)
+	if !ok {
+		return PluginConstraint{}, false
+	}
+	constraint, ok := pluginVersionConstraint(name, text, origin, ds)
+	if !ok {
+		return PluginConstraint{}, false
+	}
+	return PluginConstraint{Constraint: constraint, Origin: origin}, true
+}
+
+// decodePluginMapping reads the `version`/`source` form.
+//
+// Both keys are optional — `source` alone is a plugin whose home is stated but
+// whose version is not pinned, and `version` alone is the scalar form written
+// long-hand. Any other key is an error: this language fails closed on unknown
+// keys everywhere, because a silently ignored `versoin:` reads to its author as
+// a constraint that took effect.
+func decodePluginMapping(path, name string, node *yaml.Node, origin value.Origin, ds *diag.Diagnostics) (PluginConstraint, bool) {
+	entry := PluginConstraint{Origin: origin}
+	ok := true
+
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		key, val := node.Content[i], node.Content[i+1]
+		keyOrigin := originOf(path, key)
+
+		switch key.Value {
+		case "version":
+			text, got := requireScalar(path, "the version for plugin "+strconv.Quote(name), val, ds)
+			if !got {
+				ok = false
+				continue
+			}
+			constraint, got := pluginVersionConstraint(name, text, keyOrigin, ds)
+			if !got {
+				ok = false
+				continue
+			}
+			entry.Constraint = constraint
+		case "source":
+			text, got := requireScalar(path, "the source for plugin "+strconv.Quote(name), val, ds)
+			if !got {
+				ok = false
+				continue
+			}
+			// Validated at decode time, so a typo points at the line in
+			// infrena.yml rather than surfacing much later out of an install.
+			if _, err := plugins.ParseSource(text); err != nil {
+				ds.Add(diag.Diagnostic{
+					Severity: diag.SeverityError,
+					Summary:  "plugin " + strconv.Quote(name) + " names an invalid source: " + err.Error(),
+					Detail: "A source is a host, an owner, and optionally one repository — " +
+						"`github.com/someone` to search an owner, or " +
+						"`github.com/someone/infrena-provider-" + name + "` for one repository.",
+					Action: "Correct the source, or remove it and let the sources you trust decide.",
+					Origin: keyOrigin,
+				})
+				ok = false
+				continue
+			}
+			entry.Source = text
+			entry.SourceOrigin = keyOrigin
+		default:
+			ds.Add(diag.Diagnostic{
+				Severity: diag.SeverityError,
+				Summary:  "plugin " + strconv.Quote(name) + " has an unknown key " + strconv.Quote(key.Value),
+				Detail:   "A plugin entry understands `version` and `source`.",
+				Origin:   keyOrigin,
+			})
+			ok = false
+		}
+	}
+	return entry, ok
+}
+
+// pluginVersionConstraint parses a constraint, reporting it against origin.
+func pluginVersionConstraint(name, text string, origin value.Origin, ds *diag.Diagnostics) (semver.Constraint, bool) {
+	constraint, err := semver.ParseConstraint(text)
+	if err != nil {
+		ds.Add(diag.Diagnostic{
+			Severity: diag.SeverityError,
+			Summary:  "plugin " + strconv.Quote(name) + " has an invalid constraint: " + err.Error(),
+			Detail: "A constraint is comparison operators on MAJOR.MINOR.PATCH, with a comma " +
+				"meaning AND — `>= 0.3.0`, or `>= 0.3.0, < 0.4.0`.",
+			Origin: origin,
+		})
+		return semver.Constraint{}, false
+	}
+	return constraint, true
+}
+
+func decodeResources(path string, node *yaml.Node, dst *[]*ResourceDecl, ds *diag.Diagnostics, seen map[string]value.Origin) {
+	if node.Kind != yaml.MappingNode {
+		ds.Add(diag.Diagnostic{
+			Severity: diag.SeverityError,
+			Summary:  "`resources` must be a mapping of logical name to resource",
+			Origin:   originOf(path, node),
+		})
+		return
+	}
+
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		nameNode, body := node.Content[i], node.Content[i+1]
+		r := &ResourceDecl{
+			Name:       nameNode.Value,
+			Attributes: map[string]AttributeDecl{},
+			Origin:     originOf(path, nameNode),
+		}
+
+		if !checkResourceName(path, r.Name, r.Origin, ds) {
+			continue
+		}
+
+		// A duplicate name is silent resource loss, not a stylistic problem:
+		// resources are keyed by address, so one definition simply disappears
+		// from the plan. Decoding is the only stage that still has the line
+		// numbers to say where the other one is.
+		if first, dup := seen[r.Name]; dup {
+			ds.Add(diag.Diagnostic{
+				Severity: diag.SeverityError,
+				Summary:  "resource " + strconv.Quote(r.Name) + " is defined more than once",
+				Detail:   "A logical name must be unique within a module. " + strconv.Quote(r.Name) + " is also defined at " + describeOrigin(first) + ".",
+				Action:   "Rename one of them, or merge the two definitions.",
+				Origin:   r.Origin,
+			})
+			continue
+		}
+		seen[r.Name] = r.Origin
+
+		if body.Kind != yaml.MappingNode {
+			ds.Add(diag.Diagnostic{
+				Severity: diag.SeverityError,
+				Summary:  "resource " + strconv.Quote(r.Name) + " must be a mapping",
+				Origin:   originOf(path, body),
+			})
+			continue
+		}
+
+		// typeReported records that `type` was present but unusable, so the
+		// "has no `type`" check below does not fire a second, misleading
+		// diagnostic for the same key.
+		typeReported := false
+
+		// Keys are tracked separately from r.Attributes because `type`,
+		// `depends_on` and `lifecycle` are keys too, and repeating one of those
+		// silently loses a value just as an attribute does.
+		seenKeys := map[string]value.Origin{}
+
+		for j := 0; j+1 < len(body.Content); j += 2 {
+			key, val := body.Content[j], body.Content[j+1]
+			keyOrigin := originOf(path, key)
+			if first, dup := seenKeys[key.Value]; dup {
+				ds.Add(diag.Diagnostic{
+					Severity: diag.SeverityError,
+					Summary:  strconv.Quote(key.Value) + " is set more than once on resource " + strconv.Quote(r.Name),
+					Detail:   "The last assignment would silently win. " + strconv.Quote(key.Value) + " is also set at " + describeOrigin(first) + ".",
+					Action:   "Remove one of the two assignments.",
+					Origin:   keyOrigin,
+				})
+				continue
+			}
+			seenKeys[key.Value] = keyOrigin
+
+			switch key.Value {
+			case "type":
+				text, ok := requireScalar(path, "`type`", val, ds)
+				if !ok {
+					// The `type` key is present but unusable. Reporting "has no
+					// `type`" as well would name a symptom rather than the
+					// problem.
+					typeReported = true
+					break
+				}
+				if !checkResourceType(path, r.Name, text, originOf(path, val), ds) {
+					// Same suppression, same reason: a malformed `module.` type
+					// has been reported, and "has no `type`" would describe a
+					// symptom of it.
+					typeReported = true
+					break
+				}
+				r.Type = text
+			case "depends_on":
+				if val.Kind != yaml.SequenceNode {
+					ds.Add(diag.Diagnostic{
+						Severity: diag.SeverityError,
+						Summary:  "`depends_on` must be a list",
+						Detail:   "A scalar silently produces no dependencies, and a missing edge means a resource can be created before what it depends on.",
+						Action:   "Write depends_on: [" + val.Value + "]",
+						Origin:   originOf(path, val),
+					})
+					break
+				}
+				for i, item := range val.Content {
+					text, ok := requireScalar(path, "`depends_on`["+strconv.Itoa(i)+"]", item, ds)
+					if !ok {
+						continue
+					}
+					r.DependsOn = append(r.DependsOn, text)
+				}
+			case "provider":
+				// A named key, not an attribute, for the reason `skip` and `only`
+				// are: everything this switch does not recognise becomes an
+				// attribute, so falling through would be reported as "no
+				// attribute provider" on every resource that names one.
+				text, ok := requireScalar(path, "`provider`", val, ds)
+				if !ok {
+					break
+				}
+				r.Provider = AttributeDecl{
+					Name:   "provider",
+					Value:  value.String(text, value.SourceExplicit).WithOrigin(originOf(path, val)),
+					Origin: keyOrigin,
+				}
+			case "skip", "only":
+				// Named keys rather than attributes, for the reason `provider`
+				// is. The value is decoded exactly as an attribute would be,
+				// because it may be an expression and is evaluated later by the
+				// machinery that already evaluates attributes.
+				v, hasExpr := decodeValue(path, "`"+key.Value+"`", val, ds)
+				d := AttributeDecl{Name: key.Value, Value: v, HasExpressions: hasExpr, Origin: keyOrigin}
+				if key.Value == "skip" {
+					r.Skip = d
+				} else {
+					r.Only = d
+				}
+			case "for_each":
+				// A named key for the same reason skip and only are.
+				v, hasExpr := decodeValue(path, "`for_each`", val, ds)
+				r.ForEach = AttributeDecl{
+					Name: "for_each", Value: v, HasExpressions: hasExpr, Origin: keyOrigin,
+				}
+			case "lifecycle":
+				decodeLifecycle(path, val, r, ds)
+			default:
+				v, hasExpr := decodeValue(path, "attribute "+strconv.Quote(key.Value), val, ds)
+				r.Attributes[key.Value] = AttributeDecl{
+					Name:           key.Value,
+					Value:          v,
+					HasExpressions: hasExpr,
+					Origin:         keyOrigin,
+				}
+			}
+		}
+
+		// Two spellings of one idea, and they can contradict: `skip: [dev]`
+		// with `only: [dev]` means nothing coherent. Refused rather than given
+		// a precedence, because any precedence here is one a reader would have
+		// to memorise.
+		if r.Skip.Name != "" && r.Only.Name != "" {
+			ds.Add(diag.Diagnostic{
+				Severity: diag.SeverityError,
+				Summary:  "resource " + strconv.Quote(r.Name) + " sets both `skip` and `only`",
+				Detail: "They are two ways of saying the same thing and can contradict each other: " +
+					"`only` is also set at " + describeOrigin(r.Only.Origin) + ".",
+				Action: "Keep whichever reads better and remove the other. `only` lists the " +
+					"environments the resource belongs to; `skip` lists the ones it does not.",
+				Origin: r.Skip.Origin,
+			})
+		}
+
+		if r.Type == "" && !typeReported {
+			ds.Add(diag.Diagnostic{
+				Severity: diag.SeverityError,
+				Summary:  "resource " + strconv.Quote(r.Name) + " has no `type`",
+				Detail:   "Every resource must name the provider resource type it manages, for example `type: fake.database`.",
+				Action:   "Add a `type` key to " + strconv.Quote(r.Name) + ".",
+				Origin:   r.Origin,
+			})
+		}
+		*dst = append(*dst, r)
+	}
+}
+
+func decodeLifecycle(path string, node *yaml.Node, r *ResourceDecl, ds *diag.Diagnostics) {
+	if node.Kind != yaml.MappingNode {
+		ds.Add(diag.Diagnostic{
+			Severity: diag.SeverityError,
+			Summary:  "`lifecycle` must be a mapping",
+			Origin:   originOf(path, node),
+		})
+		return
+	}
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		key, val := node.Content[i], node.Content[i+1]
+		switch key.Value {
+		case "prevent_destroy":
+			if b, ok := decodeLifecycleBool(path, key, val, ds); ok {
+				r.Lifecycle.PreventDestroy = b
+				r.Lifecycle.PreventDestroySet = true
+			}
+		case "prevent_replace":
+			if b, ok := decodeLifecycleBool(path, key, val, ds); ok {
+				r.Lifecycle.PreventReplace = b
+				r.Lifecycle.PreventReplaceSet = true
+			}
+		case "create_before_destroy":
+			if b, ok := decodeLifecycleBool(path, key, val, ds); ok {
+				r.Lifecycle.CreateBeforeDestroy = b
+				r.Lifecycle.CreateBeforeDestroySet = true
+			}
+		case "retain":
+			if b, ok := decodeLifecycleBool(path, key, val, ds); ok {
+				r.Lifecycle.Retain = b
+				r.Lifecycle.RetainSet = true
+			}
+		case "ignore_changes":
+			decodeIgnoreChanges(path, key, val, r, ds)
+		default:
+			ds.Add(diag.Diagnostic{
+				Severity: diag.SeverityError,
+				Summary:  "unknown lifecycle option " + strconv.Quote(key.Value),
+				Detail:   "Supported options are `prevent_destroy`, `prevent_replace`, `create_before_destroy`, `retain` and `ignore_changes`.",
+				Origin:   originOf(path, key),
+			})
+		}
+	}
+}
+
+// decodeIgnoreChanges reads `ignore_changes:`, a list of attribute names whose
+// drift this resource does not want reverted.
+//
+// The names are kept exactly as written. They are resolved against the schema
+// later, at the same boundary that canonicalises everything else a user
+// spells, so `ignore_changes: [taskRevision]` and `[task_revision]` reach the
+// same attribute and a name matching nothing is refused where the attribute
+// list is known.
+//
+// An empty list is legal and means nothing is ignored, which is what a reader
+// editing the list down to nothing expects.
+func decodeIgnoreChanges(path string, key, node *yaml.Node, r *ResourceDecl, ds *diag.Diagnostics) {
+	if node.Kind != yaml.SequenceNode {
+		ds.Add(diag.Diagnostic{
+			Severity: diag.SeverityError,
+			Summary:  "`ignore_changes` must be a list of attribute names",
+			Detail:   "For example:\n  lifecycle:\n    ignore_changes: [task_revision]",
+			Origin:   originOf(path, key),
+		})
+		return
+	}
+	if r.Lifecycle.IgnoreChangesOrigin == nil {
+		r.Lifecycle.IgnoreChangesOrigin = map[string]value.Origin{}
+	}
+	for _, entry := range node.Content {
+		if entry.Kind != yaml.ScalarNode || entry.Value == "" {
+			ds.Add(diag.Diagnostic{
+				Severity: diag.SeverityError,
+				Summary:  "`ignore_changes` entries must be attribute names",
+				Origin:   originOf(path, entry),
+			})
+			continue
+		}
+		r.Lifecycle.IgnoreChanges = append(r.Lifecycle.IgnoreChanges, entry.Value)
+		r.Lifecycle.IgnoreChangesOrigin[entry.Value] = originOf(path, entry)
+	}
+}
+
+// decodeLifecycleBool decodes a lifecycle flag, letting the YAML decoder judge
+// what is boolean rather than comparing the raw scalar text.
+//
+// Raw comparison against "true" is not merely imprecise here, it is unsafe:
+// `prevent_destroy: True` and `prevent_destroy: TRUE` both carry the !!bool tag
+// but scalar text that is not literally "true", so a raw check silently
+// disables a destruction guard the user believed they had enabled. A quoted
+// "true" is a string and is rejected loudly rather than silently accepted.
+func decodeLifecycleBool(path string, key, val *yaml.Node, ds *diag.Diagnostics) (bool, bool) {
+	return decodeStrictBool(path, "lifecycle option", key, val, ds)
+}
+
+// decodeStrictBool is decodeLifecycleBool's general form: `what` names the kind
+// of setting so an environment protection does not report itself as a lifecycle
+// option. It guards the same hazard, and more of it, since the settings it
+// reads are the ones that stop production being destroyed.
+func decodeStrictBool(path, what string, key, val *yaml.Node, ds *diag.Diagnostics) (bool, bool) {
+	var b bool
+	if err := val.Decode(&b); err != nil {
+		ds.Add(diag.Diagnostic{
+			Severity: diag.SeverityError,
+			Summary:  what + " " + strconv.Quote(key.Value) + " must be true or false",
+			Detail:   "Got " + strconv.Quote(val.Value) + ", which is not a boolean. Note a quoted value is a string.",
+			Action:   "Write " + key.Value + ": true (unquoted).",
+			Origin:   originOf(path, val),
+		})
+		return false, false
+	}
+	return b, true
+}
+
+// requireScalar reads a node's scalar text, refusing anything that is not one.
+//
+// Reading node.Value without checking the node's kind is silently wrong three
+// ways: a mapping or sequence node has an empty Value, an alias node's Value is
+// the anchor's name, so `type: *base` becomes the string "base", and a !!null
+// scalar's Value is "" too, so a blank attribute would satisfy a requiredness
+// check.
+//
+// `what` names the offending position, already quoted or backticked.
+func requireScalar(path, what string, node *yaml.Node, ds *diag.Diagnostics) (string, bool) {
+	switch {
+	case node.Kind == yaml.AliasNode:
+		ds.Add(diag.Diagnostic{
+			Severity: diag.SeverityError,
+			Summary:  what + " is a YAML alias, which infrena does not resolve",
+			Detail:   "An alias node carries the anchor's name rather than its value, so accepting it would silently substitute " + strconv.Quote(node.Value) + ".",
+			Action:   "Write the value out in full.",
+			Origin:   originOf(path, node),
+		})
+	case node.Kind != yaml.ScalarNode:
+		ds.Add(diag.Diagnostic{
+			Severity: diag.SeverityError,
+			Summary:  what + " must be a single value, not a list or a mapping",
+			Detail:   "A list or mapping has no scalar text, so it would silently read as an empty value.",
+			Origin:   originOf(path, node),
+		})
+	case node.Tag == "!!null":
+		ds.Add(diag.Diagnostic{
+			Severity: diag.SeverityError,
+			Summary:  what + " has no value",
+			Detail:   "An empty value would silently read as the empty string, which is indistinguishable from a value that was deliberately set to \"\".",
+			Action:   "Give it a value, or remove the key.",
+			Origin:   originOf(path, node),
+		})
+	default:
+		return node.Value, true
+	}
+	return "", false
+}
+
+// decodeValue converts a YAML node into a typed Value, reporting whether any
+// string within it contains an interpolation.
+//
+// `what` names the position being decoded, for diagnostics.
+func decodeValue(path, what string, node *yaml.Node, ds *diag.Diagnostics) (value.Value, bool) {
+	origin := originOf(path, node)
+
+	switch node.Kind {
+	case yaml.SequenceNode:
+		items := make([]value.Value, 0, len(node.Content))
+		anyExpr := false
+		for i, item := range node.Content {
+			v, has := decodeValue(path, what+"["+strconv.Itoa(i)+"]", item, ds)
+			anyExpr = anyExpr || has
+			items = append(items, v)
+		}
+		return value.List(items, value.SourceExplicit).WithOrigin(origin), anyExpr
+
+	case yaml.MappingNode:
+		items := map[string]value.Value{}
+		anyExpr := false
+		for i := 0; i+1 < len(node.Content); i += 2 {
+			key := node.Content[i]
+			v, has := decodeValue(path, what+"."+key.Value, node.Content[i+1], ds)
+			anyExpr = anyExpr || has
+			items[key.Value] = v
+		}
+		return value.Map(items, value.SourceExplicit).WithOrigin(origin), anyExpr
+
+	default:
+		return decodeScalar(path, what, node, ds, origin)
+	}
+}
+
+func decodeScalar(path, what string, node *yaml.Node, ds *diag.Diagnostics, origin value.Origin) (value.Value, bool) {
+	raw, ok := requireScalar(path, what, node, ds)
+	if !ok {
+		// KindInvalid rather than an empty string: a value that could not be
+		// read must not masquerade as one that was.
+		return value.Value{Source: value.SourceExplicit, Origin: origin}, false
+	}
+
+	// An interpolation is kept verbatim and parsed later.
+	if strings.Contains(raw, "${") {
+		return value.String(raw, value.SourceExplicit).WithOrigin(origin), true
+	}
+
+	// A quoted scalar is always a string, whatever it looks like.
+	if node.Style == yaml.DoubleQuotedStyle || node.Style == yaml.SingleQuotedStyle {
+		return value.String(raw, value.SourceExplicit).WithOrigin(origin), false
+	}
+
+	switch node.Tag {
+	case "!!int":
+		if n, err := strconv.ParseInt(raw, 10, 64); err == nil {
+			return value.Int(n, value.SourceExplicit).WithOrigin(origin), false
+		}
+	case "!!float":
+		if f, err := strconv.ParseFloat(raw, 64); err == nil {
+			return value.Float(f, value.SourceExplicit).WithOrigin(origin), false
+		}
+	case "!!bool":
+		// Let the decoder judge, exactly as decodeLifecycleBool does: `True`
+		// and `TRUE` carry the !!bool tag but scalar text that is not literally
+		// "true", so a raw comparison silently yields the wrong boolean.
+		var b bool
+		if err := node.Decode(&b); err == nil {
+			return value.Bool(b, value.SourceExplicit).WithOrigin(origin), false
+		}
+	}
+	return value.String(raw, value.SourceExplicit).WithOrigin(origin), false
+}
+
+func documentRoot(n *yaml.Node) *yaml.Node {
+	// An empty file leaves the root at its zero value rather than producing a
+	// DocumentNode: yaml.Unmarshal never invokes the decoder for empty input.
+	if n == nil || n.Kind == 0 {
+		return nil
+	}
+	if n.Kind == yaml.DocumentNode {
+		if len(n.Content) == 0 {
+			return nil
+		}
+		return n.Content[0]
+	}
+	return n
+}
+
+// describeOrigin renders an origin for use inside a sentence, naming the file
+// only when it differs from the one the diagnostic already points at.
+func describeOrigin(o value.Origin) string {
+	if o.Line == 0 {
+		return o.File
+	}
+	return "line " + strconv.Itoa(o.Line) + " of " + o.File
+}
+
+func originOf(path string, n *yaml.Node) value.Origin {
+	if n == nil {
+		return value.Origin{File: path}
+	}
+	return value.Origin{File: path, Line: n.Line, Column: n.Column}
+}
+
+// variableTypeList renders the accepted type spellings for a diagnostic.
+//
+// The spellings come from pkg/value, which owns them in both directions. This
+// package deliberately keeps no table of its own, which would drift from the
+// one the parser consults. value.KindNames is already sorted, so the message
+// does not reorder itself between runs.
+func variableTypeList() string {
+	return strings.Join(value.KindNames(), ", ")
+}
+
+// declNoun names what a `type`/`default`/`min`/`max` declaration declares, so
+// one decoder serves both a project variable and a module input without either
+// one's diagnostics carrying the other's advice.
+//
+// The two are spelled identically, which is what makes the reuse right — but a
+// user with a broken input in modules/net/module.yml must not be told a
+// "variable" is wrong and sent to variables.yml, a file with nothing to do with
+// their problem.
+type declNoun struct {
+	singular string // "variable"
+	titled   string // "Variable", at the start of a sentence
+	// supplied is how a value reaches this kind of declaration when the
+	// declaration itself does not carry one, phrased to slot into an action:
+	// "... or put the value <supplied> instead."
+	supplied string
+}
+
+// named renders "variable \"replicas\"" or "input \"replicas\"".
+func (d declNoun) named(name string) string {
+	return d.singular + " " + strconv.Quote(name)
+}
+
+var (
+	variableNoun = declNoun{singular: "variable", titled: "Variable", supplied: "in " + VariablesFileName}
+	inputNoun    = declNoun{
+		singular: "input",
+		titled:   "Input",
+		supplied: "on the resource that instantiates this module",
+	}
+)
+
+func decodeVariables(path string, node *yaml.Node, out *ProjectDecl, ds *diag.Diagnostics, seen map[string]value.Origin) {
+	if node.Kind != yaml.MappingNode {
+		ds.Add(diag.Diagnostic{
+			Severity: diag.SeverityError,
+			Summary:  "`variables` must be a mapping of variable name to declaration",
+			Detail:   "Each variable is a key with `type`, `default`, `min` and `max` beneath it.",
+			Origin:   originOf(path, node),
+		})
+		return
+	}
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		nameNode, body := node.Content[i], node.Content[i+1]
+		origin := originOf(path, nameNode)
+
+		// yaml.v3 does not deduplicate mapping keys when decoding into a Node,
+		// so both entries arrive here and the last would silently win —
+		// discarding a type or a bound the user wrote.
+		if first, dup := seen[nameNode.Value]; dup {
+			ds.Add(diag.Diagnostic{
+				Severity: diag.SeverityError,
+				Summary:  "variable " + strconv.Quote(nameNode.Value) + " is declared more than once",
+				Detail:   "The last declaration would silently win, discarding a type or a bound. " + strconv.Quote(nameNode.Value) + " is also declared at " + describeOrigin(first) + ".",
+				Action:   "Remove one of the two declarations, or merge them.",
+				Origin:   origin,
+			})
+			continue
+		}
+		seen[nameNode.Value] = origin
+		out.Variables = append(out.Variables, decodeVariable(path, nameNode.Value, body, origin, variableNoun, ds))
+	}
+}
+
+func decodeVariable(path, name string, body *yaml.Node, origin value.Origin, d declNoun, ds *diag.Diagnostics) VariableDecl {
+	v := VariableDecl{Name: name, Origin: origin}
+
+	if body.Kind != yaml.MappingNode {
+		ds.Add(diag.Diagnostic{
+			Severity: diag.SeverityError,
+			Summary:  d.named(name) + " must be a mapping",
+			Detail:   "A `variables:` entry is a schema — `type`, `default`, `min`, `max` — not a value. A bare value here would be ambiguous with a declaration whose type is `map`.",
+			Action:   "Write `default:` beneath " + strconv.Quote(name) + ", or put the value " + d.supplied + " instead.",
+			Origin:   originOf(path, body),
+		})
+		return v
+	}
+
+	// defaultNode, minNode and maxNode are held back and resolved after the
+	// whole mapping is walked, because `type:` may appear textually after any
+	// of them. Resolving each key as it is walked would silently skip coercion,
+	// or accept `min: 1` on a string, whenever a file declared `type:` last.
+	var defaultNode, minNode, maxNode *yaml.Node
+	// typeReported and defaultReported suppress the "must specify at least a
+	// type or a default" check below when the key was present but unusable.
+	// Telling a user their declaration is empty, one line under a diagnostic
+	// explaining why their `type` was rejected, describes a symptom.
+	typeReported := false
+	defaultReported := false
+	seenKeys := map[string]value.Origin{}
+
+	for i := 0; i+1 < len(body.Content); i += 2 {
+		key, val := body.Content[i], body.Content[i+1]
+		keyOrigin := originOf(path, key)
+		if first, dup := seenKeys[key.Value]; dup {
+			ds.Add(diag.Diagnostic{
+				Severity: diag.SeverityError,
+				Summary:  strconv.Quote(key.Value) + " is set more than once on " + d.singular + " " + strconv.Quote(name),
+				Detail:   "The last assignment would silently win. " + strconv.Quote(key.Value) + " is also set at " + describeOrigin(first) + ".",
+				Action:   "Remove one of the two assignments.",
+				Origin:   keyOrigin,
+			})
+			continue
+		}
+		seenKeys[key.Value] = keyOrigin
+
+		switch key.Value {
+		case "type":
+			text, ok := requireScalar(path, d.named(name)+"'s `type`", val, ds)
+			if !ok {
+				typeReported = true
+				break
+			}
+			kind, known := value.ParseKind(text)
+			if !known {
+				ds.Add(diag.Diagnostic{
+					Severity: diag.SeverityError,
+					Summary:  "unknown " + d.singular + " type " + strconv.Quote(text),
+					Detail:   d.titled + " " + strconv.Quote(name) + " declares a type the engine does not have. Supported types are " + variableTypeList() + ".",
+					Action:   "Change `type` to one of " + variableTypeList() + ", or remove it to leave " + strconv.Quote(name) + " untyped.",
+					Origin:   originOf(path, val),
+				})
+				typeReported = true
+				break
+			}
+			v.Type = kind
+		case "default":
+			defaultNode = val
+		case "min":
+			minNode = val
+		case "max":
+			maxNode = val
+		default:
+			ds.Add(diag.Diagnostic{
+				Severity: diag.SeverityError,
+				Summary:  "unknown key " + strconv.Quote(key.Value) + " in " + d.named(name),
+				Detail:   "A " + d.singular + " declaration understands `type`, `default`, `min` and `max`.",
+				Action:   "Remove " + strconv.Quote(key.Value) + ".",
+				Origin:   keyOrigin,
+			})
+		}
+	}
+
+	if defaultNode != nil {
+		if dv, ok := decodeDefault(path, name, defaultNode, v.Type, d, ds); ok {
+			v.Default, v.HasDefault = dv, true
+		} else {
+			// decodeDefault already added its own diagnostic (interpolation,
+			// or a lossy numeric coercion) — suppress "must specify at least
+			// a `type` or a `default`" below the same way typeReported does,
+			// so the user sees one error about this declaration, not two.
+			defaultReported = true
+		}
+	}
+
+	v.Min, v.HasMin = decodeBound(path, name, "min", minNode, v.Type, typeReported, d, ds)
+	v.Max, v.HasMax = decodeBound(path, name, "max", maxNode, v.Type, typeReported, d, ds)
+
+	// A declaration with neither a type nor a default carries no information:
+	// it names a variable and says nothing about it, so there is nothing to
+	// validate against and nothing to fall back on. An error rather than a
+	// dropped declaration with a warning, because dropping it discards
+	// something the user wrote and continues as though they had not.
+	//
+	// The suppressions all say the root cause once: typeReported and
+	// defaultReported mean the key was present but unusable and has already
+	// been reported, and a present min or max means decodeBound just gave the
+	// same advice about the same declaration.
+	incomplete := v.Type == value.KindInvalid && !v.HasDefault
+	alreadyExplained := typeReported || defaultReported || minNode != nil || maxNode != nil
+	if incomplete && !alreadyExplained {
+		ds.Add(diag.Diagnostic{
+			Severity: diag.SeverityError,
+			Summary:  d.named(name) + " must specify at least a `type` or a `default`",
+			Detail:   "The declaration says nothing about " + strconv.Quote(name) + ", so nothing can be validated against it and there is no value to fall back on when it is not set.",
+			Action:   "Add `type: string` (or another type), or `default:` with a value, or remove the declaration and set " + strconv.Quote(name) + " " + d.supplied + ".",
+			Origin:   origin,
+		})
+	}
+
+	// min > max can never be satisfied. Reported here, where the declaration
+	// is in hand, because later the only thing left to point at is a value
+	// that failed a range check. min == max is legal: it pins a variable to
+	// one value.
+	if v.HasMin && v.HasMax && boundGreater(v.Min, v.Max) {
+		ds.Add(diag.Diagnostic{
+			Severity: diag.SeverityError,
+			Summary:  d.named(name) + " has a `min` greater than its `max`",
+			Detail:   "No value can satisfy this declaration, so every plan would fail with a range error naming the value rather than the declaration.",
+			Action:   "Swap `min` and `max`, or remove one of them.",
+			Origin:   v.Min.Origin,
+		})
+	}
+	return v
+}
+
+// boundGreater reports whether bound a is greater than bound b.
+//
+// It switches on Kind rather than coercing both to float64, because an int64
+// does not fit a float64: above 2^53 the conversion rounds and two bounds that
+// differ would compare equal.
+//
+// There is no mixed case to handle: decodeBound has already coerced both
+// bounds to the variable's declared type. A non-numeric value is never
+// greater, because decodeBound refused it and said why.
+func boundGreater(a, b value.Value) bool {
+	if ai, ok := a.AsInt(); ok {
+		bi, ok2 := b.AsInt()
+		return ok2 && ai > bi
+	}
+	if af, ok := a.AsFloat(); ok {
+		bf, ok2 := b.AsFloat()
+		return ok2 && af > bf
+	}
+	return false
+}
+
+// decodeBound decodes `min` or `max`, refusing it on a type that has no
+// ordering: a `min` on a string would have to mean either "shortest" or
+// "lowest in some collation", and something would have to pick one silently.
+//
+// typeReported suppresses this when `type` itself was already rejected, since
+// "`min` is not valid on an untyped variable" names a symptom of a problem
+// reported one line up.
+func decodeBound(path, name, which string, node *yaml.Node, kind value.Kind, typeReported bool, d declNoun, ds *diag.Diagnostics) (value.Value, bool) {
+	if node == nil {
+		return value.Value{}, false
+	}
+	if kind != value.KindInt && kind != value.KindFloat {
+		if typeReported {
+			return value.Value{}, false
+		}
+		detail := d.titled + " " + strconv.Quote(name) + " has type " + kind.String() + ", which has no ordering, so `" + which + "` could not be checked against anything."
+		action := "Remove `" + which + "`, or declare `type: integer` or `type: float`."
+		if kind == value.KindInvalid {
+			detail = d.titled + " " + strconv.Quote(name) + " declares no `type`, so `" + which + "` has no ordering to be checked against."
+			action = "Add `type: integer` or `type: float`, or remove `" + which + "`."
+		}
+		ds.Add(diag.Diagnostic{
+			Severity: diag.SeverityError,
+			Summary:  "`" + which + "` is not valid on " + d.named(name),
+			Detail:   detail,
+			Action:   action,
+			Origin:   originOf(path, node),
+		})
+		return value.Value{}, false
+	}
+
+	// Both numeric kinds are accepted here whatever the declared type. YAML
+	// tags `min: 1` as !!int even under `type: float`, so refusing KindInt
+	// would reject the obvious spelling of a float bound.
+	bv, hasExpr := decodeValue(path, d.named(name)+"'s `"+which+"`", node, ds)
+	if hasExpr || !bv.Known || (bv.Kind != value.KindInt && bv.Kind != value.KindFloat) {
+		ds.Add(diag.Diagnostic{
+			Severity: diag.SeverityError,
+			Summary:  "`" + which + "` on " + d.named(name) + " must be a number",
+			Detail:   "Got " + strconv.Quote(node.Value) + ". A quoted number is a string, and a string bound compares by text: \"10\" sorts before \"9\".",
+			Action:   "Write `" + which + ": " + node.Value + "` unquoted.",
+			Origin:   originOf(path, node),
+		})
+		return value.Value{}, false
+	}
+	return coerceBound(path, name, which, node, bv, kind, d, ds)
+}
+
+// coerceBound converts a decoded bound to the variable's declared kind through
+// value.Coerce, the one int/float exactness rule shared with decodeDefault and
+// with the resolution of a supplied value against a schema. It lives in
+// pkg/value rather than at each call site so a precision bug cannot be fixed in
+// one copy and left in another.
+//
+// Decoding is the right place for it: it is the only stage that knows both the
+// declared type and the line number. After it, a bound's Kind always equals its
+// variable's Type, so every consumer switches on one Kind instead of a cross
+// product.
+//
+// A conversion that would lose information is a diagnostic, never a silent
+// truncation: `type: integer` with `min: 1.5` quietly becoming 1 would let
+// values below the stated minimum through with nothing printed.
+func coerceBound(path, name, which string, node *yaml.Node, bv value.Value, kind value.Kind, d declNoun, ds *diag.Diagnostics) (value.Value, bool) {
+	// origin is computed once and applied on the success path below.
+	// value.Coerce stays pure and never touches Origin, because its other
+	// caller has no line to re-origin to.
+	origin := originOf(path, node)
+	coerced, ok := value.Coerce(bv, kind)
+	if ok {
+		return coerced.WithOrigin(origin), true
+	}
+
+	// decodeBound already refused a non-numeric kind and a non-numeric bv, so
+	// a failure here is always the genuine exactness case, and the direction
+	// follows from `kind` alone: KindInt means bv was the float being rounded,
+	// KindFloat means bv was the int overflowing 2^53.
+	if kind == value.KindInt {
+		ds.Add(diag.Diagnostic{
+			Severity: diag.SeverityError,
+			Summary:  "`" + which + "` on " + d.named(name) + " is not a whole number",
+			Detail:   d.titled + " " + strconv.Quote(name) + " has type integer, so " + strconv.Quote(node.Value) + " cannot be its " + which + ". Rounding it would silently change the bound the user asked for.",
+			Action:   "Write a whole number, or declare `type: float`.",
+			Origin:   origin,
+		})
+	} else {
+		ds.Add(diag.Diagnostic{
+			Severity: diag.SeverityError,
+			Summary:  "`" + which + "` on " + d.named(name) + " is too large to represent as a float",
+			Detail:   d.titled + " " + strconv.Quote(name) + " has type float, and " + strconv.Quote(node.Value) + " cannot be converted without changing its value.",
+			Action:   "Use a smaller bound, or declare `type: integer`.",
+			Origin:   origin,
+		})
+	}
+	return value.Value{}, false
+}
+
+// decodeDefault decodes a variable's `default:` value, coercing it where both
+// the declared type and the literal are numeric, so a numeric literal reaches
+// its declared kind here as it does for `min` and `max`.
+//
+// Called after decodeVariable's key-walking loop closes, for the same reason
+// minNode and maxNode are: `type:` may appear textually after `default:`, and
+// coercing inside the loop would silently skip it whenever a file was written
+// that way.
+//
+// ok is false whenever a diagnostic was added — an interpolation, or a lossy
+// numeric conversion — and the caller must not set HasDefault in that case.
+func decodeDefault(path, name string, node *yaml.Node, kind value.Kind, d declNoun, ds *diag.Diagnostics) (value.Value, bool) {
+	dv, hasExpr := decodeValue(path, d.named(name)+"'s `default`", node, ds)
+	if hasExpr {
+		ds.Add(diag.Diagnostic{
+			Severity: diag.SeverityError,
+			Summary:  d.named(name) + "'s default contains an interpolation",
+			Detail:   "Defaults are resolved before any expression scope exists, so `${...}` here has nothing to refer to. Accepting it would store the literal text " + strconv.Quote(node.Value) + " as the default.",
+			Action:   "Write a literal value, or set " + strconv.Quote(name) + " per environment instead.",
+			Origin:   originOf(path, node),
+		})
+		return value.Value{}, false
+	}
+
+	// Coercion is attempted only when both sides are numeric, and unlike in
+	// coerceBound that guard is load-bearing: a default is valid on every
+	// type, and value.Coerce reports failure for any kind mismatch rather
+	// than only a numeric one. Calling it unconditionally would report an
+	// untyped variable's default, or one under a non-numeric type, as a lossy
+	// conversion — when an untyped variable has no kind to coerce toward and
+	// a genuine type mismatch belongs to the stage that checks a value
+	// against its schema.
+	numericType := kind == value.KindInt || kind == value.KindFloat
+	numericLiteral := dv.Kind == value.KindInt || dv.Kind == value.KindFloat
+	if !numericType || !numericLiteral {
+		return dv, true
+	}
+
+	// The same re-origining coerceBound does, and for the same reason.
+	origin := originOf(path, node)
+	coerced, ok := value.Coerce(dv, kind)
+	if ok {
+		return coerced.WithOrigin(origin), true
+	}
+
+	// These mirror coerceBound's wording for the same exactness rule. They are
+	// kept in the two callers rather than in a third shared string because "a
+	// `min` on variable X" and "variable X's default" read differently in a
+	// sentence.
+	if kind == value.KindInt {
+		ds.Add(diag.Diagnostic{
+			Severity: diag.SeverityError,
+			Summary:  d.named(name) + "'s default is not a whole number",
+			Detail:   d.titled + " " + strconv.Quote(name) + " has type integer, so " + strconv.Quote(node.Value) + " cannot be its default. Rounding it would silently change the value the user wrote.",
+			Action:   "Write a whole number, or declare `type: float`.",
+			Origin:   origin,
+		})
+	} else {
+		ds.Add(diag.Diagnostic{
+			Severity: diag.SeverityError,
+			Summary:  d.named(name) + "'s default is too large to represent as a float",
+			Detail:   d.titled + " " + strconv.Quote(name) + " has type float, and " + strconv.Quote(node.Value) + " cannot be converted without changing its value.",
+			Action:   "Use a smaller default, or declare `type: integer`.",
+			Origin:   origin,
+		})
+	}
+	return value.Value{}, false
+}
+
+// decodeVariableValues decodes variables.yml: a flat mapping of variable name
+// to value.
+//
+// It delegates to DecodeVariableFile rather than walking the mapping itself,
+// because variables.yml and a --var-file have the identical shape and a second
+// implementation of one is how the two come to disagree. scope is
+// value.ScopeUnset because decoding declares rather than resolves, and which
+// precedence level wins is a later stage's answer.
+func decodeVariableValues(f File, out *ProjectDecl, ds *diag.Diagnostics) {
+	vals, fds := DecodeVariableFile(f, value.ScopeUnset)
+	ds.Extend(fds)
+	maps.Copy(out.VariableValues, vals)
+}
+
+// retagSource rewrites a decoded value's provenance recursively.
+//
+// decodeValue marks everything SourceExplicit, because that is what an
+// attribute in infrena.yml is. A value from variables.yml is a variable and one
+// from an environment file is an environment override, and provenance is
+// per-leaf: setting only the top level would leave every element of a list
+// variable claiming to be explicit configuration, which `explain` and minimal
+// generation both read straight off the leaves.
+//
+// scope and suppliedBy are threaded through for the same per-leaf reason.
+// Every decode-time caller passes ScopeUnset and "", their zero values, since
+// a declaration is not a resolution; the parameters exist so DecodeVariableFile
+// can also serve a --var-file, which decodes at the CLI layer where resolution
+// order is already known and no later pass is left to stamp it.
+func retagSource(v value.Value, src value.ValueSource, scope value.Scope, suppliedBy string) value.Value {
+	switch v.Kind {
+	case value.KindList:
+		items, ok := v.Raw.([]value.Value)
+		if !ok {
+			// Malformed: a diagnostic was already emitted where it was
+			// decoded. Retag the shell and stop rather than panicking.
+			return v.WithSource(src).WithScope(scope).WithSuppliedBy(suppliedBy)
+		}
+		retagged := make([]value.Value, len(items))
+		for i, item := range items {
+			retagged[i] = retagSource(item, src, scope, suppliedBy)
+		}
+		v.Raw = retagged
+	case value.KindMap:
+		m, ok := v.Raw.(map[string]value.Value)
+		if !ok {
+			return v.WithSource(src).WithScope(scope).WithSuppliedBy(suppliedBy)
+		}
+		retagged := make(map[string]value.Value, len(m))
+		for k, item := range m {
+			retagged[k] = retagSource(item, src, scope, suppliedBy)
+		}
+		v.Raw = retagged
+	}
+	return v.WithSource(src).WithScope(scope).WithSuppliedBy(suppliedBy)
+}
+
+func decodeEnvironments(path string, node *yaml.Node, out *ProjectDecl, ds *diag.Diagnostics, seen map[string]int) {
+	if node.Kind != yaml.MappingNode {
+		ds.Add(diag.Diagnostic{
+			Severity: diag.SeverityError,
+			Summary:  "`environments` must be a mapping of environment name to configuration",
+			Detail:   "Each environment is a key, optionally with `extends` and its overrides beneath it.",
+			Origin:   originOf(path, node),
+		})
+		return
+	}
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		nameNode, body := node.Content[i], node.Content[i+1]
+		decodeEnvironmentBody(path, nameNode.Value, body, out, ds, seen)
+	}
+}
+
+// environmentFor returns the decl for name, creating it on first sight.
+//
+// One environment may be declared in infrena.yml's `environments:` block and in
+// environments/<name>.yml, and the two merge, since `extends` belongs in the
+// block and overrides in the file. Load's fixed file order is what makes "which
+// one was first" deterministic, which the duplicate diagnostics depend on.
+func environmentFor(out *ProjectDecl, name string, origin value.Origin, seen map[string]int) *EnvironmentDecl {
+	if idx, ok := seen[name]; ok {
+		return &out.Environments[idx]
+	}
+	out.Environments = append(out.Environments, EnvironmentDecl{Name: name, Origin: origin})
+	seen[name] = len(out.Environments) - 1
+	return &out.Environments[len(out.Environments)-1]
+}
+
+// decodeEnvironmentBody decodes one environment's mapping, from either the
+// `environments:` block or a whole environments/<name>.yml document.
+//
+// Two override spellings are accepted: nested under `variables:`, and as flat
+// keys. `extends` is reserved in both, and in the file form.
+func decodeEnvironmentBody(path, name string, body *yaml.Node, out *ProjectDecl, ds *diag.Diagnostics, seen map[string]int) {
+	origin := originOf(path, body)
+	if body.Kind != yaml.MappingNode {
+		ds.Add(diag.Diagnostic{
+			Severity: diag.SeverityError,
+			Summary:  "environment " + strconv.Quote(name) + " must be a mapping",
+			Detail:   "An environment holds an optional `extends` and its overrides.",
+			Action:   "Write `" + name + ": {}` if it has no settings of its own.",
+			Origin:   origin,
+		})
+		return
+	}
+	env := environmentFor(out, name, origin, seen)
+
+	for i := 0; i+1 < len(body.Content); i += 2 {
+		key, val := body.Content[i], body.Content[i+1]
+		keyOrigin := originOf(path, key)
+
+		switch key.Value {
+		case "extends":
+			// requireScalar reports the alias, non-scalar and null cases, each
+			// of which would otherwise silently produce a wrong parent: an
+			// alias node's Value is the anchor's name, so `extends: *base`
+			// would become the string "base", which might even name a real
+			// environment.
+			text, ok := requireScalar(path, "environment "+strconv.Quote(name)+"'s `extends`", val, ds)
+			if !ok {
+				continue
+			}
+			if env.Extends != "" {
+				ds.Add(diag.Diagnostic{
+					Severity: diag.SeverityError,
+					Summary:  "`extends` is set more than once on environment " + strconv.Quote(name),
+					Detail:   "The last assignment would silently win, changing which values " + strconv.Quote(name) + " inherits. It is also set at " + describeOrigin(env.ExtendsOrigin) + ".",
+					Action:   "Remove one of the two assignments.",
+					Origin:   keyOrigin,
+				})
+				continue
+			}
+			env.Extends, env.ExtendsOrigin = text, keyOrigin
+
+		case "variables":
+			// The nested spelling.
+			if val.Kind != yaml.MappingNode {
+				ds.Add(diag.Diagnostic{
+					Severity: diag.SeverityError,
+					Summary:  "`variables` in environment " + strconv.Quote(name) + " must be a mapping",
+					Origin:   originOf(path, val),
+				})
+				continue
+			}
+			for j := 0; j+1 < len(val.Content); j += 2 {
+				addOverride(path, env, val.Content[j], val.Content[j+1], ds)
+			}
+
+		case "require_approval", "prevent_destroy":
+			// Recognised here rather than falling through, which is the whole
+			// reason this case exists: the `default` arm below turns any
+			// unrecognised key into a variable override, so without this
+			// `require_approval: true` would silently declare a variable called
+			// "require_approval" and protect nothing. A protection that
+			// silently does nothing is worse than no protection, because it is
+			// believed.
+			b, ok := decodeStrictBool(path, "environment protection", key, val, ds)
+			if !ok {
+				continue
+			}
+			set, origin := env.RequireApprovalSet, env.RequireApprovalOrigin
+			if key.Value == "prevent_destroy" {
+				set, origin = env.PreventDestroySet, env.PreventDestroyOrigin
+			}
+			if set {
+				// Refused rather than last-wins, as `extends` is. The block and
+				// the file merge, so a second assignment is reachable without
+				// anyone writing the key twice in one file, and a last-wins
+				// that resolved to false would disable a guard its author
+				// believes is on.
+				ds.Add(diag.Diagnostic{
+					Severity: diag.SeverityError,
+					Summary:  "`" + key.Value + "` is set more than once on environment " + strconv.Quote(name),
+					Detail: "The last assignment would silently win, and if it is `false` the protection its " +
+						"author believes is on would be off. It is also set at " + describeOrigin(origin) + ".",
+					Action: "Remove one of the two assignments.",
+					Origin: keyOrigin,
+				})
+				continue
+			}
+			if key.Value == "require_approval" {
+				env.RequireApproval, env.RequireApprovalSet, env.RequireApprovalOrigin = b, true, keyOrigin
+			} else {
+				env.PreventDestroy, env.PreventDestroySet, env.PreventDestroyOrigin = b, true, keyOrigin
+			}
+
+		case "type":
+			// Environment classification was withdrawn. Refused rather than
+			// left alone, because "left alone" is not inert: every other key in
+			// this block becomes a variable override, so `type: production`
+			// would silently declare a variable named `type` and classify
+			// nothing.
+			ds.Add(diag.Diagnostic{
+				Severity: diag.SeverityError,
+				Summary:  "environment " + strconv.Quote(name) + " sets `type`, which no longer means anything",
+				Detail: "Environment classification was withdrawn: a provider default is one " +
+					"value per attribute, and anything that differs between environments is a variable. " +
+					"Left in place, `type:` would declare a variable named \"type\".",
+				Action: "Remove it. To vary a value by environment, set that value in this environment's " +
+					"variables. For production protections, see docs/configuration.md.",
+				Origin: keyOrigin,
+			})
+
+		default:
+			// The flat spelling: any other key is an override.
+			addOverride(path, env, key, val, ds)
+		}
+	}
+}
+
+// addOverride records one environment override, refusing a second setting of
+// the same name.
+//
+// A collision is reachable three ways — the two spellings within one
+// environment, the same key twice in one file, and the block plus the file —
+// and every one of them silently discards a value the user wrote, producing a
+// plan that is wrong with nothing printed.
+func addOverride(path string, env *EnvironmentDecl, key, val *yaml.Node, ds *diag.Diagnostics) {
+	origin := originOf(path, key)
+	// Appends in document order, which is not the order the field promises:
+	// Decode sorts every environment's Overrides by name once all files are
+	// decoded, the only point at which the block's and the file's
+	// contributions are both present. Do not add a sort here.
+	//
+	// The linear scan below is what lets the duplicate diagnostic name where
+	// the first assignment was.
+	for _, existing := range env.Overrides {
+		if existing.Name == key.Value {
+			ds.Add(diag.Diagnostic{
+				Severity: diag.SeverityError,
+				Summary:  strconv.Quote(key.Value) + " is set more than once in environment " + strconv.Quote(env.Name),
+				Detail:   "The last assignment would silently win. It is also set at " + describeOrigin(existing.Origin) + ".",
+				Action:   "Remove one of the two assignments.",
+				Origin:   origin,
+			})
+			return
+		}
+	}
+
+	v, hasExpr := decodeValue(path, "environment "+strconv.Quote(env.Name)+"'s "+strconv.Quote(key.Value), val, ds)
+	if hasExpr {
+		ds.Add(diag.Diagnostic{
+			Severity: diag.SeverityError,
+			Summary:  "environment override " + strconv.Quote(key.Value) + " contains an interpolation",
+			Detail:   "Environment overrides are resolved before any expression scope exists, so `${...}` here has nothing to refer to.",
+			Action:   "Write a literal value.",
+			Origin:   originOf(path, val),
+		})
+		return
+	}
+	env.Overrides = append(env.Overrides, OverrideDecl{
+		Name:   key.Value,
+		Value:  retagSource(v, value.SourceEnvironment, value.ScopeUnset, "").WithOrigin(origin),
+		Origin: origin,
+	})
+}
