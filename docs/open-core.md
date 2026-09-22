@@ -40,6 +40,23 @@ itself.
 write a provider. That includes a backend that competes with the hosted one. The platform's
 value is everything around state, not custody of it.
 
+**A backend may talk to a paid service, under three conditions.** A plugin whose storage is the
+commercial platform is an addition to the paid list, not a subtraction from the free one: local
+and S3 state, locking included, stay exactly where they are. It is allowed only if all three of
+these hold.
+
+1. **The plugin itself is Apache 2.0**, like every other provider and backend published here.
+   "Open source client for a paid service" has to be said plainly, not discovered later.
+2. **It uses the public backend interface and nothing else.** If it needs a richer interface,
+   that interface becomes public and a third party can build against it the same day. A
+   capability, protocol extension or auth path that only the hosted backend can use is exactly
+   the seam this document forbids, and the plugin's licence does not excuse it.
+3. **Locking on S3 stays as good as locking anywhere else.** Free locking is promised outright.
+   A hosted backend that is simply the one without caveats degrades the free tier without moving
+   anything, which is the same broken promise by a slower route.
+
+Written down on 2026-09-22, while the platform does not exist and nothing rides on the answer.
+
 ## Paid, in the platform
 
 For organisations: collaboration, role-based access control, audit trails, run history,
