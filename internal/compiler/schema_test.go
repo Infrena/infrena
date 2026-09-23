@@ -486,3 +486,140 @@ func TestAnOpenMapsKeysAreLeftAlone(t *testing.T) {
 		}
 	}
 }
+
+// repeatedBlockDef is a list of maps with declared element keys — what Elem
+// exists for, and what could not be expressed at all before it.
+func repeatedBlockDef() *schema.ResourceDefinition {
+	return &schema.ResourceDefinition{
+		Type: "fake.service",
+		Attributes: map[string]schema.Attribute{
+			"containers": {
+				Kind: value.KindList, Optional: true, Computed: true,
+				Elem: &schema.Attribute{Kind: value.KindMap, Fields: map[string]schema.Attribute{
+					"imageURI": {Kind: value.KindString, Optional: true, Aliases: []string{"image"}},
+					"cpuLimit": {Kind: value.KindString, Optional: true},
+				}},
+			},
+		},
+	}
+}
+
+// TestKeysInsideARepeatedBlockCanonicalise. The keys of a list element resolve
+// by the same ladder as any other name — exact, case-folded, alias — or a
+// repeated block is the one place in a file where the spelling rules change.
+func TestKeysInsideARepeatedBlockCanonicalise(t *testing.T) {
+	def := repeatedBlockDef()
+	attrs := map[string]value.Value{
+		"containers": value.List([]value.Value{
+			value.Map(map[string]value.Value{
+				"imageuri": value.String("img", value.SourceExplicit), // case-only
+				"image":    value.String("dup", value.SourceExplicit), // alias, different element below
+			}, value.SourceExplicit),
+			value.Map(map[string]value.Value{
+				"cpulimit": value.String("1", value.SourceExplicit),
+			}, value.SourceExplicit),
+		}, value.SourceExplicit),
+	}
+	var ds diag.Diagnostics
+	canonicaliseAttributes(attrs, def, &ds)
+
+	items := attrs["containers"].Raw.([]value.Value)
+	first := items[0].Raw.(map[string]value.Value)
+	second := items[1].Raw.(map[string]value.Value)
+	if _, ok := first["imageURI"]; !ok {
+		t.Errorf("a case-only key inside a list element did not canonicalise: %v", keysOf(first))
+	}
+	if _, ok := second["cpuLimit"]; !ok {
+		t.Errorf("a key in the second element did not canonicalise, so only the first is walked: %v", keysOf(second))
+	}
+}
+
+// And the silent half: a key a repeated block does not declare must be
+// reported rather than reaching the provider and going out on the wire.
+func TestAnUndeclaredKeyInsideARepeatedBlockIsReported(t *testing.T) {
+	def := repeatedBlockDef()
+	attrs := map[string]value.Value{
+		"containers": value.List([]value.Value{
+			value.Map(map[string]value.Value{"nosuchkey": value.String("x", value.SourceExplicit)}, value.SourceExplicit),
+		}, value.SourceExplicit),
+	}
+	var ds diag.Diagnostics
+	canonicaliseAttributes(attrs, def, &ds)
+	checkConfiguredAttributes(attrs, def, value.Origin{}, &ds)
+
+	if !ds.HasErrors() {
+		t.Fatal("a key a repeated block does not declare produced no diagnostic, so it reaches the provider")
+	}
+	var buf strings.Builder
+	ds.Render(&buf)
+	if !strings.Contains(buf.String(), "nosuchkey") || !strings.Contains(buf.String(), "containers") {
+		t.Errorf("the diagnostic does not name the key and its block:\n%s", buf.String())
+	}
+}
+
+// A list whose elements have no declared shape is the honest case for a list of
+// strings, and for one whose element keys the provider does not know. Those
+// values must pass through untouched.
+func TestAListWithNoDeclaredElementIsLeftAlone(t *testing.T) {
+	def := &schema.ResourceDefinition{
+		Type: "fake.service",
+		Attributes: map[string]schema.Attribute{
+			"args": {Kind: value.KindList, Optional: true, Computed: true}, // no Elem
+		},
+	}
+	attrs := map[string]value.Value{
+		"args": value.List([]value.Value{
+			value.Map(map[string]value.Value{"AnyKey": value.String("v", value.SourceExplicit)}, value.SourceExplicit),
+		}, value.SourceExplicit),
+	}
+	var ds diag.Diagnostics
+	canonicaliseAttributes(attrs, def, &ds)
+	checkConfiguredAttributes(attrs, def, value.Origin{}, &ds)
+	if ds.HasErrors() {
+		var buf strings.Builder
+		ds.Render(&buf)
+		t.Fatalf("a list with no declared element was refused:\n%s", buf.String())
+	}
+	inner := attrs["args"].Raw.([]value.Value)[0].Raw.(map[string]value.Value)
+	if _, ok := inner["AnyKey"]; !ok {
+		t.Errorf("an undeclared element's key was rewritten: %v", keysOf(inner))
+	}
+}
+
+// TestAListOfScalarsIsWalkedWithoutComplaint. An element need not be a map:
+// a list of strings is the second most common shape in a real provider
+// catalog, well behind a list of maps and well ahead of anything else. Its
+// values are data, so the walk has to reach them, find nothing to rewrite,
+// and say nothing about it.
+func TestAListOfScalarsIsWalkedWithoutComplaint(t *testing.T) {
+	def := &schema.ResourceDefinition{
+		Type: "fake.service",
+		Attributes: map[string]schema.Attribute{
+			"args": {
+				Kind: value.KindList, Optional: true, Computed: true,
+				Elem: &schema.Attribute{Kind: value.KindString},
+			},
+		},
+	}
+	attrs := map[string]value.Value{
+		"args": value.List([]value.Value{
+			value.String("--Flag", value.SourceExplicit),
+			value.String("UPPER", value.SourceExplicit),
+		}, value.SourceExplicit),
+	}
+	var ds diag.Diagnostics
+	canonicaliseAttributes(attrs, def, &ds)
+	checkConfiguredAttributes(attrs, def, value.Origin{}, &ds)
+
+	if ds.HasErrors() {
+		var buf strings.Builder
+		ds.Render(&buf)
+		t.Fatalf("a list of strings was refused:\n%s", buf.String())
+	}
+	items := attrs["args"].Raw.([]value.Value)
+	for i, want := range []string{"--Flag", "UPPER"} {
+		if got, _ := items[i].AsString(); got != want {
+			t.Errorf("element %d = %q, want %q: an element's value is data, not a name to fold", i, got, want)
+		}
+	}
+}

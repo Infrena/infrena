@@ -105,6 +105,13 @@ func (d *ResourceDefinition) Validate() error {
 			return fmt.Errorf("%s: attribute %q is Required and also has a Default; a default makes it optional", d.Type, name)
 		case attr.Fields != nil && attr.Kind != value.KindMap:
 			return fmt.Errorf("%s: attribute %q declares Fields but its Kind is not a map; Fields describes a map's known keys", d.Type, name)
+		case attr.Elem != nil && attr.Kind != value.KindList:
+			return fmt.Errorf("%s: attribute %q declares Elem but its Kind is not a list; Elem describes each element of a list", d.Type, name)
+		}
+		if attr.Elem != nil {
+			if err := validateElem(d.Type, name, attr.Elem); err != nil {
+				return err
+			}
 		}
 		if attr.Fields != nil {
 			if err := validateFields(d.Type, name, attr.Fields); err != nil {
@@ -124,6 +131,48 @@ func (d *ResourceDefinition) Validate() error {
 		if len(req.Types) == 0 {
 			return fmt.Errorf("%s: requirement %q names no satisfying types, so it can never be satisfied", d.Type, req.Name)
 		}
+	}
+	return nil
+}
+
+// validateElem checks a list element's own declaration, and whatever it nests.
+//
+// An element is an attribute in every way that matters here: it has a Kind, it
+// may carry Fields when it is a map, and it may carry an Elem of its own when
+// it is a list of lists.
+//
+// Required, Optional, Computed and Default are NOT refused on one, even though
+// an element is not configured independently of the list that holds it and
+// nothing reads them here. A key nested inside a map is in exactly the same
+// position and validateFields accepts them there, so refusing them here would
+// be an asymmetry with no rule behind it — and an invisible one, since the two
+// edges are declared the same way.
+//
+// It would also reject almost every provider. The natural conversion from a
+// provider's own catalog marks anything neither required nor output as
+// Optional and Computed, which is right for an ordinary attribute and lands on
+// elements as a side effect. Refusing that costs a provider author a hunt
+// through a shared default several call sites away, and buys nothing: the flag
+// is ignored either way.
+func validateElem(typeName, path string, elem *Attribute) error {
+	described := path + "[]"
+	switch {
+	case elem.Kind == value.KindInvalid:
+		return fmt.Errorf("%s: the element of %q declares no Kind", typeName, path)
+	case elem.Fields != nil && elem.Kind != value.KindMap:
+		return fmt.Errorf("%s: attribute %q declares Fields but its Kind is not a map; Fields "+
+			"describes a map's known keys", typeName, described)
+	case elem.Elem != nil && elem.Kind != value.KindList:
+		return fmt.Errorf("%s: attribute %q declares Elem but its Kind is not a list; Elem "+
+			"describes each element of a list", typeName, described)
+	}
+	if elem.Elem != nil {
+		if err := validateElem(typeName, described, elem.Elem); err != nil {
+			return err
+		}
+	}
+	if elem.Fields != nil {
+		return validateFields(typeName, described, elem.Fields)
 	}
 	return nil
 }
@@ -157,6 +206,14 @@ func validateFields(typeName, path string, fields map[string]Attribute) error {
 		case nested.Fields != nil && nested.Kind != value.KindMap:
 			return fmt.Errorf("%s: attribute %q declares Fields but its Kind is not a map; Fields "+
 				"describes a map's known keys", typeName, nestedPath)
+		case nested.Elem != nil && nested.Kind != value.KindList:
+			return fmt.Errorf("%s: attribute %q declares Elem but its Kind is not a list; Elem "+
+				"describes each element of a list", typeName, nestedPath)
+		}
+		if nested.Elem != nil {
+			if err := validateElem(typeName, nestedPath, nested.Elem); err != nil {
+				return err
+			}
 		}
 		if nested.Fields != nil {
 			if err := validateFields(typeName, nestedPath, nested.Fields); err != nil {

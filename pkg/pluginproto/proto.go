@@ -35,17 +35,18 @@ import (
 //	3 — `References` on a schema attribute
 //	4 — `system_owned` and `system_owned_reason` on a discovered resource
 //	5 — `max_concurrency` in the handshake
+//	6 — `elem` on a schema attribute, describing a list's elements
 //
 // The reverse direction needs no bump: an older plugin omits the key, and
 // absent means what it always meant.
-const Version = 5
+const Version = 6
 
 // Supported lists every protocol version this build can talk to, newest first.
 //
 // It is a set rather than a single number so that raising Version does not
 // orphan every plugin already built. Older versions stay listed for as long as
 // what an older plugin omits still means what it meant then.
-var Supported = []int{5, 4, 3, 2, 1}
+var Supported = []int{6, 5, 4, 3, 2, 1}
 
 // IsSupported reports whether a plugin's protocol version can be spoken here.
 func IsSupported(v int) bool {

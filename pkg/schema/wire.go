@@ -39,6 +39,7 @@ type attributeWire struct {
 	// attribute does, since encoding/json calls a nested value's own methods.
 	References  *Reference           `json:"references,omitempty"`
 	Fields      map[string]Attribute `json:"fields,omitempty"`
+	Elem        *Attribute           `json:"elem,omitempty"`
 	Default     *value.Value         `json:"default,omitempty"`
 	Description string               `json:"description,omitempty"`
 }
@@ -68,6 +69,7 @@ func (a Attribute) MarshalJSON() ([]byte, error) {
 		Aliases:     a.Aliases,
 		References:  a.References,
 		Fields:      a.Fields,
+		Elem:        a.Elem,
 		Description: a.Description,
 	}
 	if a.Default != nil {
@@ -106,6 +108,7 @@ func (a *Attribute) UnmarshalJSON(b []byte) error {
 		Aliases:     w.Aliases,
 		References:  w.References,
 		Fields:      w.Fields,
+		Elem:        w.Elem,
 		Description: w.Description,
 	}
 	if w.Default != nil {

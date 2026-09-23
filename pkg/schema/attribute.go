@@ -102,6 +102,23 @@ type Attribute struct {
 	// and fails halfway through apply once real infrastructure exists.
 	Fields map[string]Attribute
 
+	// Elem describes every element of a KindList attribute, where the provider
+	// knows their shape. A repeated block — a list of maps with known keys —
+	// is an Elem of KindMap carrying its own Fields.
+	//
+	// Separate from Fields on purpose. The two answer different questions:
+	// Fields is "this map's known keys", Elem is "what each element looks
+	// like". Overloading one field with both meanings leaves them
+	// distinguished only by a sibling Kind, which is a coupling nothing
+	// enforces — and the version of this package that tried it had a
+	// canonicaliser asserting the list meaning while the validator enforced
+	// the map one, so a repeated block's keys could not be declared at all.
+	//
+	// Nil means the elements have no declared shape, which is the honest
+	// answer for a list of strings and for a list whose element keys the
+	// provider does not know.
+	Elem *Attribute
+
 	// Default is the value this attribute takes when configuration supplies
 	// none: a plain Go datum of the attribute's declared Kind — int64(10),
 	// "gp3", true — or nil for no default. DatumValue converts it.

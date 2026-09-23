@@ -173,36 +173,39 @@ func canonicaliseAttributes(
 		if !known {
 			continue
 		}
-		if rewritten, changed := canonicaliseNested(v, attr.Fields); changed {
+		if rewritten, changed := canonicaliseNested(v, attr); changed {
 			attrs[name] = rewritten
 		}
 	}
 }
 
 // canonicaliseNested rewrites the keys of a composite value to the names a
-// schema's Fields declare, recursively, and reports whether anything moved.
+// schema declares, recursively, and reports whether anything moved.
 //
-// NIL FIELDS STOPS THE WALK, and that is the whole reason this is not simply a
-// map rewrite. Nil means an open map — tags, labels, anything whose keys the
-// provider does not know and never will — and those keys are data the provider
-// takes verbatim. Folding one would mangle it.
+// It takes the whole attribute rather than one of its edges, because which edge
+// applies depends on the value: a map's keys come from Fields, a list's elements
+// are each described by Elem. Passing only Fields is what made this walk claim
+// to handle a list of maps while the validator refused to let anyone declare
+// one.
 //
-// Lists are walked for their elements, because Fields describes a map's keys and
-// a list of maps is the ordinary shape for a repeated block.
-func canonicaliseNested(v value.Value, fields map[string]schema.Attribute) (value.Value, bool) {
-	if fields == nil {
-		return v, false
-	}
+// NIL STOPS THE WALK, on either edge. A map with no Fields is an open map —
+// tags, labels, anything whose keys the provider does not know — and a list with
+// no Elem is one whose elements have no declared shape. Both hold data taken
+// verbatim, and folding a key of either would mangle it.
+func canonicaliseNested(v value.Value, attr schema.Attribute) (value.Value, bool) {
 	switch raw := v.Raw.(type) {
 	case map[string]value.Value:
+		if attr.Fields == nil {
+			return v, false
+		}
 		out := make(map[string]value.Value, len(raw))
 		changed := false
 		for written, inner := range raw {
 			name := written
-			if canonical, ok := canonicalField(fields, written); ok {
+			if canonical, ok := canonicalField(attr.Fields, written); ok {
 				name = canonical
 			}
-			if rewritten, deeper := canonicaliseNested(inner, fields[name].Fields); deeper {
+			if rewritten, deeper := canonicaliseNested(inner, attr.Fields[name]); deeper {
 				inner, changed = rewritten, true
 			}
 			if name != written {
@@ -217,11 +220,14 @@ func canonicaliseNested(v value.Value, fields map[string]schema.Attribute) (valu
 		return v, true
 
 	case []value.Value:
+		if attr.Elem == nil {
+			return v, false
+		}
 		out := make([]value.Value, len(raw))
 		changed := false
 		for i, item := range raw {
 			out[i] = item
-			if rewritten, deeper := canonicaliseNested(item, fields); deeper {
+			if rewritten, deeper := canonicaliseNested(item, *attr.Elem); deeper {
 				out[i], changed = rewritten, true
 			}
 		}
@@ -234,43 +240,48 @@ func canonicaliseNested(v value.Value, fields map[string]schema.Attribute) (valu
 	return v, false
 }
 
-// checkNestedKeys refuses a key a declared map does not have.
+// checkNestedKeys refuses a key a declared composite does not have, following
+// both a map's Fields and a list's Elem.
 //
 // Without this there is no diagnostic at any depth below the first: an
 // unresolved nested key is not rewritten, and the plugin boundary's own check
 // iterates top-level attributes only, so it never descends into a composite
 // value. The key reaches the provider as written and goes out on the wire.
 //
-// Nil Fields stops the walk, for the reason canonicaliseNested gives: an open
-// map's keys are the user's, not the schema's.
+// Nil on either edge stops the walk, for the reason canonicaliseNested gives:
+// the contents of an open map, or of a list with no declared element, belong to
+// whoever wrote the configuration rather than to the schema.
 //
 // The wording follows checkReferredFields in bind.go, which already reports this
 // for a ${...} path. One shape of mistake reads the same way wherever it is made.
-func checkNestedKeys(v value.Value, fields map[string]schema.Attribute, described string, ds *diag.Diagnostics) {
-	if fields == nil {
-		return
-	}
+func checkNestedKeys(v value.Value, attr schema.Attribute, described string, ds *diag.Diagnostics) {
 	switch raw := v.Raw.(type) {
 	case map[string]value.Value:
+		if attr.Fields == nil {
+			return
+		}
 		for _, key := range sortedValueKeys(raw) {
 			inner := raw[key]
-			attr, known := fields[key]
+			nested, known := attr.Fields[key]
 			if !known {
 				ds.Add(diag.Diagnostic{
 					Severity: diag.SeverityError,
 					Summary:  described + " has no key " + strconv.Quote(key),
 					Detail: "Keys of " + described + ":\n  " +
-						strings.Join(sortedFieldKeys(fields), "\n  "),
+						strings.Join(sortedFieldKeys(attr.Fields), "\n  "),
 					Action: "Correct the key name, or remove it.",
 					Origin: inner.Origin,
 				})
 				continue
 			}
-			checkNestedKeys(inner, attr.Fields, described+"."+key, ds)
+			checkNestedKeys(inner, nested, described+"."+key, ds)
 		}
 	case []value.Value:
+		if attr.Elem == nil {
+			return
+		}
 		for _, item := range raw {
-			checkNestedKeys(item, fields, described, ds)
+			checkNestedKeys(item, *attr.Elem, described+"[]", ds)
 		}
 	}
 }
@@ -404,7 +415,7 @@ func checkConfiguredAttributes(attrs map[string]value.Value, def *schema.Resourc
 			continue
 		}
 
-		checkNestedKeys(v, attr.Fields, def.Type+"."+name, ds)
+		checkNestedKeys(v, attr, def.Type+"."+name, ds)
 
 		// Computed and optional together is a third state: configuration may set
 		// it, and the provider picks when configuration does not. Only a computed
