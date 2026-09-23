@@ -333,3 +333,51 @@ func TestElemSurvivesTheWire(t *testing.T) {
 		t.Errorf("an alias inside a list element did not survive: %+v", got)
 	}
 }
+
+// TestAnElementMayCarryTheSameIgnoredFlagsANestedKeyMay. A key inside a map may
+// declare Required, Optional, Computed or a Default; nothing reads them at
+// nesting depth, and validateFields accepts them. An element is in exactly the
+// same position — not configured independently of the composite holding it — so
+// refusing it there would be an asymmetry with no rule behind it.
+//
+// This is not hypothetical tidiness. The natural conversion from a provider's
+// own catalog sets Optional and Computed on anything that is neither required
+// nor output, so a rule refusing them on elements rejects every list a provider
+// declares, for a flag that is ignored either way.
+func TestAnElementMayCarryTheSameIgnoredFlagsANestedKeyMay(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		elem Attribute
+	}{
+		{"Optional and Computed, the default conversion's shape", Attribute{
+			Kind: value.KindMap, Optional: true, Computed: true,
+			Fields: map[string]Attribute{"imageURI": definedAttr()},
+		}},
+		{"Required", Attribute{Kind: value.KindString, Required: true}},
+		{"Computed alone", Attribute{Kind: value.KindString, Computed: true}},
+		{"a Default", Attribute{Kind: value.KindString, Default: "x"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			elem := c.elem
+			def := &ResourceDefinition{Type: "x.y", Attributes: map[string]Attribute{
+				"containers": {Kind: value.KindList, Optional: true, Computed: true, Elem: &elem},
+			}}
+			if err := def.Validate(); err != nil {
+				t.Errorf("refused: %v\n\nA nested map key carrying the same flag is accepted, so "+
+					"this is an asymmetry rather than a rule.", err)
+			}
+		})
+	}
+
+	// The mirror, so the claim above is tested rather than asserted: a nested
+	// map key really does carry these today.
+	nested := &ResourceDefinition{Type: "x.y", Attributes: map[string]Attribute{
+		"template": {Kind: value.KindMap, Optional: true, Computed: true, Fields: map[string]Attribute{
+			"k": {Kind: value.KindString, Optional: true, Computed: true, Default: "x"},
+		}},
+	}}
+	if err := nested.Validate(); err != nil {
+		t.Errorf("a nested map key was refused for carrying ignored flags, which would make the "+
+			"element rule consistent after all: %v", err)
+	}
+}

@@ -139,17 +139,26 @@ func (d *ResourceDefinition) Validate() error {
 //
 // An element is an attribute in every way that matters here: it has a Kind, it
 // may carry Fields when it is a map, and it may carry an Elem of its own when
-// it is a list of lists. What it may not do is claim to be configured — an
-// element is not set independently of the list that holds it, so Required,
-// Optional and Default on one would describe something a user cannot write.
+// it is a list of lists.
+//
+// Required, Optional, Computed and Default are NOT refused on one, even though
+// an element is not configured independently of the list that holds it and
+// nothing reads them here. A key nested inside a map is in exactly the same
+// position and validateFields accepts them there, so refusing them here would
+// be an asymmetry with no rule behind it — and an invisible one, since the two
+// edges are declared the same way.
+//
+// It would also reject almost every provider. The natural conversion from a
+// provider's own catalog marks anything neither required nor output as
+// Optional and Computed, which is right for an ordinary attribute and lands on
+// elements as a side effect. Refusing that costs a provider author a hunt
+// through a shared default several call sites away, and buys nothing: the flag
+// is ignored either way.
 func validateElem(typeName, path string, elem *Attribute) error {
 	described := path + "[]"
 	switch {
 	case elem.Kind == value.KindInvalid:
 		return fmt.Errorf("%s: the element of %q declares no Kind", typeName, path)
-	case elem.Required || elem.Optional || elem.Default != nil:
-		return fmt.Errorf("%s: the element of %q declares Required, Optional or Default, but an "+
-			"element is not configured independently of the list that holds it", typeName, path)
 	case elem.Fields != nil && elem.Kind != value.KindMap:
 		return fmt.Errorf("%s: attribute %q declares Fields but its Kind is not a map; Fields "+
 			"describes a map's known keys", typeName, described)
