@@ -96,6 +96,9 @@ func (d *ResourceDefinition) checkSpellings() error {
 			}
 			seen[folded] = spelling
 		}
+		if err := checkElemSpellings(d.Type, name, attr.Elem); err != nil {
+			return err
+		}
 		if err := checkFieldSpellings(d.Type, name, attr.Fields); err != nil {
 			return err
 		}
@@ -134,11 +137,31 @@ func checkFieldSpellings(typeName, path string, fields map[string]Attribute) err
 			}
 			seen[folded] = spelling
 		}
+		if err := checkElemSpellings(typeName, path+"."+name, attr.Elem); err != nil {
+			return err
+		}
 		if err := checkFieldSpellings(typeName, path+"."+name, attr.Fields); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// checkElemSpellings follows a list's element edge, so a repeated block's keys
+// are held to the same rule as any other sibling group.
+//
+// Without it the whole point of Elem is lost: a list of maps could declare two
+// keys folding together and load happily, which is the ambiguity this file
+// exists to refuse.
+func checkElemSpellings(typeName, path string, elem *Attribute) error {
+	if elem == nil {
+		return nil
+	}
+	described := path + "[]"
+	if err := checkElemSpellings(typeName, described, elem.Elem); err != nil {
+		return err
+	}
+	return checkFieldSpellings(typeName, described, elem.Fields)
 }
 
 // sortedAttributeKeys makes the refusal deterministic: Go randomises map

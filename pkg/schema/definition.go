@@ -105,6 +105,13 @@ func (d *ResourceDefinition) Validate() error {
 			return fmt.Errorf("%s: attribute %q is Required and also has a Default; a default makes it optional", d.Type, name)
 		case attr.Fields != nil && attr.Kind != value.KindMap:
 			return fmt.Errorf("%s: attribute %q declares Fields but its Kind is not a map; Fields describes a map's known keys", d.Type, name)
+		case attr.Elem != nil && attr.Kind != value.KindList:
+			return fmt.Errorf("%s: attribute %q declares Elem but its Kind is not a list; Elem describes each element of a list", d.Type, name)
+		}
+		if attr.Elem != nil {
+			if err := validateElem(d.Type, name, attr.Elem); err != nil {
+				return err
+			}
 		}
 		if attr.Fields != nil {
 			if err := validateFields(d.Type, name, attr.Fields); err != nil {
@@ -124,6 +131,39 @@ func (d *ResourceDefinition) Validate() error {
 		if len(req.Types) == 0 {
 			return fmt.Errorf("%s: requirement %q names no satisfying types, so it can never be satisfied", d.Type, req.Name)
 		}
+	}
+	return nil
+}
+
+// validateElem checks a list element's own declaration, and whatever it nests.
+//
+// An element is an attribute in every way that matters here: it has a Kind, it
+// may carry Fields when it is a map, and it may carry an Elem of its own when
+// it is a list of lists. What it may not do is claim to be configured — an
+// element is not set independently of the list that holds it, so Required,
+// Optional and Default on one would describe something a user cannot write.
+func validateElem(typeName, path string, elem *Attribute) error {
+	described := path + "[]"
+	switch {
+	case elem.Kind == value.KindInvalid:
+		return fmt.Errorf("%s: the element of %q declares no Kind", typeName, path)
+	case elem.Required || elem.Optional || elem.Default != nil:
+		return fmt.Errorf("%s: the element of %q declares Required, Optional or Default, but an "+
+			"element is not configured independently of the list that holds it", typeName, path)
+	case elem.Fields != nil && elem.Kind != value.KindMap:
+		return fmt.Errorf("%s: attribute %q declares Fields but its Kind is not a map; Fields "+
+			"describes a map's known keys", typeName, described)
+	case elem.Elem != nil && elem.Kind != value.KindList:
+		return fmt.Errorf("%s: attribute %q declares Elem but its Kind is not a list; Elem "+
+			"describes each element of a list", typeName, described)
+	}
+	if elem.Elem != nil {
+		if err := validateElem(typeName, described, elem.Elem); err != nil {
+			return err
+		}
+	}
+	if elem.Fields != nil {
+		return validateFields(typeName, described, elem.Fields)
 	}
 	return nil
 }
@@ -157,6 +197,14 @@ func validateFields(typeName, path string, fields map[string]Attribute) error {
 		case nested.Fields != nil && nested.Kind != value.KindMap:
 			return fmt.Errorf("%s: attribute %q declares Fields but its Kind is not a map; Fields "+
 				"describes a map's known keys", typeName, nestedPath)
+		case nested.Elem != nil && nested.Kind != value.KindList:
+			return fmt.Errorf("%s: attribute %q declares Elem but its Kind is not a list; Elem "+
+				"describes each element of a list", typeName, nestedPath)
+		}
+		if nested.Elem != nil {
+			if err := validateElem(typeName, nestedPath, nested.Elem); err != nil {
+				return err
+			}
 		}
 		if nested.Fields != nil {
 			if err := validateFields(typeName, nestedPath, nested.Fields); err != nil {

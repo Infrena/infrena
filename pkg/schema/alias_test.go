@@ -1,6 +1,7 @@
 package schema
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -244,5 +245,91 @@ func TestNamesAtDifferentDepthsMayRepeat(t *testing.T) {
 	if err := def.Validate(); err != nil {
 		t.Errorf("the same name at two depths was refused, but they are never looked up "+
 			"together: %v", err)
+	}
+}
+
+// listOf builds a KindList attribute whose elements are maps with the given
+// keys — the shape a repeated block takes.
+func listOf(fields map[string]Attribute) Attribute {
+	return Attribute{
+		Kind: value.KindList, Optional: true, Computed: true,
+		Elem: &Attribute{Kind: value.KindMap, Fields: fields},
+	}
+}
+
+// TestElemBelongsOnAListAndFieldsOnAMap. The two describe different things —
+// every element of a list, versus one map's known keys — and the whole reason
+// Elem exists is that overloading Fields to mean both left the meaning implied
+// by a sibling Kind, which nothing enforced.
+func TestElemBelongsOnAListAndFieldsOnAMap(t *testing.T) {
+	for _, c := range []struct {
+		name    string
+		attr    Attribute
+		refused bool
+	}{
+		{"Elem on a list", listOf(map[string]Attribute{"imageURI": definedAttr()}), false},
+		{"Elem on a map", Attribute{
+			Kind: value.KindMap, Optional: true, Computed: true,
+			Elem: &Attribute{Kind: value.KindString},
+		}, true},
+		{"Elem on a string", Attribute{
+			Kind: value.KindString, Optional: true, Computed: true,
+			Elem: &Attribute{Kind: value.KindString},
+		}, true},
+		{"Fields on a list", Attribute{
+			Kind: value.KindList, Optional: true, Computed: true,
+			Fields: map[string]Attribute{"x": definedAttr()},
+		}, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			def := &ResourceDefinition{Type: "x.y", Attributes: map[string]Attribute{"a": c.attr}}
+			err := def.Validate()
+			if c.refused && err == nil {
+				t.Error("accepted, but the kind and the nesting edge disagree")
+			}
+			if !c.refused && err != nil {
+				t.Errorf("refused a legitimate declaration: %v", err)
+			}
+		})
+	}
+}
+
+// A collision inside a list element's keys is as ambiguous as one anywhere
+// else, and the check has to reach through Elem to find it.
+func TestSpellingCollisionsAreRefusedInsideAListElement(t *testing.T) {
+	def := &ResourceDefinition{Type: "x.y", Attributes: map[string]Attribute{
+		"containers": listOf(map[string]Attribute{
+			"imageURI": definedAttr(),
+			"imageuri": definedAttr(),
+		}),
+	}}
+	if err := def.Validate(); err == nil {
+		t.Fatal("a collision inside a list element was accepted")
+	} else if !strings.Contains(err.Error(), "containers") {
+		t.Errorf("the error does not name the path to the collision: %v", err)
+	}
+}
+
+// Elem has to survive the plugin boundary, or an out-of-process provider
+// declares element keys the host never sees — which is the gap this closes.
+func TestElemSurvivesTheWire(t *testing.T) {
+	in := listOf(map[string]Attribute{"imageURI": {Kind: value.KindString, Optional: true, Aliases: []string{"image"}}})
+	b, err := json.Marshal(in)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var out Attribute
+	if err := json.Unmarshal(b, &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if out.Elem == nil {
+		t.Fatalf("Elem did not survive the round trip: %s", b)
+	}
+	got, ok := out.Elem.Fields["imageURI"]
+	if !ok {
+		t.Fatalf("the element's keys did not survive: %+v", out.Elem)
+	}
+	if len(got.Aliases) != 1 || got.Aliases[0] != "image" {
+		t.Errorf("an alias inside a list element did not survive: %+v", got)
 	}
 }

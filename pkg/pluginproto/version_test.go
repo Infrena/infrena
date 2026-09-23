@@ -13,8 +13,8 @@ import (
 // The literal is duplicated on purpose: reading it from the constant would
 // assert only that the constant equals itself.
 func TestTheProtocolVersionIsDeliberate(t *testing.T) {
-	if Version != 5 {
-		t.Errorf("Version = %d, want 5. Changing it is a deliberate act: raise this literal "+
+	if Version != 6 {
+		t.Errorf("Version = %d, want 6. Changing it is a deliberate act: raise this literal "+
 			"together with the constant, and record what moved and why", Version)
 	}
 }
@@ -52,17 +52,18 @@ func TestSupportedIsNewestFirst(t *testing.T) {
 	}
 }
 
-func TestProtocolIsFiveAndStillSpeaksItsPredecessors(t *testing.T) {
-	if Version != 5 {
-		t.Errorf("Version = %d, want 5 — a plugin-declared concurrency ceiling in the handshake, "+
-			"the same additive shape optional/aliases, References and system_owned had", Version)
+func TestProtocolIsSixAndStillSpeaksItsPredecessors(t *testing.T) {
+	if Version != 6 {
+		t.Errorf("Version = %d, want 6 — `elem` on a schema attribute, describing a list's "+
+			"elements, the same additive shape optional/aliases, References, system_owned and "+
+			"max_concurrency had", Version)
 	}
-	for _, v := range []int{5, 4, 3, 2, 1} {
+	for _, v := range []int{6, 5, 4, 3, 2, 1} {
 		if !IsSupported(v) {
 			t.Errorf("protocol %d must still be supported — Supported is a set so raising the version does not orphan every plugin", v)
 		}
 	}
-	if IsSupported(6) {
+	if IsSupported(7) {
 		t.Error("an unreleased protocol must not be accepted")
 	}
 }
