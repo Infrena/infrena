@@ -96,8 +96,61 @@ func (d *ResourceDefinition) checkSpellings() error {
 			}
 			seen[folded] = spelling
 		}
+		if err := checkFieldSpellings(d.Type, name, attr.Fields); err != nil {
+			return err
+		}
 	}
 	return nil
+}
+
+// checkFieldSpellings is checkSpellings one level down, and then further.
+//
+// Nested names resolve by the same ladder as top-level ones — exact, then
+// case-folded, then alias — so they need the same refusal. Without it a schema
+// whose nested names fold together loads happily and answers whichever key the
+// map was walked to first, which is the silent wrong answer the top-level check
+// exists to prevent.
+//
+// Each sibling group is checked against itself only. A nested key and a
+// top-level attribute are never candidates for the same lookup, so a name that
+// repeats at another depth is unambiguous and stays allowed.
+//
+// Nil Fields is an open map, whose keys are the user's rather than the schema's,
+// and there is nothing to collide.
+func checkFieldSpellings(typeName, path string, fields map[string]Attribute) error {
+	if fields == nil {
+		return nil
+	}
+	seen := map[string]string{} // folded -> the spelling that claimed it
+	for _, name := range sortedAttributeKeys(fields) {
+		attr := fields[name]
+		for _, spelling := range append([]string{name}, attr.Aliases...) {
+			folded := foldName(spelling)
+			if first, taken := seen[folded]; taken {
+				return fmt.Errorf(
+					"%s: %s has keys %q and %q, which are the same name ignoring case, so "+
+						"configuration naming it would reach whichever was found first",
+					typeName, path, first, spelling)
+			}
+			seen[folded] = spelling
+		}
+		if err := checkFieldSpellings(typeName, path+"."+name, attr.Fields); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// sortedAttributeKeys makes the refusal deterministic: Go randomises map
+// iteration, and a plugin that loads on one run and is refused on the next
+// would be worse than either answer.
+func sortedAttributeKeys(fields map[string]Attribute) []string {
+	out := make([]string, 0, len(fields))
+	for k := range fields {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // attributeNamesSorted orders the attribute map, so a collision is reported

@@ -166,3 +166,83 @@ func TestAliasesSurviveTheWire(t *testing.T) {
 		t.Errorf("Aliases = %v, want [cidr]", after.Aliases)
 	}
 }
+
+// definedAttr is a nested attribute that passes the other validation rules, so a
+// test about spelling collisions fails on the collision rather than on something
+// else.
+func definedAttr(aliases ...string) Attribute {
+	return Attribute{Kind: value.KindString, Optional: true, Computed: true, Aliases: aliases}
+}
+
+func withFields(fields map[string]Attribute) *ResourceDefinition {
+	return &ResourceDefinition{Type: "x.y", Attributes: map[string]Attribute{
+		"template": {Kind: value.KindMap, Optional: true, Computed: true, Fields: fields},
+	}}
+}
+
+// TestNestedSpellingsMustNotCollide. A collision decided at runtime is a silent
+// wrong answer — whichever key the map was walked to first — which is the whole
+// reason the top-level check refuses one at load. Nested names resolve by the
+// same ladder, so they need the same refusal: without it, activating a nested
+// alias turns a schema that used to be merely wrong into one that is ambiguous.
+func TestNestedSpellingsMustNotCollide(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		fields map[string]Attribute
+	}{
+		{"two nested names folding together", map[string]Attribute{
+			"serviceName": definedAttr(),
+			"servicename": definedAttr(),
+		}},
+		{"a nested alias colliding with a sibling name", map[string]Attribute{
+			"serviceName": definedAttr(),
+			"other":       definedAttr("SERVICENAME"),
+		}},
+		{"two nested aliases colliding with each other", map[string]Attribute{
+			"one": definedAttr("shared"),
+			"two": definedAttr("SHARED"),
+		}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			err := withFields(c.fields).Validate()
+			if err == nil {
+				t.Fatal("accepted, so configuration naming it reaches whichever key was found " +
+					"first: a silent wrong answer rather than a plugin that will not start")
+			}
+			if !strings.Contains(err.Error(), "template") {
+				t.Errorf("the error does not say where the collision is: %v", err)
+			}
+		})
+	}
+}
+
+// The check has to reach every depth, not just the first nested level.
+func TestSpellingCollisionsAreRefusedAtEveryDepth(t *testing.T) {
+	def := withFields(map[string]Attribute{
+		"containers": {Kind: value.KindList, Optional: true, Computed: true, Fields: map[string]Attribute{
+			"imageURI": definedAttr(),
+			"imageuri": definedAttr(),
+		}},
+	})
+	if err := def.Validate(); err == nil {
+		t.Fatal("a collision two levels down was accepted")
+	} else if !strings.Contains(err.Error(), "containers") {
+		t.Errorf("the error does not name the path to the collision: %v", err)
+	}
+}
+
+// Names that only collide ACROSS levels are fine, and must stay fine: a nested
+// key and a top-level attribute are never candidates for the same lookup, so
+// refusing them would reject schemas that are perfectly unambiguous.
+func TestNamesAtDifferentDepthsMayRepeat(t *testing.T) {
+	def := &ResourceDefinition{Type: "x.y", Attributes: map[string]Attribute{
+		"serviceName": definedAttr(),
+		"template": {Kind: value.KindMap, Optional: true, Computed: true, Fields: map[string]Attribute{
+			"serviceName": definedAttr(),
+		}},
+	}}
+	if err := def.Validate(); err != nil {
+		t.Errorf("the same name at two depths was refused, but they are never looked up "+
+			"together: %v", err)
+	}
+}
