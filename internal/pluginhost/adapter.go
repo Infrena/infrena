@@ -326,7 +326,10 @@ func (r *remoteProvider) rebuild(resourceType string, result pluginproto.Resourc
 	if carry != nil {
 		// The bookkeeping the plugin was never sent and therefore cannot have
 		// lost. Dependencies is the only source of destroy-ordering edges once a
-		// resource leaves configuration; Lifecycle is prevent_destroy.
+		// resource leaves configuration; Lifecycle is prevent_destroy; Deposed is
+		// the only record that a failed replacement left a real object behind,
+		// and dropping it strands that object permanently, because the plan that
+		// would propose the cleanup is gated on the field being present.
 		out.Address = carry.Address
 		if carry.Provider != "" {
 			out.Provider = carry.Provider
@@ -335,6 +338,16 @@ func (r *remoteProvider) rebuild(resourceType string, result pluginproto.Resourc
 		out.Lifecycle = carry.Lifecycle
 		out.CreatedAt = carry.CreatedAt
 		out.UpdatedAt = carry.UpdatedAt
+		// Cloned rather than assigned, for the reason ResourceState.Clone gives:
+		// this result is written to state while the carry is still live in the
+		// caller, and a shared slice makes an edit through either one an edit to
+		// both.
+		if len(carry.Deposed) > 0 {
+			out.Deposed = make([]*resource.ResourceState, len(carry.Deposed))
+			for i, d := range carry.Deposed {
+				out.Deposed[i] = d.Clone()
+			}
+		}
 		if out.ProviderID == "" {
 			out.ProviderID = carry.ProviderID
 		}
