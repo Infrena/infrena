@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/infrena/infrena/internal/diag"
+
 	"github.com/infrena/infrena/internal/providers"
 	"github.com/infrena/infrena/internal/registry"
 	"github.com/infrena/infrena/pkg/address"
@@ -364,5 +366,123 @@ func TestSchemaStampingADefaultDoesNotMakeItCompareUnequal(t *testing.T) {
 	plain := value.Int(10, value.SourceDefault)
 	if !stamped.Equal(plain) {
 		t.Error("a stamped default must still be Equal to the same datum with no Scope — provenance describes how a value was arrived at, not what the desired state is")
+	}
+}
+
+// nestedDef declares one attribute at the top level and the same spelling one
+// level down, so a test can ask whether a name resolves the same way at both
+// depths.
+func nestedDef() *schema.ResourceDefinition {
+	return &schema.ResourceDefinition{
+		Type: "fake.service",
+		Attributes: map[string]schema.Attribute{
+			"cloudRun": {Kind: value.KindString, Optional: true},
+			"template": {
+				Kind:     value.KindMap,
+				Optional: true,
+				Fields: map[string]schema.Attribute{
+					"cloudRun":    {Kind: value.KindString, Optional: true},
+					"serviceName": {Kind: value.KindString, Optional: true, Aliases: []string{"service"}},
+				},
+			},
+		},
+	}
+}
+
+// TestNestedNamesCanonicaliseLikeTopLevelOnes. A spelling that resolves at the
+// top level has to resolve at any depth, or the same file accepts one spelling
+// outside a block and demands another inside it, with no diagnostic either way.
+func TestNestedNamesCanonicaliseLikeTopLevelOnes(t *testing.T) {
+	def := nestedDef()
+	attrs := map[string]value.Value{
+		"cloudrun": value.String("top", value.SourceExplicit),
+		"template": value.Map(map[string]value.Value{
+			"cloudrun": value.String("nested", value.SourceExplicit),
+			"service":  value.String("aliased", value.SourceExplicit),
+		}, value.SourceExplicit),
+	}
+
+	var ds diag.Diagnostics
+	canonicaliseAttributes(attrs, def, &ds)
+	if ds.HasErrors() {
+		t.Fatalf("unexpected diagnostics: %v", ds)
+	}
+
+	if _, ok := attrs["cloudRun"]; !ok {
+		t.Errorf("the top-level name did not canonicalise: keys are %v", keysOf(attrs))
+	}
+	inner, ok := attrs["template"].Raw.(map[string]value.Value)
+	if !ok {
+		t.Fatalf("template is not a map: %#v", attrs["template"].Raw)
+	}
+	if _, ok := inner["cloudRun"]; !ok {
+		t.Errorf("a nested name that differs only in case did not canonicalise: keys are %v", keysOf(inner))
+	}
+	if _, ok := inner["serviceName"]; !ok {
+		t.Errorf("a nested alias did not canonicalise: keys are %v. An Aliases list a plugin "+
+			"declares on a nested field is inert, so the schema promises a spelling that does nothing", keysOf(inner))
+	}
+}
+
+// TestANestedNameThatResolvesToNothingIsReported is the half that matters more.
+// An unresolved nested key is not rewritten and not refused: it sits inside a
+// composite value, which the plugin-boundary check never descends into, so it
+// reaches the provider and goes out on the wire as written.
+func TestANestedNameThatResolvesToNothingIsReported(t *testing.T) {
+	def := nestedDef()
+	attrs := map[string]value.Value{
+		"template": value.Map(map[string]value.Value{
+			"nosuchkey": value.String("x", value.SourceExplicit),
+		}, value.SourceExplicit),
+	}
+
+	var ds diag.Diagnostics
+	canonicaliseAttributes(attrs, def, &ds)
+	checkConfiguredAttributes(attrs, def, value.Origin{}, &ds)
+
+	if !ds.HasErrors() {
+		t.Fatal("a nested key the type does not declare produced no diagnostic, so it reaches " +
+			"the provider unchecked")
+	}
+	var buf strings.Builder
+	ds.Render(&buf)
+	for _, want := range []string{"nosuchkey", "template"} {
+		if !strings.Contains(buf.String(), want) {
+			t.Errorf("the diagnostic does not mention %q:\n%s", want, buf.String())
+		}
+	}
+}
+
+// An open map is one whose keys the provider does not know — tags, labels — and
+// nil Fields is how a schema says so. Those keys must pass through untouched:
+// canonicalising or refusing them would mangle data the provider takes verbatim.
+func TestAnOpenMapsKeysAreLeftAlone(t *testing.T) {
+	def := &schema.ResourceDefinition{
+		Type: "fake.service",
+		Attributes: map[string]schema.Attribute{
+			"tags": {Kind: value.KindMap, Optional: true}, // no Fields: open
+		},
+	}
+	attrs := map[string]value.Value{
+		"tags": value.Map(map[string]value.Value{
+			"Name":          value.String("web", value.SourceExplicit),
+			"anythingAtAll": value.String("y", value.SourceExplicit),
+		}, value.SourceExplicit),
+	}
+
+	var ds diag.Diagnostics
+	canonicaliseAttributes(attrs, def, &ds)
+	checkConfiguredAttributes(attrs, def, value.Origin{}, &ds)
+
+	if ds.HasErrors() {
+		var buf strings.Builder
+		ds.Render(&buf)
+		t.Fatalf("an open map's keys were refused:\n%s", buf.String())
+	}
+	inner := attrs["tags"].Raw.(map[string]value.Value)
+	for _, want := range []string{"Name", "anythingAtAll"} {
+		if _, ok := inner[want]; !ok {
+			t.Errorf("key %q was rewritten or dropped: keys are %v", want, keysOf(inner))
+		}
 	}
 }

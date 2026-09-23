@@ -164,6 +164,157 @@ func canonicaliseAttributes(
 		attrs[canonical] = attrs[name]
 		delete(attrs, name)
 	}
+
+	// The same rule one level down, and further. A spelling that resolves at the
+	// top level has to resolve at any depth, or one file accepts a name outside a
+	// block and demands a different one inside it.
+	for name, v := range attrs {
+		attr, known := def.Attribute(name)
+		if !known {
+			continue
+		}
+		if rewritten, changed := canonicaliseNested(v, attr.Fields); changed {
+			attrs[name] = rewritten
+		}
+	}
+}
+
+// canonicaliseNested rewrites the keys of a composite value to the names a
+// schema's Fields declare, recursively, and reports whether anything moved.
+//
+// NIL FIELDS STOPS THE WALK, and that is the whole reason this is not simply a
+// map rewrite. Nil means an open map — tags, labels, anything whose keys the
+// provider does not know and never will — and those keys are data the provider
+// takes verbatim. Folding one would mangle it.
+//
+// Lists are walked for their elements, because Fields describes a map's keys and
+// a list of maps is the ordinary shape for a repeated block.
+func canonicaliseNested(v value.Value, fields map[string]schema.Attribute) (value.Value, bool) {
+	if fields == nil {
+		return v, false
+	}
+	switch raw := v.Raw.(type) {
+	case map[string]value.Value:
+		out := make(map[string]value.Value, len(raw))
+		changed := false
+		for written, inner := range raw {
+			name := written
+			if canonical, ok := canonicalField(fields, written); ok {
+				name = canonical
+			}
+			if rewritten, deeper := canonicaliseNested(inner, fields[name].Fields); deeper {
+				inner, changed = rewritten, true
+			}
+			if name != written {
+				changed = true
+			}
+			out[name] = inner
+		}
+		if !changed {
+			return v, false
+		}
+		v.Raw = out
+		return v, true
+
+	case []value.Value:
+		out := make([]value.Value, len(raw))
+		changed := false
+		for i, item := range raw {
+			out[i] = item
+			if rewritten, deeper := canonicaliseNested(item, fields); deeper {
+				out[i], changed = rewritten, true
+			}
+		}
+		if !changed {
+			return v, false
+		}
+		v.Raw = out
+		return v, true
+	}
+	return v, false
+}
+
+// checkNestedKeys refuses a key a declared map does not have.
+//
+// Without this there is no diagnostic at any depth below the first: an
+// unresolved nested key is not rewritten, and the plugin boundary's own check
+// iterates top-level attributes only, so it never descends into a composite
+// value. The key reaches the provider as written and goes out on the wire.
+//
+// Nil Fields stops the walk, for the reason canonicaliseNested gives: an open
+// map's keys are the user's, not the schema's.
+//
+// The wording follows checkReferredFields in bind.go, which already reports this
+// for a ${...} path. One shape of mistake reads the same way wherever it is made.
+func checkNestedKeys(v value.Value, fields map[string]schema.Attribute, described string, ds *diag.Diagnostics) {
+	if fields == nil {
+		return
+	}
+	switch raw := v.Raw.(type) {
+	case map[string]value.Value:
+		for _, key := range sortedValueKeys(raw) {
+			inner := raw[key]
+			attr, known := fields[key]
+			if !known {
+				ds.Add(diag.Diagnostic{
+					Severity: diag.SeverityError,
+					Summary:  described + " has no key " + strconv.Quote(key),
+					Detail: "Keys of " + described + ":\n  " +
+						strings.Join(sortedFieldKeys(fields), "\n  "),
+					Action: "Correct the key name, or remove it.",
+					Origin: inner.Origin,
+				})
+				continue
+			}
+			checkNestedKeys(inner, attr.Fields, described+"."+key, ds)
+		}
+	case []value.Value:
+		for _, item := range raw {
+			checkNestedKeys(item, fields, described, ds)
+		}
+	}
+}
+
+// sortedValueKeys and sortedFieldKeys keep a diagnostic identical between runs:
+// Go randomises map iteration, and the same configuration must report the same
+// thing every time.
+func sortedValueKeys(m map[string]value.Value) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func sortedFieldKeys(fields map[string]schema.Attribute) []string {
+	out := make([]string, 0, len(fields))
+	for k := range fields {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// canonicalField is Canonical for one level of Fields: an exact hit, then a
+// case-folded one, then a declared alias. It is the same ladder in the same
+// order, so a name resolves identically wherever it is written.
+func canonicalField(fields map[string]schema.Attribute, written string) (string, bool) {
+	if _, ok := fields[written]; ok {
+		return written, true
+	}
+	folded := strings.ToLower(written)
+	for name, attr := range fields {
+		if strings.ToLower(name) == folded {
+			return name, true
+		}
+		for _, alias := range attr.Aliases {
+			if strings.ToLower(alias) == folded {
+				return name, true
+			}
+		}
+	}
+	return "", false
 }
 
 // canonicaliseIgnoreChanges resolves `ignore_changes:` entries to the plugin's own
@@ -252,6 +403,8 @@ func checkConfiguredAttributes(attrs map[string]value.Value, def *schema.Resourc
 			})
 			continue
 		}
+
+		checkNestedKeys(v, attr.Fields, def.Type+"."+name, ds)
 
 		// Computed and optional together is a third state: configuration may set
 		// it, and the provider picks when configuration does not. Only a computed
