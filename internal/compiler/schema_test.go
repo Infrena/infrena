@@ -585,3 +585,41 @@ func TestAListWithNoDeclaredElementIsLeftAlone(t *testing.T) {
 		t.Errorf("an undeclared element's key was rewritten: %v", keysOf(inner))
 	}
 }
+
+// TestAListOfScalarsIsWalkedWithoutComplaint. An element need not be a map:
+// a list of strings is the second most common shape in a real provider
+// catalog, well behind a list of maps and well ahead of anything else. Its
+// values are data, so the walk has to reach them, find nothing to rewrite,
+// and say nothing about it.
+func TestAListOfScalarsIsWalkedWithoutComplaint(t *testing.T) {
+	def := &schema.ResourceDefinition{
+		Type: "fake.service",
+		Attributes: map[string]schema.Attribute{
+			"args": {
+				Kind: value.KindList, Optional: true, Computed: true,
+				Elem: &schema.Attribute{Kind: value.KindString},
+			},
+		},
+	}
+	attrs := map[string]value.Value{
+		"args": value.List([]value.Value{
+			value.String("--Flag", value.SourceExplicit),
+			value.String("UPPER", value.SourceExplicit),
+		}, value.SourceExplicit),
+	}
+	var ds diag.Diagnostics
+	canonicaliseAttributes(attrs, def, &ds)
+	checkConfiguredAttributes(attrs, def, value.Origin{}, &ds)
+
+	if ds.HasErrors() {
+		var buf strings.Builder
+		ds.Render(&buf)
+		t.Fatalf("a list of strings was refused:\n%s", buf.String())
+	}
+	items := attrs["args"].Raw.([]value.Value)
+	for i, want := range []string{"--Flag", "UPPER"} {
+		if got, _ := items[i].AsString(); got != want {
+			t.Errorf("element %d = %q, want %q: an element's value is data, not a name to fold", i, got, want)
+		}
+	}
+}
