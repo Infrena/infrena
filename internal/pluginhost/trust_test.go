@@ -181,6 +181,30 @@ func TestBookkeepingSurvivesAPluginThatDropsIt(t *testing.T) {
 	}
 }
 
+// The same rule for Update, and for the one field it matters most. Deposed is not
+// on the wire, so an update that did not re-attach it would erase the only record
+// of an object a failed create_before_destroy left running, and nothing would ever
+// plan its cleanup.
+func TestDeposedSurvivesAnUpdateThroughThePlugin(t *testing.T) {
+	_, prov := connect(t, &badPlugin{})
+
+	current := managed()
+	current.Deposed = []*resource.ResourceState{{Type: "bad.thing", ProviderID: "thing-0"}}
+	got, err := prov.Update(context.Background(), current, &resource.DesiredResource{
+		Type:  "bad.thing",
+		Attrs: map[string]value.Value{"name": value.String("widget", value.SourceExplicit)},
+	})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if len(got.Deposed) != 1 || got.Deposed[0].ProviderID != "thing-0" {
+		t.Fatalf("Deposed = %v, want the one entry current held", got.Deposed)
+	}
+	if got.Deposed[0] == current.Deposed[0] {
+		t.Error("the updated state shares its deposed entry with current, so an edit to one is an edit to both")
+	}
+}
+
 // A plugin that forgets the flag must not be able to put a password into a plan, a
 // report or a generated file.
 func TestASchemaSensitiveValueIsRedactedEvenUnflagged(t *testing.T) {

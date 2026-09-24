@@ -466,6 +466,18 @@ func (r *run) execute(node planner.OpNode, snapshot map[string]*resource.Resourc
 		result.Dependencies = append([]address.Address(nil), op.DependsOn...)
 		result.Attributes = value.CarrySensitivityAttrs(result.Attributes, desired.Attrs)
 	}
+	// Deposed is the host's too, and an update does not change what a failed
+	// replacement left behind. Without this an in-process provider that
+	// returns a fresh state erases the only record of an object still
+	// running, and the plan that would clean it up never proposes it. Only
+	// for an update: a create has nothing deposed yet, and record deposits
+	// the old object for a create_before_destroy create phase itself.
+	if node.Kind == planner.OpUpdate && current != nil && result != nil {
+		result.Deposed = nil
+		for _, d := range current.Deposed {
+			result.Deposed = append(result.Deposed, d.Clone())
+		}
+	}
 
 	return result, isRemoval(node), nil
 }

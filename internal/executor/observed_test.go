@@ -362,3 +362,70 @@ func TestApplyDestroyReceivesTheObservation(t *testing.T) {
 		t.Error("Delete lost the host's lifecycle bookkeeping")
 	}
 }
+
+// withDeposed gives the fixture's resource an object a failed
+// create_before_destroy left behind, as state would hold it.
+func withDeposed(t *testing.T, st *state.State, a address.Address) {
+	t.Helper()
+	cur, ok := st.Get(a)
+	if !ok {
+		t.Fatal("fixture has no resource to depose from")
+	}
+	next := cur.Clone()
+	next.Deposed = []*resource.ResourceState{{Address: a, Type: "test.thing", Provider: "recording", ProviderID: "db-0"}}
+	st.Set(next)
+}
+
+// Deposed is the host's, like Lifecycle and Dependencies, and an update is not
+// a reason to forget it. It is the only record that a failed replacement left a
+// real object running, and the plan that would clean it up is gated on it, so a
+// provider that returns a state without it strands that object for good.
+//
+// Two ways to lose it, one case each. An in-process provider returns a fresh
+// state with no Deposed; and an observation, which carries only what a provider
+// owns, becomes `current` for a provider that builds its answer out of `current`.
+func TestApplyUpdateKeepsTheDeposedRecord(t *testing.T) {
+	cases := []struct {
+		name        string
+		echoCurrent bool
+		observed    func(address.Address) map[string]*resource.ResourceState
+	}{
+		{"provider returns a fresh state", false, func(address.Address) map[string]*resource.ResourceState { return nil }},
+		{"provider returns a fresh state after a refresh", false, func(a address.Address) map[string]*resource.ResourceState {
+			return map[string]*resource.ResourceState{a.String(): observedState(a)}
+		}},
+		{"provider echoes an observed current", true, func(a address.Address) map[string]*resource.ResourceState {
+			return map[string]*resource.ResourceState{a.String(): observedState(a)}
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			prov := &recordingProvider{resourceType: "test.thing", echoCurrent: tc.echoCurrent}
+			st, plan, reg, backend, a := observedFixture(t, prov)
+			withDeposed(t, st, a)
+
+			g, err := planner.BuildExecution(plan, noDeps)
+			if err != nil {
+				t.Fatalf("BuildExecution: %v", err)
+			}
+			result, ds := Apply(context.Background(), plan, g, st, Options{
+				Parallelism: 1, PerProvider: 1, Registry: reg, Backend: backend, Environment: "dev",
+				Observed: tc.observed(a),
+			})
+			if ds.HasErrors() {
+				t.Fatalf("unexpected diagnostics: %+v", ds)
+			}
+
+			if updates := prov.updated(); len(updates) != 1 || len(updates[0].Deposed) != 1 {
+				t.Error("Update was handed a current without the deposed entry state holds")
+			}
+			stored, ok := result.State.Get(a)
+			if !ok {
+				t.Fatal("db is not in state after a successful update")
+			}
+			if len(stored.Deposed) != 1 || stored.Deposed[0].ProviderID != "db-0" {
+				t.Errorf("persisted Deposed = %v, want [db-0] — the old object is still running and nothing else names it", stored.Deposed)
+			}
+		})
+	}
+}
