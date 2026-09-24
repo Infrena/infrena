@@ -16,11 +16,11 @@ import (
 //
 // Not the observation alone, because a ResourceState is two things at once.
 // The provider owns ProviderID and Attributes; Address, Type, the provider
-// instance, Dependencies, Lifecycle and the timestamps are the host's, and a
-// provider is never asked to report them back. The merged state is also what
-// gets persisted for an out-of-process provider, so an observation used raw
-// would write an empty Lifecycle to disk and a prevent_destroy guard would
-// silently cease to exist.
+// instance, Dependencies, Lifecycle, the timestamps and Deposed are the
+// host's, and a provider is never asked to report them back. The merged state
+// is also what gets persisted for an out-of-process provider, so an
+// observation used raw would write an empty Lifecycle to disk and a
+// prevent_destroy guard would silently cease to exist.
 //
 // And not merged before planning, however tempting one current truth is: the
 // planner's diff is persisted state against observation, so merging them
@@ -58,6 +58,13 @@ func currentFor(a address.Address, persisted map[string]*resource.ResourceState,
 	out.Lifecycle = prior.Lifecycle
 	out.CreatedAt = prior.CreatedAt
 	out.UpdatedAt = prior.UpdatedAt
+	// Replaced outright, even when the observation carries its own, because
+	// only the host knows what a failed replacement left behind. Cloned so a
+	// provider editing current cannot reach persisted state.
+	out.Deposed = nil
+	for _, d := range prior.Deposed {
+		out.Deposed = append(out.Deposed, d.Clone())
+	}
 	if out.ProviderID == "" {
 		// The observation's ID wins when it has one, but Read is not obliged
 		// to return one, and a current state with no ProviderID is a provider
