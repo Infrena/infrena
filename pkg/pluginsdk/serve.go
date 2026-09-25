@@ -98,7 +98,7 @@ func (s *server) run(in io.Reader) error {
 	// A schema list is easily past bufio's 64KiB default, and hitting that
 	// limit gives a truncated line that decodes as garbage rather than a clear
 	// error.
-	sc.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
+	sc.Buffer(make([]byte, 0, 64*1024), pluginproto.MaxMessageBytes)
 
 	var wg sync.WaitGroup
 	defer wg.Wait()

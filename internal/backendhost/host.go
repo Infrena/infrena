@@ -330,9 +330,11 @@ type client struct {
 	// real rule: one request, one response, before the next. The SDK serves
 	// in order and does not multiplex by id, so two calls in flight would
 	// have the second reading the first's answer.
-	mu     sync.Mutex
-	w      io.WriteCloser
-	sc     *bufio.Scanner
+	mu sync.Mutex
+	w  io.WriteCloser
+	sc *bufio.Scanner
+	// stdout is what sc reads, kept so fail can drain it.
+	stdout io.Reader
 	nextID uint64
 	// closed records why the connection ended, so a call arriving after a
 	// crash reports the crash rather than "file already closed".
@@ -344,6 +346,10 @@ type client struct {
 	stopOnce sync.Once
 	stop     func()
 }
+
+// maxMessage is backendproto.MaxMessageBytes, as a variable so a test can
+// reach the limit without writing 64MiB to do it.
+var maxMessage = backendproto.MaxMessageBytes
 
 // launch starts a backend binary, reads its handshake and checks it.
 //
@@ -383,13 +389,14 @@ func launch(name, path string) (*client, error) {
 		path:       path,
 		w:          stdin,
 		sc:         bufio.NewScanner(stdout),
+		stdout:     stdout,
 		stderr:     newStderrTail(20),
 		stderrDone: make(chan struct{}),
 	}
 	// A whole state, base64'd, is far past bufio's 64KiB default, and the
 	// failure mode of hitting it is a truncated line that decodes as garbage
-	// rather than a clear error. 16MiB matches what the SDK allows.
-	c.sc.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
+	// rather than a clear error.
+	c.sc.Buffer(make([]byte, 0, 64*1024), maxMessage)
 	c.stop = func() {
 		// The stderr reader finishes first: cmd.Wait closes that pipe, and
 		// a read still running when it does loses the lines that explain
@@ -507,7 +514,10 @@ func (c *client) read() (backendproto.Response, error) {
 	var resp backendproto.Response
 	for {
 		if !c.sc.Scan() {
-			if err := c.sc.Err(); err != nil {
+			if err := c.sc.Err(); errors.Is(err, bufio.ErrTooLong) {
+				return resp, fmt.Errorf("it sent a reply longer than the protocol allows (%d bytes); "+
+					"a state this large cannot be stored through a backend plugin", maxMessage)
+			} else if err != nil {
 				return resp, err
 			}
 			return resp, io.EOF
@@ -541,9 +551,18 @@ func (c *client) write(req backendproto.Request) error {
 // next operation blocked on a pipe nobody is reading: the executor writes state
 // once per operation, so a hang there is a run that never finishes and never
 // says why.
+//
+// It also drains stdout from here on. Nothing reads it after a failure, and a
+// backend whose stdout nobody reads blocks on its next write and never exits,
+// so close, which waits for the exit rather than kill a backend mid-Put, would
+// wait forever. A reply over the line limit is exactly that: the backend is
+// still writing the rest of it.
 func (c *client) fail(err error) error {
 	if c.closed == nil {
 		c.closed = err
+		if c.stdout != nil {
+			go func() { _, _ = io.Copy(io.Discard, c.stdout) }()
+		}
 	}
 	return c.transportError(c.closed)
 }
@@ -613,6 +632,12 @@ func (c *client) forwardStderr(r io.Reader) {
 	sc.Buffer(make([]byte, 0, 8*1024), 1024*1024)
 	for sc.Scan() {
 		c.stderr.add(strings.TrimRight(sc.Text(), "\r"))
+	}
+	// A line over the limit ends the scanner. Keep reading anyway, or the
+	// backend blocks on its next log write and never answers.
+	if err := sc.Err(); err != nil {
+		c.stderr.add(fmt.Sprintf("(log output dropped from here on: %v)", err))
+		_, _ = io.Copy(io.Discard, r)
 	}
 }
 
