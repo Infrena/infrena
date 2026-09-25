@@ -45,6 +45,12 @@ func IsSupported(v int) bool {
 	return slices.Contains(Supported, v)
 }
 
+// MaxMessageBytes is the longest protocol line either side reads. A whole
+// state travels as one base64 line, so this is a ceiling on state size. It
+// matches pluginproto.MaxMessageBytes without importing it, for the same
+// reason CookieEnv is spelled out below.
+const MaxMessageBytes = 64 * 1024 * 1024
+
 // CookieEnv is the environment variable the host sets when launching a
 // backend, and it is the same variable pluginproto names.
 //

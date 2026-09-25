@@ -107,9 +107,8 @@ func (s *server) run(in io.Reader) error {
 	sc := bufio.NewScanner(in)
 	// A whole state, base64'd, is far past bufio's 64KiB default, and the
 	// failure mode of hitting that limit is a truncated line that decodes as
-	// garbage rather than a clear error. The same 16MiB pluginsdk allows for
-	// a schema list.
-	sc.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
+	// garbage rather than a clear error.
+	sc.Buffer(make([]byte, 0, 64*1024), backendproto.MaxMessageBytes)
 
 	for sc.Scan() {
 		line := sc.Bytes()

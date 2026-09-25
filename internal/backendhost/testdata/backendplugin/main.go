@@ -8,7 +8,10 @@
 //
 // It behaves according to the name it was launched under, so one program built
 // once serves every case the tests need. infrena-backend-memory keeps state in
-// a map; infrena-backend-crash-on-put dies the moment a write arrives.
+// a map; infrena-backend-crash-on-put dies the moment a write arrives;
+// infrena-backend-huge-get answers a read with more than the host's line limit,
+// and infrena-backend-noisy-get logs one line longer than the host's stderr
+// limit before answering.
 package main
 
 import (
@@ -56,6 +59,17 @@ type memory struct {
 func (m *memory) Name() string { return m.name }
 
 func (m *memory) Get(ctx context.Context, environment string) ([]byte, error) {
+	switch m.name {
+	case "huge-get":
+		// Past the limit the host's test sets. Not a state, which does not
+		// matter: the host must fail before it gets as far as parsing one.
+		// Past 64KiB too: a Scanner's limit is the larger of its max and its
+		// starting buffer.
+		return []byte(strings.Repeat("x", 256*1024)), nil
+	case "noisy-get":
+		fmt.Fprintln(os.Stderr, strings.Repeat("x", 2*1024*1024))
+		fmt.Fprintln(os.Stderr, "the line after")
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	// Nothing stored is an empty answer and not an error, which is what the

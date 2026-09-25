@@ -20,6 +20,10 @@ import (
 	"github.com/infrena/infrena/pkg/provider"
 )
 
+// maxMessage is pluginproto.MaxMessageBytes, as a variable so a test can reach
+// the limit without writing 64MiB to do it.
+var maxMessage = pluginproto.MaxMessageBytes
+
 // Client is a connection to one running plugin process.
 //
 // One process per plugin, not per instance: two accounts of one cloud means one
@@ -68,7 +72,7 @@ func (c *Client) MaxConcurrency() int { return c.handshake.MaxConcurrency }
 // start reads the handshake and then serves responses until the stream ends.
 func (c *Client) start(r io.Reader, expectName string) error {
 	sc := bufio.NewScanner(r)
-	sc.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
+	sc.Buffer(make([]byte, 0, 64*1024), maxMessage)
 
 	if !sc.Scan() {
 		err := sc.Err()
@@ -85,7 +89,7 @@ func (c *Client) start(r io.Reader, expectName string) error {
 	}
 	c.name = c.handshake.Name
 
-	go c.serve(sc)
+	go c.serve(sc, r)
 	return nil
 }
 
@@ -111,8 +115,16 @@ func (c *Client) checkHandshake(expectName string) error {
 	return nil
 }
 
-func (c *Client) serve(sc *bufio.Scanner) {
+// serve reads responses until the stream ends or stops making sense.
+//
+// Either way it then drains r to the end. A plugin whose stdout nobody reads
+// blocks on its next write and never exits, and Close waits for it to exit
+// rather than kill it, since killing a plugin mid-Create can orphan a resource.
+// Without the drain, one reply over the line limit hangs the host for good,
+// after the failure has already been reported.
+func (c *Client) serve(sc *bufio.Scanner, r io.Reader) {
 	defer close(c.done)
+	defer func() { _, _ = io.Copy(io.Discard, r) }()
 	for sc.Scan() {
 		var resp pluginproto.Response
 		if err := json.Unmarshal(sc.Bytes(), &resp); err != nil {
@@ -133,6 +145,10 @@ func (c *Client) serve(sc *bufio.Scanner) {
 	err := sc.Err()
 	if err == nil {
 		err = io.EOF
+	}
+	if errors.Is(err, bufio.ErrTooLong) {
+		err = fmt.Errorf("it sent a reply longer than the protocol allows (%d bytes); "+
+			"this is a bug in the plugin, which should return less at a time", maxMessage)
 	}
 	c.fail(err)
 }
