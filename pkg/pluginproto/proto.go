@@ -53,6 +53,14 @@ func IsSupported(v int) bool {
 	return slices.Contains(Supported, v)
 }
 
+// MaxMessageBytes is the longest protocol line either side reads.
+//
+// One reply carries a whole answer, and discover's is every resource a project
+// holds: 16MiB was too small for a real GCP project's monitoring types alone.
+// Raising it is safe in both directions, since it is a read limit and a peer
+// with a smaller one only refuses sooner.
+const MaxMessageBytes = 64 * 1024 * 1024
+
 // CookieEnv is the environment variable the host sets when launching a plugin.
 //
 // A plugin binary run by hand without it prints a line saying what it is and

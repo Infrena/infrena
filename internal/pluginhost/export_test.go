@@ -25,3 +25,11 @@ func newTestClient(w io.WriteCloser) *Client {
 }
 
 func errorsNew(s string) error { return errors.New(s) }
+
+// setMaxMessage lowers the protocol line limit for one test and returns what
+// restores it.
+func setMaxMessage(n int) func() {
+	old := maxMessage
+	maxMessage = n
+	return func() { maxMessage = old }
+}

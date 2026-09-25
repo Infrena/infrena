@@ -139,6 +139,12 @@ func forwardStderr(r io.Reader, name string, tail *stderrTail, verbose io.Writer
 			fmt.Fprintf(verbose, "[%s] %s\n", name, line)
 		}
 	}
+	// A line over the limit ends the scanner. Keep reading anyway, or the
+	// plugin blocks on its next log write and never exits.
+	if err := sc.Err(); err != nil {
+		tail.add(fmt.Sprintf("(log output dropped from here on: %v)", err))
+		_, _ = io.Copy(io.Discard, r)
+	}
 }
 
 // BinaryName is the file a plugin is looked up as.
